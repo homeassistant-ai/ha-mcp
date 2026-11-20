@@ -70,6 +70,8 @@
     "transfer.session": "Reopen the HA-MCP sidebar panel as a Home Assistant administrator and try again.",
     "transfer.restore_failed": "HA-MCP could not finish importing the settings. Check the destination settings before retrying.",
     "transfer.export_failed": "Could not download the settings. Reopen the panel and try again.",
+    "transfer.invalid_source_entries": "The current integration settings cannot be restored from a file. Open Configure for HA-MCP Server and File & YAML Tools if installed, check the connection and permission settings, then export again.",
+    "transfer.invalid_server_settings": "Some saved HA-MCP settings cannot be restored from a file. Review and save the tool, security, visibility and server settings in this panel, then export again.",
     "transfer.read_failed": "Could not read the selected file. Select the file again.",
     "server.sidecar.disable": "Permanently disable settings server",
     "server.sidecar.disable_title": "Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable.",

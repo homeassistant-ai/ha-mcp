@@ -30,11 +30,12 @@ def test_transfer_moves_policy_tools_visibility_and_backup_options(tmp_path):
     assert "source-only" not in json.dumps(archive)
     restore_server_settings(target, archive)
     for name, expected in documents.items():
-        assert json.loads((target / name).read_text()) == expected
+        actual = json.loads((target / name).read_text())
+        assert {key: actual[key] for key in expected} == expected
     assert json.loads((target / "oauth_clients.json").read_text()) == {
         "credential": "target-only"
     }
-    restore_server_settings(target, archive)
+    assert restore_server_settings(target, archive) is None
     assert export_server_settings(target) == archive
 
 
@@ -44,6 +45,36 @@ def test_default_source_resets_previously_configured_destination(tmp_path):
     (tmp_path / "feature_flags.json").write_text('{"redact_secrets":true}')
     restore_server_settings(tmp_path, export_server_settings(source))
     assert not (tmp_path / "feature_flags.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("section", "filename", "target", "incoming"),
+    [
+        ("policy", "tool_policy.json", {"wait_seconds": 50}, {"wait_seconds": 20}),
+        ("visibility", "entity_visibility.json", {"enabled": True}, {"enforce": True}),
+    ],
+)
+def test_import_advances_the_local_edit_revision_even_on_reset(
+    tmp_path, section, filename, target, incoming
+):
+    path = tmp_path / filename
+    path.write_text(json.dumps({**target, "version": 7}))
+    before = export_server_settings(tmp_path)
+    assert "version" not in before[section]
+    bundle = {**before, section: {**incoming, "version": 500}}
+    assert restore_server_settings(tmp_path, bundle) == before
+    assert json.loads(path.read_text())["version"] == 8
+    assert restore_server_settings(tmp_path, bundle) is None
+    assert json.loads(path.read_text())["version"] == 8
+    restored = export_server_settings(tmp_path)
+    reset = {**bundle, section: None}
+    assert restore_server_settings(tmp_path, reset) == restored
+    assert json.loads(path.read_text())["version"] == 9
+    assert restore_server_settings(tmp_path, reset) is None
+    assert export_server_settings(tmp_path)[section] is None
+    assert restore_server_settings(tmp_path, before) == reset
+    assert json.loads(path.read_text())["version"] == 10
+    assert export_server_settings(tmp_path) == before
 
 
 @pytest.mark.parametrize(
@@ -84,3 +115,32 @@ def test_write_failure_rolls_back_prior_documents(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         restore_server_settings(tmp_path, replacement)
     assert export_server_settings(tmp_path) == original
+
+
+@pytest.mark.parametrize(
+    ("effect", "expected_rules"), [("require_approval", 2), ("allow", 1)]
+)
+def test_unstamped_policy_keeps_its_startup_semantics_on_transfer(
+    tmp_path, effect, expected_rules
+):
+    legacy = {
+        "rule_effect": effect,
+        "rules": [
+            {
+                "tool_name": "ha_call_service",
+                "when": [
+                    {"path": "args.domain", "op": "eq", "value": "switch"},
+                    {"path": "args.service", "op": "eq", "value": "turn_on"},
+                ],
+            }
+        ],
+    }
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "tool_policy.json").write_text(json.dumps(legacy))
+    archive = export_server_settings(source)
+    assert len(archive["policy"]["rules"]) == expected_rules
+    assert archive["policy"]["schema_version"] == 2
+    assert restore_server_settings(tmp_path, archive) is not None
+    assert restore_server_settings(tmp_path, archive) is None
+    assert export_server_settings(tmp_path) == archive

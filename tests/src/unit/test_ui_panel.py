@@ -387,6 +387,27 @@ class TestProxyForwarding:
         }
         assert not running_server.seen
 
+    async def test_unusable_source_settings_never_download_as_a_backup(
+        self,
+        hass: HomeAssistant,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        # An old entry can carry a root-only direct URL, which would expose
+        # a destination server without its required secret path.
+        add_options_entry(hass, data={"webhook_id": "private-hook", "secret_path": "/"})
+        client = await hass_client_no_auth()
+        response = await client.post(
+            _APP + "api/settings/transfer/export",
+            cookies=admin_cookies,
+            json={},
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
+        assert response.status == 400
+        assert await response.json() == {"success": False, "error": "invalid_backup"}
+        assert "Content-Disposition" not in response.headers
+
     async def test_import_errors_do_not_echo_file_credentials(
         self,
         hass: HomeAssistant,

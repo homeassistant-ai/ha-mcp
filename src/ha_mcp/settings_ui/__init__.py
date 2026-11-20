@@ -38,7 +38,6 @@ from ._persistence import (
     _atomic_write_json,
     _get_backup_settings_override_path,
     _get_config_path,
-    _get_override_file_lock,
     _load_backup_settings_override,
     _save_backup_settings_override,
     dump_tool_metadata_cache,

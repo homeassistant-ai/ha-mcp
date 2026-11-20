@@ -88,6 +88,17 @@ def test_download_preserves_the_export_without_rendering_credentials() -> None:
     assert result.status == "status: Settings download started."
 
 
+def test_unusable_source_entries_point_to_the_integration_configuration() -> None:
+    result = _run(
+        "document.getElementById('transferExport').click();",
+        responses={
+            _TRANSFER + "export": {"status": 400, "json": {"error": "invalid_backup"}}
+        },
+    )
+    assert result.status and "Open Configure" in result.status
+    assert "download started" not in result.status
+
+
 def test_cancel_import_keeps_the_file_local() -> None:
     result = _run(_choose(_BUNDLE), prelude="window.confirm = () => false;")
     assert not result.fetches_to(_TRANSFER)

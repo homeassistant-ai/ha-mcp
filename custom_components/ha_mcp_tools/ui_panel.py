@@ -76,6 +76,10 @@ _BOOT_URL = f"{_UI_BASE}/boot"
 _SESSION_URL = f"{_UI_BASE}/session"
 _APP_PREFIX = f"{_UI_BASE}/app/"
 _PROXY_URL = f"{_UI_BASE}/app/{{path:.*}}"
+_TRANSFER_EXPORTING = {
+    "api/settings/transfer/export": True,
+    "api/settings/transfer/import": False,
+}
 
 # Session cookie. HttpOnly so page JS can never read it; SameSite=Strict so it
 # rides only same-site requests (the iframe is same-origin with the frontend);
@@ -324,10 +328,11 @@ class _ProxyView(HomeAssistantView):
         if not await _session_user_is_admin(hass, request.cookies.get(_COOKIE_NAME)):
             return web.Response(status=401, text="Unauthorized")
 
-        if path in ("api/settings/transfer/export", "api/settings/transfer/import"):
+        exporting = _TRANSFER_EXPORTING.get(path)
+        if exporting is not None:
             from .settings_transfer import async_handle
 
-            return await async_handle(hass, request, exporting=path.endswith("/export"))
+            return await async_handle(hass, request, exporting=exporting)
 
         # Defense in depth: never let a crafted path escape the secret-path
         # prefix on the loopback server (the caller is already an admin, so this

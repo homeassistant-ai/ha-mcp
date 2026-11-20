@@ -491,10 +491,11 @@ async def _write_advanced_overrides_file(
     single file holds both advanced + feature-flag overrides.
     """
     from ..config import _FEATURE_FLAG_OVERRIDE_FILENAME
+    from ..utils.config_write_lock import config_write_guard
     from ..utils.data_paths import get_data_dir
 
     path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-    async with _persistence._get_override_file_lock():
+    async with config_write_guard():
         existing: dict[str, Any] = {}
         try:
             existing_raw = path.read_text()
