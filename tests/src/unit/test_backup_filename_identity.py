@@ -76,20 +76,28 @@ async def test_rotation_does_not_prune_another_identity_with_the_same_stem(
     assert manager.read_snapshot(other.name)["entity_id"] == stem
 
 
-async def test_legacy_digest_lists_both_filename_generations(
-    hass: HomeAssistant, manager: BackupManager, snapshot_clock: SnapshotClock
+@pytest.mark.parametrize("id_length", [25, 120])
+async def test_each_digest_lists_all_filename_generations(
+    hass: HomeAssistant,
+    manager: BackupManager,
+    snapshot_clock: SnapshotClock,
+    id_length: int,
 ) -> None:
-    identity = f"config:{'a' * 120}"
-    snapshot_clock.set("2026-01-02T00:00:00")
+    identity = f"config:{'a' * id_length}"
+    snapshot_clock.set("2026-01-03T00:00:00")
     current = await capture(hass, manager, identity)
+    current_stem = current.name.split(".")[1]
     digest = hashlib.sha256(identity.encode()).hexdigest()[:8]
-    legacy_stem = f"{identity.replace(':', '_')}-{digest}"
-    legacy = current.with_name(f"integration.{legacy_stem}.20260101_000000.yaml")
-    legacy.write_bytes(current.read_bytes())
+    bare_stem = identity.replace(":", "_")
+    legacy_stem = f"{bare_stem}-{digest}"
+    legacy = current.with_name(f"integration.{legacy_stem}.20260102_000000.yaml")
+    bare = current.with_name(f"integration.{bare_stem}.20260101_000000.yaml")
+    for older_file in (legacy, bare):
+        older_file.write_bytes(current.read_bytes())
 
-    for selector in (identity, legacy_stem):
+    for selector in (identity, legacy_stem, current_stem):
         rows = manager.list_snapshots(domain="integration", entity_id=selector)
-        assert [row["name"] for row in rows] == [current.name, legacy.name]
+        assert [row["name"] for row in rows] == [current.name, legacy.name, bare.name]
         assert {row["entity_id"] for row in rows} == {identity}
 
 
