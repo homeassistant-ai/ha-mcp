@@ -94,17 +94,25 @@ async def search_related(
 
 
 def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
-    """Summarize a ``frontend/get_themes`` result into names plus defaults.
+    """Summarize a ``frontend/get_themes`` result into names, modes and defaults.
 
-    Returns theme NAMES, not the full per-theme CSS variable dicts (installed
-    community themes can carry hundreds of variables; listings are a
-    discovery/verify surface, not a content dump).
+    Returns theme NAMES and the mode names of each theme's ``modes`` block, not
+    the full per-theme CSS variable dicts (installed community themes can carry
+    hundreds of variables; listings are a discovery/verify surface, not a
+    content dump).
     """
-    themes_value = raw_themes.get("themes") or {}
-    theme_names = sorted(themes_value.keys() if isinstance(themes_value, dict) else [])
+    themes_value = raw_themes.get("themes")
+    if not isinstance(themes_value, dict):
+        themes_value = {}
+    theme_names = sorted(themes_value)
     return {
         "themes": theme_names,
         "count": len(theme_names),
+        "modes": {
+            name: sorted(theme["modes"])
+            for name, theme in sorted(themes_value.items())
+            if "modes" in theme
+        },
         "default_theme": raw_themes.get("default_theme"),
         "default_dark_theme": raw_themes.get("default_dark_theme"),
     }

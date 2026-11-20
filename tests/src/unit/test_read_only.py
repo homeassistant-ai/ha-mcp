@@ -750,7 +750,7 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # Consumed only under the action dispatch the predicate inspects:
         # the backend-default write payload ('set')...
         "theme_name",
-        "mode",
+        "theme_name_dark",
         # ...and the engine-account restore payload plus its compare guard
         # ('set_engine_theme'). Both actions are blocked outright, so these
         # carry no mutation capability of their own in read-only mode.

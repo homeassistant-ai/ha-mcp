@@ -2,9 +2,9 @@
 
 Themes are YAML/file-based: Home Assistant itself exposes no API to create or
 edit theme files. This module covers what CAN be managed at runtime - listing
-the installed themes and selecting the backend default theme. Creating or
-editing custom theme files goes through ha_config_set_yaml (beta, ha-mcp
-custom component); installing community themes goes through HACS.
+the installed themes and selecting the backend default themes through Core's
+``frontend.set_theme``. Theme files are edited with the file and YAML tools and
+installed through HACS.
 """
 
 import logging
@@ -15,12 +15,18 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from ..client.rest_client import HomeAssistantAPIError
+from ..client.rest_client import (
+    HomeAssistantAdminRequiredError,
+    HomeAssistantCommandNotSent,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .coercion import JSON_STRING_COERCION
 from .helpers import (
+    core_error_message,
     exception_to_structured_error,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
 )
@@ -185,6 +191,84 @@ class ThemesTools:
             )
         return summarize_theme_listing(result.get("result") or {})
 
+    async def _set_theme(
+        self, theme_name: str | None, theme_name_dark: str | None
+    ) -> dict[str, Any]:
+        """Call ``frontend.set_theme`` over WebSocket, where Core's refusal keeps
+        its text (REST answers it with a bare 400), then read back the defaults
+        Core stored."""
+        service_data = {
+            key: value
+            for key, value in (("name", theme_name), ("name_dark", theme_name_dark))
+            if value is not None
+        }
+        context = {
+            "action": "set",
+            "theme_name": theme_name,
+            "theme_name_dark": theme_name_dark,
+        }
+        list_hint = "Check with ha_manage_theme(action='list')"
+        try:
+            # Core refuses an unknown or missing theme as invalid_format: the
+            # caller's input, answered below, not a server fault to log.
+            result = await self._client.send_websocket_message(
+                {
+                    "type": "call_service",
+                    "domain": "frontend",
+                    "service": "set_theme",
+                    "service_data": service_data,
+                },
+                expected_error_codes=frozenset({"invalid_format"}),
+            )
+        except HomeAssistantCommandNotSent:
+            raise
+        except HomeAssistantConnectionError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "frontend.set_theme got no answer, so whether the theme was "
+                    f"set is unknown: {e}",
+                    context={**context, "write_outcome_unknown": True},
+                    suggestions=[f"{list_hint} before retrying"],
+                )
+            )
+        if not result.get("success"):
+            # Core refuses a non-admin with a generic error code; only the
+            # text says the token lacks admin rights.
+            if core_error_message(result.get("error", "")) == "Unauthorized":
+                raise HomeAssistantAdminRequiredError(
+                    "Service frontend.set_theme is admin-only in Home Assistant "
+                    "and this token's user is not an administrator"
+                )
+            raise_core_refusal(
+                "frontend.set_theme failed",
+                result,
+                context,
+                [
+                    "Core's 'name' is theme_name and 'name_dark' is theme_name_dark",
+                    "Call ha_manage_theme(action='list') to see installed themes",
+                ],
+            )
+        try:
+            listing = await self._list_themes()
+        except HomeAssistantConnectionError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "frontend.set_theme was applied, but the defaults could "
+                    f"not be re-read: {e}",
+                    context=context,
+                    suggestions=[list_hint],
+                )
+            )
+        return {
+            "success": True,
+            "data": {
+                "default_theme": listing["default_theme"],
+                "default_dark_theme": listing["default_dark_theme"],
+            },
+        }
+
     @tool(
         name="ha_manage_theme",
         tags={"System"},
@@ -203,7 +287,7 @@ class ThemesTools:
             Field(
                 description=(
                     "Theme operation: 'list' installed themes, 'set' the "
-                    "backend default theme, or read/restore the screenshot "
+                    "backend default themes, or read/restore the screenshot "
                     "engine account's own per-user theme with "
                     "'get_engine_theme' / 'set_engine_theme'."
                 ),
@@ -213,9 +297,19 @@ class ThemesTools:
             str | None,
             Field(
                 description=(
-                    "Theme name when action='set'. Must be an installed theme; "
-                    "'default' restores the built-in theme, 'none' resets the "
-                    "chosen mode to the built-in default."
+                    "action='set': the default theme, sent as "
+                    "frontend.set_theme's 'name'."
+                ),
+                default=None,
+            ),
+        ] = None,
+        theme_name_dark: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "action='set': the dark-mode default theme, sent as "
+                    "frontend.set_theme's 'name_dark'; 'none' removes the "
+                    "dark-mode override."
                 ),
                 default=None,
             ),
@@ -258,28 +352,22 @@ class ThemesTools:
                 default=None,
             ),
         ] = None,
-        mode: Annotated[
-            Literal["light", "dark"] | None,
-            Field(
-                description=(
-                    "Which mode the theme applies to when action='set'. "
-                    "Defaults to light."
-                ),
-                default=None,
-            ),
-        ] = None,
     ) -> dict[str, Any]:
         """Manage Home Assistant frontend themes.
 
         When NOT to use: themes are YAML files - Home Assistant has no API to
         create or edit them. Installing community themes goes through HACS
-        (the Marketplace on 2026.11+, both via ha_manage_hacs); editing custom theme files goes through
-        ha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name
-        and attempts an automatic theme reload).
+        (the Marketplace on 2026.11+, both via ha_manage_hacs); theme files
+        are edited with ha_write_file or ha_config_set_yaml (beta), which
+        reload themes after the edit. After any other change to theme files,
+        ha_reload_core(target='themes') loads them.
 
-        When to use: action='list' discovers installed theme names and the
-        current defaults; action='set' selects the backend default theme
-        (optionally per light/dark mode).
+        When to use: action='list' discovers installed theme names, the modes
+        each theme declares and the current defaults; action='set' selects
+        the backend default theme, the dark-mode one, or both in one call,
+        and returns the defaults Home Assistant then holds. Home Assistant
+        describes frontend.set_theme's fields in
+        ha_list_services(domain='frontend', detail_level='full').
 
         SCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):
         Taking a dashboard screenshot makes the Puppet engine write the saved
@@ -293,17 +381,15 @@ class ThemesTools:
         Giving the engine its own dedicated user and token avoids the issue
         entirely.
 
-        Caveats: action='set' changes the backend-selected default only -
+        Caveats: action='set' changes the backend-selected defaults only -
         users who explicitly picked a theme in their profile keep their
-        choice. Theme names are validated by Home Assistant at call time.
+        choice.
 
         EXAMPLES:
         - List themes: ha_manage_theme(action="list")
         - Set default theme: ha_manage_theme(action="set", theme_name="nord")
-        - Set dark-mode theme: ha_manage_theme(
-              action="set", theme_name="nord", mode="dark")
-        - Restore built-in default: ha_manage_theme(
-              action="set", theme_name="default")
+        - Set light and dark defaults: ha_manage_theme(
+              action="set", theme_name="nord", theme_name_dark="nord_dark")
         - Inspect the engine account's theme: ha_manage_theme(
               action="get_engine_theme")
         - Undo a screenshot's theme change (pass BOTH values from the
@@ -324,62 +410,17 @@ class ThemesTools:
                     action, value, expected_current, force
                 )
 
-            if not theme_name:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        "theme_name is required when action='set'",
-                        context={"action": action},
-                        suggestions=[
-                            "Call ha_manage_theme(action='list') to see "
-                            "installed themes",
-                        ],
-                    )
-                )
-
-            service_data: dict[str, Any] = {"name": theme_name}
-            if mode is not None:
-                service_data["mode"] = mode
-            try:
-                await self._client.call_service("frontend", "set_theme", service_data)
-            except HomeAssistantAPIError as e:
-                # HA's REST layer collapses the service's validation detail
-                # ("Theme X not found") into a bare 400 - name the theme here.
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to set theme '{theme_name}': {e}. "
-                        "The theme may not be installed.",
-                        context={
-                            "action": action,
-                            "theme_name": theme_name,
-                            "mode": mode,
-                        },
-                        suggestions=[
-                            "Call ha_manage_theme(action='list') to see "
-                            "installed themes",
-                        ],
-                    )
-                )
-
-            # Re-read the defaults so the agent sees the effective state.
-            listing = await self._list_themes()
-            return {
-                "success": True,
-                "data": {
-                    "theme": theme_name,
-                    # HA applies the theme to light mode when mode is omitted.
-                    "mode": mode or "light",
-                    "default_theme": listing.get("default_theme"),
-                    "default_dark_theme": listing.get("default_dark_theme"),
-                },
-            }
+            return await self._set_theme(theme_name, theme_name_dark)
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
-                context={"action": action, "theme_name": theme_name, "mode": mode},
+                context={
+                    "action": action,
+                    "theme_name": theme_name,
+                    "theme_name_dark": theme_name_dark,
+                },
                 suggestions=[
                     "Call ha_manage_theme(action='list') to see installed themes",
                     "Verify the Home Assistant connection",
