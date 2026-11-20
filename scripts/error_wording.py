@@ -201,6 +201,25 @@ class Program:
             self.changed = True
 
 
+def _visible(
+    node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+) -> dict[ast.AST, set[str]]:
+    """For each node of a comprehension, the targets bound where it runs: an
+    iterable sees the targets of the ``for`` clauses before its own, and the
+    conditions and the element see every target so far."""
+    seen: set[str] = set()
+    visible: dict[ast.AST, set[str]] = {}
+    for each in node.generators:
+        visible.update((inner, set(seen)) for inner in ast.walk(each.iter))
+        seen |= {n.id for n in ast.walk(each.target) if isinstance(n, ast.Name)}
+        for condition in each.ifs:
+            visible.update((inner, set(seen)) for inner in ast.walk(condition))
+    parts = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+    for part in parts:
+        visible.update((inner, seen) for inner in ast.walk(part))
+    return visible
+
+
 def _bindings(
     scope: Scope, nodes: list[ast.AST]
 ) -> tuple[set[str], dict[ast.AST, set[str]]]:
@@ -213,10 +232,9 @@ def _bindings(
         if isinstance(
             node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
         ):
-            own = {name for each in node.generators for name in ast.walk(each.target)}
-            targets |= own
-            names = {name.id for name in own if isinstance(name, ast.Name)}
-            for inner in ast.walk(node):
+            for each in node.generators:
+                targets.update(ast.walk(each.target))
+            for inner, names in _visible(node).items():
                 looped.setdefault(inner, set()).update(names)
     bound = {
         node.id

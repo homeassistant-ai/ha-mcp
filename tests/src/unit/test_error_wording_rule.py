@@ -145,6 +145,18 @@ REFUSED = {
             values = [is_missing for is_missing in ()]
             return is_missing(str(exc))
         """,
+    "a helper called in a comprehension's first iterable": """
+        def candidates(text):
+            return [1] if "not found" in text else []
+        def handle(exc: Exception):
+            return [candidates for candidates in candidates(str(exc))]
+        """,
+    "a helper called in a later iterable, before its own target": """
+        def parts(text):
+            return [1] if "not found" in text else []
+        def handle(groups, exc: Exception):
+            return [parts for group in groups for parts in parts(str(exc))]
+        """,
     "a regex function imported by name": """
         from re import search as find
         def handle(err: Exception):
@@ -227,6 +239,12 @@ ALLOWED = {
             return "not found" in text
         def handle(callbacks, exc: Exception):
             return [is_missing(str(exc)) for is_missing in callbacks]
+        """,
+    "a comprehension target called in its condition": """
+        def keep(text):
+            return "not found" in text
+        def handle(callbacks, exc: Exception):
+            return [1 for keep in callbacks if keep(str(exc))]
         """,
     "a function of its own that shares a regex name": """
         def search(needle, text):
