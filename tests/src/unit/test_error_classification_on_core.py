@@ -2,8 +2,10 @@
 
 import pytest
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.setup import async_setup_component
 
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosedError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandError
 from ha_mcp.tools.helpers import exception_to_structured_error
 
@@ -87,3 +89,45 @@ async def test_file_service_identifies_its_own_missing_file(
 
     assert result["success"] is False
     assert result["error_code"] == "not_found"
+
+
+async def test_a_service_validation_refusal_is_a_validation_failure(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    @callback
+    def refuse(call: ServiceCall) -> None:
+        raise ServiceValidationError("brightness is out of range")
+
+    hass.services.async_register("test", "validate", refuse)
+    ws = await pooled_socket(core_client)
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command("call_service", domain="test", service="validate")
+
+    assert refused.value.code == "service_validation_error"
+    result = exception_to_structured_error(refused.value, raise_error=False)
+    assert result["error"]["code"] == "VALIDATION_FAILED"
+
+
+async def test_a_missing_entity_is_named_from_the_callers_context(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    assert await async_setup_component(hass, "config", {})
+    ws = await pooled_socket(core_client)
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command("config/entity_registry/get", entity_id="light.ghost")
+
+    result = exception_to_structured_error(
+        refused.value, context={"entity_id": "light.ghost"}, raise_error=False
+    )
+    assert result["error"]["code"] == "ENTITY_NOT_FOUND"
+    assert result["entity_id"] == "light.ghost"
+    assert result["ha_error_code"] == "not_found"
+
+
+def test_a_socket_that_drops_mid_write_is_a_connection_failure() -> None:
+    """A caller of ``send_command`` gets the socket library's own exception."""
+    result = exception_to_structured_error(
+        ConnectionClosedError(None, None), raise_error=False
+    )
+
+    assert result["error"]["code"] == "CONNECTION_FAILED"

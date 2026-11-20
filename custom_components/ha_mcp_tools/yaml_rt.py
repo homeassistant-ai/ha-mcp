@@ -298,7 +298,11 @@ def _walk_yaml_mappings(
     found: set[str],
     parent_file: str | None = None,
 ) -> None:
-    """Find file-local dotted paths, including roots underneath include tags."""
+    """Collect the file that writes ``parts[0]`` wherever the whole path is in
+    Core's config, also below an include tag. Only a key at the top of a file
+    counts: ``sensor`` under ``template`` is not a definition of ``sensor``.
+    The rest of the path may be merged in from other files; the caller reads
+    the file and says so when the path is not readable there."""
     if id(node) in seen:
         return
     seen.add(id(node))
@@ -317,10 +321,7 @@ def _walk_yaml_mappings(
         ):
             current = node[parts[0]]
             for part in parts[1:]:
-                if (
-                    not isinstance(current, dict)
-                    or _key_file(current, part) != root_file
-                ):
+                if not isinstance(current, dict) or part not in current:
                     break
                 current = current[part]
             else:

@@ -42,7 +42,7 @@ _FIND_CALENDARS_HINT = (
     "calendar entities"
 )
 
-# Core's calendar view answers a refused read with a bare status.
+# Core's calendar view gives no reason with these statuses.
 _READ_REFUSAL_HINTS: dict[int | None, list[str]] = {
     400: [
         "Home Assistant answers 400 when '{entity_id}' is not a calendar entity "

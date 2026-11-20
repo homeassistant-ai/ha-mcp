@@ -1134,8 +1134,8 @@ async def _lazy_resolve_and_retry(
     No-op when:
     - the response is not a failure (success=True or non-dict),
     - ``url_path`` is empty,
-    - the error message does not contain ``UNKNOWN_CONFIG_PREFIX``
-      (the substring miss),
+    - Core's code is not ``config_not_found``, or its message does not
+      name the identifier as unknown,
     - the resolver finds no match,
     - or the resolver itself raises (logged at WARNING).
 

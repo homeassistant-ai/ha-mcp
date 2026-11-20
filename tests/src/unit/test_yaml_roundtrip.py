@@ -435,11 +435,13 @@ class TestSeqIndentDetectionEdges:
             "template",
             [],
         ),
+        # The including file writes the first key; the read then reports
+        # that the rest of the path is not in that file.
         (
             "shell_command: !include commands.yaml\n",
             {"commands.yaml": "mcp_secret: value\n"},
             "shell_command.mcp_secret",
-            [],
+            ["configuration.yaml"],
         ),
         (
             "included: !include commands.yaml\n",
@@ -455,6 +457,18 @@ class TestSeqIndentDetectionEdges:
             },
             "shell_command.mcp_secret",
             ["packages/nested/mcp.yaml"],
+        ),
+        (
+            "automation: !include_dir_merge_list automations\n",
+            {"automations/night.yaml": "- alias: Night\n  variables: {mode: dim}\n"},
+            "variables.mode",
+            ["automations/night.yaml"],
+        ),
+        (
+            "automation: !include_dir_list automations\n",
+            {"automations/night.yaml": "alias: Night\nvariables: {mode: dim}\n"},
+            "variables.mode",
+            ["automations/night.yaml"],
         ),
     ],
 )

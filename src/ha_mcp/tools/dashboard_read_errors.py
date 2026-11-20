@@ -7,9 +7,9 @@ dashboard it holds but has no config for ("No config found."), which the
 frontend shows as its generated default view. The second comes from Core's
 ``ConfigNotFound`` (``lovelace/dashboard.py``): a storage dashboard with nothing
 saved, a YAML dashboard whose file is missing, or any storage dashboard in
-recovery mode. The code alone cannot tell the causes apart, so the message does.
-If HA rewords either string, the lazy resolve stops firing and an empty
-dashboard reads as a failure; re-verify them on major HA upgrades.
+recovery mode. The code alone cannot tell the causes apart, so under that code
+the message does (``error_wording``). If HA rewords either string, the lazy
+resolve stops firing and an empty dashboard reads as a failure.
 """
 
 from __future__ import annotations

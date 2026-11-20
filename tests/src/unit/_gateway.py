@@ -38,6 +38,8 @@ class Gateway:
         # test adds them before it takes ``gateway_client``, which serves
         # the app once.
         self.routes: list[web.AbstractRouteDef] = []
+        # What the gateway listens on, once ``gateway_client`` serves it.
+        self.sites: Any = ()
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -119,6 +121,7 @@ async def gateway_client(
 ) -> AsyncIterator[HomeAssistantClient]:
     """The server's client, reaching Core only through ``gateway``."""
     server = await aiohttp_client(gateway.app())
+    gateway.sites = server.server.runner.sites
     behind_gateway = HomeAssistantClient(
         base_url=str(server.make_url("")).rstrip("/"),
         token=hass_access_token,

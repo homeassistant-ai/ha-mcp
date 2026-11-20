@@ -252,10 +252,12 @@ async def test_named_bracketed_file_core_loaded_raises_on_a_parse_error(
     assert error_of(exc)["code"] == "CONFIG_INVALID"
 
 
-async def test_merged_folder_keys_are_local_to_the_file_that_writes_them(
+async def test_a_key_merged_in_from_a_folder_is_flagged_and_readable_locally(
     hass: HomeAssistant, get_yaml: GetYaml
 ) -> None:
-    """A merged key can be read from its own file under its local name."""
+    """The package writes ``shell_command`` and a folder supplies its keys:
+    the dotted path is in no single file, which the result has to say. The
+    key is readable from its own file under its local name."""
     await put(
         hass,
         {
@@ -268,8 +270,9 @@ async def test_merged_folder_keys_are_local_to_the_file_that_writes_them(
     out = await get_yaml(yaml_path="shell_command.mcp_secret", file="packages/*.yaml")
 
     assert out["matches"] == []
-    assert not any(
-        "is annotated as defining" in warning for warning in out.get("warnings", [])
+    assert any(
+        warning.startswith("packages/merged.yaml is annotated as defining")
+        for warning in out["warnings"]
     )
     local = await get_yaml(yaml_path="mcp_secret", file="themes/*.yaml")
     assert _files(local) == ["themes/commands.yaml"]

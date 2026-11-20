@@ -30,7 +30,6 @@ from ..client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
-    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.supervisor_client import make_supervisor_httpx_client
@@ -39,6 +38,7 @@ from ..error_wording import (
     has_command_failed_prefix,
     supervisor_invalid_options,
     supervisor_job_collision,
+    supervisor_unserved_endpoint,
 )
 from ..errors import (
     ErrorCode,
@@ -253,13 +253,8 @@ def _merge_options(base: dict, override: dict) -> dict:
     return merged
 
 
-# Supervisor's per-job-group rejection, matched case-insensitively, plus the
-# bounded window and backoff used to ride it out. See _supervisor_api_call.
-# The "for job group" tail is load-bearing: JobGroup.acquire raises
-# "Another job is running for job group <name>" for the transient per-app
-# collision, while the job-level JobConcurrency.REJECT path raises a bare
-# "Another job is running" for long operations (OS update, data-disk wipe)
-# that must NOT be retried on this schedule.
+# The bounded window and backoff used to ride out Supervisor's per-job-group
+# rejection (``error_wording.supervisor_job_collision``). See _supervisor_api_call.
 _JOB_COLLISION_RETRY_WINDOW = 60.0
 JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
 JOB_COLLISION_RETRY_MAX_DELAY = 5.0
@@ -472,8 +467,7 @@ async def _supervisor_api_call_via_core(
     except HomeAssistantConnectionError as exc:
         if verb in {"GET", "HEAD"}:
             raise
-        # send_websocket_message re-raises a command timeout as the cause.
-        timed_out = isinstance(exc.__cause__, HomeAssistantCommandTimeout)
+        timed_out = exc.timed_out
         code = ErrorCode.TIMEOUT_OPERATION if timed_out else ErrorCode.CONNECTION_FAILED
         _raise_supervisor_write_outcome_unknown(
             code,
@@ -635,7 +629,7 @@ def _raise_supervisor_api_failure(
                 ],
             )
         )
-    if status_code == 404:
+    if status_code == 404 or supervisor_unserved_endpoint(result):
         raise HomeAssistantAPIError(
             error_text,
             status_code=404,
@@ -659,7 +653,8 @@ def _raise_supervisor_api_failure(
         )
     if isinstance(status_code, int) and not has_command_failed_prefix(error_text):
         error_text = f"Command failed: {error_text}"
-    raise HomeAssistantCommandError(error_text, code=result.get("error_code"))
+    result["error_code"] = result.get("error_code") or key  # Supervisor's own key
+    raise HomeAssistantCommandError.from_reply(result, error_text)
 
 
 def _supervisor_result_mapping(
@@ -741,7 +736,7 @@ async def _supervisor_api_call(
         # proxy rejects app-originated ``supervisor/api`` commands.
         # Both transports feed the common retry and error-normalization path:
         # direct 4xx/5xx responses retain status metadata, while WebSocket
-        # failures are classified from the returned message.
+        # failures carry Core's code, with Supervisor's own text behind it.
         #
         # Supervisor serialises jobs per app job group and rejects a
         # state-changing call while a still-settling job (a watchdog restart,
@@ -781,7 +776,7 @@ async def _supervisor_api_call(
             ):
                 _raise_supervisor_api_failure(result, endpoint, method.upper())
 
-            # The marker test runs on the raw text; everything below reports
+            # The collision test runs on the raw text; everything below reports
             # it, so bind the size once the classification is settled.
             error_text = _bounded_supervisor_text(error_text)
 
@@ -2926,6 +2921,7 @@ class AddOnTools:
         try:
             store = await _supervisor_api_call(self._client, "/store")
         except ToolError:
+            logger.warning("Could not read the store back after %s", key, exc_info=True)
             store = {}
         repos = store.get("result", {}).get("repositories")
         field = "source" if key == "add_repository" else "slug"
@@ -2948,6 +2944,7 @@ class AddOnTools:
 
     @staticmethod
     def _repo_noop_result(key: str, repository: str, verb: str) -> dict[str, Any]:
+        logger.info("Repository %s is a no-op: %r is %s.", key, repository, verb)
         return {
             "success": True,
             "action": key,

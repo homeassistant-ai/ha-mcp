@@ -36,7 +36,7 @@ suggestions on top of them.
 
 Where the sender gives one code to several causes and nothing else tells them
 apart, the wording test goes in `error_wording.py` (one in `src/ha_mcp`, one in
-the component), beside the source that sends the text. `scripts/error_wording.py`
+the component), under a comment naming the source that sends the text. `scripts/error_wording.py`
 fails Fast Checks on a wording test anywhere else and has no list.
 
 ## Choose the authoritative path

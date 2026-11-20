@@ -547,6 +547,47 @@ class TestRepositories:
         assert advice in suggestions
         assert "connection" not in suggestions.lower()
 
+    @pytest.mark.parametrize(
+        ("action", "listed", "message"),
+        [
+            ("add_repository", "core", "invalid repository"),
+            (
+                "remove_repository",
+                "abc123",
+                "Can't remove repository, it is used by installed apps",
+            ),
+        ],
+    )
+    async def test_a_refusal_the_store_does_not_explain_still_fails(
+        self, core_route: Route, action: str, listed: str, message: str
+    ) -> None:
+        """The store is readable and shows the refused change is not already
+        in place: the add is absent from it, the removed one still listed."""
+        adding = action == "add_repository"
+        path = REPOSITORIES if adding else f"{REPOSITORIES}/abc123"
+        core_route.supervisor.refuse("POST" if adding else "DELETE", path, message)
+        stored = Repository(
+            slug=listed,
+            name="Test apps",
+            source="core" if adding else REPO_URL,
+            url=CORE_APPS_URL if adding else REPO_URL,
+            maintainer="Test",
+        )
+        core_route.supervisor.answer(
+            "GET", "/store", StoreInfo(repositories=[stored], addons=[]).to_dict()
+        )
+
+        body = await rejected_call_body(
+            manage(
+                core_route.client,
+                action=action,
+                repository=REPO_URL if adding else "abc123",
+            )
+        )
+
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert message in str(body)
+
     @pytest.mark.parametrize("repository", [None, "   "])
     async def test_a_repository_action_needs_a_repository(
         self, unreachable_client: HomeAssistantClient, repository: str | None

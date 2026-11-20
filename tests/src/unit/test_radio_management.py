@@ -456,6 +456,20 @@ async def test_an_entity_core_does_not_know_is_not_found(
     }
 
 
+async def test_a_lookup_core_refuses_is_not_a_missing_entity(
+    core_client: HomeAssistantClient, radio: RadioTools, config: None
+) -> None:
+    """Core's schema refuses this id; that says nothing about the entity."""
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="matter", action="diagnostics", entity_id="not an entity id"
+        )
+
+    body = error_body(exc)
+    assert body["error"]["code"] != "ENTITY_NOT_FOUND"
+    assert body["ha_error_code"] == "invalid_format"
+
+
 async def test_an_unreachable_home_assistant_is_not_a_missing_entity(
     unreachable_client: HomeAssistantClient,
 ) -> None:

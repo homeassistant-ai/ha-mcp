@@ -33,6 +33,9 @@ from ha_mcp.tools import tools_utility
 from ha_mcp.tools.component_api import get_component_caps
 from ha_mcp.tools.tools_utility import UtilityTools
 
+from ._gateway import Gateway
+from ._gateway import gateway as gateway
+from ._gateway import gateway_client as gateway_client
 from ._tool_errors import error_body
 
 DIAGNOSE = "ha_mcp_tools/template_diagnose"
@@ -357,3 +360,14 @@ class TestCondition:
 
         assert error["condition"] == condition
         assert "template" not in error
+
+
+async def test_a_403_on_the_socket_gets_the_reverse_proxy_advice(
+    gateway: Gateway, gateway_client: HomeAssistantClient
+) -> None:
+    """A proxy that refuses the WebSocket answers the upgrade with 403."""
+    gateway.upgrade_status = 403
+
+    body = await _eval_error(gateway_client, template="{{ 1 }}")
+
+    assert "403 Forbidden" in " ".join(body["error"]["suggestions"])

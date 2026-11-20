@@ -39,9 +39,9 @@ def raise_substitute_failure(
 ) -> NoReturn:
     """Map a failed ``blueprint/substitute`` onto a structured error.
 
-    Core answers every substitute failure with the same generic
-    ``unknown_error`` code, so the message text is the only discriminator:
-    ``MissingInput`` and ``FailedToLoad`` carry their own prefixes.
+    Core answers a blueprint it cannot render with ``unknown_error`` whatever
+    the cause, so under that code the wording tells the causes apart
+    (``error_wording``); any other code is reported as it came.
     """
     message = error_text(response, "Failed to render the blueprint")
     lowered = message.lower() if error_code(response) == "unknown_error" else ""

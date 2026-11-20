@@ -1,11 +1,14 @@
-"""Every test of another program's error wording, each beside its source.
+"""Every test of an error's wording, each under the source that sends the text.
 
-Home Assistant Core, the Supervisor, the Marketplace, Python and FastMCP send
-the errors below with no code, status or exception type that tells the cases
-apart, so their wording is the only signal. A reworded message makes its test
-answer False, and the caller then reports the error as it came. A case that
-has a code, status or type is decided on that instead and does not belong
-here. ``scripts/error_wording.py`` refuses a wording test in any other module.
+Home Assistant Core, the Supervisor, Python and FastMCP send most of the errors
+below with no code, status or exception type that tells the cases apart, so
+their wording is the only signal. The rest is this project's own text: the
+client's ``Command failed: `` prefix, the replies of a component from before
+its file services returned codes, and the usage log. A reworded message makes
+its test answer False, and the caller then reports the error as it came. A
+case that has a code, status or type is decided on that instead and does not
+belong here. ``scripts/error_wording.py`` refuses a wording test in any other
+module.
 """
 
 from __future__ import annotations
@@ -22,9 +25,9 @@ def has_command_failed_prefix(text: str) -> bool:
 
 
 # --- Core: blueprint/websocket_api.py --------------------------------------
-# ws_substitute_blueprint answers ERR_UNKNOWN_ERROR with str(err) for both
-# MissingInput ("Missing input ...") and FailedToLoad ("Failed to load
-# blueprint: ...").
+# ws_substitute_blueprint answers ERR_UNKNOWN_ERROR with str(err) for every
+# BlueprintException (MissingInput: "Missing input ...", FailedToLoad: "Failed
+# to load blueprint: ...") and for an undefined substitution.
 
 
 def blueprint_missing_input(message: str) -> bool:
@@ -32,8 +35,7 @@ def blueprint_missing_input(message: str) -> bool:
 
 
 def blueprint_not_loaded(message: str) -> bool:
-    lowered = message.lower()
-    return "failed to load" in lowered or "not found" in lowered
+    return "failed to load" in message.lower()
 
 
 # --- Core: lovelace/websocket.py and lovelace/dashboard.py -----------------
@@ -65,7 +67,8 @@ def dashboard_save_in_recovery_mode(message: str) -> bool:
 
 
 def hyphenated_url_path(message: str, url_path: str) -> str | None:
-    """lovelace/const.py url_slug: "Url path needs to contain a hyphen (-)".
+    """lovelace/dashboard.py DashboardsCollection._process_create_data: "Url
+    path needs to contain a hyphen (-)".
     The path with hyphens for its underscores, when that is a different path."""
     hyphenated = url_path.replace("_", "-")
     refused = "needs to contain a hyphen" in message
@@ -93,10 +96,9 @@ def invalid_platform_key(text: str) -> re.Match[str] | None:
 
 
 def service_call_unauthorized(code: str | None, message: str) -> bool:
-    """Core refuses the call itself with ``unauthorized``; an Unauthorized the
-    service raises is a HomeAssistantError, sent as ``home_assistant_error``
-    with the exception's text."""
-    return code == "unauthorized" or (
+    """Unauthorized is a HomeAssistantError, so handle_call_service sends every
+    one, the admin gate's included, as ``home_assistant_error`` with its text."""
+    return (
         code == "home_assistant_error"
         and message.removeprefix(COMMAND_FAILED) == "Unauthorized"
     )
@@ -115,11 +117,16 @@ def render_timed_out(message: str, timeout: float) -> bool:
 
 
 def config_resource_not_found(response_data: dict[str, Any] | None) -> bool:
-    """EditKeyBasedConfigView.delete answers 400 for an id it does not have."""
+    """BaseEditConfigView.delete, shared by the id- and key-based views,
+    answers 400 for an id it does not have."""
     return (response_data or {}).get("message") == "Resource not found"
 
 
 # --- Supervisor --------------------------------------------------------------
+# JobGroup.acquire raises "Another job is running for job group <name>" for the
+# transient per-app collision. The job-level JobConcurrency.REJECT path raises
+# a bare "Another job is running" for long operations (OS update, data-disk
+# wipe), which must not be retried: the "for job group" tail tells them apart.
 _JOB_COLLISION = re.compile(r"Another job is running for job group \S+", re.IGNORECASE)
 
 
@@ -127,6 +134,13 @@ def supervisor_invalid_options(reason: str, slug: str) -> bool:
     """AppConfigurationInvalidError after Core's bridge dropped its key; older
     Supervisors send the missing option without the app prefix."""
     return reason.startswith((f"App {slug} has invalid options: ", "Missing option '"))
+
+
+def supervisor_unserved_endpoint(reply: dict[str, Any]) -> bool:
+    """The plain 404 of the Supervisor's router for a path it does not serve;
+    Core's bridge relays the text as ``unknown_error`` and drops the status."""
+    text = str(reply.get("error", "")).removeprefix(COMMAND_FAILED)
+    return reply.get("error_code") == "unknown_error" and text == "404: Not Found"
 
 
 def supervisor_job_collision(text: str) -> bool:

@@ -47,6 +47,7 @@ async def _missing_after_update(
     except HomeAssistantError, ToolError:
         # The update already received a refusal. An optional lookup may
         # refine that answer only if Core supplies the registry.
+        logger.debug("Category list unavailable after a refused update", exc_info=True)
         return False
     categories = listed.get("result") if listed.get("success") else None
     return isinstance(categories, list) and all(

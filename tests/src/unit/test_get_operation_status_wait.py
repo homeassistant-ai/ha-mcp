@@ -75,35 +75,50 @@ async def test_completed_or_zero_timeout_never_polls(
         assert "time_remaining_ms" in result
 
 
-@pytest.mark.parametrize("change", ["completed", "failed", "cleaned"])
-async def test_change_during_a_poll(
-    tools: DeviceControlTools, pending: str, change: str
+async def test_a_poll_sees_the_operation_complete(
+    tools: DeviceControlTools, pending: str, poll_sleeps: list[float]
+) -> None:
+    manager = get_operation_manager()
+    asyncio.get_running_loop().call_soon(
+        manager.update_operation_status, pending, OperationStatus.COMPLETED
+    )
+
+    result = await tools.get_device_operation_status(pending, timeout_seconds=2)
+
+    assert result["status"] == "completed"
+    # The first read was still pending: the answer came from a later poll.
+    assert poll_sleeps
+
+
+@pytest.mark.parametrize(
+    ("gone", "code", "reason"),
+    [
+        (False, "SERVICE_CALL_FAILED", "device unreachable"),
+        (True, "RESOURCE_NOT_FOUND", "cleaned up"),
+    ],
+    ids=["failed", "cleaned"],
+)
+async def test_a_poll_reports_an_operation_that_failed_or_is_gone(
+    tools: DeviceControlTools, pending: str, gone: bool, code: str, reason: str
 ) -> None:
     manager = get_operation_manager()
     loop = asyncio.get_running_loop()
-    if change == "completed":
-        loop.call_soon(
-            manager.update_operation_status, pending, OperationStatus.COMPLETED
-        )
-        result = await tools.get_device_operation_status(pending, timeout_seconds=2)
-        assert result["status"] == "completed"
-        return
-    if change == "cleaned":
+    if gone:
         loop.call_soon(manager.operations.pop, pending)
-        expected = ("RESOURCE_NOT_FOUND", "cleaned up")
     else:
         loop.call_soon(
             manager.update_operation_status,
             pending,
             OperationStatus.FAILED,
             None,
-            "device unreachable",
+            reason,
         )
-        expected = ("SERVICE_CALL_FAILED", "device unreachable")
+
     with pytest.raises(ToolError) as raised:
         await tools.get_device_operation_status(pending, timeout_seconds=2)
-    for text in expected:
-        assert text in str(raised.value)
+
+    assert code in str(raised.value)
+    assert reason in str(raised.value)
 
 
 async def test_fractional_deadline_returns_the_pending_operation(

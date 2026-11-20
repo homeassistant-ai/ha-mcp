@@ -94,10 +94,14 @@ class TestTheRoute:
 
 
 class TestSupervisorRefusals:
+    @pytest.mark.parametrize(
+        "prefix", ["", f"App {SLUG} has invalid options: "], ids=["bare", "named"]
+    )
     async def test_options_supervisor_rejects_are_a_validation_failure(
-        self, route: Route
+        self, route: Route, prefix: str
     ) -> None:
-        """#993: "authorized_keys" in Supervisor's message is not an auth error."""
+        """#993: "authorized_keys" in Supervisor's message is not an auth error.
+        Supervisor names the app before the reason; older ones sent it bare."""
         route.supervisor.running(
             options={"ssh": {"sftp": False}},
             schema=[
@@ -113,7 +117,7 @@ class TestSupervisorRefusals:
         route.supervisor.refuse(
             "POST",
             f"/addons/{SLUG}/options",
-            "Missing option 'authorized_keys' in ssh in SSH (core_ssh)",
+            f"{prefix}Missing option 'authorized_keys' in ssh in SSH (core_ssh)",
         )
 
         body = await rejected_call_body(
@@ -180,14 +184,11 @@ class TestSupervisorRefusals:
 
         body = await rejected_call_body(read(route.client, slug=SLUG))
 
-        if route.in_app:
-            assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
-            assert body["error"]["suggestion"] == (
-                "Check Home Assistant connection and Supervisor availability"
-            )
-        else:
-            # Core's supervisor/api reports only unknown_error for this endpoint.
-            assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        # Core's supervisor/api relays the text and drops the status.
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert body["error"]["suggestion"] == (
+            "Check Home Assistant connection and Supervisor availability"
+        )
 
 
 class TestNoAnswer:

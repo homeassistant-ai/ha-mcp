@@ -116,6 +116,10 @@ class HomeAssistantCommandError(HomeAssistantError):
     defaults to ``None`` for exceptions raised without a code (older raise
     sites, string error payloads, or direct construction in tests), which
     keeps the single-positional-argument constructor backward-compatible.
+
+    The ``translation_*`` fields are Core's, when it sent them.
+    ``empty_error_message`` marks a refusal whose message was blank, which is
+    what a lost Supervisor acknowledgement looks like over Core's bridge.
     """
 
     def __init__(
@@ -134,6 +138,20 @@ class HomeAssistantCommandError(HomeAssistantError):
         self.translation_domain = translation_domain
         self.translation_placeholders = translation_placeholders
         self.empty_error_message = empty_error_message
+
+    @classmethod
+    def from_reply(
+        cls, reply: dict[str, Any], message: str | None = None
+    ) -> HomeAssistantCommandError:
+        """The refusal a pooled reply carries, the inverse of ``refusal_fields``."""
+        return cls(
+            str(reply.get("error")) if message is None else message,
+            reply.get("error_code"),
+            translation_key=reply.get("translation_key"),
+            translation_domain=reply.get("translation_domain"),
+            translation_placeholders=reply.get("translation_placeholders"),
+            empty_error_message=bool(reply.get("empty_error_message")),
+        )
 
     def refusal_fields(self) -> dict[str, Any]:
         """Fields accompanying the human-readable error on a pooled response."""
@@ -154,12 +172,22 @@ class HomeAssistantCommandError(HomeAssistantError):
         if not isinstance(error, dict):
             return cls(f"{prefix}: {error}")
         message = error.get("message", error)
+        key, domain, placeholders = (
+            error.get(field)
+            for field in (
+                "translation_key",
+                "translation_domain",
+                "translation_placeholders",
+            )
+        )
         return cls(
             f"{prefix}: {message}",
             error.get("code"),
-            translation_key=error.get("translation_key"),
-            translation_domain=error.get("translation_domain"),
-            translation_placeholders=error.get("translation_placeholders"),
+            translation_key=key if isinstance(key, str) else None,
+            translation_domain=domain if isinstance(domain, str) else None,
+            translation_placeholders=(
+                placeholders if isinstance(placeholders, dict) else None
+            ),
             empty_error_message=isinstance(message, str) and not message.strip(),
         )
 
@@ -168,9 +196,8 @@ class HomeAssistantCommandTimeout(HomeAssistantError):
     """WebSocket ``send_command`` timed out waiting for HA's response.
 
     A missing response is distinct from a command refusal. Callers that
-    specifically want to handle the WS
-    round-trip timeout (e.g. short-lived waiter cleanup that should
-    swallow a timeout instead of masking the real wait result) catch
-    this type directly. Replaces a bare ``Exception("Command timeout")``
+    specifically want to handle the WS round-trip timeout (e.g. short-lived
+    waiter cleanup that should swallow a timeout instead of masking the real
+    wait result) catch this type directly. Replaces a bare ``Exception("Command timeout")``
     string-match pattern (#1382 Patch76 review).
     """

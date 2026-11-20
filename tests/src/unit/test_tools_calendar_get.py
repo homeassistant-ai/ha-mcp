@@ -39,7 +39,8 @@ async def test_the_default_window_is_the_next_seven_days(
 ) -> None:
     """The window runs from now to seven days later: an event an hour away
     and one an hour before the window closes are both in it."""
-    # No runner's own zone, so a window counted on the server's clock misses.
+    # A zone no CI runner uses: a window counted on the server's clock
+    # instead of Home Assistant's misses.
     await hass.config.async_set_time_zone("Pacific/Kiritimati")
     now = dt.datetime(2026, 6, 12, 12, tzinfo=dt.UTC)
     set_module_clock(monkeypatch, tools_calendar, now)

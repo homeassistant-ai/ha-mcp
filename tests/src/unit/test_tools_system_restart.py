@@ -101,6 +101,47 @@ async def test_a_restart_whose_answer_is_lost_is_reported_as_restarting(
 
 
 @pytest.fixture
+def gateway_goes_away_after_the_check(
+    gateway: Gateway, core_client: HomeAssistantClient
+) -> None:
+    """The gateway answers the config check, then stops listening: the restart
+    call that follows finds nothing to connect to."""
+
+    async def check_then_stop(request: web.Request) -> web.Response:
+        gateway.requests.append(f"{request.method} {request.path}")
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{core_client.base_url}{request.path}",
+                headers={"Authorization": request.headers["Authorization"]},
+            ) as answer,
+        ):
+            body = await answer.read()
+        for site in list(gateway.sites):
+            await site.stop()
+        return web.Response(
+            body=body, content_type="application/json", headers={"Connection": "close"}
+        )
+
+    gateway.routes.append(web.post("/api/config/core/check_config", check_then_stop))
+
+
+@pytest.mark.usefixtures("gateway_goes_away_after_the_check")
+async def test_a_restart_that_could_not_connect_is_not_reported_as_restarting(
+    stops: list[bool], gateway: Gateway, gateway_client: HomeAssistantClient
+) -> None:
+    """Nothing was sent, so telling the user to wait would be for a restart
+    that never comes."""
+    body = await rejected_call_body(
+        SystemTools(gateway_client).ha_restart(confirm=True)
+    )
+
+    assert gateway.requests == ["POST /api/config/core/check_config"]
+    assert stops == []
+    assert body["error"]["code"] == "CONNECTION_FAILED"
+
+
+@pytest.fixture
 def restart_over_websocket(gateway: Gateway) -> None:
     """An explicit REST 401 routes the service call through the client's WS path."""
 

@@ -369,7 +369,6 @@ async def get_connected_ws_client(
 _ENVIRONMENT_CODES = frozenset(
     {
         ErrorCode.AUTH_INVALID_TOKEN.value,
-        ErrorCode.AUTH_EXPIRED.value,
         ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS.value,
         ErrorCode.CONNECTION_FAILED.value,
         ErrorCode.CONNECTION_TIMEOUT.value,

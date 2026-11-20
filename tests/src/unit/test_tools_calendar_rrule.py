@@ -26,8 +26,10 @@ from homeassistant.exceptions import HomeAssistantError
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
+from ha_mcp.tools.helpers import exception_to_structured_error
 from ha_mcp.tools.tools_calendar import CalendarTools
 
 from ._calendars import (
@@ -37,6 +39,7 @@ from ._calendars import (
     local_calendar,
     remote_calendar,
 )
+from ._command_faults import pooled_socket
 from ._tool_errors import error_body, error_of
 
 # Core's config directory is this test's ``tmp_path``.
@@ -265,3 +268,26 @@ async def test_a_create_the_calendar_fails_is_not_blamed_on_a_uid(
     assert body["ha_error_code"] == "failed"
     assert "the calendar store is read-only" in body["error"]["message"]
     assert "ha_config_get_calendar_events" not in str(body)
+
+
+async def test_a_command_core_times_out_on_is_a_timeout(
+    writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
+) -> None:
+    """Core answers a handler's TimeoutError with its ``timeout`` code."""
+    writable.side_effect = TimeoutError
+    ws = await pooled_socket(core_client)
+
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command(
+            "calendar/event/create",
+            entity_id="calendar.writable",
+            event={
+                "summary": "Slow",
+                "dtstart": "2026-06-15T10:00:00",
+                "dtend": "2026-06-15T10:30:00",
+            },
+        )
+
+    assert refused.value.code == "timeout"
+    result = exception_to_structured_error(refused.value, raise_error=False)
+    assert result["error"]["code"] == "TIMEOUT_OPERATION"

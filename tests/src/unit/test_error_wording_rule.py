@@ -88,6 +88,47 @@ REFUSED = {
             error = reply.get("error")
             return error.get("message") == "Not supported"
         """,
+    "text passed by keyword": """
+        def is_missing(*, text):
+            return "No prefs" in text
+        def read(reply):
+            return is_missing(text=str(reply.get("error", "")))
+        """,
+    "the first argument of an exception": """
+        def handle(err: Exception):
+            return err.args[0] == "Unknown entity"
+        """,
+    "text built into an f-string": """
+        def handle(err: Exception):
+            line = f"failed: {err}"
+            return "timed out" in line
+        """,
+    "the message of a REST reply": """
+        def handle(error):
+            return error.response_data["message"] == "Resource not found"
+        """,
+    "equality with a constant that holds prose": """
+        NOT_SUPPORTED = "Not supported"
+        def handle(reply):
+            return reply.get("error") == NOT_SUPPORTED
+        """,
+    "an exception reached through its cause": """
+        def handle(err: Exception):
+            cause = err.__cause__
+            return "expired" in str(cause)
+        """,
+    "an exception taken from a task": """
+        def handle(task):
+            failure = task.exception()
+            return str(failure).startswith("Timed out")
+        """,
+    "a match on the text": """
+        def handle(err: Exception):
+            match str(err):
+                case "Unauthorized" | "Forbidden":
+                    return True
+            return False
+        """,
 }
 
 ALLOWED = {
@@ -119,6 +160,22 @@ ALLOWED = {
         def handle(reply):
             return reply.get("error") == ""
         """,
+    "equality with a constant that holds a code": """
+        TIMED_OUT = "describe_timeout"
+        def handle(reply):
+            return reply.get("error") == TIMED_OUT
+        """,
+    "the error field among bare codes": """
+        def handle(reply):
+            return reply.get("error") in ("cards_loading", "card_not_inspected")
+        """,
+    "a match on the code": """
+        def handle(reply):
+            match reply.get("error_code"):
+                case "not_found":
+                    return True
+            return False
+        """,
 }
 
 
@@ -143,6 +200,8 @@ def test_the_wording_module_is_the_one_place_for_it(
 
     assert _found(guard, source, path) == []
     assert len(_found(guard, source, path.replace("error_wording", "other"))) == 1
+    # Only those two files: the name alone exempts nothing.
+    assert len(_found(guard, source, "src/ha_mcp/tools/error_wording.py")) == 1
 
 
 def test_a_finding_names_the_file_and_line(guard: ModuleType) -> None:

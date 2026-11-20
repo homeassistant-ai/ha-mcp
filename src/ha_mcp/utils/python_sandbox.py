@@ -492,7 +492,6 @@ def format_sandbox_error(
             "Use .get(key, default) to handle missing keys",
             f"Expression: {preview}",
         ]
-        # Python 3.14 adds ", got N" only for a plain list, tuple or dict.
         if single_target_unpack(error):
             suggestions.insert(
                 0,

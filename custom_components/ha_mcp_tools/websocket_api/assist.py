@@ -46,15 +46,8 @@ def _async_get_assistant_settings(hass: HomeAssistant) -> dict[str, Any]:
 
 
 def _is_unknown_entity_error(exc: Exception) -> bool:
-    """True for core's ``HomeAssistantError('Unknown entity')`` from the settings helper.
-
-    The type alone is too wide: core raises a plain ``HomeAssistantError`` for
-    other faults too, so the message is also required to carry ``unknown entity``
-    (case-insensitive). A store-read failure that raises a bare
-    ``HomeAssistantError`` therefore propagates instead of being silently reported
-    as not-exposed; the audit guardrail (junk id → not-exposed default) still
-    matches because that raise carries the ``Unknown entity`` message.
-    """
+    """Core's "Unknown entity" from the settings helper; any other
+    ``HomeAssistantError``, a failed store read included, propagates."""
     return unknown_entity(exc)
 
 

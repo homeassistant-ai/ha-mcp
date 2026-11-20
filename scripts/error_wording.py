@@ -6,14 +6,15 @@ Core, the Supervisor, the frontend, Python and FastMCP all reword theirs
 freely; the code, HTTP status and exception type are what they keep. A branch
 on the wording works until the next release, then fails without a trace.
 
-Where the sender offers nothing but its wording, the test goes into the one
-module per package named ``error_wording.py``, beside the source line that
-sends the text. This script fails on a wording test anywhere else under
-``src/ha_mcp`` and ``custom_components``. There is no list of exceptions.
+Where the sender offers nothing but its wording, the test goes into
+``src/ha_mcp/error_wording.py`` or the component's ``error_wording.py``, under
+a comment that names the source sending the text. This script fails on a
+wording test in any other file of ``src/ha_mcp`` and ``custom_components``
+(vendored libraries are not scanned). There is no list of exceptions.
 
-What counts as error text: ``str()`` of a caught exception, its ``args`` or
-``message``, the ``error`` (or an error's ``message``) field of a reply, and
-anything built from those. The text is followed through assignments, through
+What counts as error text: ``str()`` or ``repr()`` of a caught exception, its
+``args``, ``message`` or ``msg``, the ``error`` or ``error_message`` (or an
+error's ``message``) field of a reply, and anything built from those. The text is followed through assignments, through
 arguments into the functions they are passed to, and out of the functions that
 return it. A decision is a membership, prefix, suffix or regex test on such
 text, or its comparison with a literal that is not a bare code (``not_found``).
@@ -29,7 +30,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TREES = ("src/ha_mcp", "custom_components")
-HOME = "error_wording.py"
+HOMES = frozenset(
+    {"src/ha_mcp/error_wording.py", "custom_components/ha_mcp_tools/error_wording.py"}
+)
 
 EXCEPTION_PARAMS = {"e", "exc", "err", "error", "exception"}
 REPLY_KEYS = {"error", "error_message"}
@@ -83,6 +86,7 @@ class Program:
     def __init__(self) -> None:
         self.text_params: dict[str, set[str]] = {}
         self.returns_text: set[str] = set()
+        self.prose: set[str] = set()
         self.changed = False
 
     def pass_text(self, func: str, param: str) -> None:
@@ -106,12 +110,12 @@ class Flow:
         for node in self.nodes:
             if isinstance(node, ast.ExceptHandler) and node.name:
                 self.exceptions.add(node.name)
-            elif isinstance(node, (ast.For, ast.comprehension)) and self._fixed(
-                node.iter
-            ):
-                self.fixed.update(
-                    n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)
-                )
+            elif isinstance(node, (ast.For, ast.comprehension)):
+                names = {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
+                if self._fixed(node.iter):
+                    self.fixed.update(names)
+                elif _name(node.iter) == "exceptions":  # an exception group's
+                    self.exceptions.update(names)
         while self._follow_assignments():
             pass
 
@@ -133,8 +137,9 @@ class Flow:
                 self.exceptions.add(param.arg)
 
     def _follow_assignments(self) -> bool:
-        """Mark the names assigned error text; True while new ones turn up."""
-        before = len(self.texts)
+        """Mark the names assigned error text or an exception; True while new
+        ones turn up."""
+        before = len(self.texts) + len(self.exceptions)
         for node in self.nodes:
             if isinstance(node, ast.Assign):
                 targets, value = node.targets, node.value
@@ -142,9 +147,12 @@ class Flow:
                 targets, value = [node.target], node.value
             else:
                 continue
+            names = [t.id for t in targets if isinstance(t, ast.Name)]
             if self.is_text(value):
-                self.texts.update(t.id for t in targets if isinstance(t, ast.Name))
-        return len(self.texts) > before
+                self.texts.update(names)
+            elif self.is_exception(value):
+                self.exceptions.update(names)
+        return len(self.texts) + len(self.exceptions) > before
 
     def _fixed(self, node: ast.expr) -> bool:
         """Wording written in the source: a literal, a constant, or a name
@@ -155,7 +163,10 @@ class Flow:
             return node.id.isupper() or node.id in self.fixed
         if isinstance(node, ast.Attribute):
             return node.attr.isupper()
-        return _wording(node)
+        # Any literal: a one-word needle is a wording test all the same.
+        return isinstance(node, ast.JoinedStr) or (
+            isinstance(node, ast.Constant) and isinstance(node.value, str)
+        )
 
     def is_exception(self, node: ast.AST) -> bool:
         if isinstance(node, ast.Attribute) and node.attr in {
@@ -163,6 +174,8 @@ class Flow:
             "__context__",
         }:
             return self.is_exception(node.value)
+        if isinstance(node, ast.Call):  # ``task.exception()``
+            return _name(node.func) == "exception" and not node.args
         return isinstance(node, ast.Name) and node.id in self.exceptions
 
     def _is_error_field(self, receiver: ast.expr, key: ast.expr) -> bool:
@@ -238,30 +251,81 @@ class Flow:
                     if keyword.arg and self.is_text(keyword.value):
                         self.program.pass_text(target.name, keyword.arg)
 
-    def decisions(self) -> Iterator[ast.Compare | ast.Call]:
+    def _prose(self, node: ast.expr) -> bool:
+        """Prose: a literal, a collection holding one, or a module constant
+        that does. A bare code such as ``not_found`` is not."""
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            return any(self._prose(item) for item in node.elts)
+        if isinstance(node, ast.Call) and _name(node.func) in STR_METHODS:
+            node = getattr(node.func, "value", node)
+        return _wording(node) or _name(node) in self.program.prose
+
+    def _compares_wording(self, node: ast.Compare) -> bool:
+        sides = [node.left, *node.comparators]
+        for op, left, right in zip(node.ops, sides, sides[1:], strict=False):
+            if isinstance(op, (ast.In, ast.NotIn)):
+                # A needle in the text, or the text among whole messages.
+                found = (self.is_text(right) and self._fixed(left)) or (
+                    self.is_text(left) and self._prose(right)
+                )
+            elif isinstance(op, (ast.Eq, ast.NotEq)):
+                found = (self.is_text(left) and self._prose(right)) or (
+                    self.is_text(right) and self._prose(left)
+                )
+            else:
+                continue
+            if found:
+                return True
+        return False
+
+    def _tests_wording(self, node: ast.Call) -> bool:
+        attr = _name(node.func)
+        return (
+            attr in TEXT_TESTS and self.is_text(getattr(node.func, "value", node))
+        ) or (attr in REGEX_TESTS and any(self.is_text(arg) for arg in node.args[:2]))
+
+    def _matches_wording(self, node: ast.Match) -> bool:
+        return self.is_text(node.subject) and any(
+            _wording(value) for case in node.cases for value in _values(case.pattern)
+        )
+
+    def decisions(self) -> Iterator[ast.Compare | ast.Call | ast.Match]:
         for node in self.nodes:
             if isinstance(node, ast.Compare):
-                sides = [node.left, *node.comparators]
-                for op, left, right in zip(node.ops, sides, sides[1:], strict=False):
-                    if isinstance(op, (ast.In, ast.NotIn)):
-                        found = (self.is_text(right) and self._fixed(left)) or (
-                            self.is_text(left) and self._fixed(right)
-                        )
-                    elif isinstance(op, (ast.Eq, ast.NotEq)):
-                        found = (self.is_text(left) and _wording(right)) or (
-                            self.is_text(right) and _wording(left)
-                        )
-                    else:
-                        found = False
-                    if found:
-                        yield node
-                        break
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                attr, args = node.func.attr, node.args
-                if (attr in TEXT_TESTS and self.is_text(node.func.value)) or (
-                    attr in REGEX_TESTS and any(self.is_text(arg) for arg in args[:2])
-                ):
+                if self._compares_wording(node):
                     yield node
+            elif isinstance(node, ast.Match):
+                if self._matches_wording(node):
+                    yield node
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if self._tests_wording(node):
+                    yield node
+
+
+def _values(pattern: ast.pattern) -> list[ast.expr]:
+    """The literals a ``case`` compares against."""
+    if isinstance(pattern, ast.MatchValue):
+        return [pattern.value]
+    if isinstance(pattern, ast.MatchOr):
+        return [value for each in pattern.patterns for value in _values(each)]
+    return []
+
+
+def _prose_constants(tree: ast.Module) -> set[str]:
+    """Module-level names bound to prose or to a collection holding some."""
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if any(
+            isinstance(part, ast.expr) and _wording(part) for part in ast.walk(value)
+        ):
+            names.update(t.id for t in targets if isinstance(t, ast.Name))
+    return names
 
 
 def _wording(node: ast.expr) -> bool:
@@ -295,9 +359,11 @@ def scan(sources: dict[str, str]) -> list[str]:
             else:
                 stack.extend(ast.iter_child_nodes(node))
 
-    for path, source in sources.items():
-        collect(path, ast.parse(source, path), None)
     program = Program()
+    for path, source in sources.items():
+        tree = ast.parse(source, path)
+        program.prose |= _prose_constants(tree)
+        collect(path, tree, None)
     program.changed = True
     while program.changed:
         program.changed = False
@@ -311,7 +377,7 @@ def scan(sources: dict[str, str]) -> list[str]:
     found = {
         (path, node.lineno, ast.unparse(node).replace("\n", " "))
         for path, flow in flows
-        if Path(path).name != HOME
+        if path not in HOMES
         for node in flow.decisions()
     }
     return [f"{path}:{line}: {code[:120]}" for path, line, code in sorted(found)]
@@ -331,7 +397,7 @@ def main() -> int:
         print(
             f"\n{len(found)} decision(s) by the wording of an error. Use the code, "
             f"status or exception type the sender provides; where it provides none, "
-            f"put the test in {HOME} beside the source that sends the text.",
+            "put the test in error_wording.py under the source that sends the text.",
             file=sys.stderr,
         )
     return 1 if found else 0

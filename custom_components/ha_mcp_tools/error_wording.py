@@ -1,8 +1,9 @@
-"""Every test of another program's error wording in the component.
+"""Every test of an error's wording in the component, each under its source.
 
-These errors carry no code or type that tells the cases apart, so their
-wording is the only signal. ``scripts/error_wording.py`` refuses a wording
-test in any other module.
+Core's error below has no code or type that tells its cases apart, and the
+JavaScript engine reports an undefined name only as text. ``export_needed``
+reads the card engine's own request (``card_definitions.py``) and sits with
+them. ``scripts/error_wording.py`` refuses a wording test in any other module.
 """
 
 from __future__ import annotations
@@ -16,8 +17,9 @@ _REFERENCE_ERROR = re.compile(r"ReferenceError: ([\w$]+) is not defined")
 
 
 def unknown_entity(exc: Exception) -> bool:
-    """homeassistant/exposed_entities.py async_get_entity_settings raises a
-    plain HomeAssistantError("Unknown entity"), the type of its other faults."""
+    """components/homeassistant/exposed_entities.py: async_get_entity_settings
+    raises a plain HomeAssistantError("Unknown entity"), the type of its other
+    faults."""
     return isinstance(exc, HomeAssistantError) and "unknown entity" in str(exc).lower()
 
 

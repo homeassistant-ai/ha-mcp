@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 
+from ._vendor.websockets.exceptions import WebSocketException
 from .client.exceptions import (
     HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
@@ -134,7 +135,8 @@ def create_client_error_response(
         return _command_error_response(error, context)
     if isinstance(error, (TimeoutError, HomeAssistantCommandTimeout)):
         return _request_timeout(error, context)
-    if isinstance(error, (ConnectionError, httpx.NetworkError)):
+    # A socket that drops mid-write reaches a direct ``send_command`` caller raw.
+    if isinstance(error, (ConnectionError, httpx.NetworkError, WebSocketException)):
         return create_connection_error(message, context=context)
     if isinstance(error, ValueError):
         return create_validation_error(message, context=context)

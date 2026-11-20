@@ -2532,7 +2532,8 @@ async def _list_legacy_backups(client: Any) -> tuple[list[dict[str, Any]], str |
 
 
 async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
-    """Read a legacy backup, carrying service unavailability separately from absence."""
+    """Read a legacy backup; a service that cannot be called is ``success: False``
+    with no ``error_code``, which a missing backup has."""
     from .tools.helpers import extract_structured_error_reason
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response

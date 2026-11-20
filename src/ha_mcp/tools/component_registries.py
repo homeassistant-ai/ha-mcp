@@ -174,9 +174,7 @@ async def registry_list_rows(client: Any, kind: str) -> list[Any]:
     is raised as ``HomeAssistantCommandError``."""
     reply = await registry_list_reply(client, kind)
     if not reply.get("success"):
-        raise HomeAssistantCommandError(
-            str(reply.get("error")), reply.get("error_code")
-        )
+        raise HomeAssistantCommandError.from_reply(reply)
     rows: list[Any] = reply["result"]
     return rows
 
