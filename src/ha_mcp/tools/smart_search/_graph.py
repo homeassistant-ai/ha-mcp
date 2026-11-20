@@ -408,9 +408,9 @@ def _graph_record(
     injected rather than reimplemented. A scene's storage key is its registry
     ``unique_id``, which diverges from the entity slug for any scene renamed in
     the UI, and it is the key ``ha_config_get_scene`` /
-    ``ha_config_delete_scene`` take. Reusing the resolver keeps one tier order
-    and, when it does fall back to the slug, keeps the warning that makes the
-    unresolvable case visible (#1168).
+    ``ha_config_remove_scene`` take. Reusing the resolver keeps one tier order
+    and, when it finds no key and falls back to ``scene.<slug>``, keeps the
+    warning that makes the unresolvable case visible (#1168).
     """
     record: dict[str, Any] = {
         "entity_id": entity_id,

@@ -518,7 +518,7 @@ async def test_graph_scene_hit_carries_its_storage_key_not_its_slug(
     """A graph scene hit's scene_id must be the key its tools index on.
 
     For a renamed scene the slug is not the storage key. Handing the slug to
-    ha_config_get_scene or ha_config_delete_scene finds the wrong scene or
+    ha_config_get_scene or ha_config_remove_scene finds the wrong scene or
     none at all, and a graph hit is exactly the case where no config body
     was read to correct it.
     """

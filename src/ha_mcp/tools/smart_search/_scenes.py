@@ -293,15 +293,15 @@ class SceneSearchMixin(ConfigFetchMixin):
             return (sid, None, "yaml_skipped")
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                # A bare 404 (not the subclass above) means the entity is in
-                # neither the registry nor the state machine: it vanished
-                # between get_states() and this fetch, or ``scene.<sid>`` is
-                # unregistered while key ``<sid>`` holds another scene. That IS
-                # a gap in this result, so it belongs in the failed bucket with
-                # a representative sample.
+                # A bare 404 (not the subclass above) means the entity
+                # vanished between get_states() and this fetch, or
+                # ``scene.<sid>`` is unregistered while key ``<sid>`` holds a
+                # scene. That IS a gap in this result, so it belongs in the
+                # failed bucket with a representative sample.
                 logger.debug(
                     f"Scene individual config fetch ({sid}) returned 404 "
-                    "— entity no longer exists since enumeration."
+                    "— the entity vanished since enumeration, or its slug is "
+                    "another scene's storage key."
                 )
             else:
                 logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")

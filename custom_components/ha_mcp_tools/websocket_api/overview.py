@@ -544,8 +544,9 @@ def _do_states(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
     the live ``last_reported`` (see ``_state_as_dict``). It is never
     ``_plainify``'d: ``_plainify``'s ``str()`` would render a datetime with a
     space separator where both REST and WS use ``isoformat``'s ``T``. State bodies carry no ``!secret`` plaintext. No per-frame guard:
-    ``ha_get_state`` caps its ids at ``MAX_ENTITIES`` and a scene capture names one
-    scene's entities, while ``overview`` already returns every state in one call.
+    each id is one in-memory read and the reply grows only with the caller's own id
+    list; its bodies hold the states ``overview`` already returns for every entity
+    at once.
     """
     entity_ids = params.get("entity_ids") or []
     states: dict[str, Any] = {}
