@@ -744,7 +744,7 @@
         },
         "uid": {
           "type": "str | None",
-          "description": "UID of an existing event to update.",
+          "description": "UID of an existing event to update; omit to create one.",
           "default": null
         },
         "recurrence_id": {
