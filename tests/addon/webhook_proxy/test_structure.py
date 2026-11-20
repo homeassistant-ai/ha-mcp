@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -23,13 +24,19 @@ def _config(variant: Variant) -> dict[str, Any]:
     return config
 
 
+def _app_modules(variant: Variant) -> list[Path]:
+    """The app's top-level Python modules: ``start.py`` and its siblings."""
+    return sorted(variant.addon_dir.glob("*.py"))
+
+
 def _options_start_reads(variant: Variant) -> set[str]:
-    """The option keys ``start.py`` reads from /data/options.json."""
-    tree = ast.parse(variant.start_src())
+    """The option keys the app reads from /data/options.json."""
     reader = next(
         node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_read_addon_options"
+        for module in _app_modules(variant)
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8")))
+        if isinstance(node, ast.FunctionDef)
+        and node.name in ("_read_addon_options", "read_app_options")
     )
     return {
         str(call.args[0].value)
@@ -56,6 +63,14 @@ def test_supervisor_build_gets_the_files_it_copies(variant: Variant) -> None:
     assert "/start.py" in dockerfile.split("CMD", 1)[1]
 
 
+def test_image_gets_every_module_start_can_import(variant: Variant) -> None:
+    """``start.py`` imports its sibling modules from ``/`` in the image; one
+    the Dockerfile does not copy makes the app fail to start."""
+    dockerfile = (variant.addon_dir / "Dockerfile").read_text()
+    for module in _app_modules(variant):
+        assert f"COPY {module.name} /\n" in dockerfile, module.name
+
+
 def test_supervisor_builds_the_image_instead_of_pulling_one(variant: Variant) -> None:
     """No image is published for the proxy: an ``image`` key would make the
     Supervisor pull one that does not exist instead of building the Dockerfile."""
@@ -79,6 +94,19 @@ async def test_core_loads_the_bundled_component_as_a_config_flow_integration(
     hass.config_entries.flow.async_abort(result["flow_id"])
 
 
+def _mounts_config_writable_at_config(entry: Any) -> bool:
+    """A ``map`` entry that mounts Home Assistant's config directory writable
+    at ``/config``, where ``start.py`` writes."""
+    if isinstance(entry, str):
+        # The deprecated ``config`` type mounts at /config.
+        return entry == "config:rw"
+    return (
+        entry.get("type") == "homeassistant_config"
+        and entry.get("read_only") is False
+        and entry.get("path") == "/config"
+    )
+
+
 def test_app_has_the_supervisor_access_start_needs(variant: Variant) -> None:
     """``start.py`` lists apps and reads the server app's logs (Supervisor API
     with the manager role), calls Core's API, and writes the component and its
@@ -89,7 +117,7 @@ def test_app_has_the_supervisor_access_start_needs(variant: Variant) -> None:
     assert config["hassio_api"] is True
     assert config["hassio_role"] == "manager"
     assert config["homeassistant_api"] is True
-    assert "config:rw" in config["map"]
+    assert any(_mounts_config_writable_at_config(entry) for entry in config["map"])
 
 
 def test_slug_is_the_one_the_sibling_flavor_refuses_to_run_beside(
@@ -126,7 +154,10 @@ def test_oauth_options_stay_hidden_and_the_secret_is_masked(variant: Variant) ->
     assert "enable_oauth" in oauth_options
     for key in oauth_options:
         assert key not in config["options"], key
-        assert str(config["schema"][key]).endswith("?"), key
+        schema = config["schema"][key]
+        # A list option is optional when its item type is.
+        item = schema[0] if isinstance(schema, list) else schema
+        assert str(item).endswith("?"), key
     assert config["schema"]["oauth_client_secret"] == "password?"
 
 

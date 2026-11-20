@@ -108,3 +108,23 @@ configuration:
       never arrived — the problem is network reachability (public URL / DNS /
       TLS), not the addon. Restart the addon after changing this option. Leave
       off for normal operation.
+  oauth_redirect_allowlist:
+    name: Allowed OAuth callback URLs
+    description: |
+      Applies only while Enable OAuth is off. The sign-in redirect is sent only
+      to a callback URL on this list. Leave unset to use the built-in list of
+      common clients (Claude, Claude Code, ChatGPT, Gemini Enterprise).
+
+      When set, this list replaces the built-in one, so include every callback
+      you need. Matching is exact, except that an http://localhost or
+      http://127.0.0.1 entry matches any port. Each entry must be https (or
+      http on localhost/127.0.0.1) with no username/password or #fragment.
+      Restart the app after changing this option.
+  oauth_allow_any_callback:
+    name: Allow any OAuth callback URL
+    description: |
+      Turns the Allowed OAuth callback URLs list off: any https or loopback
+      http callback is accepted. This lets anyone use your Home Assistant
+      address to redirect a visitor to a site of their choice. Off by default;
+      applies only while Enable OAuth is off. Restart the app after changing
+      this option.

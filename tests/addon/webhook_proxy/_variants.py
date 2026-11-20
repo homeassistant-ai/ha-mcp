@@ -10,6 +10,7 @@ stay off for stable after the code arrives.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -80,13 +81,27 @@ VARIANTS = (
 
 
 def load_start(variant: Variant) -> ModuleType:
-    """Load a fresh copy of the flavor's ``start.py``, the app's process."""
+    """Load a fresh copy of the flavor's ``start.py``, the app's process.
+
+    In the image ``start.py`` imports its sibling modules from ``/``; here they
+    come from the flavor's own directory, and each load gets its own copy so
+    the two flavors never share one.
+    """
     spec = importlib.util.spec_from_file_location(
         f"webhook_proxy_start_{variant.key}", variant.addon_dir / "start.py"
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    siblings = {path.stem for path in variant.addon_dir.glob("*.py")} - {"start"}
+    sys.path.insert(0, str(variant.addon_dir))
+    try:
+        for name in siblings:
+            sys.modules.pop(name, None)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(variant.addon_dir))
+        for name in siblings:
+            sys.modules.pop(name, None)
     return module
 
 

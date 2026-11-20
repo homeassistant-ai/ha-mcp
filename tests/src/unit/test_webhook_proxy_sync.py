@@ -439,6 +439,47 @@ def _assert_committed_equals_transform(tmp_path, direction, src, dst, bump=None)
     )
 
 
+def _stage_both_trees(root: Path) -> None:
+    """Copy both committed app trees and the ruff config under ``root``."""
+    import shutil
+
+    for flavor in (sync.STABLE, sync.DEV):
+        shutil.copytree(
+            REPO_ROOT / flavor.addon_dir,
+            root / flavor.addon_dir,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+    shutil.copy2(REPO_ROOT / "pyproject.toml", root / "pyproject.toml")
+
+
+def test_promote_carries_a_sibling_module_with_its_tokens_renamed(tmp_path):
+    """start.py imports its sibling modules from the image root; a promote
+    that left one behind would ship a stable app that cannot start."""
+    _stage_both_trees(tmp_path)
+    (tmp_path / sync.DEV.addon_dir / "extra_module.py").write_text(
+        'STATE = "/config/.mcp_proxy_dev_state.json"\n', encoding="utf-8"
+    )
+
+    sync.sync("promote", bump="patch", root=tmp_path)
+
+    carried = tmp_path / sync.STABLE.addon_dir / "extra_module.py"
+    assert carried.read_text(encoding="utf-8") == (
+        'STATE = "/config/.mcp_proxy_state.json"\n'
+    )
+
+
+def test_promote_removes_a_module_the_source_no_longer_has(tmp_path):
+    """A module dev deleted must not linger in stable, where nothing keeps it
+    in step with the code that replaced it."""
+    _stage_both_trees(tmp_path)
+    stale = tmp_path / sync.STABLE.addon_dir / "retired_module.py"
+    stale.write_text("RETIRED = True\n", encoding="utf-8")
+
+    sync.sync("promote", bump="patch", root=tmp_path)
+
+    assert not stale.exists()
+
+
 @_sync_point_only
 def test_committed_dev_equals_reset_transform_of_stable(tmp_path):
     """Sync-point drift guard: the committed dev tree MUST equal reset(stable) — the

@@ -10,10 +10,12 @@ other as its sibling, and applies it mechanically:
 * ``--direction promote``  copies dev -> stable (SRC=dev, DST=stable)
 * ``--direction reset``    copies stable -> dev (SRC=stable, DST=dev)
 
-Beyond the component code, the copy+rename set also spans ``start.py``, the
-``Dockerfile``, ``config.yaml``, and ``translations/en.yaml`` — each carries
-the ``mcp_proxy`` identity token (in ``translations/en.yaml`` it is the
-log-filter hint) that must flip with the flavor.
+Beyond the component code, the copy+rename set also spans every top-level
+``*.py`` module (``start.py`` and its sibling modules; a destination module
+the source no longer has is deleted), the ``Dockerfile``, ``config.yaml``, and
+``translations/en.yaml`` — each may carry the ``mcp_proxy`` identity token (in
+``translations/en.yaml`` it is the log-filter hint) that must flip with the
+flavor.
 
 Everything is expressed as small pure functions so the transform can be unit
 tested without touching the filesystem. The one side-effecting step is
@@ -415,7 +417,8 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
     dst_dir = root / dst.addon_dir
     dst_comp = dst_dir / dst.component
 
-    # 1. Replace the component dir + copy start.py / Dockerfile / translations.
+    # 1. Replace the component dir + the top-level modules (start.py and its
+    # siblings), and copy the Dockerfile / translations.
     if dst_comp.exists():
         shutil.rmtree(dst_comp)
     shutil.copytree(
@@ -423,7 +426,13 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
         dst_comp,
         ignore=shutil.ignore_patterns("__pycache__"),
     )
-    shutil.copy2(src_dir / "start.py", dst_dir / "start.py")
+    src_modules = {p.name for p in src_dir.glob("*.py")}
+    for stale in dst_dir.glob("*.py"):
+        if stale.name not in src_modules:
+            stale.unlink()
+    modules = [dst_dir / name for name in sorted(src_modules)]
+    for module in modules:
+        shutil.copy2(src_dir / module.name, module)
     shutil.copy2(src_dir / "Dockerfile", dst_dir / "Dockerfile")
     shutil.copy2(
         src_dir / "translations" / "en.yaml", dst_dir / "translations" / "en.yaml"
@@ -439,7 +448,7 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
 
     # 2. Blanket token rename on the copied code + Dockerfile + translations.
     rename_targets = [
-        dst_dir / "start.py",
+        *modules,
         dst_dir / "Dockerfile",
         dst_dir / "translations" / "en.yaml",
     ]
@@ -474,7 +483,7 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
     _edit(dst_comp / "manifest.json", lambda t: apply_manifest(t, dst, version))
 
     # Re-wrap .py lines whose length crossed 88 cols due to the token swap.
-    _ruff_format([start_py, *sorted(dst_comp.rglob("*.py"))], root)
+    _ruff_format([*modules, *sorted(dst_comp.rglob("*.py"))], root)
 
     if direction == "promote":
         # The promote PR itself carries the dev version-line rebase — see
