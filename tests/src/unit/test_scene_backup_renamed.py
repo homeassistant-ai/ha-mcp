@@ -122,12 +122,10 @@ async def test_a_failed_read_of_the_stored_scenes_blocks_the_restore(
     hass: HomeAssistant, backup_manager: BackupManager, snapshot_of_deleted_movie: str
 ) -> None:
     """Core cannot read an unparsable scenes.yaml, so it cannot say whether
-    the scene is gone; nothing is written."""
+    the scene is gone. The message is the check: a write would fail on the same
+    file, so the file's bytes cannot tell a refusal from an attempted write."""
     path = Path(hass.config.path("scenes.yaml"))
-    broken = "- id: [unclosed\n"
-    await hass.async_add_executor_job(path.write_text, broken)
+    await hass.async_add_executor_job(path.write_text, "- id: [unclosed\n")
 
     with pytest.raises(MandatoryBackupError, match="stored scenes could not be read"):
         await backup_manager.restore_snapshot(snapshot_of_deleted_movie)
-
-    assert await hass.async_add_executor_job(path.read_text) == broken

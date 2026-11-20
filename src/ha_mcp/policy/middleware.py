@@ -305,7 +305,13 @@ class PolicyMiddleware(Middleware):
             ):
                 return await call_next(context)
             await self._end_lost_claim(
-                pending, rule, name, args_hash, args, policy, dynamic_targets
+                pending,
+                rule,
+                name=name,
+                args_hash=args_hash,
+                args=args,
+                policy=policy,
+                dynamic_targets=dynamic_targets,
             )
         if pending.decision == "denied":
             self._queue.remove(pending.token)
@@ -581,6 +587,7 @@ class PolicyMiddleware(Middleware):
         self,
         pending: PendingApproval,
         rule: Rule | None,
+        *,
         name: str,
         args_hash: str,
         args: dict[str, Any],
@@ -594,10 +601,13 @@ class PolicyMiddleware(Middleware):
         already spent, so it does not wait again here -- re-waiting would also
         let a steady stream of identical calls starve one another. Only a
         resume of the same single-use request shares a dynamic entry, and no
-        call could ever claim a new one, so that call ends with no new row.
+        call could ever claim a new one, so that call ends with no new row,
+        told that the other resume used the approval.
         """
         if dynamic_targets:
-            self._raise_pending_error(pending, rule, dynamic_targets=True)
+            self._raise_pending_error(
+                pending, rule, dynamic_targets=True, used_elsewhere=True
+            )
         pending = await self._new_pending(
             name, args_hash, args, policy=policy, dynamic_targets=False
         )
@@ -751,6 +761,7 @@ class PolicyMiddleware(Middleware):
         *,
         dynamic_targets: bool = False,
         dismissed: bool = False,
+        used_elsewhere: bool = False,
     ) -> NoReturn:
         """Raise the structured USER_APPROVAL_REQUIRED error for one pending entry.
 
@@ -762,9 +773,12 @@ class PolicyMiddleware(Middleware):
         picked up by a later re-call -- so its wording must not promise the
         normal "re-call after the user approves" recovery path the
         non-dynamic case uses, and must not describe a still-open approval
-        window. It ends either after ``_wait_for_decision`` returned with no
-        decision (the window closed) or, with ``dismissed``, when the user
-        dismissed the approval form, and the message says which.
+        window. It ends after ``_wait_for_decision`` returned with no
+        decision (the window closed), with ``dismissed`` when the user
+        dismissed the approval form, or with ``used_elsewhere`` when another
+        resume of the same request used its approval, and the message says
+        which. Only that last one warns against re-calling: the approved action
+        runs through the other call.
         """
         context: dict[str, Any] = {"token": pending.token}
         # Surface the matched rule so users (and the LLM) can tell at a
@@ -781,26 +795,42 @@ class PolicyMiddleware(Middleware):
             # countdown left to report -- a number here would read as
             # "there's still time", exactly the false impression this
             # message must not give.
-            ended = (
-                "the approval form for this call was dismissed"
-                if dismissed
-                else "this call's wait window has now closed"
-            )
+            if used_elsewhere:
+                ended = (
+                    "another resume of this request used its approval: that "
+                    "call runs the tool and returns its result, this one does not"
+                )
+                next_step = recall = (
+                    "Do not re-call this tool for the same effect: the other "
+                    "resume runs it, and a re-call asks the user to approve "
+                    "the same action a second time."
+                )
+            else:
+                ended = (
+                    "the approval form for this call was dismissed"
+                    if dismissed
+                    else "this call's wait window has now closed"
+                )
+                next_step = (
+                    "Re-call this tool to create a brand-new, independent request."
+                )
+                recall = (
+                    "Re-call this tool with the same arguments to create a new "
+                    "pending request, then have the user approve THAT one "
+                    "while the new call is still waiting on it."
+                )
             message = (
                 "User approval required, and this specific request has "
                 "already ended: it was single-use, bound to this one "
                 f"call only, and {ended}. "
                 "The token above has already been removed and no longer "
                 "exists -- there is nothing left to approve for this call. "
-                "Re-call this tool to create a brand-new, independent "
-                "request."
+                f"{next_step}"
             )
             suggestions = [
                 "Do not tell the user to approve the token above -- it no "
                 + "longer exists and there is nothing left to approve.",
-                "Re-call this tool with the same arguments to create a new "
-                + "pending request, then have the user approve THAT one "
-                + "while the new call is still waiting on it.",
+                recall,
             ]
         else:
             message = (

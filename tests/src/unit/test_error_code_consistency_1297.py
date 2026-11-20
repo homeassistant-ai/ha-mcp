@@ -245,6 +245,21 @@ async def test_missing_script_lists_the_ids_of_the_scripts_that_exist(
         "script.morning_routine",
     ]
     assert any("ha_search(domain_filter='script')" in s for s in _suggestions(body))
+    # Only remove reads a bare id strictly as a storage key.
+    hinted = any("bare script_id" in s for s in _suggestions(body))
+    assert hinted == (tool == "ha_config_remove_script")
+
+
+async def test_a_missing_entity_id_gets_no_bare_key_hint(
+    scripts: ConfigScriptTools,
+) -> None:
+    """An entity_id already is the form the bare-key hint would suggest."""
+    body = await rejected_call_body(
+        scripts.ha_config_remove_script(script_id="script.missing_script")
+    )
+
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert not any("bare script_id" in s for s in _suggestions(body))
 
 
 async def test_an_unreadable_entity_registry_still_reports_the_missing_script(

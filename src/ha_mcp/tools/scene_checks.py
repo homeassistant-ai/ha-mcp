@@ -68,8 +68,8 @@ def raise_scene_id_refusal(identifier: str, storage_key: str) -> NoReturn:
         create_error_response(
             ErrorCode.VALIDATION_FAILED,
             f"{identifier} is no registered entity, while storage key "
-            f"'{storage_key}' holds a scene; a bare scene_id is read as a storage "
-            "key, scene.<x> as an entity_id",
+            f"'{storage_key}' holds a scene; scene.<x> is read as an entity_id, "
+            f"and the bare '{storage_key}' names the scene stored under that key",
             suggestions=[
                 f"Pass '{storage_key}' for the scene stored under that key",
                 "Pass the entity_id of the scene you mean; ha_search lists scenes",
@@ -148,5 +148,23 @@ def raise_problems(problems: list[dict[str, Any]]) -> None:
                     for p in problems
                 ]
             },
+        )
+    )
+
+
+def raise_bare_id_of_another_key(scene_id: str, storage_key: str) -> NoReturn:
+    """No scene is stored under the bare ``scene_id``, while ``scene.<scene_id>``
+    is the scene stored under ``storage_key``: the mirror of
+    :func:`raise_scene_id_refusal`. A delete never falls back to that scene."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            f"No scene is stored under key '{scene_id}', so nothing was deleted; "
+            f"scene.{scene_id} is the scene stored under '{storage_key}'",
+            suggestions=[
+                f"Pass 'scene.{scene_id}' to delete that scene",
+                "Use ha_search(domain_filter='scene') to find storage keys",
+            ],
+            context={"scene_id": scene_id, "storage_key": storage_key},
         )
     )

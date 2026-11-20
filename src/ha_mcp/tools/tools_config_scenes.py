@@ -61,6 +61,7 @@ from .scene_capture import merge_captures, read_captures
 from .scene_checks import (
     category_problems,
     entity_form_create_problems,
+    raise_bare_id_of_another_key,
     raise_problems,
     raise_scene_id_refusal,
     scene_body_problems,
@@ -79,24 +80,6 @@ from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 _SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
 
 logger = logging.getLogger(__name__)
-
-
-def _refuse_bare_id_of_another_key(scene_id: str, storage_key: str) -> NoReturn:
-    """No scene is stored under the bare ``scene_id``; ``scene.<scene_id>`` is
-    the scene stored under ``storage_key``. A delete never falls back to it, so
-    a repeated delete cannot reach another scene."""
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.RESOURCE_NOT_FOUND,
-            f"No scene is stored under key '{scene_id}', so nothing was deleted; "
-            f"scene.{scene_id} is the scene stored under '{storage_key}'",
-            suggestions=[
-                f"Pass 'scene.{scene_id}' to delete that scene",
-                "Use ha_search(domain_filter='scene') to find storage keys",
-            ],
-            context={"scene_id": scene_id, "storage_key": storage_key},
-        )
-    )
 
 
 def _raise_scene_not_storage_error(scene_id: str, platform: str | None) -> NoReturn:
@@ -320,8 +303,9 @@ class ConfigSceneTools:
             Field(
                 description="Scene storage ID from listing (e.g. 'movie_night') "
                 "or the scene's entity_id (e.g. 'scene.movie_night'). A bare id "
-                "is a storage key; 'scene.<x>' is an entity_id, resolved to its "
-                "storage key."
+                "names the scene stored under that key or, when none is, the "
+                "scene whose entity is 'scene.<id>'; 'scene.<x>' is an entity_id, "
+                "resolved to its storage key."
             ),
         ] = None,
         query: Annotated[
@@ -601,8 +585,10 @@ class ConfigSceneTools:
             str,
             Field(
                 description="Scene storage key (e.g. 'movie_night') or entity_id "
-                "(e.g. 'scene.movie_night'). A new scene takes the bare key; "
-                "Core names its entity after 'name'."
+                "(e.g. 'scene.movie_night'). A bare id names the scene stored "
+                "under that key or, when none is, the scene whose entity is "
+                "scene.<id>; scene.<x> is an entity_id. A new scene takes the "
+                "bare key; Core names its entity after 'name'."
             ),
         ],
         config: Annotated[
@@ -1323,21 +1309,18 @@ class ConfigSceneTools:
             # Issue #1168 R3 blocker 6: resolve once up-front so every later
             # callsite (entity_id resolver, delete call, response) uses the
             # storage key consistently — outer ``scene_id`` matches the
-            # inner body regardless of whether the caller passed the
-            # entity_id slug or the storage key. The rich resolution also
+            # inner body whether the caller passed the entity_id or the
+            # storage key. The rich resolution also
             # carries ``registry_hit``/``platform`` so a config-API 404 on a
             # non-storage scene (Hue/vendor, raw-YAML) classifies as
             # CONFIG_NOT_FOUND rather than the misleading generic 404 (#1971).
             resolution = await self._client._resolve_scene(scene_id)
             resolved_id = resolution.storage_key
-            # A bare id is a storage key; a scene not in storage is refused below.
-            bare = not scene_id.startswith("scene.")
-            if (
-                bare
-                and resolved_id != scene_id
-                and await self._client._config_exists("scene", resolved_id)
-            ):
-                _refuse_bare_id_of_another_key(scene_id, resolved_id)
+            if resolved_id != scene_id and not scene_id.startswith("scene."):
+                # A bare id is a storage key: no delete goes to another key.
+                if await self._client._config_exists("scene", resolved_id):
+                    raise_bare_id_of_another_key(scene_id, resolved_id)
+                _raise_scene_not_storage_error(scene_id, resolution.platform)
 
             # Resolve actual entity_id BEFORE delete — once the registry
             # entry is gone, the unique_id lookup can no longer find it.

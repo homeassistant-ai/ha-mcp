@@ -296,6 +296,9 @@ async def test_a_resume_that_loses_a_single_use_approval_leaves_no_row(
     assert results.count("saved") == 1
     (lost,) = [r for r in results if isinstance(r, ToolError)]
     assert pending.token in str(lost)
+    # The approval was used, not timed out: the action already ran once.
+    assert "another resume of this request used its approval" in str(lost)
+    assert "Re-call this tool" not in str(lost)
     assert gate.queue.list_pending() == []
     assert gate.executed == [name]
 

@@ -109,7 +109,7 @@ async def test_a_renamed_scene_is_removed_under_its_storage_key(
 ) -> None:
     await load(hass, "scene", [RENAMED])
 
-    result = await config_client.delete_scene_config("renamed_scene")
+    result = await config_client.delete_scene_config("scene.renamed_scene")
 
     assert result["scene_id"] == "original_storage_key"
     assert await error_status(_stored(config_client, "original_storage_key")) == 404

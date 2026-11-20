@@ -6,7 +6,7 @@ Home Assistant script configurations.
 """
 
 import logging
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, NoReturn, cast
 
 from pydantic import Field
 
@@ -258,7 +258,9 @@ class ConfigScriptTools:
             self._client, storage_key, "script", timeout=0
         )
 
-    async def _raise_script_not_found(self, script_id: str) -> None:
+    async def _raise_script_not_found(
+        self, script_id: str, *, bare_key: bool = False
+    ) -> NoReturn:
         """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing script.
 
         Single source of truth for the 404→RESOURCE_NOT_FOUND mapping used
@@ -266,9 +268,17 @@ class ConfigScriptTools:
         mutation paths (``ha_config_set_script`` update branch,
         ``ha_config_remove_script``). Populates ``available_script_ids``
         (up to 10 entity_ids) from the entity registry: a bare slug can be
-        another script's storage key.
+        another script's storage key. ``bare_key``: the id was read only as a
+        storage key, so the suggestions name its entity form.
         """
         available_ids = await list_visible_registry_ids(self._client, "script")
+        suggestions = ["Use ha_search(domain_filter='script') to find existing scripts"]
+        if bare_key:
+            suggestions.insert(
+                0,
+                f"A bare script_id is read as a storage key; if the script you "
+                f"mean has the entity script.{script_id}, pass 'script.{script_id}'",
+            )
         raise_tool_error(
             create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
@@ -277,9 +287,7 @@ class ConfigScriptTools:
                     "script_id": script_id,
                     "available_script_ids": available_ids,
                 },
-                suggestions=[
-                    "Use ha_search(domain_filter='script') to find existing scripts"
-                ],
+                suggestions=suggestions,
             )
         )
 
@@ -1088,6 +1096,8 @@ class ConfigScriptTools:
 
         WARNING: Deleting a script that is used by automations may cause those automations to fail.
         """
+        # The client deletes a bare id under that key, unresolved.
+        bare = not script_id.startswith("script.")
         try:
             # Empty/whitespace would surface as a misleading HA delete-failure.
             validate_identifier_not_empty(
@@ -1099,7 +1109,8 @@ class ConfigScriptTools:
                 context={"operation": "remove_script"},
             )
             # The entity is gone from the registry once its script is deleted.
-            entity_id = await self._script_entity_id(script_id) if wait else ""
+            key = script_id if bare else None
+            entity_id = await self._script_entity_id(script_id, key) if wait else ""
             result = await self._client.delete_script_config(script_id)
             if wait:
                 await verify_entity_removed(self._client, entity_id, result)
@@ -1109,7 +1120,7 @@ class ConfigScriptTools:
             raise
         except Exception as e:  # noqa: BLE001
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
-                await self._raise_script_not_found(script_id)
+                await self._raise_script_not_found(script_id, bare_key=bare)
             exception_to_structured_error(
                 e,
                 context={"script_id": script_id},

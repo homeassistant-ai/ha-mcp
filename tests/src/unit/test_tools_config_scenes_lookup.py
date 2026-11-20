@@ -333,12 +333,15 @@ class TestNotAStorageScene:
             hass, core_client, monkeypatch, yaml_only=[scene("key_b", "Key A")]
         )
 
-        body = await rejected_call_body(
-            tools.ha_config_remove_scene(scene_id="key_a", wait=False)
-        )
+        with deletes(core_client) as delete:
+            body = await rejected_call_body(
+                tools.ha_config_remove_scene(scene_id="key_a", wait=False)
+            )
 
         assert body["error"]["code"] == "CONFIG_NOT_FOUND"
         assert hass.states.get("scene.key_a") is not None
+        # A bare id never sends a delete to another key.
+        delete.assert_not_called()
 
     @pytest.mark.parametrize("transform", [False, True])
     async def test_hash_bearing_set_names_the_owning_integration(
@@ -644,23 +647,20 @@ class TestStorageKeyPrecedence:
         assert hass.states.get("scene.key_a") is not None
         assert not any("scene.key_a" in w for w in result.get("warnings", []))
 
-    @pytest.mark.parametrize("repeat", ["key_a", "first"])
-    async def test_a_bare_id_removes_no_scene_stored_under_another_key(
-        self, hass: HomeAssistant, collided: ConfigSceneTools, repeat: str
+    async def test_a_repeated_remove_by_key_leaves_the_other_scene(
+        self, hass: HomeAssistant, collided: ConfigSceneTools
     ) -> None:
-        """A bare id is a storage key: a repeated remove of key_a, or the name
-        of key_a's entity, must not reach the scene another entity names."""
-        if repeat == "key_a":
-            await collided.ha_config_remove_scene(scene_id="key_a", wait=False)
-        before = await stored_scenes(hass)
+        """A bare id is a storage key: once key_a is gone, a repeated remove
+        must not reach key_b, whose entity is scene.key_a."""
+        await collided.ha_config_remove_scene(scene_id="key_a", wait=False)
 
         body = await rejected_call_body(
-            collided.ha_config_remove_scene(scene_id=repeat, wait=False)
+            collided.ha_config_remove_scene(scene_id="key_a", wait=False)
         )
 
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert f"scene.{repeat}" in body["error"]["message"]
-        assert await stored_scenes(hass) == before
+        assert any("'scene.key_a'" in s for s in body["error"]["suggestions"])
+        assert [s["id"] for s in await stored_scenes(hass)] == ["key_b"]
 
 
 class TestEntityIdForm:

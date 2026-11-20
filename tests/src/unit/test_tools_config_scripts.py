@@ -552,10 +552,11 @@ class TestCollidingIds:
         await tools.ha_config_remove_script(script_id="key_a", wait=False)
 
         body = await rejected_call_body(
-            tools.ha_config_remove_script(script_id="key_a", wait=False)
+            tools.ha_config_remove_script(script_id="key_a")
         )
 
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert any("'script.key_a'" in s for s in body["error"]["suggestions"])
         assert set(await _stored(hass)) == {"key_b"}
 
     @pytest.mark.parametrize(

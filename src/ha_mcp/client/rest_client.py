@@ -2060,7 +2060,8 @@ class HomeAssistantClient:
             raise
 
     async def delete_script_config(self, script_id: str) -> dict[str, Any]:
-        bare = not script_id.startswith("script.")  # deletes only under that key
+        """A bare id is deleted under that key unresolved; script.<x> resolves."""
+        bare = not script_id.startswith("script.")
         resolved_id = script_id if bare else await self._resolve_script_id(script_id)
         try:
             endpoint = f"config/script/config/{resolved_id}"
@@ -2347,7 +2348,8 @@ class HomeAssistantClient:
         the full outcome through - the endpoint uses its ``storage_key`` while
         ``scene_id`` stays the caller's slug for messages, and its ``registry_hit``
         drives the config-404 classification (issue #1971) with no extra lookup.
-        Otherwise the id is resolved here.
+        Otherwise the id is resolved here: a bare id can reach another key, which
+        ``ha_config_remove_scene`` refuses before it calls.
         """
         if resolution is not None:
             resolved_id = resolution.storage_key
