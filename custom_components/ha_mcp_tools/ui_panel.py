@@ -324,6 +324,11 @@ class _ProxyView(HomeAssistantView):
         if not await _session_user_is_admin(hass, request.cookies.get(_COOKIE_NAME)):
             return web.Response(status=401, text="Unauthorized")
 
+        if path in ("api/settings/transfer/export", "api/settings/transfer/import"):
+            from .settings_transfer import async_handle
+
+            return await async_handle(hass, request, exporting=path.endswith("/export"))
+
         # Defense in depth: never let a crafted path escape the secret-path
         # prefix on the loopback server (the caller is already an admin, so this
         # only blocks confusing requests, but it keeps the target well-formed).

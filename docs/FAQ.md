@@ -775,8 +775,29 @@ Two things differ on the Marketplace in Home Assistant 2026.11:
   GitHub connection and refreshes every six hours.
 - The store lists HA-MCP twice, once per repository, and refuses to install the
   second listing over the first ("The ha_mcp_tools directory belongs to …").
-  That refusal is expected, because one listing owns an integration. Keep the
-  one you have.
+  That refusal is expected, because one listing owns an integration.
+
+To move to the catalog listing, use versions on both sides that offer settings
+transfer in the **HA-MCP** sidebar panel.
+
+1. As a Home Assistant administrator, open **HA-MCP → Server Settings** and
+   select **Download settings JSON**.
+   Keep the downloaded JSON private. It includes the credentials used for
+   the server's connect URL.
+2. Remove the mirror installation and its HA-MCP entries in HACS or Marketplace.
+   Install the catalog listing, `homeassistant-ai/ha-mcp`, and restart Home
+   Assistant when the store prompts you.
+3. Add the **HA-MCP Server** integration entry. In its sidebar panel, open
+   **Server Settings**, choose the JSON under **Settings file to import**, and
+   select **Import settings**. Reopen the panel after the server restarts. Check the
+   settings and try an existing client with its saved URL.
+
+The backup includes tool states, security policies, entity visibility and
+automatic backup settings. Backup snapshots stay on the source instance.
+On a different Home Assistant instance, supply the destination's Home Assistant
+credentials. A change of hostname or cloudhook can change the public URL.
+If you use PIN-based approval events, set a decision PIN on the destination
+before importing their policy.
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 

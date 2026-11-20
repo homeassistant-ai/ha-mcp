@@ -40,6 +40,7 @@ from custom_components.ha_mcp_tools.mcp_webhook import (
     async_unregister_webhook,
 )
 
+from ._config_flow_core import add_options_entry
 from ._garbled_upstream import garbled_upstream
 
 # The HTTP surface the boot page, the session endpoint and the proxy share.
@@ -342,6 +343,69 @@ async def admin_cookies(
 
 
 class TestProxyForwarding:
+    async def test_backup_secrets_require_live_same_origin_admin_session(
+        self,
+        hass: HomeAssistant,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        add_options_entry(
+            hass,
+            data={
+                "webhook_id": "portable-id",
+                "secret_path": "/private-backup",
+                "admin_token": "destination-token",
+            },
+        )
+        client = await hass_client_no_auth()
+        url = _APP + "api/settings/transfer/export"
+        anonymous = await client.post(
+            url, json={}, headers={"Sec-Fetch-Site": "same-origin"}
+        )
+        assert anonymous.status == 401
+        foreign = await client.post(
+            url,
+            json={},
+            cookies=admin_cookies,
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+        assert foreign.status == 403
+        exported = await client.post(
+            url,
+            json={},
+            cookies=admin_cookies,
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
+        assert exported.status == 200
+        assert exported.headers["Cache-Control"] == "no-store"
+        assert exported.headers["Content-Disposition"].startswith("attachment;")
+        bundle = await exported.json()
+        assert bundle["entries"]["server"]["data"] == {
+            "webhook_id": "portable-id",
+            "secret_path": "/private-backup",
+        }
+        assert not running_server.seen
+
+    async def test_import_errors_do_not_echo_file_credentials(
+        self,
+        hass: HomeAssistant,
+        running_server: _SettingsServer,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+    ) -> None:
+        add_options_entry(hass)
+        client = await hass_client_no_auth()
+        resp = await client.post(
+            _APP + "api/settings/transfer/import",
+            cookies=admin_cookies,
+            json={"secret_path": "/sensitive"},
+            headers={"Origin": str(client.make_url("/").origin())},
+        )
+        assert resp.status == 400
+        assert await resp.json() == {"success": False, "error": "invalid_backup"}
+        assert not running_server.seen
+
     async def test_server_down_returns_503(
         self,
         panel_views: None,
