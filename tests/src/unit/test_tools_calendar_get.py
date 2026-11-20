@@ -193,6 +193,8 @@ async def test_a_default_bound_needs_the_time_zone(
     assert "Home Assistant's time zone" in error["message"]
 
 
+# Core leaves the heartbeat timer of the socket it refused.
+@pytest.mark.parametrize("expected_lingering_timers", [True])
 async def test_a_rejected_token_is_not_reported_as_a_lost_connection(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
