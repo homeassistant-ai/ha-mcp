@@ -67,6 +67,41 @@ def _recording_lock(events: list[str]) -> Any:
     return lock
 
 
+@pytest.mark.parametrize(
+    ("handler", "route", "body"),
+    [
+        ("save_advanced_settings", "/api/settings/advanced", {"timeout": 75}),
+        (
+            "save_feature_flags",
+            "/api/settings/features",
+            {"flags": {"read_only_mode": True}},
+        ),
+    ],
+)
+def test_override_writes_share_the_settings_import_lock(
+    handler: str,
+    route: str,
+    body: dict,
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    replace = os.replace
+
+    def recording_replace(src: str, dest: str) -> None:
+        if Path(dest) == data_dir / OVERRIDE_FILE:
+            events.append("save")
+        replace(src, dest)
+
+    monkeypatch.setattr(config_write_lock, "config_file_lock", _recording_lock(events))
+    monkeypatch.setattr(os, "replace", recording_replace)
+    monkeypatch.delenv("HA_TIMEOUT", raising=False)
+    monkeypatch.delenv("READ_ONLY_MODE", raising=False)
+    response = TestClient(_app(handler, route, "POST")).post(route, json=body)
+    assert response.status_code == 200, response.text
+    assert events == ["acquire", "save", "release"]
+
+
 class TestToolMetadataCache:
     def test_dump_and_load(self, data_dir: Path) -> None:
         payload = [{"name": "ha_get_state", "primary_tag": "Entity Operations"}]

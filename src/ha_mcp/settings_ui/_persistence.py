@@ -10,15 +10,13 @@ File I/O for the three JSON files the settings UI owns in the data dir:
 - ``backup_settings.json`` — the standalone-mode auto-backup override
   (``_load_backup_settings_override`` / ``_save_backup_settings_override``).
 
-``_atomic_write_json`` is the shared tmp-then-rename writer, and
-``_get_override_file_lock`` serialises the feature-flag/advanced-settings
-read-modify-write. Leaf module (no imports from the settings_ui package)
+``_atomic_write_json`` is the shared tmp-then-rename writer.
+Leaf module (no imports from the settings_ui package)
 so the handler families and ``__init__`` can depend on it without cycles.
 """
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import logging
@@ -392,33 +390,3 @@ def _save_backup_settings_override(data: dict[str, Any]) -> bool:
         logger.exception("Failed to save backup settings override to %s", path)
         return False
     return True
-
-
-# Serialises read-modify-write on the shared override file
-# (``feature_flags.json``) so two concurrent saves can't interleave
-# their reads and clobber each other's persisted state. Both
-# ``_save_feature_flags`` and ``_save_advanced_settings``
-# touch the same file; without this lock, request A reading before
-# request B's ``os.replace`` lands would write back a merged dict that
-# misses B's changes. The runtime master gate kept functionality
-# correct even when this raced, but the persisted state lied about the
-# user's intent — surfacing as "I set the flag and it came back off"
-# after a restart.
-_OVERRIDE_FILE_LOCK: asyncio.Lock | None = None
-
-
-def _get_override_file_lock() -> asyncio.Lock:
-    """Lazy lock construction. ``asyncio.Lock()`` on Python 3.10+ no
-    longer takes a ``loop=`` argument and only binds to a loop on
-    first ``acquire()`` via ``asyncio.get_event_loop()``. Either eager
-    or lazy module-level construction works for this project's
-    single-uvicorn-loop deployment; we keep the lazy pattern so a
-    future test fixture that spins up its own loop doesn't lock in
-    the import-time loop. Assumes a single asyncio event loop for the
-    process lifetime — a multi-loop deployment (e.g. threaded handler
-    dispatch) would race here.
-    """
-    global _OVERRIDE_FILE_LOCK
-    if _OVERRIDE_FILE_LOCK is None:
-        _OVERRIDE_FILE_LOCK = asyncio.Lock()
-    return _OVERRIDE_FILE_LOCK

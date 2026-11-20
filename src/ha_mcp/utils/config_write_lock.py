@@ -6,8 +6,8 @@ loop) acquire this single lock around any load-modify-save of
 ``tool_config.json`` or ``tool_policy.json``, so two concurrent writers can't
 read the same on-disk state and then clobber each other's update.
 
-Lazy construction mirrors ``settings_ui._persistence._get_override_file_lock``:
-``asyncio.Lock`` binds to the running loop on first ``acquire()``, so a test
+The lazily constructed ``asyncio.Lock`` binds to the running loop on first
+``acquire()``, so a test
 fixture with its own loop isn't locked into an import-time loop. Assumes the
 single-uvicorn-loop deployment every ha-mcp server uses.
 

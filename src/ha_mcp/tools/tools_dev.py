@@ -715,21 +715,19 @@ class DevTools:
     async def _merge_file_override(changes: dict[str, Any]) -> None:
         """Read-merge-write ``changes`` into the shared override file.
 
-        Uses the settings UI's override-file lock and atomic-write
+        Uses the shared config-file lock and the settings UI's atomic-write
         helper so a concurrent web-UI save can't interleave and
         clobber this write (or vice versa). Refuses to overwrite an
         unreadable or corrupt existing file — same data-loss guard as
         the web UI save handlers.
         """
         from ..config import _FEATURE_FLAG_OVERRIDE_FILENAME
-        from ..settings_ui._persistence import (
-            _atomic_write_json,
-            _get_override_file_lock,
-        )
+        from ..settings_ui._persistence import _atomic_write_json
+        from ..utils.config_write_lock import config_write_guard
         from ..utils.data_paths import get_data_dir
 
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-        async with _get_override_file_lock():
+        async with config_write_guard():
             existing: dict[str, Any] = {}
             try:
                 # Executor thread: file I/O must not block the event loop.

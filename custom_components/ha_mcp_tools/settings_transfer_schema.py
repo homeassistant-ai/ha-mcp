@@ -21,6 +21,10 @@ MAX_BYTES = 4 * 1024 * 1024
 class InvalidBackup(ValueError):
     """A stable error code that may be returned without revealing input values."""
 
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
 
 def _port(value: Any) -> int:
     if type(value) is not int or not 1 <= value <= 65535:
@@ -141,21 +145,34 @@ def portable_server(entry: Any) -> dict[str, Any]:
 def validate(bundle: Any, config_dir: Path) -> dict[str, Any]:
     """Validate the complete entry payload before writing either entry or store."""
     try:
-        checked = _ENVELOPE(bundle)
+        checked: dict[str, Any] = _ENVELOPE(bundle)
     except (vol.Invalid, TypeError, ValueError) as err:
         raise InvalidBackup("invalid_backup") from err
     if type(checked["version"]) is not int or checked["version"] != VERSION:
         raise InvalidBackup("incompatible_version")
     if checked["contains_credentials"] is not True:
         raise InvalidBackup("invalid_backup")
+    server = checked["entries"][c.ENTRY_TYPE_SERVER]
+    legacy_fields = {
+        c.DATA_OAUTH_CLIENT_ID,
+        c.DATA_OAUTH_CLIENT_SECRET,
+        c.DATA_OAUTH_SIGNING_KEY,
+    }
+    has_legacy = server["options"].get(c.OPT_WEBHOOK_AUTH) == c.WEBHOOK_AUTH_LEGACY
+    if has_legacy or legacy_fields.intersection(server["data"]):
+        if not legacy_fields.issubset(server["data"]):
+            raise InvalidBackup("invalid_backup")
     if tools := checked["entries"].get(c.ENTRY_TYPE_TOOLS):
-        if any(
-            _normalize_extra_dir(item, config_dir) is None
-            for item in tools["allowed_dirs"]
-        ):
+        paths = [
+            _normalize_extra_dir(item, config_dir) for item in tools["allowed_dirs"]
+        ]
+        if None in paths:
             raise InvalidBackup("invalid_backup")
-        if _normalize_extra_yaml_keys(tools["extra_yaml_keys"])[1]:
+        keys, dropped = _normalize_extra_yaml_keys(tools["extra_yaml_keys"])
+        if dropped:
             raise InvalidBackup("invalid_backup")
+        tools["allowed_dirs"] = list(dict.fromkeys(paths))
+        tools["extra_yaml_keys"] = keys
     return checked
 
 

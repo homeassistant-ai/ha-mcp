@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 from contextlib import AsyncExitStack
-from importlib import import_module
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -16,12 +15,17 @@ from homeassistant.components import webhook
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers.storage import Store
 
 from . import (
+    _ALLOWED_PATHS_STORAGE_KEY,
+    _ALLOWED_PATHS_STORAGE_VERSION,
+    _EXTRA_YAML_KEYS_STORAGE_KEY,
+    _EXTRA_YAML_KEYS_STORAGE_VERSION,
     _apply_allowed_paths,
     _apply_extra_yaml_keys,
-    _load_allowed_paths,
-    _load_extra_yaml_keys,
+    _save_allowed_paths,
+    _save_extra_yaml_keys,
 )
 from . import const as c
 from . import settings_transfer_schema as schema
@@ -41,34 +45,84 @@ def _entries(hass: HomeAssistant) -> dict[str, ConfigEntry]:
     return entries
 
 
-async def _wheel(hass: HomeAssistant) -> ModuleType:
-    # A developer package override may predate transfer support. Load the
-    # installed wheel at use time, never during component registration.
+def _load_wheel() -> ModuleType:
+    """Load the paired wheel off-loop, allowing overrides that predate transfer."""
     try:
-        return await hass.async_add_executor_job(
-            import_module, "ha_mcp.settings_transfer"
-        )
+        from ha_mcp import settings_transfer
     except ImportError as err:
         raise InvalidBackup("server_unavailable") from err
+    return settings_transfer
+
+
+_TOOLS_STORES = {
+    "allowed_dirs": (
+        _ALLOWED_PATHS_STORAGE_KEY,
+        _ALLOWED_PATHS_STORAGE_VERSION,
+        "paths",
+        _apply_allowed_paths,
+        _save_allowed_paths,
+    ),
+    "extra_yaml_keys": (
+        _EXTRA_YAML_KEYS_STORAGE_KEY,
+        _EXTRA_YAML_KEYS_STORAGE_VERSION,
+        "keys",
+        _apply_extra_yaml_keys,
+        _save_extra_yaml_keys,
+    ),
+}
+
+
+async def _read_tools_setting(hass: HomeAssistant, name: str) -> list[str]:
+    key, version, field, _, _ = _TOOLS_STORES[name]
+    # Startup intentionally falls back to no grants on a read error. A backup
+    # must distinguish a missing setting from a store it could not read.
+    store: Store[dict[str, list[str]]] = Store(hass, version, key)
+    data = await store.async_load()
+    if data is None:
+        return []
+    if not isinstance(data, dict) or not isinstance(data.get(field), list):
+        raise InvalidBackup("invalid_backup")
+    return data[field]
 
 
 async def _tools_settings(hass: HomeAssistant) -> dict[str, list[str]]:
-    return {
-        "allowed_dirs": await _load_allowed_paths(hass),
-        "extra_yaml_keys": await _load_extra_yaml_keys(hass),
-    }
+    return {name: await _read_tools_setting(hass, name) for name in _TOOLS_STORES}
+
+
+async def _write_tools_setting(
+    hass: HomeAssistant,
+    name: str,
+    values: list[str],
+    entry: ConfigEntry | None,
+) -> None:
+    _, _, _, apply, save = _TOOLS_STORES[name]
+    if entry is not None and entry.state is ConfigEntryState.LOADED:
+        _, rejected = await apply(hass, values)
+        if rejected:
+            raise InvalidBackup("invalid_backup")
+    else:
+        # Unloaded entries have no live permissions cache. Setup loads the
+        # saved values, including on the first setup of a newly created entry.
+        await save(hass, values)
+    # HA Store logs certain write failures and returns normally. Read back
+    # through a fresh Store before reporting that the transfer succeeded.
+    if await _read_tools_setting(hass, name) != values:
+        raise OSError("Could not persist File & YAML Tools settings")
 
 
 async def async_export(hass: HomeAssistant) -> dict[str, Any]:
     entries = _entries(hass)
-    wheel = await _wheel(hass)
+    wheel = await hass.async_add_executor_job(_load_wheel)
     result = {c.ENTRY_TYPE_SERVER: schema.portable_server(entries[c.ENTRY_TYPE_SERVER])}
     if c.ENTRY_TYPE_TOOLS in entries:
         result[c.ENTRY_TYPE_TOOLS] = await _tools_settings(hass)
     directory = Path(hass.config.path(c.SERVER_CONFIG_SUBDIR))
-    settings = await hass.async_add_executor_job(
-        wheel.export_server_settings, directory
-    )
+    try:
+        settings = await hass.async_add_executor_job(
+            wheel.export_server_settings, directory
+        )
+    except ValueError as err:
+        raise InvalidBackup("invalid_server_settings") from err
     bundle = {
         "format": schema.FORMAT,
         "version": schema.VERSION,
@@ -83,22 +137,18 @@ async def async_export(hass: HomeAssistant) -> dict[str, Any]:
 
 async def _restore_tools(
     hass: HomeAssistant,
-    existing: bool,
+    entry: ConfigEntry | None,
     tools: dict[str, Any],
     rollback: AsyncExitStack,
 ) -> None:
     old = await _tools_settings(hass)
-    if old["allowed_dirs"] != tools["allowed_dirs"]:
-        _, rejected = await _apply_allowed_paths(hass, tools["allowed_dirs"])
-        rollback.push_async_callback(_apply_allowed_paths, hass, old["allowed_dirs"])
-        if rejected:
-            raise InvalidBackup("invalid_backup")
-    if old["extra_yaml_keys"] != tools["extra_yaml_keys"]:
-        await _apply_extra_yaml_keys(hass, tools["extra_yaml_keys"])
-        rollback.push_async_callback(
-            _apply_extra_yaml_keys, hass, old["extra_yaml_keys"]
-        )
-    if not existing:
+    for name, previous in old.items():
+        if previous != tools[name]:
+            rollback.push_async_callback(
+                _write_tools_setting, hass, name, previous, entry
+            )
+            await _write_tools_setting(hass, name, tools[name], entry)
+    if entry is None:
         flow = await hass.config_entries.flow.async_init(
             c.DOMAIN,
             context={"source": SOURCE_IMPORT},
@@ -106,9 +156,10 @@ async def _restore_tools(
         )
         if flow["type"] != FlowResultType.CREATE_ENTRY:
             raise InvalidBackup("restore_failed")
-        rollback.push_async_callback(
-            hass.config_entries.async_remove, flow["result"].entry_id
-        )
+        created = flow["result"]
+        rollback.push_async_callback(hass.config_entries.async_remove, created.entry_id)
+        if created.state is not ConfigEntryState.LOADED:
+            raise InvalidBackup("restore_failed")
 
 
 def _restore_entry(
@@ -152,7 +203,7 @@ def _restore_entry(
 async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
     """Validate every section, retain target-local state and roll back on failure."""
     entries = _entries(hass)
-    wheel = await _wheel(hass)
+    wheel = await hass.async_add_executor_job(_load_wheel)
     checked = await hass.async_add_executor_job(
         schema.validate, bundle, Path(hass.config.config_dir)
     )
@@ -165,23 +216,17 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
     current_hook = hass.data.get(c.DOMAIN, {}).get(c.DATA_WEBHOOK, {}).get("webhook_id")
     if hook != current_hook and hook in hass.data.get(webhook.DOMAIN, {}):
         raise InvalidBackup("webhook_in_use")
-    try:
-        await hass.async_add_executor_job(wheel.validate_server_settings, settings)
-    except ValueError as err:
-        raise InvalidBackup("invalid_backup") from err
     directory = Path(hass.config.path(c.SERVER_CONFIG_SUBDIR))
-    old_settings = await hass.async_add_executor_job(
-        wheel.export_server_settings, directory
-    )
-    files_changed = settings != old_settings
     async with AsyncExitStack() as rollback:
-        if files_changed:
-            try:
-                await hass.async_add_executor_job(
-                    wheel.restore_server_settings, directory, settings
-                )
-            except wheel.DecisionPinRequired as err:
-                raise InvalidBackup("decision_pin_required") from err
+        try:
+            old_settings = await hass.async_add_executor_job(
+                wheel.restore_server_settings, directory, settings
+            )
+        except wheel.DecisionPinRequired as err:
+            raise InvalidBackup("decision_pin_required") from err
+        except ValueError as err:
+            raise InvalidBackup("invalid_backup") from err
+        if old_settings is not None:
             rollback.push_async_callback(
                 hass.async_add_executor_job,
                 wheel.restore_server_settings,
@@ -189,12 +234,12 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
                 old_settings,
             )
         if tools := checked["entries"].get(c.ENTRY_TYPE_TOOLS):
-            await _restore_tools(hass, c.ENTRY_TYPE_TOOLS in entries, tools, rollback)
+            await _restore_tools(hass, entries.get(c.ENTRY_TYPE_TOOLS), tools, rollback)
         restart = _restore_entry(
             hass,
             entries[c.ENTRY_TYPE_SERVER],
             server,
-            files_changed,
+            old_settings is not None,
         )
         rollback.pop_all()
     return restart
@@ -275,7 +320,7 @@ async def async_handle(
             hass.async_create_task(_transfer(hass, body, exporting))
         )
     except InvalidBackup as err:
-        code = str(err)
+        code = err.code
         return _error(
             code, 409 if code in {"server_unavailable", "webhook_in_use"} else 400
         )
