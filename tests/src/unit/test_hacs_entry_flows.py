@@ -334,8 +334,9 @@ class TestDownloadSource:
 
         assert marketplace.options[CONF_PROFILE] == field["current"]
         assert saved["data"]["entry_state"] is None
-        assert saved["data"]["download_source"]["fields"][0]["current"] == (
-            field["current"]
+        assert (
+            saved["data"]["download_source"]["fields"][0]["current"]
+            == (field["current"])
         )
         assert any("No reload" in w for w in saved["warnings"])
 

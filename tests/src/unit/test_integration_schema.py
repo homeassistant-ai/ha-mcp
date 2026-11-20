@@ -398,8 +398,18 @@ async def test_a_select_without_option_labels_from_core_is_described_as_given(
     resp = await tools.ha_get_integration(entry_id=entry.entry_id, include_schema=True)
 
     assert resp["options_schema"]["fields"] == [
-        {"name": "speed", "required": True, "type": "select", "options": ["low", "high"]},
-        {"name": "color", "required": True, "type": "select", "options": ["red", "blue"]},
+        {
+            "name": "speed",
+            "required": True,
+            "type": "select",
+            "options": ["low", "high"],
+        },
+        {
+            "name": "color",
+            "required": True,
+            "type": "select",
+            "options": ["red", "blue"],
+        },
     ]
 
 
