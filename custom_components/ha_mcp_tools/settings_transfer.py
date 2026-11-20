@@ -18,19 +18,21 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers.storage import Store
 
 from . import (
-    _ALLOWED_PATHS_STORAGE_KEY,
-    _ALLOWED_PATHS_STORAGE_VERSION,
-    _EXTRA_YAML_KEYS_STORAGE_KEY,
-    _EXTRA_YAML_KEYS_STORAGE_VERSION,
-    _apply_allowed_paths,
-    _apply_extra_yaml_keys,
-    _save_allowed_paths,
-    _save_extra_yaml_keys,
+    _apply_allowed_paths_locked,
+    _apply_extra_yaml_keys_locked,
 )
 from . import const as c
 from . import settings_transfer_schema as schema
 from .embedded_entry import _reload_relevant
 from .settings_transfer_schema import InvalidBackup
+from .tools_settings_store import (
+    ALLOWED_PATHS_KEY,
+    EXTRA_YAML_KEYS_KEY,
+    TOOLS_STORAGE_VERSION,
+    save_allowed_paths,
+    save_extra_yaml_keys,
+    store_writes,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,27 +58,25 @@ def _load_wheel() -> ModuleType:
 
 _TOOLS_STORES = {
     "allowed_dirs": (
-        _ALLOWED_PATHS_STORAGE_KEY,
-        _ALLOWED_PATHS_STORAGE_VERSION,
+        ALLOWED_PATHS_KEY,
         "paths",
-        _apply_allowed_paths,
-        _save_allowed_paths,
+        _apply_allowed_paths_locked,
+        save_allowed_paths,
     ),
     "extra_yaml_keys": (
-        _EXTRA_YAML_KEYS_STORAGE_KEY,
-        _EXTRA_YAML_KEYS_STORAGE_VERSION,
+        EXTRA_YAML_KEYS_KEY,
         "keys",
-        _apply_extra_yaml_keys,
-        _save_extra_yaml_keys,
+        _apply_extra_yaml_keys_locked,
+        save_extra_yaml_keys,
     ),
 }
 
 
 async def _read_tools_setting(hass: HomeAssistant, name: str) -> list[str]:
-    key, version, field, _, _ = _TOOLS_STORES[name]
+    key, field, _, _ = _TOOLS_STORES[name]
     # Startup intentionally falls back to no grants on a read error. A backup
     # must distinguish a missing setting from a store it could not read.
-    store: Store[dict[str, list[str]]] = Store(hass, version, key)
+    store: Store[dict[str, list[str]]] = Store(hass, TOOLS_STORAGE_VERSION, key)
     data = await store.async_load()
     if data is None:
         return []
@@ -95,7 +95,7 @@ async def _write_tools_setting(
     values: list[str],
     entry: ConfigEntry | None,
 ) -> None:
-    _, _, _, apply, save = _TOOLS_STORES[name]
+    _, _, apply, save = _TOOLS_STORES[name]
     if entry is not None and entry.state is ConfigEntryState.LOADED:
         _, rejected = await apply(hass, values)
         if rejected:
@@ -160,17 +160,46 @@ def _check_tools_entry(
         raise InvalidBackup("restore_failed")
 
 
+async def _rollback_tools_setting(
+    hass: HomeAssistant,
+    name: str,
+    revision: int,
+    before: list[str],
+    imported: list[str],
+    entry: ConfigEntry | None,
+) -> None:
+    writes = store_writes(hass, _TOOLS_STORES[name][0])
+    async with writes.lock:
+        if writes.revision != revision:
+            return
+        current = await _read_tools_setting(hass, name)
+        if current in (imported, before):
+            # A failed HA Store save can leave just the live cache changed.
+            await _write_tools_setting(hass, name, before, entry)
+            writes.revision += 1
+
+
 async def _restore_tools(
     hass: HomeAssistant,
     entry: ConfigEntry | None,
     tools: dict[str, Any],
     rollback: AsyncExitStack,
 ) -> None:
-    old = await _tools_settings(hass)
-    for name, previous in old.items():
-        if previous != tools[name]:
+    for name, (key, _, _, _) in _TOOLS_STORES.items():
+        writes = store_writes(hass, key)
+        async with writes.lock:
+            previous = await _read_tools_setting(hass, name)
+            if previous == tools[name]:
+                continue
+            writes.revision += 1
             rollback.push_async_callback(
-                _write_tools_setting, hass, name, previous, entry
+                _rollback_tools_setting,
+                hass,
+                name,
+                writes.revision,
+                previous,
+                tools[name],
+                entry,
             )
             await _write_tools_setting(hass, name, tools[name], entry)
     if entry is None:
@@ -246,19 +275,19 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
     directory = Path(hass.config.path(c.SERVER_CONFIG_SUBDIR))
     async with AsyncExitStack() as rollback:
         try:
-            old_settings = await hass.async_add_executor_job(
+            server_changes = await hass.async_add_executor_job(
                 wheel.restore_server_settings, directory, settings
             )
         except wheel.DecisionPinRequired as err:
             raise InvalidBackup("decision_pin_required") from err
         except ValueError as err:
             raise InvalidBackup("invalid_backup") from err
-        if old_settings is not None:
+        if server_changes is not None:
             rollback.push_async_callback(
                 hass.async_add_executor_job,
-                wheel.restore_server_settings,
+                wheel.rollback_server_settings,
                 directory,
-                old_settings,
+                server_changes,
             )
         if source_tools is not None:
             await _restore_tools(
@@ -272,10 +301,10 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
             hass,
             entries[c.ENTRY_TYPE_SERVER],
             server,
-            old_settings is not None,
+            server_changes is not None,
         )
         rollback.pop_all()
-    return restart
+    return restart or bool(server_changes and server_changes.restart_required)
 
 
 class _TooLarge(ValueError):

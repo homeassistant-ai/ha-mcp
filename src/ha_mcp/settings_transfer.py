@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,7 @@ from .config_meta import setting_of
 from .config_registry import (
     _BACKUP_OVERRIDE_FILENAME,
     _FEATURE_FLAG_OVERRIDE_FILENAME,
+    ADVANCED_RESTART_REQUIRED,
     ADVANCED_SETTINGS_FIELDS,
     BACKUP_OVERRIDE_FIELDS,
     FEATURE_FLAG_FIELDS,
@@ -26,6 +29,8 @@ from .settings_ui._tools_meta import _VALID_STATES
 from .utils.config_write_lock import config_file_lock
 from .visibility.model import VisibilityConfig
 from .visibility.persistence import VISIBILITY_FILENAME
+
+_LOGGER = logging.getLogger(__name__)
 
 # Never use a path from the uploaded document. A null section records that
 # the source used defaults and must clear any override on the destination.
@@ -125,18 +130,18 @@ def validate_server_settings(settings: dict[str, Any]) -> dict[str, Any]:
     return portable
 
 
+def _read_document(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Expected a JSON object in the server settings file")
+    return value
+
+
 def _read_settings(directory: Path) -> dict[str, Any]:
-    settings: dict[str, Any] = {}
-    for key, name in _FILES.items():
-        try:
-            value = json.loads((directory / name).read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            settings[key] = None
-        else:
-            if not isinstance(value, dict):
-                raise ValueError("Expected a JSON object in the server settings file")
-            settings[key] = value
-    return settings
+    return {key: _read_document(directory / name) for key, name in _FILES.items()}
 
 
 def export_server_settings(data_dir: Path) -> dict[str, Any]:
@@ -153,10 +158,89 @@ def _replace(path: Path, value: dict[str, Any] | None) -> None:
         _atomic_write_json(path, value)
 
 
+def _file_stamp(path: Path) -> tuple[int, int, int, int, int] | None:
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+@dataclass
+class _DocumentChange:
+    key: str
+    previous: dict[str, Any] | None
+    written: dict[str, Any] | None
+    stamp: tuple[int, int, int, int, int] | None = None
+
+
+@dataclass
+class ServerSettingsChanges:
+    documents: list[_DocumentChange]
+    restart_required: bool
+
+
+def _next_revision(
+    key: str, value: dict[str, Any] | None, current: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    if key not in _REVISIONED_DEFAULTS:
+        return value
+    # A reset must also advance the edit revision to invalidate open editors.
+    default = _REVISIONED_DEFAULTS[key]
+    version = (current or {}).get("version", default.version)
+    return {**(value or default.model_dump(mode="json")), "version": version + 1}
+
+
+def _undo_documents(
+    directory: Path, changes: list[_DocumentChange], *, published: bool
+) -> None:
+    """Attempt every undo step under the caller's file lock."""
+    for change in reversed(changes):
+        path = directory / _FILES[change.key]
+        try:
+            previous = change.previous
+            if published:
+                if (
+                    _file_stamp(path) != change.stamp
+                    or _read_document(path) != change.written
+                ):
+                    _LOGGER.warning(
+                        "Kept %s because it changed after settings import", path.name
+                    )
+                    continue
+                if (
+                    change.key == "policy"
+                    and previous
+                    and previous.get("event_decisions_enabled")
+                    and not is_pin_set(directory)
+                ):
+                    _LOGGER.error(
+                        "Could not roll back %s because the decision PIN was removed",
+                        path.name,
+                    )
+                    continue
+                previous = _next_revision(change.key, previous, change.written)
+            _replace(path, previous)
+        except (OSError, ValueError) as err:
+            # Exception messages may include settings or paths supplied by the
+            # operator. Report only the fixed filename and exception class.
+            _LOGGER.error(
+                "Settings import rollback failed for %s (%s)",
+                path.name,
+                type(err).__name__,
+            )
+
+
+def rollback_server_settings(directory: Path, changes: ServerSettingsChanges) -> None:
+    """Undo only writes from this import that no later save has replaced."""
+    with config_file_lock(directory):
+        _undo_documents(directory, changes.documents, published=True)
+
+
 def restore_server_settings(
     data_dir: Path, settings: dict[str, Any]
-) -> dict[str, Any] | None:
-    """Return the prior portable settings on a change, or None on a no-op."""
+) -> ServerSettingsChanges | None:
+    """Return a rollback record for committed changes, or None on a no-op."""
     incoming = validate_server_settings(settings)
     data_dir.mkdir(parents=True, exist_ok=True)
     with config_file_lock(data_dir):
@@ -169,25 +253,28 @@ def restore_server_settings(
             raise DecisionPinRequired("Set the approval decision PIN locally first")
         previous = _read_settings(data_dir)
         old_content = validate_server_settings(previous)
-        changed: list[str] = []
+        changed: list[_DocumentChange] = []
         try:
             for key, name in _FILES.items():
                 value = incoming[key]
                 if old_content[key] == value:
                     continue
-                if key in _REVISIONED_DEFAULTS:
-                    # Even a reset to defaults must advance the revision: an
-                    # editor open before this import has the old CAS token.
-                    default = _REVISIONED_DEFAULTS[key]
-                    version = (previous[key] or {}).get("version", default.version)
-                    value = {
-                        **(value or default.model_dump(mode="json")),
-                        "version": version + 1,
-                    }
-                _replace(data_dir / name, value)
-                changed.append(key)
+                path = data_dir / name
+                change = _DocumentChange(
+                    key, previous[key], _next_revision(key, value, previous[key])
+                )
+                _replace(path, change.written)
+                changed.append(change)
+                change.stamp = _file_stamp(path)
         except OSError:
-            for key in reversed(changed):
-                _replace(data_dir / _FILES[key], previous[key])
+            _undo_documents(data_dir, changed, published=False)
             raise
-    return old_content if changed else None
+    if not changed:
+        return None
+    old_features = old_content["features"] or {}
+    new_features = incoming["features"] or {}
+    restart = any(
+        old_features.get(key) != new_features.get(key)
+        for key in ADVANCED_RESTART_REQUIRED
+    )
+    return ServerSettingsChanges(changed, restart)

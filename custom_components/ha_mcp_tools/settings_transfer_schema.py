@@ -45,8 +45,8 @@ def _external_url(value: str) -> str:
             and not any(ch.isspace() or ord(ch) < 32 for ch in value)
         ):
             return value
-    except ValueError:
-        pass
+    except ValueError as err:
+        raise vol.Invalid("invalid external URL") from err
     raise vol.Invalid("invalid external URL")
 
 

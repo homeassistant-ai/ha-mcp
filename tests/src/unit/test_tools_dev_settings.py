@@ -6,6 +6,9 @@ add-on, at the Supervisor upstream (``_tools_dev_core.supervisor``).
 """
 
 import asyncio
+import sys
+import threading
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -18,6 +21,7 @@ from ha_mcp.config import (
     get_global_settings,
     reset_global_settings,
 )
+from ha_mcp.settings_ui._persistence import _atomic_write_json
 from ha_mcp.tools.tools_dev import FEATURE_FLAG, DevTools
 
 from ._dev_tool_env import _isolated_env as _isolated_env
@@ -102,6 +106,57 @@ class TestSettingsMatrix:
             action="set", setting="log_level", value="ERROR"
         )
         assert stored_overrides() == {"debug": True, "log_level": "ERROR"}
+
+    async def test_cancelled_set_holds_file_lock_until_replace_finishes(
+        self, dev_tools: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        writing = threading.Event()
+        resume = threading.Event()
+        finished = threading.Event()
+
+        def paused_write(path: Path, payload: dict[str, Any]) -> None:
+            try:
+                writing.set()
+                assert resume.wait(10)
+                _atomic_write_json(path, payload)
+            finally:
+                finished.set()
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._atomic_write_json", paused_write
+        )
+        setter = asyncio.create_task(
+            dev_tools.ha_dev_manage_settings(
+                action="set", setting="log_level", value="DEBUG"
+            )
+        )
+        try:
+            assert await asyncio.to_thread(writing.wait, 10)
+            setter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await setter
+
+            # A second writer must still contend on a separately opened lockfile.
+            with (
+                override_path().with_name(".config_write.lock").open("r+b") as lockfile,
+                pytest.raises(OSError),
+            ):
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    msvcrt.locking(lockfile.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lockfile.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            resume.set()
+            assert await asyncio.to_thread(finished.wait, 10)
+
+        await dev_tools.ha_dev_manage_settings(
+            action="set", setting="debug", value=True
+        )
+        assert stored_overrides() == {"log_level": "DEBUG", "debug": True}
 
     async def test_set_refuses_a_setting_pinned_by_its_env_var(
         self, dev_tools: DevTools, monkeypatch: pytest.MonkeyPatch

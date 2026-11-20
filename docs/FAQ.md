@@ -780,13 +780,16 @@ transfer in the **HA-MCP** sidebar panel.
    select **Download settings JSON**.
    Keep the downloaded JSON private. It includes the credentials used for
    the server's connect URL.
-2. Remove the mirror installation and its HA-MCP entries in HACS or Marketplace.
-   Install the catalog listing, `homeassistant-ai/ha-mcp`, and restart Home
-   Assistant when the store prompts you.
-3. Add the **HA-MCP Server** integration entry. In its sidebar panel, open
+2. Open **Settings → Devices & services** and delete each HA-MCP integration
+   entry, including **HA-MCP Server** and **File & YAML Tools** if present.
+3. In HACS or Marketplace, uninstall the `homeassistant-ai/ha-mcp-integration`
+   mirror. Install the catalog listing, `homeassistant-ai/ha-mcp`, and restart
+   Home Assistant when prompted.
+4. Add the **HA-MCP Server** integration entry. In its sidebar panel, open
    **Server Settings**, choose the JSON under **Settings file to import**, and
-   select **Import settings**. Reopen the panel after the server restarts. Check the
-   settings and try an existing client with its saved URL.
+   select **Import settings**. If the panel asks you to restart Home Assistant,
+   do so to apply the restored settings. Reopen the panel and try an existing
+   client with its saved URL.
 
 The backup includes tool states, security policies, entity visibility and
 automatic backup settings. Backup snapshots stay on the source instance.
