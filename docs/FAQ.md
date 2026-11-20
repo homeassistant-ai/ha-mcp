@@ -790,6 +790,10 @@ transfer in the **HA-MCP** sidebar panel.
 
 The backup includes tool states, security policies, entity visibility and
 automatic backup settings. Backup snapshots stay on the source instance.
+Import recreates an enabled **File & YAML Tools** entry when needed. If the
+source had that entry disabled, disable it on the destination before importing.
+If the source had no tools entry, import into a destination with only the server
+entry.
 On a different Home Assistant instance, supply the destination's Home Assistant
 credentials. A change of hostname or cloudhook can change the public URL.
 If you use PIN-based approval events, set a decision PIN on the destination

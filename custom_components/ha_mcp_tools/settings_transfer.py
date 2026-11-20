@@ -38,7 +38,7 @@ _LOGGER = logging.getLogger(__name__)
 def _entries(hass: HomeAssistant) -> dict[str, ConfigEntry]:
     entries = {
         entry.data.get(c.CONF_ENTRY_TYPE, c.ENTRY_TYPE_TOOLS): entry
-        for entry in hass.config_entries.async_entries(c.DOMAIN)
+        for entry in hass.config_entries.async_entries(c.DOMAIN, include_ignore=False)
     }
     if c.ENTRY_TYPE_SERVER not in entries:
         raise InvalidBackup("server_unavailable")
@@ -114,8 +114,11 @@ async def async_export(hass: HomeAssistant) -> dict[str, Any]:
     entries = _entries(hass)
     wheel = await hass.async_add_executor_job(_load_wheel)
     result = {c.ENTRY_TYPE_SERVER: schema.portable_server(entries[c.ENTRY_TYPE_SERVER])}
-    if c.ENTRY_TYPE_TOOLS in entries:
-        result[c.ENTRY_TYPE_TOOLS] = await _tools_settings(hass)
+    if tools_entry := entries.get(c.ENTRY_TYPE_TOOLS):
+        tools: dict[str, Any] = dict(await _tools_settings(hass))
+        if tools_entry.disabled_by is not None:
+            tools["disabled"] = True
+        result[c.ENTRY_TYPE_TOOLS] = tools
     directory = Path(hass.config.path(c.SERVER_CONFIG_SUBDIR))
     try:
         settings = await hass.async_add_executor_job(
@@ -133,6 +136,28 @@ async def async_export(hass: HomeAssistant) -> dict[str, Any]:
     return await hass.async_add_executor_job(
         schema.validate, bundle, Path(hass.config.config_dir)
     )
+
+
+def _check_tools_entry(
+    source: dict[str, Any] | None,
+    target: ConfigEntry | None,
+    *,
+    allow_create: bool,
+) -> None:
+    """Keep the destination's privileged services consistent with the backup."""
+    if source is None:
+        if target is not None:
+            raise InvalidBackup("extra_tools_entry")
+        return
+    disabled = target is not None and target.disabled_by is not None
+    if source.get("disabled", False) != disabled:
+        # HA's config flow sets up a new entry immediately. Creating one for
+        # a disabled source would grant file access before it could be disabled.
+        raise InvalidBackup(
+            "tools_must_be_enabled" if disabled else "tools_must_be_disabled"
+        )
+    if target is None and not allow_create:
+        raise InvalidBackup("restore_failed")
 
 
 async def _restore_tools(
@@ -202,11 +227,13 @@ def _restore_entry(
 
 async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
     """Validate every section, retain target-local state and roll back on failure."""
-    entries = _entries(hass)
     wheel = await hass.async_add_executor_job(_load_wheel)
     checked = await hass.async_add_executor_job(
         schema.validate, bundle, Path(hass.config.config_dir)
     )
+    entries = _entries(hass)
+    source_tools = checked["entries"].get(c.ENTRY_TYPE_TOOLS)
+    _check_tools_entry(source_tools, entries.get(c.ENTRY_TYPE_TOOLS), allow_create=True)
     settings = checked["server_settings"]
     server = checked["entries"][c.ENTRY_TYPE_SERVER]
     hook = (
@@ -233,8 +260,14 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
                 directory,
                 old_settings,
             )
-        if tools := checked["entries"].get(c.ENTRY_TYPE_TOOLS):
-            await _restore_tools(hass, entries.get(c.ENTRY_TYPE_TOOLS), tools, rollback)
+        if source_tools is not None:
+            await _restore_tools(
+                hass, entries.get(c.ENTRY_TYPE_TOOLS), source_tools, rollback
+            )
+        # Entry enable/remove flows can run while the disk writes are awaited.
+        _check_tools_entry(
+            source_tools, _entries(hass).get(c.ENTRY_TYPE_TOOLS), allow_create=False
+        )
         restart = _restore_entry(
             hass,
             entries[c.ENTRY_TYPE_SERVER],
@@ -322,7 +355,17 @@ async def async_handle(
     except InvalidBackup as err:
         code = err.code
         return _error(
-            code, 409 if code in {"server_unavailable", "webhook_in_use"} else 400
+            code,
+            409
+            if code
+            in {
+                "server_unavailable",
+                "webhook_in_use",
+                "extra_tools_entry",
+                "tools_must_be_enabled",
+                "tools_must_be_disabled",
+            }
+            else 400,
         )
     except _TooLarge:
         return _error("too_large", 413)

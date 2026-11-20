@@ -43,7 +43,8 @@ function initSettingsTransfer() {
       if (failure?.error === 'invalid_backup') return report('invalid_source_entries', true);
       if (failure?.error === 'invalid_server_settings') return report('invalid_server_settings', true);
     }
-    const importErrors = ['invalid_backup', 'incompatible_version', 'webhook_in_use', 'decision_pin_required'];
+    const importErrors = ['invalid_backup', 'incompatible_version', 'webhook_in_use', 'decision_pin_required',
+      'extra_tools_entry', 'tools_must_be_disabled', 'tools_must_be_enabled'];
     report(fallback === 'restore_failed' && importErrors.includes(failure?.error) ? failure.error : fallback, true);
   }
 
