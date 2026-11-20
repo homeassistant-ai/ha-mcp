@@ -222,6 +222,12 @@ ALLOWED = {
             line = "{} has {}".format(name, count)
             return "timed out" in line
         """,
+    "a comprehension target called inside the comprehension": """
+        def is_missing(text):
+            return "not found" in text
+        def handle(callbacks, exc: Exception):
+            return [is_missing(str(exc)) for is_missing in callbacks]
+        """,
     "a function of its own that shares a regex name": """
         def search(needle, text):
             return needle

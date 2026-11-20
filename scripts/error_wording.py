@@ -201,6 +201,35 @@ class Program:
             self.changed = True
 
 
+def _bindings(
+    scope: Scope, nodes: list[ast.AST]
+) -> tuple[set[str], dict[ast.AST, set[str]]]:
+    """The names a scope binds itself, other than its functions, and for every
+    node inside a comprehension the targets bound there: a comprehension's
+    target is bound in the comprehension alone."""
+    looped: dict[ast.AST, set[str]] = {}
+    targets: set[ast.AST] = set()
+    for node in nodes:
+        if isinstance(
+            node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+        ):
+            own = {name for each in node.generators for name in ast.walk(each.target)}
+            targets |= own
+            names = {name.id for name in own if isinstance(name, ast.Name)}
+            for inner in ast.walk(node):
+                looped.setdefault(inner, set()).update(names)
+    bound = {
+        node.id
+        for node in nodes
+        if isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Store)
+        and node not in targets
+    }
+    if not isinstance(scope, ast.Module):
+        bound |= {arg.arg for arg in ast.walk(scope.args) if isinstance(arg, ast.arg)}
+    return bound, looped
+
+
 class Flow:
     """Which names in one scope hold an exception and which hold error text."""
 
@@ -216,25 +245,7 @@ class Flow:
         self.texts: set[str] = set(outer.texts) if outer else set()
         self.fixed: set[str] = set(outer.fixed) if outer else set()
         self.nodes = list(_body(scope))
-        # The names this scope binds itself, other than its functions. A
-        # comprehension's target is bound in the comprehension alone.
-        looped = {
-            name
-            for node in self.nodes
-            if isinstance(node, ast.comprehension)
-            for name in ast.walk(node.target)
-        }
-        self.bound = {
-            node.id
-            for node in self.nodes
-            if isinstance(node, ast.Name)
-            and isinstance(node.ctx, ast.Store)
-            and node not in looped
-        }
-        if not isinstance(scope, ast.Module):
-            self.bound |= {
-                arg.arg for arg in ast.walk(scope.args) if isinstance(arg, ast.arg)
-            }
+        self.bound, self.looped = _bindings(scope, self.nodes)
         self._read_params()
         for node in self.nodes:
             if isinstance(node, ast.ExceptHandler) and node.name:
@@ -308,6 +319,8 @@ class Flow:
         """The functions a call may run: the one its name is bound to, or, on
         an object whose class is not known here, every method of that name."""
         if isinstance(func, ast.Name):
+            if func.id in self.looped.get(func, ()):
+                return []
             flow: Flow | None = self
             while flow:
                 if func.id in flow.module.defined[flow.scope]:
