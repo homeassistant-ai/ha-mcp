@@ -362,7 +362,7 @@ markers = [
     "floor: floor management tests",
     "zone: zone management tests",
     "group: entity group management tests",
-    "hacs: HACS (Home Assistant Community Store) tests",
+    "hacs: Marketplace (store tools) tests",
     "update_path: component (stable tag + working tree) x new-server in-process update-path e2e (dedicated lane; runs only with E2E_UPDATE_PATH=1; #1783/#1785)",
     "core: core tool tests (state, service, bulk control, history, templates)",
     "config: configuration management tests (helpers, labels)",

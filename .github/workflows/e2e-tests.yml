@@ -110,7 +110,7 @@ jobs:
   # combined x64 container lane. The same full E2E suite runs with the
   # component's "File & YAML Tools" config entry never created
   # (E2E_NO_TOOLS_ENTRY=1) — the app (add-on) / Docker / PyPI user who never
-  # installed the component from HACS: the majority install, and the one every
+  # installed the component from the Marketplace: the majority install, and the one every
   # component-present lane hides, because the e2e fixtures set the component up
   # everywhere. Every component-backed capability must therefore either fall
   # back to a server-side path or fail with an actionable "install the

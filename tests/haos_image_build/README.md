@@ -3,7 +3,8 @@
 Builds the pre-baked HAOS qcow2 used by the HAOS E2E test tier (#1281).
 The image bundles a configured HAOS install with the ha-mcp addon repository
 registered, a v1 set of addons installed (Frigate, ESPHome, Node-RED,
-Mosquitto, Zigbee2MQTT), and HACS bootstrapped.
+Mosquitto, Zigbee2MQTT), and the E2E seed state from
+`tests/initial_test_state` (including the Marketplace's stored state).
 
 ## Local build
 

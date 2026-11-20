@@ -2,8 +2,9 @@
 """Redact credential values from HAOS diagnostics before artifact upload.
 
 The HAOS e2e workflows tar ``.storage`` out of the booted qcow2 into a
-diagnostics artifact. Since _conftest_haos.py injects ``GITHUB_TOKEN`` into the HACS
-config entry pre-boot (see ``haos_runtime.inject_hacs_token_in_qcow2``),
+diagnostics artifact. Since _conftest_haos.py injects ``GITHUB_TOKEN`` into the
+Marketplace config entry pre-boot (see
+``haos_runtime.inject_marketplace_token_in_qcow2``),
 ``core.config_entries`` inside that tar carries the token — expired by the
 time anyone can download the artifact (``GITHUB_TOKEN`` is revoked when the
 run ends), but a credential must not persist into a downloadable artifact
