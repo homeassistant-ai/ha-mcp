@@ -7,12 +7,13 @@ entity does not change. Every stored scene read back is Core's.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from ha_mcp.backup_manager import BackupManager, MandatoryBackupError
-from ha_mcp.client.exceptions import HomeAssistantAPIError
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._tools_config_scenes_core import TV_ON, scene, scene_tools, stored_scenes
@@ -118,18 +119,15 @@ async def test_a_deleted_scene_comes_back_under_its_own_key(
 
 
 async def test_a_failed_read_of_the_stored_scenes_blocks_the_restore(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    backup_manager: BackupManager,
-    snapshot_of_deleted_movie: str,
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant, backup_manager: BackupManager, snapshot_of_deleted_movie: str
 ) -> None:
-    async def fails(domain: str, storage_key: str) -> bool:
-        raise HomeAssistantAPIError("Internal Server Error", status_code=500)
-
-    monkeypatch.setattr(core_client, "_config_exists", fails)
+    """Core cannot read an unparsable scenes.yaml, so it cannot say whether
+    the scene is gone; nothing is written."""
+    path = Path(hass.config.path("scenes.yaml"))
+    broken = "- id: [unclosed\n"
+    await hass.async_add_executor_job(path.write_text, broken)
 
     with pytest.raises(MandatoryBackupError, match="stored scenes could not be read"):
         await backup_manager.restore_snapshot(snapshot_of_deleted_movie)
 
-    assert {s["id"] for s in await stored_scenes(hass)} == {"other"}
+    assert await hass.async_add_executor_job(path.read_text) == broken
