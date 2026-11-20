@@ -235,7 +235,7 @@ class FaultLogSourceMixin:
         }
         if not result.get("success", False):
             error = str(result.get("error", ""))
-            if file_read_error_code(result, FAULT_LOG_PATH) in {
+            if file_read_error_code(result) in {
                 "not_found",
                 "not_a_file",
             }:

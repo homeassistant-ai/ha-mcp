@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from io import StringIO
 from pathlib import Path
-from typing import Any
 
 import pytest
 from annotatedyaml import Secrets
@@ -428,6 +427,7 @@ class TestSeqIndentDetectionEdges:
             ["configuration.yaml"],
         ),
         ("sensor: {name: x}\n", {}, "sensor..name", []),
+        ("template: {}\n", {}, "", []),
         ("template: {sensor: []}\n", {}, "sensor", []),
         (
             "shell_command: !secret commands\n",
@@ -493,17 +493,3 @@ def test_discovery_walks_a_list_of_loaded_mappings(tmp_path: Path) -> None:
     config = load_yaml_config_file(str(path), Secrets(tmp_path))
     config["cycle"] = config
     assert find_yaml_key_files([config], "template") == [str(path)]
-
-
-@pytest.mark.parametrize(
-    ("root", "key"),
-    [
-        ({"template": {}}, ""),
-        ("not a mapping", "template"),
-        ({"template": {}}, "template"),
-    ],
-)
-def test_discovery_ignores_missing_paths_and_unannotated_inputs(
-    root: Any, key: str
-) -> None:
-    assert find_yaml_key_files(root, key) == []

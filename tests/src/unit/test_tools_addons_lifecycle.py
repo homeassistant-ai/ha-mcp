@@ -455,15 +455,12 @@ class TestRepositories:
     async def test_direct_repository_conflict_uses_supervisors_error_key(
         self, app_route: Route
     ) -> None:
-        app_route.supervisor.reply(
+        app_route.supervisor.refuse(
             "POST",
             REPOSITORIES,
+            "Repository registration declined",
             status=409,
-            payload={
-                "result": "error",
-                "error_key": "store_repository_already_added_error",
-                "message": "Repository registration declined",
-            },
+            error_key="store_repository_already_added_error",
         )
         result = await manage(
             app_route.client, action="add_repository", repository=REPO_URL

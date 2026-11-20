@@ -607,8 +607,7 @@ def _raise_supervisor_api_failure(
     if method == "POST" and (
         options := re.fullmatch(r"/addons/([^/]+)/options", endpoint)
     ):
-        # The bridge strips AppConfigurationInvalidError's key; older Supervisors
-        # report the underlying missing option without the app-specific prefix.
+        # The bridge strips AppConfigurationInvalidError's key.
         reason = error_text.removeprefix("Command failed: ")
         if (status_code == 400 and key == "app_configuration_invalid_error") or (
             _generic_supervisor_refusal(result)

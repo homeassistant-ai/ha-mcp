@@ -32,6 +32,8 @@ class Gateway:
         self.upgrade_status: int | None = None
         # WebSocket command types the gateway drops the socket on.
         self.drops: set[str] = set()
+        # WebSocket message types the gateway keeps to itself, socket left open.
+        self.holds: set[str] = set()
         # "METHOD /path" of every REST request that reached the gateway.
         self.requests: list[str] = []
         # Routes the gateway answers itself, ahead of forwarding to Core. A
@@ -78,8 +80,8 @@ class Gateway:
         await caller.prepare(request)
         async with self._session.ws_connect(f"{self._core_url}/api/websocket") as core:
             relays = await asyncio.gather(
-                _relay(caller, core, self.drops),
-                _relay(core, caller, set()),
+                _relay(caller, core, self.drops, self.holds),
+                _relay(core, caller, set(), set()),
                 return_exceptions=True,
             )
         for outcome in relays:
@@ -95,6 +97,7 @@ async def _relay(
     source: web.WebSocketResponse | aiohttp.ClientWebSocketResponse,
     target: web.WebSocketResponse | aiohttp.ClientWebSocketResponse,
     drops: set[str],
+    holds: set[str],
 ) -> None:
     try:
         async for message in source:
@@ -104,6 +107,8 @@ async def _relay(
                 break
             if drops and json.loads(message.data).get("type") in drops:
                 break
+            if holds and json.loads(message.data).get("type") in holds:
+                continue
             await target.send_str(message.data)
     finally:
         await target.close()

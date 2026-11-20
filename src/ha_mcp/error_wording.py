@@ -3,8 +3,7 @@
 Home Assistant Core, the Supervisor, Python and FastMCP send most of the errors
 below with no code, status or exception type that tells the cases apart, so
 their wording is the only signal. The rest is this project's own text: the
-client's ``Command failed: `` prefix, the replies of a component from before
-its file services returned codes, and the usage log. A reworded message makes
+client's ``Command failed: `` prefix and the usage log. A reworded message makes
 its test answer False, and the caller then reports the error as it came. A
 case that has a code, status or type is decided on that instead and does not
 belong here. ``scripts/error_wording.py`` refuses a wording test in any other
@@ -131,9 +130,8 @@ _JOB_COLLISION = re.compile(r"Another job is running for job group \S+", re.IGNO
 
 
 def supervisor_invalid_options(reason: str, slug: str) -> bool:
-    """AppConfigurationInvalidError after Core's bridge dropped its key; older
-    Supervisors send the missing option without the app prefix."""
-    return reason.startswith((f"App {slug} has invalid options: ", "Missing option '"))
+    """AppConfigurationInvalidError after Core's bridge dropped its key."""
+    return reason.startswith(f"App {slug} has invalid options: ")
 
 
 def supervisor_unserved_endpoint(reply: dict[str, Any]) -> bool:
@@ -146,20 +144,6 @@ def supervisor_unserved_endpoint(reply: dict[str, Any]) -> bool:
 def supervisor_job_collision(text: str) -> bool:
     """JobGroupExecutionLimitExceeded carries no error key."""
     return _JOB_COLLISION.fullmatch(text.removeprefix(COMMAND_FAILED)) is not None
-
-
-# --- ha_mcp_tools component before its file services returned codes ---------
-
-
-def legacy_file_read_code(message: str, path: str) -> str | None:
-    if message.startswith("Path not allowed. Allowed paths: "):
-        return "path_not_allowed"
-    return {
-        f"File does not exist: {path}": "not_found",
-        f"Backup does not exist: {path}": "not_found",
-        f"Path is not a file: {path}": "not_a_file",
-        f"Cannot read binary file: {path}. Only text files are supported.": "binary_file",
-    }.get(message)
 
 
 # --- Python --------------------------------------------------------------------

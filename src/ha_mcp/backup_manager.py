@@ -1851,7 +1851,7 @@ class BackupManager:
         info = await _read_legacy_backup(self._client, filename)
         if not info.get("success", False):
             err = str(info.get("error", ""))
-            if file_read_error_code(info, filename) == "not_found":
+            if file_read_error_code(info) == "not_found":
                 raise FileNotFoundError(filename)
             raise ValueError(f"Cannot read legacy backup {filename!r}: {err}")
         return info
@@ -2413,7 +2413,7 @@ async def _fetch_yaml(client: Any, entity_id: str) -> Any:
     result = unwrap_service_response(result)
     if not result.get("success", False):
         error = str(result.get("error", ""))
-        if file_read_error_code(result, file) in {"not_found", "not_a_file"}:
+        if file_read_error_code(result) in {"not_found", "not_a_file"}:
             return None
         raise HomeAssistantError(f"read_file failed for {file!r}: {error}")
     # The component extracts the subtree (it has ruamel); None = key absent.

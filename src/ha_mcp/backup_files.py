@@ -8,21 +8,15 @@ from __future__ import annotations
 from typing import Any
 
 from .client.rest_client import HomeAssistantError
-from .error_wording import legacy_file_read_code
 
 # The component flag that gates read_file's ``keep_line_endings`` field.
 LINE_ENDINGS_CAPABILITY = "read_file_line_endings"
 
 
-def file_read_error_code(result: dict[str, Any], path: str) -> str | None:
-    """Read the service code, recognizing exact replies from older components."""
-    if "error_code" in result:
-        code = result["error_code"]
-        return code if isinstance(code, str) else None
-    message = result.get("error")
-    if not isinstance(message, str):
-        return None
-    return legacy_file_read_code(message, path)
+def file_read_error_code(result: dict[str, Any]) -> str | None:
+    """The ``error_code`` of a failed file service reply."""
+    code = result.get("error_code")
+    return code if isinstance(code, str) else None
 
 
 async def _fetch_file(
@@ -52,7 +46,7 @@ async def _fetch_file(
         content = result.get("content")
         return content if isinstance(content, str) else None
     error = str(result.get("error", ""))
-    code = file_read_error_code(result, entity_id)
+    code = file_read_error_code(result)
     if code in {"not_found", "not_a_file", "binary_file"}:
         return None
     if code == "path_not_allowed":

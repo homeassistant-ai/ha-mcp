@@ -216,9 +216,19 @@ class Supervisor:
         payload = {"result": "ok", "data": {} if data is None else data}
         self._queue(method, path, _Answer(payload=payload))
 
-    def refuse(self, method: str, path: str, message: str, status: int = 400) -> None:
-        """Supervisor refuses the request with its own message."""
+    def refuse(
+        self,
+        method: str,
+        path: str,
+        message: str,
+        status: int = 400,
+        error_key: str | None = None,
+    ) -> None:
+        """Supervisor refuses the request with its own message, and with the
+        ``error_key`` its keyed errors add (``api_return_error``)."""
         payload = {"result": "error", "message": message}
+        if error_key is not None:
+            payload["error_key"] = error_key
         self._queue(method, path, _Answer(status, payload))
 
     def reply(

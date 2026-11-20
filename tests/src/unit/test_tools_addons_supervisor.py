@@ -94,14 +94,10 @@ class TestTheRoute:
 
 
 class TestSupervisorRefusals:
-    @pytest.mark.parametrize(
-        "prefix", ["", f"App {SLUG} has invalid options: "], ids=["bare", "named"]
-    )
     async def test_options_supervisor_rejects_are_a_validation_failure(
-        self, route: Route, prefix: str
+        self, route: Route
     ) -> None:
-        """#993: "authorized_keys" in Supervisor's message is not an auth error.
-        Supervisor names the app before the reason; older ones sent it bare."""
+        """#993: "authorized_keys" in Supervisor's message is not an auth error."""
         route.supervisor.running(
             options={"ssh": {"sftp": False}},
             schema=[
@@ -117,7 +113,8 @@ class TestSupervisorRefusals:
         route.supervisor.refuse(
             "POST",
             f"/addons/{SLUG}/options",
-            f"{prefix}Missing option 'authorized_keys' in ssh in SSH (core_ssh)",
+            f"App {SLUG} has invalid options: "
+            "Missing option 'authorized_keys' in ssh in SSH (core_ssh)",
         )
 
         body = await rejected_call_body(
@@ -133,15 +130,11 @@ class TestSupervisorRefusals:
         self, app_route: Route
     ) -> None:
         app_route.supervisor.running(options={}, schema=[])
-        app_route.supervisor.reply(
+        app_route.supervisor.refuse(
             "POST",
             f"/addons/{SLUG}/options",
-            status=400,
-            payload={
-                "result": "error",
-                "error_key": "app_configuration_invalid_error",
-                "message": "Configuration declined",
-            },
+            "Configuration declined",
+            error_key="app_configuration_invalid_error",
         )
         body = await rejected_call_body(
             manage(app_route.client, slug=SLUG, options={"debug": True})
@@ -413,15 +406,8 @@ class TestBusyJobGroup:
     async def test_a_specific_rest_refusal_prevents_a_job_retry(
         self, app_route: Route, quick_retry: None
     ) -> None:
-        app_route.supervisor.reply(
-            "POST",
-            STOP,
-            status=400,
-            payload={
-                "result": "error",
-                "error_key": "app_not_running_error",
-                "message": COLLISION,
-            },
+        app_route.supervisor.refuse(
+            "POST", STOP, COLLISION, error_key="app_not_running_error"
         )
         app_route.supervisor.answer("POST", STOP, {})
 

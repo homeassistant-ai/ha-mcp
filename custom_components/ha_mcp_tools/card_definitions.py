@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from .card_runtime import async_ensure_runtime
 from .custom_cards import CustomCards, async_get_custom_cards, custom_load_status
-from .error_wording import export_needed, missing_reference
+from .error_wording import missing_reference
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -112,7 +112,9 @@ function build(src, bindings) {
       return new Proxy({}, { get: function (t, k) {
         var key = b + ':' + String(k);
         if (Object.prototype.hasOwnProperty.call(PURE, key)) return PURE[key];
-        throw new Error('export-needed ' + key);
+        var needed = new Error('export-needed ' + key);
+        if (typeof k === 'string' && /^[\w$]+$/.test(k)) needed.exportNeeded = [b, k];
+        throw needed;
       } });
     }
   });
@@ -183,7 +185,9 @@ function engine(op, p) {
     }
     return { error: 'unknown op' };
   } catch (e) {
-    return { error: String(e) };
+    var failed = { error: String(e) };
+    if (e && e.exportNeeded) failed.export_needed = e.exportNeeded;
+    return failed;
   }
 }
 """
@@ -483,11 +487,9 @@ class CardDefinitions:
             # A form may leave a name inert; a validator must not, or it
             # would flag valid configs.
             inert_ok = op == "schema"
-            needed = export_needed(error)
+            needed = out.get("export_needed")
             if needed:
-                self._resolve_export(
-                    needed.group(1), needed.group(2), bindings, depth, inert_ok
-                )
+                self._resolve_export(needed[0], needed[1], bindings, depth, inert_ok)
                 continue
             missing = missing_reference(error)
             if not missing:

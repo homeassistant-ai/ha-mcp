@@ -127,10 +127,9 @@ Assistant Core: twelve ast-grep rules, ruff's `SLF001` (their own `ruff.toml`)
 and the mypy run above. [`tests/AGENTS.md`](../../tests/AGENTS.md#unit-tests-run-on-real-home-assistant-core)
 owns these rules; every grandfather list is empty.
 
-`scripts/error_wording.py` fails on production code that decides by the
-wording of an error instead of its code, status or type; the
+`scripts/error_wording.py` enforces the
 [native contracts](native-core-contracts.md#decide-on-the-code-not-the-wording)
-say where the few wording tests live. It has no list.
+rule on deciding by an error's wording.
 
 C901 complexity is capped at 10 repository-wide with no per-file exemptions;
 issue #925 removed the grandfathered list, so extract helpers instead of
