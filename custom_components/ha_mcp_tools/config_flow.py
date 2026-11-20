@@ -77,7 +77,6 @@ from .const import (
     EXPOSURE_FULL,
     EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
-    MAX_OAUTH_CALLBACKS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_ACCESS_OFF_AFTER_RESTART,
     OPT_ADMIN_TOKEN_REPLACEMENT,
@@ -91,7 +90,6 @@ from .const import (
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_OAUTH_REGENERATE,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
@@ -107,6 +105,8 @@ from .const import (
     WEBHOOK_AUTH_NONE,
 )
 from .oauth_redirect_allowlist import (
+    MAX_OAUTH_CALLBACKS,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
     effective_allowlist,
     normalize_allowlist,
     stored_allowlist,

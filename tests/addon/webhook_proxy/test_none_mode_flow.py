@@ -1,12 +1,15 @@
 """The none-mode auto-approve OAuth flow, as an MCP client runs it.
 
-Discovery, the invisible authorize redirect and the PKCE token exchange are
-all made over Home Assistant's real HTTP server against a proxy Core set up
-with OAuth off.
+Discovery, the invisible authorize redirect, its callback allowlist and the
+PKCE token exchange are all made over Home Assistant's real HTTP server
+against a proxy Core set up with OAuth off.
 """
 
 from __future__ import annotations
 
+import html
+import logging
+import uuid
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -15,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from aiohttp import ClientResponse
 from aiohttp.test_utils import TestClient
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.typing import ClientSessionGenerator
 
@@ -24,10 +28,15 @@ from ._auth_modes import (
     fetch_json,
     pkce_pair,
     proxy_config,
+    reload_proxy,
     submodule,
 )
 from ._proxy import start_proxy
-from ._variants import Variant
+from ._variants import Variant, callback_allowlist_supported
+
+OTHER_CALLBACK = "https://other.example/cb"
+REFUSED_LINE = "Allowed OAuth callback URLs option"
+LIST_ADVICE = "enter this exact address"
 
 
 @pytest.fixture
@@ -69,6 +78,36 @@ async def _authorize(
 def _redirect_query(response: ClientResponse) -> dict[str, list[str]]:
     assert response.status == 302
     return parse_qs(urlparse(response.headers["Location"]).query)
+
+
+def _require_allowlist(variant: Variant) -> None:
+    if not callback_allowlist_supported(variant):
+        pytest.skip("the callback allowlist rides the dev flavor until promote")
+
+
+async def _client_with(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    variant: Variant,
+    fs_root: Path,
+    **extra: Any,
+) -> TestClient:
+    """A client of a proxy with OAuth off and ``extra`` in its config file."""
+    await start_proxy(hass, variant, fs_root, proxy_config(**extra))
+    return await hass_client_no_auth()
+
+
+async def _status_for(
+    client: TestClient, variant: Variant, redirect_uri: str
+) -> tuple[int, str | None]:
+    """Authorize's status and ``Location`` for ``redirect_uri``."""
+    _verifier, challenge = pkce_pair()
+    response = await _authorize(client, variant, challenge, redirect_uri=redirect_uri)
+    return response.status, response.headers.get("Location")
+
+
+def _refusal_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if REFUSED_LINE in r.getMessage()]
 
 
 async def _token(
@@ -158,24 +197,344 @@ async def test_authorization_responses_carry_the_advertised_rfc9207_iss(
     assert query["iss"] == [doc["issuer"]]
 
 
-async def test_any_valid_https_redirect_is_accepted(
+async def test_unlisted_callback_gets_an_explanation_page_not_a_redirect(
+    proxy_client: TestClient,
+    component: ModuleType,
+    variant: Variant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An anonymous authorize that redirected anywhere would make the Home
+    Assistant origin an open redirector: an unlisted callback gets a 400 page
+    naming it, escaped, uncached and unscriptable, and no code. Stable predates
+    the list and still redirects."""
+    # One pending code at most: a refusal that issued one would starve the
+    # listed request below.
+    monkeypatch.setattr(submodule(component, "oauth"), "MAX_PENDING_CODES", 1)
+    callback = f"{OTHER_CALLBACK}?next=<img src=x>"
+    _verifier, challenge = pkce_pair()
+
+    response = await _authorize(proxy_client, variant, challenge, redirect_uri=callback)
+
+    if not callback_allowlist_supported(variant):
+        assert response.status == 302
+        assert response.headers["Location"].startswith(f"{OTHER_CALLBACK}?")
+        return
+    assert response.status == 400
+    assert "Location" not in response.headers
+    page = await response.text()
+    assert html.escape(callback) in page
+    assert "<img src=x>" not in page
+    assert "no-store" in response.headers["Cache-Control"]
+    csp = response.headers["Content-Security-Policy"]
+    assert "default-src 'none'" in csp
+    assert "script-src" not in csp
+    # Entering only this address would drop claude.ai and the other defaults.
+    assert "replaces the built-in list" in page
+    assert "code" in _redirect_query(await _authorize(proxy_client, variant, challenge))
+
+
+async def test_a_configured_list_replaces_the_shipped_defaults(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    component: ModuleType,
+    variant: Variant,
+    fs_root: Path,
+) -> None:
+    """The app's option is the whole list, not an addition: its entry signs
+    in, and claude.ai's default callback is then refused."""
+    _require_allowlist(variant)
+    client = await _client_with(
+        hass,
+        hass_client_no_auth,
+        variant,
+        fs_root,
+        oauth_redirect_allowlist=[OTHER_CALLBACK],
+    )
+
+    listed = await _status_for(client, variant, OTHER_CALLBACK)
+    default = await _status_for(client, variant, CLAUDE_REDIRECT)
+
+    assert listed[0] == 302
+    assert default == (400, None)
+
+
+@pytest.mark.parametrize(
+    ("redirect_uri", "accepted"),
+    [
+        ("http://127.0.0.1:61264/cli-callback", True),
+        ("http://127.0.0.1:61264/elsewhere", False),
+    ],
+    ids=["other-port", "other-path"],
+)
+async def test_a_listed_loopback_callback_matches_any_port_but_only_its_path(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    component: ModuleType,
+    variant: Variant,
+    fs_root: Path,
+    redirect_uri: str,
+    accepted: bool,
+) -> None:
+    """Native and CLI clients (RFC 8252) pick a fresh port per sign-in, so a
+    listed loopback callback must work on any port, never on another path."""
+    _require_allowlist(variant)
+    client = await _client_with(
+        hass,
+        hass_client_no_auth,
+        variant,
+        fs_root,
+        oauth_redirect_allowlist=["http://127.0.0.1/cli-callback"],
+    )
+
+    status, _location = await _status_for(client, variant, redirect_uri)
+
+    assert status == (302 if accepted else 400)
+
+
+@pytest.mark.parametrize("allow_any", [False, True], ids=["listed", "allow-any"])
+async def test_a_callback_carrying_credentials_is_refused(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    component: ModuleType,
+    variant: Variant,
+    fs_root: Path,
+    allow_any: bool,
+) -> None:
+    """A callback with userinfo is never legitimate: it is refused even when
+    its host and path are listed, and even with any callback allowed."""
+    _require_allowlist(variant)
+    client = await _client_with(
+        hass,
+        hass_client_no_auth,
+        variant,
+        fs_root,
+        oauth_redirect_allowlist=["http://127.0.0.1/cli-callback"],
+        oauth_allow_any_callback=allow_any,
+    )
+
+    result = await _status_for(client, variant, "http://u@127.0.0.1:5000/cli-callback")
+
+    assert result == (400, None)
+
+
+@pytest.mark.parametrize(
+    ("callback", "listable"),
+    [(OTHER_CALLBACK, True), ("https://u:pw@other.example/cb", False)],
+    ids=["unlisted", "carries-credentials"],
+)
+async def test_a_refusal_blames_the_list_only_for_a_callback_the_list_could_hold(
+    proxy_client: TestClient,
+    variant: Variant,
+    caplog: pytest.LogCaptureFixture,
+    callback: str,
+    listable: bool,
+) -> None:
+    """The app's option refuses a callback carrying credentials, so telling the
+    administrator to list one sends them to a setting that cannot help."""
+    _require_allowlist(variant)
+    _verifier, challenge = pkce_pair()
+
+    with caplog.at_level(logging.WARNING):
+        response = await _authorize(
+            proxy_client, variant, challenge, redirect_uri=callback
+        )
+
+    page = await response.text()
+    logged = [m for m in caplog.messages if OTHER_CALLBACK in m]
+    assert response.status == 400
+    assert (LIST_ADVICE in page) is listable
+    assert len(logged) == 1
+    assert (REFUSED_LINE in logged[0]) is listable
+
+
+async def test_a_refusal_log_holds_no_credentials_or_query_from_the_callback(
+    proxy_client: TestClient,
+    variant: Variant,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The callback's password and query string must not reach the Home
+    Assistant log in clear text; its host and path still name the client."""
+    _require_allowlist(variant)
+    password, token = uuid.uuid4().hex, uuid.uuid4().hex
+    callback = f"https://u:{password}@other.example/cb?token={token}"
+
+    with caplog.at_level(logging.WARNING):
+        await _status_for(proxy_client, variant, callback)
+
+    logged = [m for m in caplog.messages if "other.example/cb" in m]
+    assert len(logged) == 1
+    assert password not in caplog.text
+    assert token not in caplog.text
+
+
+async def test_a_callback_too_long_for_any_list_is_refused_for_its_length(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    component: ModuleType,
+    variant: Variant,
+    fs_root: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The app's option refuses a callback over the length bound, so allow-any
+    must refuse it too, and the page and log must give its length as the
+    reason rather than send the administrator to that option."""
+    _require_allowlist(variant)
+    limit = submodule(component, "oauth_redirect_allowlist").MAX_OAUTH_CALLBACK_LENGTH
+    callback = f"{OTHER_CALLBACK}?" + "a" * limit
+    client = await _client_with(
+        hass, hass_client_no_auth, variant, fs_root, oauth_allow_any_callback=True
+    )
+    _verifier, challenge = pkce_pair()
+
+    with caplog.at_level(logging.WARNING):
+        response = await _authorize(client, variant, challenge, redirect_uri=callback)
+
+    page = await response.text()
+    logged = [m for m in caplog.messages if OTHER_CALLBACK in m]
+    assert response.status == 400
+    assert "Location" not in response.headers
+    assert LIST_ADVICE not in page
+    assert f"{limit} characters" in page
+    assert len(logged) == 1
+    assert "too long" in logged[0]
+
+
+async def test_dynamic_registration_cannot_add_a_callback(
     proxy_client: TestClient, variant: Variant
 ) -> None:
-    """The secret webhook URL is the only credential in none mode, so by
-    maintainer decision authorize serves any spec-valid redirect, not only
-    claude.ai's."""
+    """A client registering its own callback must not get past the list."""
+    _require_allowlist(variant)
+    registration = await proxy_client.post(
+        f"{variant.oauth_base}/register", json={"redirect_uris": [OTHER_CALLBACK]}
+    )
+    assert registration.status == 201
     _verifier, challenge = pkce_pair()
 
     response = await _authorize(
         proxy_client,
         variant,
         challenge,
-        client_id="https://other.example/cimd",
-        redirect_uri="https://other.example/cb",
+        client_id=(await registration.json())["client_id"],
+        redirect_uri=OTHER_CALLBACK,
     )
 
-    assert response.status == 302
-    assert response.headers["Location"].startswith("https://other.example/cb?")
+    assert response.status == 400
+    assert "Location" not in response.headers
+
+
+async def test_a_changed_list_applies_after_the_reload_the_app_does_on_start(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    component: ModuleType,
+    variant: Variant,
+    fs_root: Path,
+) -> None:
+    """The app rewrites its config file and reloads the entry on every start:
+    the new list must replace the old one, not add to it or be ignored."""
+    _require_allowlist(variant)
+    entry = await start_proxy(
+        hass, variant, fs_root, proxy_config(oauth_redirect_allowlist=[CLAUDE_REDIRECT])
+    )
+    assert await reload_proxy(
+        hass,
+        fs_root,
+        variant,
+        entry,
+        proxy_config(oauth_redirect_allowlist=[OTHER_CALLBACK]),
+    )
+    client = await hass_client_no_auth()
+
+    new = await _status_for(client, variant, OTHER_CALLBACK)
+    old = await _status_for(client, variant, CLAUDE_REDIRECT)
+
+    assert new[0] == 302
+    assert old == (400, None)
+
+
+async def test_allow_any_callback_accepts_an_unlisted_callback(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    component: ModuleType,
+    variant: Variant,
+    fs_root: Path,
+) -> None:
+    """With the app's allow-any option on, an unlisted https callback signs in."""
+    _require_allowlist(variant)
+    client = await _client_with(
+        hass, hass_client_no_auth, variant, fs_root, oauth_allow_any_callback=True
+    )
+
+    status, location = await _status_for(client, variant, OTHER_CALLBACK)
+
+    assert status == 302
+    assert location is not None and location.startswith(f"{OTHER_CALLBACK}?")
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [CLAUDE_REDIRECT, [CLAUDE_REDIRECT, "http://localhost/callback#frag"]],
+    ids=["not-a-list", "unusable-entry"],
+)
+async def test_a_malformed_stored_list_refuses_every_callback(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    component: ModuleType,
+    variant: Variant,
+    fs_root: Path,
+    stored: object,
+) -> None:
+    """A list no validated writer could have stored is not the administrator's:
+    honouring its other entries or falling back to the defaults would widen
+    the setting silently, so even a callback it holds is refused."""
+    _require_allowlist(variant)
+    client = await _client_with(
+        hass, hass_client_no_auth, variant, fs_root, oauth_redirect_allowlist=stored
+    )
+
+    result = await _status_for(client, variant, CLAUDE_REDIRECT)
+
+    assert result == (400, None)
+
+
+async def test_a_refused_callback_is_logged_without_forging_lines(
+    proxy_client: TestClient,
+    variant: Variant,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Whoever reads the log can tell why a client keeps failing to sign in,
+    and a terminal escape in the anonymous caller's callback stays inert."""
+    _require_allowlist(variant)
+
+    with caplog.at_level(logging.WARNING):
+        await _status_for(proxy_client, variant, f"{OTHER_CALLBACK}\x1b[31mRED")
+
+    lines = _refusal_lines(caplog)
+    assert len(lines) == 1
+    assert OTHER_CALLBACK in lines[0]
+    assert "\x1b" not in lines[0]
+
+
+async def test_a_burst_of_refusals_writes_one_line_then_a_count(
+    proxy_client: TestClient,
+    variant: Variant,
+    caplog: pytest.LogCaptureFixture,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Authorize is anonymous, so refusals must not flood the log: a burst
+    writes one line, and the next line counts what it held back."""
+    _require_allowlist(variant)
+
+    with caplog.at_level(logging.WARNING):
+        for n in range(5):
+            await _status_for(proxy_client, variant, f"{OTHER_CALLBACK}{n}")
+        assert len(_refusal_lines(caplog)) == 1
+        freezer.tick(3600)
+        await _status_for(proxy_client, variant, f"{OTHER_CALLBACK}-last")
+
+    lines = _refusal_lines(caplog)
+    assert len(lines) == 2
+    assert "4 more refused since the last such line" in lines[1]
+    assert f"{OTHER_CALLBACK}-last" in lines[1]
 
 
 async def test_authorize_refuses_a_non_s256_challenge(

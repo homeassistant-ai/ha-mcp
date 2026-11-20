@@ -9,6 +9,18 @@ history from before the fork.
 -->
 
 
+## v3.0.6.dev3 (2026-11-19)
+
+- **BREAKING for none mode (OAuth off):** the sign-in redirect is only sent to
+  callbacks on a list. The built-in list covers Claude (claude.ai,
+  claude.com), Claude Code, ChatGPT and Gemini Enterprise. Any other client's
+  callback gets a page naming the address to add under the new "Allowed OAuth
+  callback URLs" option; "Allow any OAuth callback URL" restores the old
+  behaviour. Callbacks with a username or password are refused (#2653).
+- The app declares the `homeassistant_config` mount instead of the deprecated
+  `config` one; paths inside the app are unchanged (#3153).
+
+
 ## v3.0.6.dev2 (2026-11-09)
 
 - The app (add-on) image is built on Python 3.14 (`python:3.14-slim`).

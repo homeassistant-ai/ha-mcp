@@ -35,9 +35,8 @@ from .oauth import (
     _addon_alive,
     _b64url_decode,
     _b64url_encode,
-    _is_loopback_host,
-    _is_valid_redirect_uri,
 )
+from .oauth_redirect_allowlist import _is_loopback_host, _is_valid_redirect_uri
 
 CFG_DCR_SIGNING_KEY = "dcr_signing_key"
 _DCR_VIEW_REGISTERED_KEY = "mcp_proxy_dev_oauth_dcr_view_registered"

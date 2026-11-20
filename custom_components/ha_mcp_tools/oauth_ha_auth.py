@@ -45,8 +45,8 @@ security considerations page).
 MIRROR: ``homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py``
 is the near-verbatim twin of this module. Keep behavioural changes on the two
 sides in step; that file's header names the pair's two intended deltas (the
-loopback, redirect-shape, and base64url helpers come from ``oauth_legacy.py``
-here and ``oauth.py`` there, and only that file carries ``core_listener_url``,
+base64url helpers come from ``oauth_legacy.py`` here and ``oauth.py`` there,
+and only that file carries ``core_listener_url``,
 its copy of ``loopback_url.derive_loopback_url``).
 """
 

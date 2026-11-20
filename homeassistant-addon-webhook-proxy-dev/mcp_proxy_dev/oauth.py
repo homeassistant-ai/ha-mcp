@@ -28,7 +28,6 @@ import base64
 import binascii
 import hashlib
 import hmac
-import ipaddress
 import json
 import logging
 import os
@@ -38,13 +37,14 @@ import time
 from html import escape
 from pathlib import Path
 from typing import Any, TypedDict
-from urllib.parse import unquote_plus, urlparse
+from urllib.parse import unquote_plus
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .oauth_metadata import MetadataProvider as MetadataProvider
+from .oauth_redirect_allowlist import _is_valid_redirect_uri
 from .readonly_webhook import ENDPOINT_SUFFIXES, endpoint_suffix
 
 _LOGGER = logging.getLogger(__name__)
@@ -130,12 +130,6 @@ PKCE_VERIFIER_MAX = 128
 PKCE_S256_CHALLENGE_LEN = 43
 _PKCE_VERIFIER_RE = re.compile(r"^[A-Za-z0-9._~-]+$")
 _PKCE_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9_-]{{{PKCE_S256_CHALLENGE_LEN}}}$")
-_LOOPBACK_HOSTNAMES = frozenset({"localhost"})
-
-# RFC 3986 §3.2 authority charset (unreserved / pct-encoded / sub-delims /
-# ':' '@' and IPv6 brackets). Anything outside it (a backslash, a space, raw
-# unicode) is an illegal authority that downstream URL builders may reject.
-_AUTHORITY_CHARS_RE = re.compile(r"[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]*")
 
 # Pending-code dict cap. An attacker spamming /authorize with valid params
 # could grow the dict between the prune passes that run on each issuance.
@@ -300,43 +294,6 @@ def load_or_create_secret() -> bytes:
             SECRET_FILE,
         )
     return new_secret
-
-
-def _is_loopback_host(hostname: str) -> bool:
-    """Return whether RFC 8252 permits the host on a plain-http callback."""
-    if hostname in _LOOPBACK_HOSTNAMES:
-        return True
-    try:
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
-
-
-def _is_valid_redirect_uri(redirect_uri: str) -> bool:
-    """Validate an HTTPS callback or RFC 8252 plain-HTTP loopback callback."""
-    if not redirect_uri:
-        return False
-    try:
-        parsed = urlparse(redirect_uri)
-        _ = parsed.port
-    except ValueError:
-        return False
-    if not parsed.hostname:
-        return False
-    if not _AUTHORITY_CHARS_RE.fullmatch(parsed.netloc):
-        # urlparse and yarl split authorities differently (e.g. a backslash
-        # before '@', which urlparse tolerates and yarl rejects per RFC 3986).
-        # Every accepted redirect later flows through yarl in _redirect_with,
-        # so an RFC 3986-illegal authority must 400 HERE, never 500 there
-        # (#2218 review — same contract as the .port access above).
-        return False
-    if parsed.scheme == "http":
-        if not _is_loopback_host(parsed.hostname):
-            return False
-    elif parsed.scheme != "https":
-        return False
-    # Fragments are not allowed in OAuth redirect URIs (RFC 6749 §3.1.2).
-    return not parsed.fragment
 
 
 def _build_base_url(request: web.Request, public_base_url: str | None = None) -> str:

@@ -10,6 +10,7 @@ stay off for stable after the code arrives.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -80,13 +81,27 @@ VARIANTS = (
 
 
 def load_start(variant: Variant) -> ModuleType:
-    """Load a fresh copy of the flavor's ``start.py``, the app's process."""
+    """Load a fresh copy of the flavor's ``start.py``, the app's process.
+
+    In the image ``start.py`` imports its sibling modules from ``/``; here they
+    come from the flavor's own directory, and each load gets its own copy so
+    the two flavors never share one.
+    """
     spec = importlib.util.spec_from_file_location(
         f"webhook_proxy_start_{variant.key}", variant.addon_dir / "start.py"
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    siblings = {path.stem for path in variant.addon_dir.glob("*.py")} - {"start"}
+    sys.path.insert(0, str(variant.addon_dir))
+    try:
+        for name in siblings:
+            sys.modules.pop(name, None)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(variant.addon_dir))
+        for name in siblings:
+            sys.modules.pop(name, None)
     return module
 
 
@@ -102,6 +117,11 @@ def ha_auth_supported(variant: Variant) -> bool:
 
 def none_autoapprove_supported(variant: Variant) -> bool:
     return (variant.component_dir / "oauth_autoapprove.py").exists()
+
+
+def callback_allowlist_supported(variant: Variant) -> bool:
+    """The flavor ships the none-mode callback allowlist."""
+    return (variant.component_dir / "oauth_redirect_allowlist.py").exists()
 
 
 def unified_oauth_routes(variant: Variant) -> bool:
@@ -132,11 +152,6 @@ def proxy_owned_oauth_endpoints(variant: Variant) -> bool:
     return '"authorization_endpoint": f"{base}{OAUTH_BASE}/authorize"' in (
         variant.component_src("auth_native.py")
     )
-
-
-def autoapprove_any_redirect(variant: Variant) -> bool:
-    """None mode accepts any valid redirect (the client allowlist retired)."""
-    return "without a client allowlist" in variant.component_src("oauth_autoapprove.py")
 
 
 def rfc9207_iss_supported(variant: Variant) -> bool:

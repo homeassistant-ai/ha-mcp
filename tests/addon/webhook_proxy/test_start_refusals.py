@@ -30,7 +30,7 @@ def test_unreadable_options_refuse_to_start(app: App, variant: Variant) -> None:
     assert not app.path(variant.config_file).exists()
     err = app.err()
     assert "refusing to start" in err
-    assert "Could not read the add-on configuration" in err
+    assert "configuration (JSONDecodeError)" in err
 
 
 def test_too_short_client_id_refuses_to_start(app: App) -> None:

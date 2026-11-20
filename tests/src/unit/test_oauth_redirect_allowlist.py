@@ -7,22 +7,36 @@ in ``test_oauth_redirect_allowlist_authorize.py``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from custom_components.ha_mcp_tools.const import (
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     MAX_OAUTH_CALLBACK_LENGTH,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
-)
-from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
     effective_allowlist,
     is_redirect_allowed,
+    loggable_callback,
     normalize_allowlist,
     stored_allowlist,
 )
 
 CLAUDE = "https://claude.ai/api/mcp/auth_callback"
 LOOPBACK = "http://127.0.0.1/callback"
+
+_ROOT = Path(__file__).resolve().parents[3]
+_MODULE = "oauth_redirect_allowlist.py"
+_COMPONENT_COPY = _ROOT / "custom_components/ha_mcp_tools" / _MODULE
+_DEV_PROXY_COPY = (
+    _ROOT / "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev" / _MODULE
+)
+
+
+def test_the_webhook_proxy_copy_honours_the_same_callbacks_as_the_component() -> None:
+    """A drifted proxy copy would redirect sign-ins the component refuses. The
+    stable copy is held to the dev tree by the promote drift guards."""
+    assert _DEV_PROXY_COPY.read_bytes() == _COMPONENT_COPY.read_bytes()
 
 
 class TestIsRedirectAllowed:
@@ -91,6 +105,13 @@ class TestIsRedirectAllowed:
         listed = f"{CLAUDE}#frag"
         assert not is_redirect_allowed(listed, [listed])
 
+    def test_a_callback_too_long_for_any_list_is_refused_even_when_listed(
+        self,
+    ) -> None:
+        # No writer can store it, so /authorize must not call it listable.
+        long = f"{CLAUDE}?" + "a" * MAX_OAUTH_CALLBACK_LENGTH
+        assert not is_redirect_allowed(long, [long])
+
 
 class TestEffectiveAllowlist:
     def test_an_entry_never_edited_uses_the_default(self) -> None:
@@ -158,3 +179,24 @@ class TestNormalizeAllowlist:
     def test_reports_an_over_long_callback(self) -> None:
         long = "https://example.com/" + "a" * MAX_OAUTH_CALLBACK_LENGTH
         assert normalize_allowlist([long]) == ([], [long])
+
+
+class TestLoggableCallback:
+    """A refused callback is logged; its userinfo, query and fragment can carry
+    a password or a token, so they must not reach the log."""
+
+    def test_keeps_scheme_host_port_and_path_only(self) -> None:
+        callback = "https://user:pw@claude.ai:8443/api/cb?token=abc#frag"
+        assert loggable_callback(callback) == "https://claude.ai:8443/api/cb"
+
+    def test_keeps_an_ipv6_host_bracketed(self) -> None:
+        assert loggable_callback("http://[::1]:5000/cb?x=1") == "http://[::1]:5000/cb"
+
+    @pytest.mark.parametrize(
+        "unparseable",
+        ["https://claude.ai:abc/cb?token=abc", "http://[::1/cb", "token=abc", ""],
+    )
+    def test_an_unparseable_callback_logs_as_a_fixed_placeholder(
+        self, unparseable: str
+    ) -> None:
+        assert loggable_callback(unparseable) == "<unparseable callback>"

@@ -17,20 +17,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from ..const import (
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_ENABLE_WEBHOOK,
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_WEBHOOK_AUTH,
     WEBHOOK_AUTH_NONE,
 )
 from ..oauth_redirect_allowlist import (
+    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
+    MAX_OAUTH_CALLBACKS,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
     effective_allowlist,
     normalize_allowlist,
     stored_allowlist,
 )
 from .constants import (
-    MAX_OAUTH_CALLBACKS,
     WS_OAUTH_CALLBACKS,
     WS_OAUTH_CALLBACKS_UPDATE,
 )
