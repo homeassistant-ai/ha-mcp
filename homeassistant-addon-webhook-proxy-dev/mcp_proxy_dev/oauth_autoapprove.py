@@ -102,8 +102,8 @@ def _log_refused_callback(redirect_uri: str, listable: bool) -> None:
     reason = (
         "it is not on the app's Allowed OAuth callback URLs option"
         if listable
-        else "a callback carrying a username, a password or a '#', or longer than "
-        f"{MAX_OAUTH_CALLBACK_LENGTH} characters, can never be allowed"
+        else "a callback carrying a username, a password or a '#', or one that is "
+        "too long, can never be allowed"
     )
     # repr: the callback is attacker-supplied, and an encoded newline or
     # terminal sequence in it must not forge log lines.

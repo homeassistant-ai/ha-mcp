@@ -370,13 +370,12 @@ async def test_a_callback_too_long_for_any_list_is_refused_for_its_length(
 
     page = await response.text()
     logged = [m for m in caplog.messages if callback[:200] in m]
-    too_long = f"{limit} characters"
     assert response.status == 400
     assert "Location" not in response.headers
     assert LIST_ADVICE not in page
-    assert too_long in page
+    assert f"{limit} characters" in page
     assert len(logged) == 1
-    assert too_long in logged[0]
+    assert "too long" in logged[0]
 
 
 async def test_dynamic_registration_cannot_add_a_callback(

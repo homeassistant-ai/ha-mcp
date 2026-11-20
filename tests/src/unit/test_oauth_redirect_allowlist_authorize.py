@@ -344,13 +344,12 @@ async def test_a_callback_too_long_for_any_list_is_refused_for_its_length(
 
     page = await resp.text()
     logged = [m for m in caplog.messages if callback[:200] in m]
-    too_long = f"{MAX_OAUTH_CALLBACK_LENGTH} characters"
     assert resp.status == 400
     assert "Location" not in resp.headers
     assert "add this exact address" not in page
-    assert too_long in page
+    assert f"{MAX_OAUTH_CALLBACK_LENGTH} characters" in page
     assert len(logged) == 1
-    assert too_long in logged[0]
+    assert "too long" in logged[0]
 
 
 async def test_ha_auth_mode_still_accepts_a_callback_with_userinfo(
