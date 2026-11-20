@@ -43,7 +43,7 @@ One handler per backed-up domain. Storage helper types each register one keyed
 from __future__ import annotations
 
 import asyncio
-import hashlib
+import errno
 import logging
 import os
 import re
@@ -117,6 +117,16 @@ from .backup_registry_items import fetch_label as _fetch_label
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
+from .backup_snapshot_identity import (
+    entity_id_aliases as _entity_id_aliases,
+)
+from .backup_snapshot_identity import (
+    matches_listing_identity,
+    might_name_multiple_stems,
+)
+from .backup_snapshot_identity import (
+    safe_entity_id as _safe_entity_id,
+)
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
@@ -131,6 +141,7 @@ from .client.rest_client import (
 from .config import get_global_settings
 from .errors import ErrorCode, get_error_code
 from .storage_helper_types import SIMPLE_HELPER_TYPES
+from .utils.config_write_lock import file_write_lock
 from .utils.data_paths import get_data_dir
 from .utils.registry_update_lock import registry_update_lock
 
@@ -147,7 +158,6 @@ logger = logging.getLogger(__name__)
 _MAX_PATCH_OPS = 200
 
 SCHEMA_VERSION = 1
-_SAFE_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 # Expected failure modes for the capture pipeline. Anything outside this
 # tuple is a bug (TypeError, AttributeError, KeyError, etc.) and should
@@ -368,7 +378,7 @@ TRACKER_PRUNE_BATCH = 1_000
 # Filename pattern: <domain>.<safe_entity_id>.<YYYYMMDD_HHMMSS>[_NN].yaml
 # The middle ``.`` separators make the timestamp rsplit reliable even
 # when entity_id contains dots (after sanitization, dots are kept). ``_NN``
-# is the same-second sequence (see ``_unclaimed_target``): the timestamp is
+# is the same-second sequence (see ``_publish_snapshot``): the timestamp is
 # a second and the throttle defaults to 0, so a second capture of one entity
 # inside that second takes the next free suffix rather than replacing the
 # first. ``_`` sorts after ``.``, so a suffixed name stays newest-last.
@@ -380,7 +390,7 @@ _FILENAME_RE = re.compile(
 
 # Captures of one entity inside one second before the manager gives up on a
 # free name. Two is the realistic case (a save then a delete of the same
-# blueprint); the cap only bounds the ``exists()`` probe.
+# blueprint); the cap bounds the number of publication attempts.
 _MAX_SAME_SECOND = 100
 
 # Domains whose snapshot ``config`` is raw text (file/YAML content) rather
@@ -436,47 +446,6 @@ class DomainHandler:
 # ----------------------------- backup manager -------------------------------
 
 
-def _entity_id_aliases(entity_id: str) -> list[str]:
-    """Every filename stem a snapshot of ``entity_id`` may carry.
-
-    Sanitised ids gained a digest suffix, so snapshots written before that
-    sit under the bare sanitised name. Rotation and entity filtering match
-    both, otherwise those older files would never be counted again: they
-    would never be pruned, and would drop out of an entity-filtered listing.
-    """
-    current = _safe_entity_id(entity_id)
-    legacy = _SAFE_ID_RE.sub("_", entity_id).lstrip(".") or "_"
-    return [current] if legacy == current else [current, legacy]
-
-
-def _safe_entity_id(entity_id: str) -> str:
-    """Sanitize an entity id for use in a filename.
-
-    Replaces any character outside ``[A-Za-z0-9._-]`` with ``_``. Path
-    separators get caught by this (the regex excludes both ``/`` and ``\\``).
-    Strips leading dots to prevent dotfile collisions.
-
-    Sanitizing is lossy, so ids that needed it get a short digest of the
-    ORIGINAL appended. Blueprint domains (#2329) key on paths, where
-    ``user/motion.yaml`` and ``user_motion.yaml`` both clean to
-    ``user_motion.yaml`` -- without the digest they share one snapshot
-    namespace, so captures in the same second overwrite each other and
-    rotation counts both histories as one, able to delete the only restore
-    point for a blueprint that was never written. Entity ids are already
-    within the safe set, so their filenames are unchanged and existing
-    snapshots stay discoverable.
-    """
-    if not entity_id:
-        return "_"
-    cleaned = _SAFE_ID_RE.sub("_", entity_id).lstrip(".")
-    if not cleaned:
-        return "_"
-    if cleaned == entity_id:
-        return cleaned
-    digest = hashlib.sha256(entity_id.encode("utf-8")).hexdigest()[:8]
-    return f"{cleaned}-{digest}"
-
-
 def _snapshot_order(path: Path) -> tuple[str, str, str]:
     """Sort key placing snapshots in capture order, oldest first.
 
@@ -490,20 +459,6 @@ def _snapshot_order(path: Path) -> tuple[str, str, str]:
     if m is None:
         return ("", "", path.name)
     return (m.group("ts"), m.group("seq") or "", path.name)
-
-
-def _id_matches(payload_id: str | None, wanted: str) -> bool:
-    """Whether a snapshot whose payload names ``payload_id`` is ``wanted``.
-
-    Two spellings select an entity: the id itself, and the digest stem
-    ``_safe_entity_id`` derives from it — the stem a listing used to show and
-    a filename still carries. Both name exactly one entity. The bare
-    pre-digest stem is deliberately not accepted: it is the current stem of a
-    differently-named entity, which is the ambiguity this check exists for.
-    """
-    if payload_id is None:
-        return False
-    return payload_id == wanted or _safe_entity_id(payload_id) == wanted
 
 
 def _now_ts() -> str:
@@ -1104,7 +1059,7 @@ class BackupManager:
             self._directory_checked = True
             raise
         safe = _safe_entity_id(entity_id)
-        target = self._unclaimed_target(domain, safe, _now_ts())
+        ts = _now_ts()
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "domain": domain,
@@ -1120,7 +1075,7 @@ class BackupManager:
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
         # mkstemp creates a unique 0600 inode before any configuration is written.
         fd, tmp_name = tempfile.mkstemp(
-            prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+            prefix=".snapshot-", suffix=".tmp", dir=self._dir
         )
         try:
             try:
@@ -1130,7 +1085,7 @@ class BackupManager:
                 raise
             with stream:
                 stream.write("# ha_mcp_backup\n" + body)
-            os.replace(tmp_name, str(target))
+            target = self._publish_snapshot(tmp_name, domain, safe, ts)
         finally:
             with suppress(OSError):
                 Path(tmp_name).unlink()
@@ -1139,22 +1094,38 @@ class BackupManager:
         logger.info("Auto-backup: snapshot written")
         return target
 
-    def _unclaimed_target(self, domain: str, safe: str, ts: str) -> Path:
-        """First filename for ``ts`` that no snapshot of this entity holds yet.
-
-        The bare name is taken when it is free; each later capture inside the
-        same second appends ``_01``, ``_02``, ... so the atomic replace in
-        ``_write_snapshot`` can never discard an earlier pre-write state.
-        ``maybe_snapshot`` serialises captures per key, so the ``exists()``
-        probe is not racing another capture of the same entity.
-        """
-        target = self._dir / f"{domain}.{safe}.{ts}.yaml"
-        for seq in range(1, _MAX_SAME_SECOND):
-            if not target.exists():
+    def _publish_snapshot(self, source: str, domain: str, safe: str, ts: str) -> Path:
+        stem = f"{domain}.{safe}.{ts}"
+        windows = os.name == "nt"
+        with (
+            nullcontext()
+            if windows
+            else file_write_lock(
+                self._dir / ".snapshot-publication.lock", required=True
+            )
+        ):
+            for seq in range(_MAX_SAME_SECOND):
+                suffix = f"_{seq:02d}" if seq else ""
+                target = self._dir / f"{stem}{suffix}.yaml"
+                try:
+                    if windows:
+                        os.rename(source, target)
+                    else:
+                        os.link(source, target)
+                except FileExistsError:
+                    continue
+                except OSError as exc:
+                    if windows or exc.errno not in {
+                        errno.ENOSYS,
+                        errno.EOPNOTSUPP,
+                        errno.EPERM,
+                        errno.EXDEV,
+                    }:
+                        raise
+                    if os.path.lexists(target):
+                        continue
+                    os.replace(source, target)
                 return target
-            target = self._dir / f"{domain}.{safe}.{ts}_{seq:02d}.yaml"
-        if not target.exists():
-            return target
         raise OSError(
             f"{_MAX_SAME_SECOND} snapshots of {domain}:{safe} inside one second"
         )
@@ -1265,10 +1236,6 @@ class BackupManager:
         with self._entry_identity_lock:
             self._entry_identity_cache.pop(name, None)
 
-    def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
-        """Whether ``path`` holds a snapshot of ``entity_id`` (see ``_id_matches``)."""
-        return _id_matches(self._payload_entity_id(path), entity_id)
-
     def _rotate(
         self, domain: str, entity_id: str, protected: frozenset[str] = frozenset()
     ) -> None:
@@ -1285,7 +1252,7 @@ class BackupManager:
             for safe in _entity_id_aliases(entity_id):
                 candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
         files = sorted(
-            (p for p in candidates if self._snapshot_is_for(p, entity_id)),
+            (p for p in candidates if self._payload_entity_id(p) == entity_id),
             key=_snapshot_order,
         )
         excess = len(files) - self.retain_per_entity
@@ -1329,9 +1296,12 @@ class BackupManager:
         # sanitising is lossy in both directions (``user/motion.yaml``'s
         # pre-digest stem IS ``user_motion.yaml``'s current stem), so each
         # stem match is confirmed against the id the payload stores before it
-        # counts as this entity's — ``delete_bulk`` unlinks whatever is
-        # returned here, and the caller named one entity.
-        safe_filter = set(_entity_id_aliases(entity_id)) if entity_id else None
+        # counts as this entity's.
+        safe_filter = (
+            set(_entity_id_aliases(entity_id))
+            if entity_id and not might_name_multiple_stems(entity_id)
+            else None
+        )
         out: list[dict[str, Any]] = []
         # Newest first by capture time — see ``_snapshot_order`` for why the
         # filename itself is not the key.
@@ -1376,7 +1346,9 @@ class BackupManager:
         # itself keeps its stem in an unfiltered
         # listing and is left out of a filtered one.
         payload_id = self._payload_entity_id(path)
-        if entity_id and not _id_matches(payload_id, entity_id):
+        if entity_id and not matches_listing_identity(
+            payload_id, entity_id, meta["entity_id"]
+        ):
             return None
         if payload_id is not None:
             meta["entity_id"] = payload_id
@@ -1434,7 +1406,7 @@ class BackupManager:
         entity_id: str | None = None,
         older_than_days: int | None = None,
     ) -> BulkDeleteResult:
-        """Delete snapshots matching ``domain`` / ``entity_id`` / age.
+        """Delete snapshots matching ``domain`` / original ``entity_id`` / age.
 
         Returns a dict ``{"deleted": [...], "failed": [...]}`` so callers
         can surface partial failures. ``failure_reasons`` optionally maps
@@ -1450,6 +1422,8 @@ class BackupManager:
                 raise ValueError("older_than_days must be >= 0")
             cutoff = time.time() - (older_than_days * 86400)
         for meta in self.list_snapshots(domain=domain, entity_id=entity_id):
+            if entity_id and meta["entity_id"] != entity_id:
+                continue
             if cutoff is not None and meta["mtime"] >= cutoff:
                 continue
             try:

@@ -8,8 +8,9 @@ through the first two on the server's own manager and client, on a real
 
 from __future__ import annotations
 
+import errno
 import json
-import os
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -106,14 +107,14 @@ async def diff_through(
 
 def fill_the_disk(manager: bm.BackupManager, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every write of a snapshot into the backup directory fails, as on a full disk."""
-    native_replace = os.replace
+    native_mkstemp = tempfile.mkstemp
 
-    def replace(src: Any, dst: Any, *args: Any, **kwargs: Any) -> None:
-        if Path(os.fsdecode(dst)).parent == manager.backup_dir:
-            raise OSError("No space left on device")
-        native_replace(src, dst, *args, **kwargs)
+    def create(*args: Any, **kwargs: Any) -> tuple[int, str]:
+        if kwargs.get("dir") == manager.backup_dir:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return native_mkstemp(*args, **kwargs)
 
-    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(tempfile, "mkstemp", create)
 
 
 def restore_fails_with(

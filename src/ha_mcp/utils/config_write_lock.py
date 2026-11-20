@@ -99,11 +99,17 @@ def config_file_lock(data_dir: Path | None = None) -> Iterator[None]:
     from .data_paths import get_data_dir
 
     lock_dir = data_dir if data_dir is not None else get_data_dir()
+    with file_write_lock(lock_dir / ".config_write.lock"):
+        yield
+
+
+@contextlib.contextmanager
+def file_write_lock(lock_path: Path, *, required: bool = False) -> Iterator[None]:
     fd: int | None = None
     locked = False
     try:
         try:
-            fd = os.open(lock_dir / ".config_write.lock", os.O_CREAT | os.O_RDWR, 0o600)
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
             if fcntl is not None:
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 locked = True
@@ -111,7 +117,11 @@ def config_file_lock(data_dir: Path | None = None) -> Iterator[None]:
                 os.lseek(fd, 0, os.SEEK_SET)
                 msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
                 locked = True
+            elif required:
+                raise OSError("Cross-process file locking is unavailable")
         except OSError:
+            if required:
+                raise
             logger.warning(
                 "config write lockfile unavailable; proceeding without "
                 "cross-process lock",
