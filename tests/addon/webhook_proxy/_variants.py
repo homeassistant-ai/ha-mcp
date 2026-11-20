@@ -154,11 +154,6 @@ def proxy_owned_oauth_endpoints(variant: Variant) -> bool:
     )
 
 
-def autoapprove_any_redirect(variant: Variant) -> bool:
-    """None mode accepts any valid redirect (the client allowlist retired)."""
-    return "without a client allowlist" in variant.component_src("oauth_autoapprove.py")
-
-
 def rfc9207_iss_supported(variant: Variant) -> bool:
     """Authorization responses carry the RFC 9207 ``iss`` parameter."""
     return "def _issuer(" in variant.component_src("oauth_autoapprove.py")
