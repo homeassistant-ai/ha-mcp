@@ -41,7 +41,7 @@ jobs:
   # user-facing markdown counts as code. On non-PR events (manual dispatch)
   # always run. Consumed by e2e-validation's `if:` below — a job-level skip
   # reports Success to a required check (a workflow path-skip would not).
-  # The HACS component shares the server's version and pins the server build
+  # The component shares the server's version and pins the server build
   # it runs (#2427). semantic-release stamps all five places in each release
   # commit (pyproject's project.version, the manifest's version and ha-mcp pin,
   # const.py's COMPONENT_VERSION, tools_filesystem.py's MIN_COMPONENT_VERSION).
@@ -297,7 +297,7 @@ jobs:
       # where HA pins a shared dependency exactly, ha-mcp must admit the pin;
       # where HA is loose, ha-mcp must not pin exactly (an exact pin forces
       # pip to replace the image-shipped copy in place — the torn-install
-      # window). Check the current E2E image AND the HACS minimum: a Core
+      # window). Check the current E2E image AND the hacs.json minimum: a Core
       # image update must not silently strand users on the supported floor.
       # For the image's Core, uv.lock must also hold Core's exact pin for every
       # runtime package, so the Docker/app images and the embedded install run

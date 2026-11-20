@@ -131,7 +131,7 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and
 `_conftest_haos._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
 (HAOS). The qcow2 edit is offline and per-worker, like the recorder seed
-staging and the HACS refresher, and raises rather than warning: a silent no-op would leave the
+staging and the Marketplace token injection, and raises rather than warning: a silent no-op would leave the
 entry in place and the lane would re-test the ordinary topology while
 reporting green.
 

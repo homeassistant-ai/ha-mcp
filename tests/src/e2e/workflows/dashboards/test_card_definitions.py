@@ -154,7 +154,7 @@ async def test_saved_card_problems_come_back_as_warnings(mcp_client):
 async def test_custom_cards_are_checked_and_described_from_their_resource(
     mcp_client: Client,
 ) -> None:
-    """A card from a dashboard resource answers for itself, like a HACS card."""
+    """A card from a dashboard resource answers for itself, like a Marketplace card."""
     mcp = MCPAssertions(mcp_client)
     if not component_surface_available():
         failure = await mcp.call_tool_failure(

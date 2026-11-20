@@ -76,7 +76,7 @@ jobs:
             exit 0
           fi
           # -dev. tags are the dev channel: the prerelease flag is what keeps
-          # them away from stable HACS users (HACS filters on it unless the
+          # them away from stable users (the Marketplace filters on it unless the
           # repository's "Pre-release" switch entity is on) and out of
           # GitHub's "latest" release.
           PRERELEASE_FLAG=""
@@ -90,9 +90,9 @@ jobs:
         # A stable release supersedes every dev pre-release cut before it:
         # the component version on master only moves forward, so when the
         # bare v<version> lands, any existing -dev. tag is for a version at
-        # or below it. HACS's newest-first scan already stops offering those
+        # or below it. The Marketplace's newest-first scan already stops offering those
         # builds once the stable release exists - this step just keeps the
-        # releases page and the HACS version dropdown from accumulating
+        # releases page and the Marketplace's version list from accumulating
         # stale dev builds. The base-version guard (not a blanket wipe)
         # protects a dev build for a HIGHER version that races in between.
         if: ${{ !contains(github.ref_name, '-dev.') }}
@@ -130,7 +130,7 @@ jobs:
 
       - name: Keep the newest five dev pre-releases
         # The main repository keeps its newest five dev pre-releases
-        # (publish-dev.yml); the mirror keeps the same number. HACS reads a
+        # (publish-dev.yml); the mirror keeps the same number. The Marketplace reads a
         # repository's 30 newest releases and installs the default branch
         # when none of them is stable, so a dev channel left to grow for a
         # whole release cycle pushes the stable release out of reach.
