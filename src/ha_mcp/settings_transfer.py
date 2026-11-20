@@ -266,7 +266,7 @@ def restore_server_settings(
                 _replace(path, change.written)
                 changed.append(change)
                 change.stamp = _file_stamp(path)
-        except OSError:
+        except OSError, ValueError:
             _undo_documents(data_dir, changed, published=False)
             raise
     if not changed:

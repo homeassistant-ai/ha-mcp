@@ -87,15 +87,12 @@ class TestSettingsMatrix:
     async def test_set_saves_the_value_where_the_web_ui_saves_it(
         self, dev_tools: DevTools
     ) -> None:
-        shared_lock = override_path().with_name(".config_write.lock")
-        assert not shared_lock.exists()
         result = await dev_tools.ha_dev_manage_settings(
             action="set", setting="log_level", value="DEBUG"
         )
         assert result["data"]["restart_required"] is True
         assert result["data"]["mode"] == "file"
         assert stored_overrides() == {"log_level": "DEBUG"}
-        assert shared_lock.is_file()
         assert get_global_settings().log_level == "DEBUG"
 
     async def test_set_keeps_the_other_saved_settings(

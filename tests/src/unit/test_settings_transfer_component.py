@@ -6,7 +6,11 @@ import copy
 from pathlib import Path
 
 import pytest
-from homeassistant.config_entries import SOURCE_IGNORE, ConfigEntryDisabler
+from homeassistant.config_entries import (
+    SOURCE_IGNORE,
+    ConfigEntryDisabler,
+    ConfigEntryState,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from pytest_homeassistant.common import MockConfigEntry
@@ -14,6 +18,7 @@ from pytest_homeassistant.common import MockConfigEntry
 from custom_components.ha_mcp_tools import SERVICE_SET_ALLOWED_PATHS, settings_transfer
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.const import DOMAIN, SERVER_CONFIG_SUBDIR
+from ha_mcp import settings_transfer as server_transfer
 from ha_mcp.policy.persistence import load_policy, save_policy
 from ha_mcp.utils.config_write_lock import config_file_lock
 
@@ -136,12 +141,81 @@ async def test_invalid_backup_cannot_change_even_an_earlier_valid_field(
     assert await settings_transfer.async_export(hass) == original
 
 
+@pytest.mark.parametrize(
+    "state", [ConfigEntryState.SETUP_IN_PROGRESS, ConfigEntryState.UNLOAD_IN_PROGRESS]
+)
+async def test_import_rejects_a_transitioning_tools_entry_before_writing(
+    hass: HomeAssistant, state: ConfigEntryState
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "old", "secret_path": "/old"})
+    target = MockConfigEntry(domain=DOMAIN, data={"entry_type": "tools"}, state=state)
+    target.add_to_hass(hass)
+    original = await settings_transfer.async_export(hass)
+    candidate = copy.deepcopy(original)
+    candidate["server_settings"]["backup"] = {"auto_backup_retain_per_entity": 18}
+    async with target.setup_lock:
+        with pytest.raises(settings_transfer.InvalidBackup, match="tools_entry_busy"):
+            await settings_transfer.async_import(hass, candidate)
+    assert await settings_transfer.async_export(hass) == original
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        ConfigEntryState.NOT_LOADED,
+        ConfigEntryState.SETUP_ERROR,
+        ConfigEntryState.SETUP_RETRY,
+    ],
+)
+async def test_import_requires_enabled_tools_to_be_loaded(
+    hass: HomeAssistant, state: ConfigEntryState
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "old", "secret_path": "/old"})
+    MockConfigEntry(
+        domain=DOMAIN, data={"entry_type": "tools"}, state=state
+    ).add_to_hass(hass)
+    original = await settings_transfer.async_export(hass)
+    candidate = copy.deepcopy(original)
+    candidate["server_settings"]["backup"] = {"auto_backup_retain_per_entity": 18}
+    with pytest.raises(
+        settings_transfer.InvalidBackup, match="tools_entry_unavailable"
+    ):
+        await settings_transfer.async_import(hass, candidate)
+    assert await settings_transfer.async_export(hass) == original
+
+
+async def test_original_import_error_survives_undo_failure(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "old", "secret_path": "/old"})
+    candidate = await settings_transfer.async_export(hass)
+    candidate["server_settings"]["backup"] = {"auto_backup_retain_per_entity": 18}
+    primary = FileNotFoundError("primary")
+
+    def fail_entry(*args, **kwargs):
+        raise primary
+
+    def fail_undo(*args):
+        raise TimeoutError("private undo detail")
+
+    monkeypatch.setattr(type(hass.config_entries), "async_update_entry", fail_entry)
+    monkeypatch.setattr(server_transfer, "rollback_server_settings", fail_undo)
+    with pytest.raises(FileNotFoundError) as caught:
+        await settings_transfer.async_import(hass, candidate)
+    assert caught.value is primary
+    assert "Settings import rollback incomplete" in caught.value.__notes__
+    assert "could not undo server settings (TimeoutError)" in caplog.text
+    assert "private undo detail" not in caplog.text
+
+
 async def test_failed_entry_update_restores_prior_tools_and_server_file(
     hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     server = add_options_entry(hass, data={"webhook_id": "old", "secret_path": "/old"})
-    await add_tools_entry(hass)
+    await add_tools_entry(hass, loaded=True)
     original = await settings_transfer.async_export(hass)
     candidate = copy.deepcopy(original)
     candidate["entries"]["server"]["data"]["webhook_id"] = "mirror"
