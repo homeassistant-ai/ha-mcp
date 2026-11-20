@@ -4,10 +4,12 @@ Home Assistant 2026.11 hands the ``hacs`` config entry and the ``hacs.*``
 storage files to its built-in Marketplace at the first start. HACS installs
 can hold both HA-MCP listings as installed, and the Marketplace then refuses
 to update either. ``hacs_install/`` is what HACS wrote (the E2E seed's files,
-cut to the one installed record); the two HA-MCP records are added to it in
-HACS's record shape. Core reads the entry from storage and adopts it as a
-start does; the test asserts on what Core left, then on the component's
-repair and the download reroute.
+cut to the one installed record). Each HA-MCP record is a copy of that HACS
+record with the fields that name and install a repository put in (id, full
+name, domain, manifests, installed version), and the integration's folder is
+on disk, as a HACS download leaves it. Core reads the entry from storage and
+adopts it as a start does; the test asserts on what Core left, then on the
+component's repair and the download reroute.
 """
 
 from __future__ import annotations
@@ -37,21 +39,51 @@ from ha_mcp.tools.tools_hacs import HacsTools
 
 from ._config_flow_core import add_tools_entry
 from ._hacs_marketplace import core_install, pooled_socket, prepare_marketplace
-from ._marketplace_records import own_records, stored_record, unload_marketplace
+from ._marketplace_records import (
+    REPOSITORY_IDS,
+    stored_record,
+    unload_marketplace,
+)
 
 HACS_INSTALL = Path(__file__).parent / "hacs_install"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_INSTALLED = "v9.1.0"
+
+
+def _own_hacs_records(hacs_record: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Both HA-MCP listings as HACS stored them, installed."""
+    manifest = json.loads((_REPO_ROOT / "hacs.json").read_text())
+    component = json.loads(
+        (_REPO_ROOT / "custom_components" / DOMAIN / "manifest.json").read_text()
+    )
+    return {
+        REPOSITORY_IDS[full_name]: hacs_record
+        | {
+            "full_name": full_name,
+            "domain": DOMAIN,
+            "repository_manifest": manifest,
+            "manifest_name": component["name"],
+            "installed": True,
+            "version_installed": _INSTALLED,
+            "last_version": _INSTALLED,
+        }
+        for full_name in (MAIN_REPOSITORY, MIRROR_REPOSITORY)
+    }
 
 
 def _leave_hacs_install(config_dir: Path) -> dict[str, Any]:
-    """Write HACS's storage files, with both HA-MCP listings installed, into
-    the config directory; returns Core's stored config entries."""
+    """Write HACS's storage files, with both HA-MCP listings installed, and
+    the integration's folder into the config directory; returns Core's stored
+    config entries."""
     storage = config_dir / STORAGE_DIR
     storage.mkdir(exist_ok=True)
     for name in ("hacs.hacs", "hacs.critical"):
         shutil.copyfile(HACS_INSTALL / name, storage / name)
     repositories = json.loads((HACS_INSTALL / "hacs.repositories").read_text())
-    repositories["data"] |= own_records(main=True, mirror=True)
+    [hacs_record] = repositories["data"].values()
+    repositories["data"] |= _own_hacs_records(hacs_record)
     (storage / "hacs.repositories").write_text(json.dumps(repositories))
+    (config_dir / "custom_components" / DOMAIN).mkdir(parents=True)
     entries: dict[str, Any] = json.loads(
         (HACS_INSTALL / "core.config_entries").read_text()
     )

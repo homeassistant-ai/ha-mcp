@@ -194,11 +194,17 @@ def _prepare_testcontainer_config(
     github_token = os.environ.get("GITHUB_TOKEN")
     if github_token:
         storage_file = config_path / ".storage" / "core.config_entries"
-        if storage_file.exists():
-            ce_data = json.loads(storage_file.read_text())
-            if inject_marketplace_token(ce_data, github_token):
-                logger.info("Injected GITHUB_TOKEN into the Marketplace config entry")
+        ce_data = json.loads(storage_file.read_text()) if storage_file.exists() else {}
+        if inject_marketplace_token(ce_data, github_token):
             storage_file.write_text(json.dumps(ce_data, indent=2))
+            logger.info("Injected GITHUB_TOKEN into the Marketplace config entry")
+        else:
+            logger.warning(
+                "No marketplace config entry in %s — token not injected; "
+                "the Marketplace stays unauthenticated (GitHub rate-limit "
+                "flakes possible)",
+                storage_file,
+            )
 
     # Install custom components from repo source
     repo_root = Path(__file__).parent.parent.parent.parent

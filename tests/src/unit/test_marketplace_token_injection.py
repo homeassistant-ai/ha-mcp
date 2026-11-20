@@ -35,6 +35,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.json import json_bytes
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
+from pytest_homeassistant.typing import WebSocketGenerator
 
 from ._hacs_marketplace import set_up_marketplace
 from ._marketplace_records import unload_marketplace
@@ -80,14 +81,16 @@ def _server_entry() -> MockConfigEntry:
     )
 
 
-async def test_the_token_keeps_the_marketplace_entry_and_its_acceptances(
+async def test_the_injected_token_connects_the_marketplace_to_github(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
     hass_storage: dict[str, Any],
     hass_admin_user: User,
+    hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """A user who accepted the Marketplace warning keeps that acceptance, which
-    Core stores in the same ``data`` the token goes into."""
+    """Core's Marketplace, set up from the injected entry, reports GitHub
+    connected, and a user who accepted its warning, which Core stores in the
+    same ``data`` the token goes into, keeps that acceptance."""
     entry = await set_up_marketplace(hass, aioclient_mock, hass_storage, {})
     manager: MarketplaceManager = entry.runtime_data
     manager.async_accept_warning(hass_admin_user.id)
@@ -97,14 +100,22 @@ async def test_the_token_keeps_the_marketplace_entry_and_its_acceptances(
 
     assert marketplace_token.inject_marketplace_token(doc, "ghs_test_token") is True
 
-    marketplace = doc["data"]["entries"][1]
-    # The key the Marketplace reads its GitHub account from.
-    assert marketplace["data"] == {**before[1]["data"], "token": "ghs_test_token"}
-    assert hass_admin_user.id in marketplace["data"]["warning_accepted"]
-    assert {k: v for k, v in marketplace.items() if k != "data"} == {
+    injected = doc["data"]["entries"][1]
+    assert {k: v for k, v in injected.items() if k != "data"} == {
         k: v for k, v in before[1].items() if k != "data"
     }
     assert doc["data"]["entries"][0] == before[0]
+
+    hass.config_entries.async_update_entry(entry, data=injected["data"])
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "marketplace/info"})
+    info = (await client.receive_json())["result"]
+    await unload_marketplace(hass)
+
+    assert info["github_connected"] is True
+    assert info["warning_accepted"] is True
 
 
 def test_a_stale_token_is_replaced() -> None:

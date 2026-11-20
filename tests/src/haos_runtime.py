@@ -506,7 +506,8 @@ def remove_tools_entry_in_qcow2(image_path: Path) -> None:
     entry are deliberately left alone, so the ``haos_embedded`` lane still
     gets its server-entry-only topology.
 
-    Unlike the best-effort Marketplace-token injection above, every failure RAISES:
+    Unlike the best-effort Marketplace-token injection in ``marketplace_token``,
+    every failure RAISES:
     a silent no-op would leave the tools entry in place and the whole lane
     would then re-test the ordinary topology while reporting green.
     """
