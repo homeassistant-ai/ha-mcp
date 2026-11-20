@@ -21,6 +21,7 @@ from haos_runtime import inject_hacs_token
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from test_constants import HA_TEST_IMAGE
 
+from ..recorder_seed import session_recorder_seed
 from ._conftest_embedded import (
     _EMBEDDED_DOMAIN,
     _EMBEDDED_WEBHOOK_ID,
@@ -44,7 +45,6 @@ from ._conftest_seed import (
     _collect_manifest_requirements,
     _ensure_hacs_frontend,
     _install_custom_component,
-    _refresh_recorder_timestamps,
     _seed_legacy_yaml_backups,
     _seed_non_yaml_package_file,
     _seed_yaml_package_scene,
@@ -256,13 +256,7 @@ def _prepare_testcontainer_config(
     # registers in the registry yet 404s on the config API. Same pre-boot reason.
     _seed_yaml_package_scene(config_path)
 
-    # Shift the pre-baked recorder timestamps forward so the seeded rows
-    # look "recent" to history queries with a 24h window. The recorder DB in
-    # initial_test_state is baked offline (see scripts/bake_pagination_seed.py)
-    # and its rows have whatever timestamps were captured at bake time. Without
-    # this shift, the pagination tests in test_history.py/test_logbook.py would
-    # silently skip again the moment the seed gets more than 24h old.
-    _refresh_recorder_timestamps(config_path / "home-assistant_v2.db")
+    shutil.copyfile(session_recorder_seed(), config_path / "home-assistant_v2.db")
     local_blueprint = _copy_local_blueprint_to_www(config_path)
 
     # Ensure proper permissions for Home Assistant

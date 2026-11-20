@@ -135,35 +135,27 @@ async def test_logbook_invalid_entity_id_is_actionable(mcp_client: Client):
 
 @pytest.mark.asyncio
 async def test_logbook_pagination_with_offset(mcp_client):
-    """Test logbook pagination using offset."""
+    """A second logbook page must continue after the first, not repeat it."""
     logger.info("Testing logbook pagination with offset")
 
-    # Get first page (use safe_call_tool to handle empty logbook in fresh containers)
-    first_raw = await safe_call_tool(
-        mcp_client,
-        "ha_get_logs",
-        {"hours_back": 24, "limit": 5, "offset": 0},
-    )
+    async with MCPAssertions(mcp_client) as mcp:
+        first_raw = await mcp.call_tool_success(
+            "ha_get_logs", {"hours_back": 24, "limit": 5, "offset": 0}
+        )
+        second_raw = await mcp.call_tool_success(
+            "ha_get_logs", {"hours_back": 24, "limit": 5, "offset": 5}
+        )
     first_data = get_logbook_data(first_raw)
+    second_data = get_logbook_data(second_raw)
 
-    # The recorder seed ships with >5 logbook-visible events (see
-    # scripts/bake_pagination_seed.py + _conftest_seed._refresh_recorder_timestamps);
-    # assert rather than skip so a regression in the seed or refresh fails
-    # loudly instead of silently passing.
-    assert first_data.get("success"), f"ha_get_logs failed: {first_data!r}"
+    # The generated recorder seed (tests/src/recorder_seed.py) holds >5
+    # logbook-visible events in the last 24h, so a missing seed fails here
+    # instead of skipping.
     assert first_data.get("total_entries", 0) > 5, (
         f"Expected >5 logbook entries from seed, got "
-        f"{first_data.get('total_entries', 0)} — recorder seed or timestamp "
-        f"refresh may be broken."
+        f"{first_data.get('total_entries', 0)}; see the generated recorder "
+        f"seed in tests/src/recorder_seed.py."
     )
-
-    # Get second page
-    second_raw = await safe_call_tool(
-        mcp_client,
-        "ha_get_logs",
-        {"hours_back": 24, "limit": 5, "offset": 5},
-    )
-    second_data = get_logbook_data(second_raw)
 
     # Verify offset is applied
     assert second_data["offset"] == 5, "Offset should be 5"

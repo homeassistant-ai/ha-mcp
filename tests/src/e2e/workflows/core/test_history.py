@@ -16,7 +16,12 @@ import pytest
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp.client import HomeAssistantClient
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -468,6 +473,8 @@ class TestGetHistoryStatisticsSource:
             assert entity["unit_source"] == "recorder_metadata"
             pages.append(entity)
         assert pages[0]["has_more"] and pages[1]["statistics"]
+        first, second = (row["start"] for row in pages[0]["statistics"])
+        assert second - first == 3_600_000, pages[0]["statistics"]
         assert pages[0]["statistics"][0]["start"] != pages[1]["statistics"][0]["start"]
         assert pages[2]["statistics"] == []
 
@@ -596,76 +603,50 @@ class TestGetHistoryNegativeInputs:
     async def test_offset_pagination_single_entity(self, mcp_client: Any) -> None:
         """Offset pagination works for a single entity and returns correct metadata.
 
-        Queries ``input_number.e2e_pagination_seed`` — the entity that the seed
-        recorder DB in ``tests/initial_test_state/home-assistant_v2.db`` ships
-        with 11 pre-baked state-change rows for. The conftest fixture shifts
-        those rows' timestamps forward each session so they fall inside any
-        reasonable history window. Previous reliance on
-        ``sensor.home_temperature`` (which never existed in the seed) was the
-        original cause of the silent skip flagged by #366.
-
-        Previously HAOS-skipped (#1349 hypothesis: states_meta orphan). The
-        real cause was diagnosed in PR #1361 from the inaddon diagnostics
-        artifact: ``refresh_recorder_in_qcow2`` left the workdir DB in WAL
-        mode with unsynced WAL frames, so the .db copy-in landed in the
-        qcow2 missing pages. HA Core's ``basic_sanity_check`` raised
-        ``sqlite3.DatabaseError: database disk image is malformed`` on
-        first boot and renamed the seed to ``.corrupt.<ts>`` before
-        starting with an empty DB — making the live state the only row
-        ha_get_history could surface. Fixed by checkpointing WAL and
-        switching to DELETE journal mode pre-UPDATE in
-        ``haos_runtime.refresh_recorder_in_qcow2``.
+        Queries ``input_number.e2e_pagination_seed``, whose state changes the
+        session's generated recorder database holds (``tests/src/recorder_seed.py``),
+        both inside the last 24 hours and older.
         """
         target = "input_number.e2e_pagination_seed"
-        # First page: offset=0, limit=5
-        result_p1 = await safe_call_tool(
-            mcp_client,
-            "ha_get_history",
-            {"entity_ids": target, "start_time": "24h", "limit": 5, "offset": 0},
-        )
-        # safe_call_tool returns the parsed envelope; the history payload is
-        # nested under "data" — matches the unwrap pattern used by
-        # test_get_history_single_entity earlier in this file. Without this
-        # unwrap the assertions below read the wrong dict level and
-        # `success` is always None — a latent bug uncovered by the same
-        # #366 audit.
-        inner_p1 = result_p1.get("data", result_p1)
-        # The seed ships ≥10 rows for ``input_number.e2e_pagination_seed`` and
-        # the conftest fixture shifts their timestamps into the 24h window.
-        # Pagination preconditions are therefore guaranteed; assert rather
-        # than pytest.skip so a regression (empty seed, broken refresh)
-        # fails loudly instead of silently passing.
-        assert inner_p1.get("success"), (
-            f"ha_get_history failed for {target}: {inner_p1!r}"
-        )
-        entities_p1 = inner_p1.get("entities", [])
-        assert entities_p1, f"No entities returned for {target}: {inner_p1!r}"
 
-        entity_p1 = entities_p1[0]
+        async def history(**arguments: Any) -> dict[str, Any]:
+            async with MCPAssertions(mcp_client) as mcp:
+                result = await mcp.call_tool_success(
+                    "ha_get_history", {"entity_ids": target, **arguments}
+                )
+            entity: dict[str, Any] = result.get("data", result)["entities"][0]
+            return entity
+
+        entity_p1 = await history(start_time="24h", limit=5, offset=0)
         assert entity_p1["offset"] == 0
         assert entity_p1["limit"] == 5
+        # The generated seed holds >=10 rows for the target inside the 24h
+        # window, so a missing seed fails here instead of skipping.
         assert entity_p1["total_count"] >= 10, (
             f"Expected >=10 seeded rows for {target}, got "
-            f"{entity_p1['total_count']} - recorder seed or timestamp refresh "
-            f"may be broken; see _conftest_seed._refresh_recorder_timestamps."
+            f"{entity_p1['total_count']}; see the generated recorder seed in "
+            f"tests/src/recorder_seed.py."
         )
         assert entity_p1["has_more"] is True
         assert entity_p1["next_offset"] == 5
 
-        # Second page: offset=5
-        result_p2 = await safe_call_tool(
-            mcp_client,
-            "ha_get_history",
-            {"entity_ids": target, "start_time": "24h", "limit": 5, "offset": 5},
-        )
-        inner_p2 = result_p2.get("data", result_p2)
-        assert inner_p2.get("success")
-        entity_p2 = inner_p2["entities"][0]
+        entity_p2 = await history(start_time="24h", limit=5, offset=5)
         assert entity_p2["offset"] == 5
         assert entity_p2["total_count"] == entity_p1["total_count"]
         assert len(entity_p2.get("states", [])) >= 1, (
             f"Second page returned no rows: {entity_p2!r}"
         )
+
+        # Without Core's window-start row, the first row is one the recorder holds.
+        oldest = await history(
+            start_time="7d",
+            order="asc",
+            limit=1,
+            core_options={"include_start_time_state": False},
+        )
+        assert len(oldest["states"]) == 1, oldest
+        recorded = datetime.fromisoformat(oldest["states"][0]["last_updated"])
+        assert datetime.now(UTC) - recorded > timedelta(hours=24), oldest
 
     async def test_multi_entity_offset_rejected(self, mcp_client: Any) -> None:
         """offset > 0 with multiple entity_ids is rejected before any network call."""
