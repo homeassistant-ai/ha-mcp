@@ -122,6 +122,23 @@ REFUSED = {
             failure = task.exception()
             return str(failure).startswith("Timed out")
         """,
+    "text built by concatenation": """
+        def handle(err: Exception):
+            line = "failed: " + str(err)
+            return "timed out" in line
+        """,
+    "a regex function imported by name": """
+        from re import search as find
+        def handle(err: Exception):
+            return find("expired", str(err))
+        """,
+    "a name the nested function reads from outside": """
+        def classify(exc: Exception):
+            text = str(exc)
+            def timed_out(label):
+                return text.startswith("Timed out")
+            return timed_out("x")
+        """,
     "a match on the text": """
         def handle(err: Exception):
             match str(err):
@@ -169,6 +186,19 @@ ALLOWED = {
         def handle(reply):
             return reply.get("error") in ("cards_loading", "card_not_inspected")
         """,
+    "a parameter that repeats an outer name": """
+        def classify(exc: Exception):
+            text = str(exc)
+            def is_device(text: str):
+                return text.startswith("device:")
+            return is_device("device:1"), text
+        """,
+    "a function of its own that shares a regex name": """
+        def search(needle, text):
+            return needle
+        def handle(err: Exception):
+            return search("expired", str(err))
+        """,
     "a match on the code": """
         def handle(reply):
             match reply.get("error_code"):
@@ -208,3 +238,85 @@ def test_a_finding_names_the_file_and_line(guard: ModuleType) -> None:
     found = _found(guard, REFUSED["prefix of a reply's error"])
 
     assert found == ["src/ha_mcp/tools/x.py:4: message.startswith('Path not allowed')"]
+
+
+def _scan(guard: ModuleType, **modules: str) -> list[str]:
+    return guard.scan(
+        {
+            f"src/ha_mcp/tools/{name}.py": textwrap.dedent(source)
+            for name, source in modules.items()
+        }
+    )
+
+
+LABELS = """
+    STATE = "Not supported"
+    def matches(text):
+        return text.startswith("device:")
+    def use(label):
+        return matches(label)
+    """
+
+
+def test_a_function_of_the_same_name_elsewhere_is_left_alone(guard: ModuleType) -> None:
+    errors = """
+        def matches(value):
+            return value.startswith("Timed out")
+        def handle(exc: Exception):
+            return matches(str(exc))
+        """
+
+    assert _scan(guard, labels=LABELS, errors=errors) == [
+        "src/ha_mcp/tools/errors.py:3: value.startswith('Timed out')"
+    ]
+
+
+def test_a_constant_of_the_same_name_elsewhere_is_left_alone(guard: ModuleType) -> None:
+    errors = """
+        STATE = "idle"
+        def handle(reply):
+            return reply.get("error") == STATE
+        """
+
+    assert _scan(guard, labels=LABELS, errors=errors) == []
+
+
+@pytest.mark.parametrize(
+    "caller",
+    [
+        """
+        from .labels import matches
+        def handle(exc: Exception):
+            return matches(str(exc))
+        """,
+        """
+        from . import labels
+        def handle(exc: Exception):
+            return labels.matches(str(exc))
+        """,
+        """
+        from .labels import STATE
+        def handle(reply):
+            return reply.get("error") == STATE
+        """,
+    ],
+    ids=["imported function", "function of an imported module", "imported constant"],
+)
+def test_text_is_followed_through_an_import(guard: ModuleType, caller: str) -> None:
+    assert len(_scan(guard, labels=LABELS, errors=caller)) == 1
+
+
+def test_text_is_followed_into_a_method_of_another_module(guard: ModuleType) -> None:
+    reader = """
+        class Reader:
+            def is_missing(self, text):
+                return text.endswith("No prefs")
+        """
+    caller = """
+        def read(reader, reply):
+            return reader.is_missing(str(reply.get("error", "")))
+        """
+
+    assert _scan(guard, reader=reader, caller=caller) == [
+        "src/ha_mcp/tools/reader.py:4: text.endswith('No prefs')"
+    ]

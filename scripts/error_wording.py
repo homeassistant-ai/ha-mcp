@@ -14,10 +14,13 @@ wording test in any other file of ``src/ha_mcp`` and ``custom_components``
 
 What counts as error text: ``str()`` or ``repr()`` of a caught exception, its
 ``args``, ``message`` or ``msg``, the ``error`` or ``error_message`` (or an
-error's ``message``) field of a reply, and anything built from those. The text is followed through assignments, through
-arguments into the functions they are passed to, and out of the functions that
-return it. A decision is a membership, prefix, suffix or regex test on such
-text, or its comparison with a literal that is not a bare code (``not_found``).
+error's ``message``) field of a reply, and anything built from those. The text
+is followed through assignments, through arguments into the functions they are
+passed to, and out of the functions that return it. A call is followed to the
+function its name is bound to: one defined around the call, one imported, or,
+for a call on an object, the methods of that name. A decision is a membership,
+prefix, suffix or regex test on such text, or its comparison with a literal
+that is not a bare code (``not_found``).
 """
 
 from __future__ import annotations
@@ -51,8 +54,10 @@ STR_METHODS = {
 TEXT_TESTS = {"count", "endswith", "find", "index", "startswith"}
 REGEX_TESTS = {"findall", "fullmatch", "match", "search"}
 CODE = re.compile(r"[a-z][a-z0-9_]*")
+IMPORT_HOPS = 5
 
-type Scope = ast.FunctionDef | ast.AsyncFunctionDef | ast.Module
+type Func = ast.FunctionDef | ast.AsyncFunctionDef
+type Scope = Func | ast.Module
 
 
 def _name(func: ast.expr) -> str:
@@ -80,16 +85,114 @@ def _params(scope: Scope) -> list[ast.arg]:
     return [*params, *scope.args.kwonlyargs]
 
 
-class Program:
-    """Every scanned function, and which of them take or return error text."""
+class Module:
+    """One file: its functions, what it imports, and its prose constants."""
 
-    def __init__(self) -> None:
-        self.text_params: dict[str, set[str]] = {}
-        self.returns_text: set[str] = set()
-        self.prose: set[str] = set()
+    def __init__(self, path: str, tree: ast.Module) -> None:
+        self.path = path
+        self.tree = tree
+        # Functions by name, per scope that defines them (the module included).
+        self.defined: dict[Scope, dict[str, list[Func]]] = {}
+        # Functions defined in a class body, by name.
+        self.methods: dict[str, list[Func]] = {}
+        # ``from x import name as local``: local -> (x, name).
+        self.names: dict[str, tuple[Module, str]] = {}
+        # ``from . import x`` or ``import a.x as x``: local -> x.
+        self.modules: dict[str, Module] = {}
+        # ``from re import search``: the local names of re's tests.
+        self.regex: set[str] = set()
+        self.prose = _prose_constants(tree)
+        self.scopes: list[tuple[Scope, Scope | None]] = []
+        self._collect(tree, None)
+
+    def _collect(self, scope: Scope, outer: Scope | None) -> None:
+        self.scopes.append((scope, outer))
+        defined = self.defined.setdefault(scope, {})
+        stack = [(child, False) for child in ast.iter_child_nodes(scope)]
+        while stack:
+            node, in_class = stack.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                owner = self.methods if in_class else defined
+                owner.setdefault(node.name, []).append(node)
+                self._collect(node, scope)
+            else:
+                inside = in_class or isinstance(node, ast.ClassDef)
+                stack.extend((child, inside) for child in ast.iter_child_nodes(node))
+
+
+class Program:
+    """Every scanned module, and which functions take or return error text."""
+
+    def __init__(self, sources: dict[str, str]) -> None:
+        self.modules = [
+            Module(path, ast.parse(source, path)) for path, source in sources.items()
+        ]
+        self._by_stem = {
+            module.path.removesuffix(".py").removesuffix("/__init__"): module
+            for module in self.modules
+        }
+        self.methods: dict[str, list[Func]] = {}
+        for module in self.modules:
+            for name, found in module.methods.items():
+                self.methods.setdefault(name, []).extend(found)
+            self._read_imports(module)
+        self.text_params: dict[Func, set[str]] = {}
+        self.returns_text: set[Func] = set()
         self.changed = False
 
-    def pass_text(self, func: str, param: str) -> None:
+    def _find(self, parts: list[str], *, exact: bool) -> Module | None:
+        stem = "/".join(parts)
+        if stem in self._by_stem or exact:
+            return self._by_stem.get(stem)
+        ends = [m for s, m in self._by_stem.items() if s.endswith("/" + stem)]
+        return ends[0] if len(ends) == 1 else None
+
+    def _read_imports(self, module: Module) -> None:
+        here = module.path.split("/")[:-1]
+        for node in ast.walk(module.tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    found = self._find(alias.name.split("."), exact=False)
+                    if found and alias.asname:
+                        module.modules[alias.asname] = found
+            elif isinstance(node, ast.ImportFrom):
+                named = node.module.split(".") if node.module else []
+                if node.level == 0 and named == ["re"]:
+                    module.regex.update(
+                        alias.asname or alias.name
+                        for alias in node.names
+                        if alias.name in REGEX_TESTS
+                    )
+                    continue
+                relative = node.level > 0
+                parts = (
+                    [*here[: len(here) - node.level + 1], *named] if relative else named
+                )
+                source = self._find(parts, exact=relative)
+                for alias in node.names:
+                    local = alias.asname or alias.name
+                    submodule = self._find([*parts, alias.name], exact=relative)
+                    if submodule:
+                        module.modules[local] = submodule
+                    elif source:
+                        module.names[local] = (source, alias.name)
+
+    def functions(self, module: Module, name: str, hops: int = 0) -> list[Func]:
+        """The module-level functions ``name`` is bound to in ``module``."""
+        defined = module.defined[module.tree].get(name)
+        if defined or name not in module.names or hops == IMPORT_HOPS:
+            return defined or []
+        source, original = module.names[name]
+        return self.functions(source, original, hops + 1)
+
+    def is_prose(self, module: Module, name: str, hops: int = 0) -> bool:
+        """Whether ``name`` is bound to a prose constant in ``module``."""
+        if name in module.prose or name not in module.names or hops == IMPORT_HOPS:
+            return name in module.prose
+        source, original = module.names[name]
+        return self.is_prose(source, original, hops + 1)
+
+    def pass_text(self, func: Func, param: str) -> None:
         if param not in self.text_params.setdefault(func, set()):
             self.text_params[func].add(param)
             self.changed = True
@@ -98,9 +201,13 @@ class Program:
 class Flow:
     """Which names in one scope hold an exception and which hold error text."""
 
-    def __init__(self, scope: Scope, program: Program, outer: Flow | None) -> None:
+    def __init__(
+        self, scope: Scope, module: Module, program: Program, outer: Flow | None
+    ) -> None:
         self.scope = scope
+        self.module = module
         self.program = program
+        self.outer = outer
         # A nested function reads the names of the function around it.
         self.exceptions: set[str] = set(outer.exceptions) if outer else set()
         self.texts: set[str] = set(outer.texts) if outer else set()
@@ -122,9 +229,14 @@ class Flow:
     def _read_params(self) -> None:
         if isinstance(self.scope, ast.Module):
             return
+        # A parameter hides the outer name it repeats.
+        own = {param.arg for param in _params(self.scope)}
+        self.texts -= own
+        self.exceptions -= own
+        self.fixed -= own
         if self.scope.args.vararg:
             self.fixed.add(self.scope.args.vararg.arg)
-        text_params = self.program.text_params.get(self.scope.name, ())
+        text_params = self.program.text_params.get(self.scope, ())
         for param in _params(self.scope):
             note = ast.unparse(param.annotation) if param.annotation else ""
             if param.arg in text_params:
@@ -168,6 +280,26 @@ class Flow:
             isinstance(node, ast.Constant) and isinstance(node.value, str)
         )
 
+    def _targets(self, func: ast.expr) -> list[Func]:
+        """The functions a call may run: the one its name is bound to, or, on
+        an object whose class is not known here, every method of that name."""
+        if isinstance(func, ast.Name):
+            flow: Flow | None = self
+            while flow:
+                if func.id in flow.module.defined[flow.scope]:
+                    return flow.module.defined[flow.scope][func.id]
+                flow = flow.outer
+            return self.program.functions(self.module, func.id)
+        if not isinstance(func, ast.Attribute):
+            return []
+        owner = func.value
+        if isinstance(owner, ast.Name) and owner.id in self.module.modules:
+            return self.program.functions(self.module.modules[owner.id], func.attr)
+        own = self.module.methods.get(func.attr)
+        if own and isinstance(owner, ast.Name) and owner.id in {"self", "cls"}:
+            return own
+        return self.program.methods.get(func.attr, [])
+
     def is_exception(self, node: ast.AST) -> bool:
         if isinstance(node, ast.Attribute) and node.attr in {
             "__cause__",
@@ -204,7 +336,9 @@ class Flow:
                 attr in STR_METHODS
             ):
                 return self.is_text(receiver)
-        return _name(node.func) in self.program.returns_text
+        return any(
+            target in self.program.returns_text for target in self._targets(node.func)
+        )
 
     def is_text(self, node: ast.AST) -> bool:
         match node:
@@ -226,6 +360,11 @@ class Flow:
                     and (self.is_text(part.value) or self.is_exception(part.value))
                     for part in node.values
                 )
+            case ast.BinOp(op=ast.Add() | ast.Mod()):  # ``"failed: " + str(exc)``
+                right = node.right.elts if isinstance(node.right, ast.Tuple) else []
+                return any(
+                    self.is_text(part) for part in (node.left, node.right, *right)
+                )
             case ast.BoolOp():
                 return any(self.is_text(value) for value in node.values)
             case ast.IfExp():
@@ -234,22 +373,35 @@ class Flow:
 
     def spread(self) -> None:
         """Follow error text into the functions it is passed to and returned from."""
-        name = getattr(self.scope, "name", "")
         for node in self.nodes:
             if isinstance(node, ast.Return) and node.value and self.is_text(node.value):
-                if name not in self.program.returns_text:
-                    self.program.returns_text.add(name)
+                if (
+                    not isinstance(self.scope, ast.Module)
+                    and self.scope not in self.program.returns_text
+                ):
+                    self.program.returns_text.add(self.scope)
                     self.program.changed = True
             if not isinstance(node, ast.Call):
                 continue
-            for target in FUNCTIONS.get(_name(node.func), ()):
+            for target in self._targets(node.func):
                 params = _params(target)
                 for index, arg in enumerate(node.args[: len(params)]):
                     if self.is_text(arg):
-                        self.program.pass_text(target.name, params[index].arg)
+                        self.program.pass_text(target, params[index].arg)
                 for keyword in node.keywords:
                     if keyword.arg and self.is_text(keyword.value):
-                        self.program.pass_text(target.name, keyword.arg)
+                        self.program.pass_text(target, keyword.arg)
+
+    def _prose_constant(self, node: ast.expr) -> bool:
+        """A name bound to prose: this module's constant, or an imported one."""
+        if isinstance(node, ast.Name):
+            return self.program.is_prose(self.module, node.id)
+        if not isinstance(node, ast.Attribute):
+            return False
+        owner = node.value
+        if isinstance(owner, ast.Name) and owner.id in self.module.modules:
+            return node.attr in self.module.modules[owner.id].prose
+        return node.attr in self.module.prose
 
     def _prose(self, node: ast.expr) -> bool:
         """Prose: a literal, a collection holding one, or a module constant
@@ -258,7 +410,7 @@ class Flow:
             return any(self._prose(item) for item in node.elts)
         if isinstance(node, ast.Call) and _name(node.func) in STR_METHODS:
             node = getattr(node.func, "value", node)
-        return _wording(node) or _name(node) in self.program.prose
+        return _wording(node) or self._prose_constant(node)
 
     def _compares_wording(self, node: ast.Compare) -> bool:
         sides = [node.left, *node.comparators]
@@ -279,10 +431,15 @@ class Flow:
         return False
 
     def _tests_wording(self, node: ast.Call) -> bool:
-        attr = _name(node.func)
-        return (
-            attr in TEXT_TESTS and self.is_text(getattr(node.func, "value", node))
-        ) or (attr in REGEX_TESTS and any(self.is_text(arg) for arg in node.args[:2]))
+        func = node.func
+        searched = any(self.is_text(arg) for arg in node.args[:2])
+        if isinstance(func, ast.Name):  # ``from re import search``
+            return func.id in self.module.regex and searched
+        if not isinstance(func, ast.Attribute):
+            return False
+        return (func.attr in TEXT_TESTS and self.is_text(func.value)) or (
+            func.attr in REGEX_TESTS and searched
+        )
 
     def _matches_wording(self, node: ast.Match) -> bool:
         return self.is_text(node.subject) and any(
@@ -297,9 +454,8 @@ class Flow:
             elif isinstance(node, ast.Match):
                 if self._matches_wording(node):
                     yield node
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if self._tests_wording(node):
-                    yield node
+            elif isinstance(node, ast.Call) and self._tests_wording(node):
+                yield node
 
 
 def _values(pattern: ast.pattern) -> list[ast.expr]:
@@ -340,38 +496,20 @@ def _wording(node: ast.expr) -> bool:
     )
 
 
-FUNCTIONS: dict[str, list[ast.FunctionDef | ast.AsyncFunctionDef]] = {}
-
-
 def scan(sources: dict[str, str]) -> list[str]:
     """Return ``path:line: code`` for every wording decision in ``sources``."""
-    scopes: list[tuple[str, Scope, Scope | None]] = []
-    FUNCTIONS.clear()
-
-    def collect(path: str, scope: Scope, outer: Scope | None) -> None:
-        scopes.append((path, scope, outer))
-        stack = list(ast.iter_child_nodes(scope))
-        while stack:
-            node = stack.pop()
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                FUNCTIONS.setdefault(node.name, []).append(node)
-                collect(path, node, scope)
-            else:
-                stack.extend(ast.iter_child_nodes(node))
-
-    program = Program()
-    for path, source in sources.items():
-        tree = ast.parse(source, path)
-        program.prose |= _prose_constants(tree)
-        collect(path, tree, None)
+    program = Program(sources)
     program.changed = True
+    flows: list[tuple[str, Flow]] = []
     while program.changed:
         program.changed = False
-        built: dict[Scope, Flow] = {}
         flows = []
-        for path, scope, outer in scopes:
-            built[scope] = Flow(scope, program, built.get(outer) if outer else None)
-            flows.append((path, built[scope]))
+        for module in program.modules:
+            built: dict[Scope, Flow] = {}
+            for scope, outer in module.scopes:
+                around = built[outer] if outer else None
+                built[scope] = Flow(scope, module, program, around)
+                flows.append((module.path, built[scope]))
         for _path, flow in flows:
             flow.spread()
     found = {

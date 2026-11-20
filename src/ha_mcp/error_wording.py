@@ -160,12 +160,6 @@ def line_continuation(error: object) -> bool:
     return "line continuation character" in str(error)
 
 
-def error_mentions(error: Exception, *needles: str) -> bool:
-    """Whether the type name or the text of a sandbox error holds a needle."""
-    kind, text = type(error).__name__, str(error)
-    return any(needle in kind or needle in text for needle in needles)
-
-
 # --- FastMCP -----------------------------------------------------------------
 
 

@@ -123,3 +123,22 @@ class TestRuntimeErrorBucket:
             core_client, monkeypatch, "bytearray(1)"
         )
         assert code == ErrorCode.SANDBOX_RUNTIME_ERROR
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            'd = {}\nd["MemoryError"]',
+            'raise ValueError("RecursionError happened")',
+            'raise ValueError("No module named x")',
+            'raise ValueError("timed out")',
+        ],
+        ids=["key", "recursion", "import", "timeout"],
+    )
+    async def test_a_message_that_names_another_category_stays_a_runtime_error(
+        self,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        source: str,
+    ) -> None:
+        code, _message, _suggestions = await _failure(core_client, monkeypatch, source)
+        assert code == ErrorCode.SANDBOX_RUNTIME_ERROR
