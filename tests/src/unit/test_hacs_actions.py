@@ -637,6 +637,38 @@ class TestAddRepository:
         assert body["translation_key"] == translation_key
         assert any(hint in s for s in suggestions(body))
 
+    async def test_an_app_repository_points_at_the_app_tool(
+        self, connected: MockConfigEntry, tools: HacsTools
+    ) -> None:
+        body = await rejected_call_body(
+            tools.ha_manage_hacs(
+                action="add_repository",
+                repository="hassio-addons/repository",
+                category="integration",
+            )
+        )
+        assert body["ha_error_code"] == "app_repository"
+        assert any("ha_manage_app" in s for s in suggestions(body))
+
+    async def test_a_repository_github_does_not_have_points_at_system_health(
+        self,
+        connected: MockConfigEntry,
+        aioclient_mock: AiohttpClientMocker,
+        tools: HacsTools,
+    ) -> None:
+        aioclient_mock.get(
+            "https://api.github.com/repos/owner/gone",
+            status=404,
+            json={"message": "Not Found"},
+        )
+        body = await rejected_call_body(
+            tools.ha_manage_hacs(
+                action="add_repository", repository="owner/gone", category="plugin"
+            )
+        )
+        assert body["translation_key"] == "github_failed"
+        assert any("ha_get_system_health" in s for s in suggestions(body))
+
     async def test_a_github_account_is_connected_through_the_marketplace(
         self, accepted: None, tools: HacsTools
     ) -> None:

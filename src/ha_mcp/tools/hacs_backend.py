@@ -87,6 +87,17 @@ _SUGGESTIONS = {
         "It is listed already: find its id with "
         "ha_get_hacs_info(action='search', query='<owner/repo>').",
     ],
+    "app_repository": [
+        "An app (add-on) repository is registered with "
+        "ha_manage_app(action='add_repository', repository='<URL>').",
+    ],
+    "github_failed": [
+        "The message carries GitHub's answer. ha_get_hacs_info(action='search') "
+        + "shows the Marketplace's state in its store block.",
+        "ha_get_system_health reports under marketplace whether GitHub and "
+        + "the catalog are reachable and which download source is in use; the "
+        + "source is an option of the Marketplace entry (ha_set_integration).",
+    ],
     # Core gives these two one code (invalid_format); its translation key
     # tells them apart.
     "invalid_repository": [
