@@ -1,20 +1,21 @@
-"""The in-process server's access switch (#2801).
+"""The in-process server's access and write-permission switches.
 
-Turning it off closes every way into the server while the entry stays loaded,
-so access can be granted on demand and revoked by automations. The state lives
-in ``entry.data`` (see :func:`embedded_entry.access_enabled`), not in the
-entity, because the entry setup decides on the bring-up before this platform is
-forwarded. Disabling the entity keeps the last state; while that is off,
-nothing can turn access back on until the entity is enabled again.
+Turning Access off closes every way into the server while the entry stays
+loaded, so access can be granted on demand and revoked by automations. Its
+state lives in ``entry.data`` (see :func:`embedded_entry.access_enabled`).
+Allow changes persists the server's existing Read Only Mode flag and applies
+it live; its polling keeps the entity aligned with edits from the web panel.
 
-The entity is registered disabled, so the switch is opt-in: a service call
-with ``entity_id: all`` reaches every entity of the switch platform, whatever
-its entity category, and would otherwise close access on installs that never
-asked for the switch. Home Assistant adds no disabled entity to the platform.
+Both entities are registered disabled, so they are opt-in: a service call with
+``entity_id: all`` reaches every enabled entity of the switch platform,
+whatever its entity category. Home Assistant adds no disabled entity to the
+platform.
 """
 
 from __future__ import annotations
 
+import logging
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import SwitchEntity
@@ -23,18 +24,32 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
 from .embedded_entry import access_enabled, async_set_access
+from .embedded_read_only import (
+    ReadOnlyStateError,
+    embedded_config_dir,
+    read_only_mode,
+    set_read_only_mode,
+)
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+_LOGGER = logging.getLogger(__name__)
+SCAN_INTERVAL = timedelta(seconds=30)
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    """Add the access switch; only the server entry forwards this platform."""
-    async_add_entities([ServerAccessSwitch(entry)])
+    """Add server controls; only the server entry forwards this platform."""
+    async_add_entities(
+        [ServerAccessSwitch(entry), ServerAllowChangesSwitch(hass, entry)],
+        update_before_add=True,
+    )
 
 
 class ServerAccessSwitch(SwitchEntity):
@@ -68,3 +83,48 @@ class ServerAccessSwitch(SwitchEntity):
             await async_set_access(self.hass, self._entry, False)
         finally:
             self.async_write_ha_state()
+
+
+class ServerAllowChangesSwitch(SwitchEntity):
+    """Allow writes by turning the embedded server's Read Only Mode off."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "server_allow_changes"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_registry_enabled_default = False
+    _attr_should_poll = True
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._attr_unique_id = f"{entry.entry_id}_server_allow_changes"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)})
+        self._read_only = False
+        self._config_dir: Path = embedded_config_dir(hass.config.config_dir)
+
+    @property
+    def is_on(self) -> bool:
+        return not self._read_only
+
+    async def async_update(self) -> None:
+        try:
+            self._read_only = await self.hass.async_add_executor_job(
+                read_only_mode, self._config_dir
+            )
+        except ReadOnlyStateError as err:
+            self._attr_available = False
+            _LOGGER.warning("Cannot read embedded Read Only Mode: %s", err)
+        else:
+            self._attr_available = True
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set_read_only(False)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set_read_only(True)
+
+    async def _set_read_only(self, enabled: bool) -> None:
+        await self.hass.async_add_executor_job(
+            set_read_only_mode, self._config_dir, enabled
+        )
+        self._read_only = enabled
+        self._attr_available = True
+        self.async_write_ha_state()

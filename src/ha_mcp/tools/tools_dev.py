@@ -722,14 +722,12 @@ class DevTools:
         the web UI save handlers.
         """
         from ..config import _FEATURE_FLAG_OVERRIDE_FILENAME
-        from ..settings_ui._persistence import (
-            _atomic_write_json,
-            _get_override_file_lock,
-        )
+        from ..settings_ui import _persistence
+        from ..utils.config_write_lock import config_write_guard
         from ..utils.data_paths import get_data_dir
 
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-        async with _get_override_file_lock():
+        async with _persistence._get_override_file_lock(), config_write_guard():
             existing: dict[str, Any] = {}
             try:
                 # Executor thread: file I/O must not block the event loop.
@@ -768,7 +766,7 @@ class DevTools:
                     existing.pop(key, None)
                 else:
                     existing[key] = val
-            await asyncio.to_thread(_atomic_write_json, path, existing)
+            await asyncio.to_thread(_persistence._atomic_write_json, path, existing)
 
     # ----- server-entry helpers -----
 
