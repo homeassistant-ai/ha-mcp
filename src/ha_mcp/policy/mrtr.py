@@ -220,7 +220,7 @@ class ApprovalContinuation(BaseModel):
         deadline = min(time() + wait_seconds, pending.expires_at.timestamp())
         if dynamic_targets:
             # A client that never resumes must not leave an approvable dynamic
-            # selector behind after its original invocation's wait window.
+            # entry behind after its original invocation's wait window.
             pending.expires_at = datetime.fromtimestamp(deadline, UTC)
         return cls(
             token=pending.token,

@@ -27,6 +27,7 @@ from .evaluator import (
     evaluate,
     find_matching_rule,
     has_dynamic_selector_targets,
+    has_unresolved_scene_members,
     normalize_stringified_containers,
 )
 from .events import emit_approval_requested
@@ -93,8 +94,8 @@ class PolicyMiddleware(Middleware):
         approval itself is consumed exactly once
         (``PendingApproval.claim``): a second waiter woken by the same
         decision gets its own pending row instead of riding the first
-        call's click. A dynamic selector call
-        (``has_dynamic_selector_targets``) never shares or reuses another
+        call's click. A dynamic call (``has_dynamic_selector_targets`` or
+        ``has_unresolved_scene_members``) never shares or reuses another
         call's pending entry, and is never reissued on TTL eviction: see
         the inline comments above the ``existing =``, ``pending =``, and
         eviction-reissue assignments below for why binding it to this one
@@ -193,7 +194,11 @@ class PolicyMiddleware(Middleware):
     ) -> Any:
         """Wait on one approval, returning a continuation only while it is pending."""
         rule = find_matching_rule(name, args, policy)
-        dynamic_targets = has_dynamic_selector_targets(name, args)
+        # A capture_devices scene call is single-use like a selector call: its
+        # device entities are read inside the tool, after this gate.
+        dynamic_targets = has_dynamic_selector_targets(
+            name, args
+        ) or has_unresolved_scene_members(name, args)
         remember_minutes = (
             0 if dynamic_targets else rule.remember_minutes if rule else 0
         )
@@ -214,7 +219,7 @@ class PolicyMiddleware(Middleware):
         ):
             return await call_next(context)
 
-        # A dynamic selector call must never consume an entry it did not
+        # A dynamic call must never consume an entry it did not
         # itself create and is not itself still waiting on. Two reachable
         # ways an unguarded lookup here breaks the "approve once, dispatch
         # once, against fresh topology" invariant: (1) a race -- decide()
@@ -508,7 +513,7 @@ class PolicyMiddleware(Middleware):
     ) -> bool:
         """Act on an entry this call did not create. True means dispatch now.
 
-        A dynamic selector call must never consume an entry it did not
+        A dynamic call must never consume an entry it did not
         itself create and is not itself still waiting on, so it skips this
         lookup entirely -- see the creator-only binding rationale above the
         call site in ``on_call_tool``.
@@ -559,13 +564,13 @@ class PolicyMiddleware(Middleware):
         is why it has to be re-checked here rather than relied upon.
 
         A call that skips that gate (``reads_remembered`` is false for a
-        dynamic selector call and for every call under an allow list) must
-        not consult the cache here either. Under an allow list an entry left
-        over from a require-approval list can be live. For a dynamic
-        selector call no reachable case arms one today
-        (``has_dynamic_selector_targets`` is a pure function of the name and
-        args that also produce ``args_hash``, so static and dynamic calls
-        cannot collide on one key), but the guard keeps this branch
+        dynamic call and for every call under an allow list) must not
+        consult the cache here either. Under an allow list an entry left
+        over from a require-approval list can be live. For a dynamic call
+        no reachable case arms one today (``has_dynamic_selector_targets``
+        and ``has_unresolved_scene_members`` are pure functions of the name
+        and args that also produce ``args_hash``, so static and dynamic
+        calls cannot collide on one key), but the guard keeps this branch
         degrading the same direction as the defensive claim check in
         ``_resolve_already_decided``: toward an extra prompt, never toward a
         dispatch the caller was not entitled to.
@@ -594,11 +599,11 @@ class PolicyMiddleware(Middleware):
         sees one approval row. Sharing the row is safe; sharing the
         *decision* is not, which is what ``_claim_approval`` enforces.
 
-        Dynamic selector calls must NOT share a pending entry at all: two
-        concurrent identical calls can still resolve to different (or
-        overlapping) target sets by the time each one dispatches, so
-        folding them onto one approval would let a single click authorize
-        a broader effect than the user saw. Skip the sharing and always
+        Dynamic calls (selector, scene device capture) must NOT share a
+        pending entry at all: two concurrent identical calls can still
+        resolve to different (or overlapping) target sets by the time each
+        one dispatches, so folding them onto one approval would let a single
+        click authorize a broader effect than the user saw. Skip the sharing and always
         mint a fresh entry.
         """
         if dynamic_targets:
@@ -729,7 +734,7 @@ class PolicyMiddleware(Middleware):
         """Raise the structured USER_APPROVAL_REQUIRED error for one pending entry.
 
         ``dynamic_targets`` switches both the message and suggestions: a
-        dynamic selector entry is bound to the single invocation that
+        dynamic entry is bound to the single invocation that
         created it (see the creator-only binding in ``on_call_tool``), was
         already removed from the queue by the caller just before this
         raises (nothing else could ever consume it), and can never be

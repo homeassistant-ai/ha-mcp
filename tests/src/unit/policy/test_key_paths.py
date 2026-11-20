@@ -140,3 +140,177 @@ class TestKeysSegmentMustBeLast:
     @pytest.mark.parametrize("path", ["args.config.entities.*~", "args.*~", "*~"])
     def test_keys_as_last_segment_is_accepted(self, path):
         assert Predicate(path=path, op="exists").path == path
+
+
+def _capture(policy: Policy, entities: object = None, **capture: object) -> Verdict:
+    config: dict[str, object] = {"name": "Movie", "entities": {"light.living": "on"}}
+    if entities is not None:
+        config["entities"] = entities
+    args = {"scene_id": "movie", "config": config, **capture}
+    return evaluate("ha_config_set_scene", args, policy)
+
+
+class TestCapturedEntities:
+    """``capture_entities`` adds its ids to ``config.entities`` inside the tool,
+    so a rule on those keys reads them as keys too, named as Core stores them."""
+
+    @pytest.mark.parametrize("captured", ["lock.front", "LOCK.FRONT"])
+    def test_a_captured_lock_needs_approval(self, captured):
+        assert (
+            _capture(BLOCK_LIST, capture_entities=[captured])
+            == Verdict.REQUIRE_APPROVAL
+        )
+
+    @pytest.mark.parametrize("captured", ["lock.front", "LOCK.FRONT"])
+    def test_a_captured_lock_rides_no_lights_only_approval(self, captured):
+        assert (
+            _capture(LIGHTS_ONLY, capture_entities=[captured])
+            == Verdict.REQUIRE_APPROVAL
+        )
+
+    @pytest.mark.parametrize("captured", ["light.hall", "LIGHT.HALL"])
+    def test_a_captured_light_runs_under_both_lists(self, captured):
+        assert _capture(BLOCK_LIST, capture_entities=[captured]) == Verdict.ALLOW
+        assert _capture(LIGHTS_ONLY, capture_entities=[captured]) == Verdict.ALLOW
+
+    @pytest.mark.parametrize(
+        ("entities", "capture"),
+        [
+            (None, {"capture_entities": {"lock.front": {}}}),
+            (None, {"capture_entities": [1, None]}),
+            ([{"entity_id": "light.living"}], {"capture_entities": ["lock.front"]}),
+        ],
+    )
+    def test_a_malformed_capture_is_left_to_the_tool(self, entities, capture):
+        assert _capture(BLOCK_LIST, entities, **capture) == Verdict.ALLOW
+
+    @pytest.mark.parametrize(
+        ("path", "effect", "expected"),
+        [
+            ("args", "require_approval", Verdict.REQUIRE_APPROVAL),
+            ("args.config", "require_approval", Verdict.REQUIRE_APPROVAL),
+            ("args.config.entities", "require_approval", Verdict.REQUIRE_APPROVAL),
+            ("args", "allow", Verdict.ALLOW),
+            ("args.config", "allow", Verdict.REQUIRE_APPROVAL),
+            ("args.config.entities", "allow", Verdict.REQUIRE_APPROVAL),
+        ],
+    )
+    def test_a_rule_on_a_whole_object_holds_the_capture(self, path, effect, expected):
+        """A require-approval rule naming the call as written still gates it; an
+        allow-list rule approves the captured lock only when it lists it, as
+        the whole argument object does through ``capture_entities``."""
+        entities = {"light.living": "on"}
+        config = {"name": "Movie", "entities": entities}
+        args = {
+            "scene_id": "movie",
+            "config": config,
+            "capture_entities": ["lock.front"],
+        }
+        exact = {"args": args, "args.config": config}.get(path, entities)
+        rule = Rule(
+            tool_name="ha_config_set_scene",
+            when=[Predicate(path=path, op="eq", value=exact)],
+        )
+        verdict = evaluate(
+            "ha_config_set_scene", args, Policy(rules=[rule], rule_effect=effect)
+        )
+        assert verdict == expected
+
+    def test_an_allow_list_value_rule_does_not_approve_a_state_the_capture_replaces(
+        self,
+    ):
+        """The tool stores the live state over the caller's value, so an approval
+        of that value covers nothing the scene will hold."""
+        rule = Rule(
+            tool_name="ha_config_set_scene",
+            when=[Predicate(path="args.config.entities.*", op="eq", value="locked")],
+        )
+        policy = Policy(rules=[rule], rule_effect="allow")
+        verdict = _capture(
+            policy, {"lock.front": "locked"}, capture_entities=["lock.front"]
+        )
+        assert verdict == Verdict.REQUIRE_APPROVAL
+
+    def test_another_tools_capture_argument_is_not_read_as_scene_entities(self):
+        rule = Rule(tool_name="*", when=SCENE_KEYS.when)
+        args = {"config": {"entities": {}}, "capture_entities": ["lock.front"]}
+        verdict = evaluate("ha_config_set_script", args, Policy(rules=[rule]))
+        assert verdict == Verdict.ALLOW
+
+    def test_a_capture_without_a_config_object_is_left_to_the_tool(self):
+        args = {"scene_id": "movie", "config": None, "capture_entities": ["light.x"]}
+        assert evaluate("ha_config_set_scene", args, BLOCK_LIST) == Verdict.ALLOW
+
+
+class TestCapturedDevices:
+    """A device's entities are read inside the tool, after the gate, so a rule
+    that inspects ``config.entities`` cannot see them: it gates the call under
+    a require-approval list and cannot approve it under an allow list."""
+
+    @pytest.mark.parametrize(
+        ("tool", "path"),
+        [
+            ("ha_config_set_scene", "args.config.entities.*~"),
+            ("ha_config_set_scene", "args.*.entities.*~"),
+            ("ha_config_set_scene", "config.*"),
+            ("*", "args.config.entities.*~"),
+        ],
+    )
+    def test_a_rule_on_scene_entities_gates_a_device_capture(self, tool, path):
+        rule = Rule(
+            tool_name=tool, when=[Predicate(path=path, op="regex", value=SENSITIVE)]
+        )
+        policy = Policy(rules=[rule])
+        assert _capture(policy, capture_devices=["d1"]) == Verdict.REQUIRE_APPROVAL
+
+    @pytest.mark.parametrize(
+        ("effect", "approved_scene"),
+        [("allow", "movie"), ("require_approval", "other")],
+    )
+    def test_a_rule_on_the_whole_argument_object_is_judged_as_written(
+        self, effect, approved_scene
+    ):
+        args = {
+            "scene_id": "movie",
+            "config": {"name": "Movie", "entities": {}},
+            "capture_devices": ["d1"],
+        }
+        approved = {**args, "scene_id": approved_scene}
+        rule = Rule(
+            tool_name="ha_config_set_scene",
+            when=[Predicate(path="args", op="in", value=[approved])],
+        )
+        policy = Policy(rules=[rule], rule_effect=effect)
+        assert evaluate("ha_config_set_scene", args, policy) == Verdict.ALLOW
+
+    def test_a_lights_only_approval_does_not_cover_a_device_capture(self):
+        assert _capture(LIGHTS_ONLY, capture_devices=["d1"]) == Verdict.REQUIRE_APPROVAL
+
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            Rule(
+                tool_name="ha_config_set_scene",
+                when=[Predicate(path="args.scene_id", op="eq", value="bedroom")],
+            ),
+            Rule(
+                tool_name="*",
+                when=[
+                    Predicate(
+                        path="args.operations.*.entity_id", op="regex", value="^lock"
+                    )
+                ],
+            ),
+            Rule(
+                tool_name="ha_config_set_scene",
+                when=[Predicate(path="args.config.name", op="eq", value="Bedroom")],
+            ),
+            Rule(
+                tool_name="ha_config_set_script",
+                when=[Predicate(path="config.entities.*~", op="regex", value="^l")],
+            ),
+        ],
+    )
+    def test_a_rule_blind_to_scene_entities_does_not_gate_it(self, rule):
+        policy = Policy(rules=[rule])
+        assert _capture(policy, capture_devices=["d1"]) == Verdict.ALLOW
