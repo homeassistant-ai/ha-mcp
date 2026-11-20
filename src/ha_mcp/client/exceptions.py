@@ -26,6 +26,11 @@ class HomeAssistantConnectionError(HomeAssistantError):
         )
 
 
+class HomeAssistantNotReached(HomeAssistantConnectionError):
+    """An answer that shows the request did not reach Home Assistant: a
+    redirect, which the client does not follow."""
+
+
 class HomeAssistantCommandNotSent(HomeAssistantConnectionError):
     """A WS command that provably never left the process.
 

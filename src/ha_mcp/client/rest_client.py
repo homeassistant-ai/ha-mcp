@@ -50,7 +50,7 @@ from .exceptions import (
 from .models import ErrorLogPage
 from .service_identifiers import service_rest_path
 from .supervisor_client import make_supervisor_httpx_client
-from .transport_errors import is_ssl_error, redirect_message
+from .transport_errors import is_ssl_error, redirect_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -380,9 +380,7 @@ class HomeAssistantClient:
                     )
 
                 if 300 <= response.status_code < 400:
-                    raise HomeAssistantConnectionError(
-                        redirect_message(self.base_url, response)
-                    )
+                    raise redirect_refusal(self.base_url, response)
 
                 if response.status_code >= 400:
                     message, error_data = self._error_message_from_response(response)

@@ -9,7 +9,11 @@ import httpx
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_embedded
-from ..client.exceptions import HomeAssistantCommandNotSent, http_failure_status
+from ..client.exceptions import (
+    HomeAssistantCommandNotSent,
+    HomeAssistantNotReached,
+    http_failure_status,
+)
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, raise_tool_error
@@ -32,8 +36,9 @@ def _reply_lost_after_dispatch(error: Exception) -> bool:
     looks like to its caller: a dropped connection, or the proxy's 502/503/504
     (the Supervisor answers 502 for the app's call on Home Assistant OS).
     """
-    if isinstance(error, HomeAssistantCommandNotSent):
-        # Includes failed WebSocket upgrades, even when the proxy returned 5xx.
+    if isinstance(error, (HomeAssistantCommandNotSent, HomeAssistantNotReached)):
+        # Failed WebSocket upgrades, even when the proxy returned 5xx, and a
+        # redirect the client did not follow.
         return False
     if isinstance(error, HomeAssistantConnectionError):
         # A connection or pool acquisition that failed sent nothing, and a

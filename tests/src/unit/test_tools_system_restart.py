@@ -142,6 +142,32 @@ async def test_a_restart_that_could_not_connect_is_not_reported_as_restarting(
 
 
 @pytest.fixture
+def restart_redirected(gateway: Gateway) -> None:
+    """The gateway answers the restart call with a redirect, which the client
+    does not follow."""
+
+    async def redirect(request: web.Request) -> web.Response:
+        gateway.requests.append(f"{request.method} {request.path}")
+        return web.Response(status=307, headers={"Location": "/elsewhere"})
+
+    gateway.routes.append(web.post(RESTART_PATH, redirect))
+
+
+@pytest.mark.usefixtures("restart_redirected")
+async def test_a_redirected_restart_is_not_reported_as_restarting(
+    stops: list[bool], gateway: Gateway, gateway_client: HomeAssistantClient
+) -> None:
+    """The restart never reached Core, so there is nothing to wait for."""
+    body = await rejected_call_body(
+        SystemTools(gateway_client).ha_restart(confirm=True)
+    )
+
+    assert gateway.requests.count(f"POST {RESTART_PATH}") == 1
+    assert stops == []
+    assert body["error"]["code"] == "CONNECTION_FAILED"
+
+
+@pytest.fixture
 def restart_over_websocket(gateway: Gateway) -> None:
     """An explicit REST 401 routes the service call through the client's WS path."""
 
