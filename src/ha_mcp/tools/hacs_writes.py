@@ -218,10 +218,15 @@ async def set_version(
         if held is not None
         else f"The Marketplace accepted {version} for {{name}}."
     )
+    # A ref Core did not select is not one to send the caller to install.
+    install_hint = (
+        f"ha_manage_hacs(action='download', version='{version}') installs it, and "
+        if held is None or kept
+        else ""
+    )
     message = (
-        f"{selection} Nothing was installed: ha_manage_hacs(action='download', "
-        f"version='{version}') installs it, and a download without version "
-        "resets this selection."
+        f"{selection} Nothing was installed: {install_hint}a download without "
+        "version resets this selection."
     )
     warnings = [unread] if unread else []
     if held is not None and not kept:

@@ -418,6 +418,7 @@ class TestRepositorySettings:
         info = await socket.send_command(REPO_INFO, repository_id=CARD_ID)
         assert info["result"]["selected_tag"] == "main"
         assert result["data"]["selected_tag"] == "main"
+        assert "version='main') installs it" in result["data"]["message"]
         assert "warnings" not in result
 
     async def test_a_ref_core_did_not_select_is_reported(
@@ -436,6 +437,8 @@ class TestRepositorySettings:
         assert info["result"]["ref"] != "no-such-ref"
         assert result["data"]["ref"] == info["result"]["ref"]
         assert "no-such-ref" in result["warnings"][0]
+        # The ref Core refused is not offered as one to install.
+        assert "no-such-ref" not in result["data"]["message"]
 
     async def test_the_default_branch_clears_the_selection_without_a_warning(
         self,
