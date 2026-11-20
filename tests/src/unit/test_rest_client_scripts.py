@@ -164,10 +164,12 @@ async def test_a_script_with_neither_sequence_nor_blueprint_is_refused(
     assert await error_status(config_client.get_script_config("test_script")) == 404
 
 
+@pytest.mark.parametrize("identifier", ["test_script", "script.test_script"])
 async def test_a_script_without_an_alias_is_named_after_its_id(
-    config_client: HomeAssistantClient,
+    config_client: HomeAssistantClient, identifier: str
 ) -> None:
-    await config_client.upsert_script_config({"sequence": SEQUENCE}, "test_script")
+    """``script.test_script``, which no entity has, is stored as ``test_script``."""
+    await config_client.upsert_script_config({"sequence": SEQUENCE}, identifier)
 
     assert (await _stored(config_client, "test_script"))["alias"] == "test_script"
 
@@ -260,6 +262,40 @@ async def test_no_answer_to_the_registry_lookup_is_not_guessed_past(
         pytest.raises(HomeAssistantConnectionError),
     ):
         await config_client.upsert_script_config(dict(SCRIPT), "new_name")
+
+
+async def _collided(hass: HomeAssistant, entity_registry: er.EntityRegistry) -> None:
+    """``key_a`` is renamed to ``script.first``; ``key_b`` to ``script.key_a``."""
+    await load(
+        hass,
+        "script",
+        {"key_a": {**SCRIPT, "alias": "A"}, "key_b": {**SCRIPT, "alias": "B"}},
+    )
+    entity_registry.async_update_entity("script.key_a", new_entity_id="script.first")
+    entity_registry.async_update_entity("script.key_b", new_entity_id="script.key_a")
+    await hass.async_block_till_done()
+
+
+@pytest.mark.parametrize(
+    ("identifier", "key"),
+    [
+        ("key_a", "key_a"),
+        ("script.key_a", "key_b"),
+        ("script.key_b", "key_b"),
+    ],
+)
+async def test_a_bare_storage_key_names_its_own_script(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    identifier: str,
+    key: str,
+) -> None:
+    """Another script's entity being ``script.key_a`` does not take key ``key_a``;
+    ``script.key_b``, which no entity has, still names key ``key_b``."""
+    await _collided(hass, entity_registry)
+
+    assert (await config_client.get_script_config(identifier))["script_id"] == key
 
 
 # --- a caller that resolved the storage key already (#1813, #1935) ------------------

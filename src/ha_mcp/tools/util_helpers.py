@@ -521,20 +521,17 @@ def is_connection_error_message(error_msg: Any) -> bool:
     return any(sig in lowered for sig in WS_CONNECTION_SIGNATURES)
 
 
-async def list_visible_registry_ids(
-    client: Any, domain: str, *, bare: bool = False
-) -> list[str]:
+async def list_visible_registry_ids(client: Any, domain: str) -> list[str]:
     """Best-effort list of up to 10 visible ``domain`` entity IDs from the registry.
 
-    Populates the ``available_*_ids`` hint of a RESOURCE_NOT_FOUND error. With
-    ``bare`` the ``<domain>.`` prefix is stripped, for tools that take the bare
-    storage-key form. Entities hidden by enforce mode are dropped so the hint
+    Populates the ``available_*_ids`` hint of a RESOURCE_NOT_FOUND error.
+    Ids the enforce-mode outbound scan matches are dropped so the hint
     neither leaks a hidden ID nor trips the outbound scan. Returns an empty list
     on any failure: the caller treats absence as "no IDs to report" rather than
     failing the structured error raise. The cap lives here so a new call site
     can't bloat the error payload.
     """
-    from ..visibility.enforcement import active_hidden_entity_ids
+    from ..visibility.enforcement import active_hidden_regex
 
     try:
         result = await client.send_websocket_message(
@@ -546,13 +543,15 @@ async def list_visible_registry_ids(
     entries = result.get("result", []) if isinstance(result, dict) else result
     if not isinstance(entries, list):
         return []
-    hidden = await active_hidden_entity_ids(client)
+    # The regex also covers ``script.<hidden storage key>``, which another
+    # script's entity_id can be.
+    hidden = await active_hidden_regex(client)
     prefix = f"{domain}."
     return [
-        entity_id.removeprefix(prefix) if bare else entity_id
+        entity_id
         for entry in entries
         if isinstance(entry, dict)
         and isinstance(entity_id := entry.get("entity_id"), str)
         and entity_id.startswith(prefix)
-        and entity_id not in hidden
+        and not (hidden and hidden.search(entity_id))
     ][:10]

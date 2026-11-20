@@ -1959,36 +1959,25 @@ class HomeAssistantClient:
             await ws_client.release_subscription(sub_id)
 
     async def _resolve_script_id(self, identifier: str) -> str:
-        """
-        Resolve a script identifier to its storage key via the entity registry.
+        """Resolve a script identifier to its storage key.
 
-        Scripts may be renamed in the HA UI, changing the entity_id but keeping
-        the original storage key. This method looks up the entity registry via
-        WebSocket to find the actual storage key (unique_id).
-
-        Unlike automations (which expose their storage key in state attributes),
-        scripts require a WebSocket entity registry lookup.
-
-        Args:
-            identifier: Script ID (with or without 'script.' prefix)
-
-        Returns:
-            The storage key for the configuration API
+        A UI rename changes the entity_id but keeps the storage key, which the
+        registry holds as the entity's ``unique_id``. ``script.<x>`` names that
+        entity, or key ``<x>`` when the registry names none. A bare id that is itself a
+        storage key names that script, not another one whose entity is
+        ``script.<id>``: the config is read when the registry key of
+        ``script.<id>`` differs from the bare id, and a failure of that read
+        other than a 404 propagates.
         """
         bare_id = identifier.removeprefix("script.")
         entity_id = f"script.{bare_id}"
+        unique_id = None
         try:
             result = await self.send_websocket_message(
                 {"type": "config/entity_registry/get", "entity_id": entity_id}
             )
             if result.get("success") is not False:
                 unique_id = result.get("result", {}).get("unique_id")
-                if unique_id:
-                    if unique_id != bare_id:
-                        logger.debug(
-                            f"Resolved script entity_id {entity_id} to storage key {unique_id}"
-                        )
-                    return str(unique_id)
         except HomeAssistantConnectionError:
             # A dead transport must not become a silent guess: the fallback
             # below assumes the storage key equals the bare entity_id, which is
@@ -2001,6 +1990,15 @@ class HomeAssistantClient:
                 f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
                 exc_info=True,  # Log full traceback for better debugging
             )
+        qualified = identifier != bare_id
+        # Another key only from script.<bare_id>'s entry: the script tools'
+        # _script_entity_id relies on it.
+        if unique_id and (
+            qualified
+            or unique_id == bare_id
+            or not await self._config_exists("script", bare_id)
+        ):
+            return str(unique_id)
         return bare_id
 
     async def get_script_config(self, script_id: str) -> dict[str, Any]:
@@ -2051,7 +2049,7 @@ class HomeAssistantClient:
             # ``write_id``) so a renamed script's user-visible name is preserved
             # instead of being reset to the storage key.
             if "alias" not in config:
-                config["alias"] = script_id
+                config["alias"] = script_id.removeprefix("script.")
 
             # Validate that either sequence or use_blueprint is present
             if "sequence" not in config and "use_blueprint" not in config:
@@ -2161,15 +2159,17 @@ class HomeAssistantClient:
         if registered is not None:
             if qualified or registered.storage_key == bare_id:
                 return registered
-            return fallback if await self._scene_config_exists(bare_id) else registered
-        if qualified and unregistered and await self._scene_config_exists(bare_id):
+            return (
+                fallback if await self._config_exists("scene", bare_id) else registered
+            )
+        if qualified and unregistered and await self._config_exists("scene", bare_id):
             raise SceneIdNotAnEntityError(identifier, bare_id)
         return fallback
 
-    async def _scene_config_exists(self, storage_key: str) -> bool:
-        """Whether Core's config API holds a scene under ``storage_key``."""
+    async def _config_exists(self, domain: str, storage_key: str) -> bool:
+        """Whether Core's config API holds a ``domain`` config under ``storage_key``."""
         try:
-            await self._request("GET", f"config/scene/config/{storage_key}")
+            await self._request("GET", f"config/{domain}/config/{storage_key}")
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
                 return False
@@ -2184,10 +2184,10 @@ class HomeAssistantClient:
         Scenes may be renamed in the HA UI, changing the entity_id but keeping
         the original storage key. Like :meth:`_resolve_script_id`, this returns
         the bare storage key and needs a WebSocket entity registry lookup because
-        the state attributes do not surface it. Unlike it, :meth:`_resolve_scene`
-        may also read the scene config, gives a bare storage key precedence,
-        raises :class:`SceneIdNotAnEntityError` for an unregistered ``scene.<id>``
-        when key ``<id>`` holds a scene, and carries ``registry_hit``/``platform``.
+        the state attributes do not surface it, and gives a bare storage key
+        precedence. Unlike it, :meth:`_resolve_scene` raises
+        :class:`SceneIdNotAnEntityError` for an unregistered ``scene.<id>`` when
+        key ``<id>`` holds a scene, and carries ``registry_hit``/``platform``.
 
         Thin wrapper over :meth:`_resolve_scene` for callers that only need the
         storage key (e.g. the write path); the read/delete paths use the richer

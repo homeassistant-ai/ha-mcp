@@ -35,12 +35,13 @@ policies.
 **GET-path invariant:** the automation/script/scene *config-get* tools never
 read the config body through the component — its in-process ``raw_config``
 freshness lags the config file between a write and the next completed reload,
-so the body always comes from Core's REST config endpoint. The script and scene
-resolvers gate the whole component branch (caps probe included) behind
+so the body always comes from Core's REST config endpoint. The scene resolver
+gates the whole component branch (caps probe included) behind
 ``allow_component`` for removals, and the dedicated post-write resolver is never
-called from a config-get. The automation tools resolve through
-``component_automation.automation_lookup`` instead, which reads the registry,
-never the body.
+called from a scene or automation config-get; the script config-get asks it once
+(``timeout=0``) for the entity of its category, a registry read. The automation
+tools resolve through ``component_automation.automation_lookup`` instead, which
+reads the registry, never the body.
 """
 
 from __future__ import annotations

@@ -229,11 +229,11 @@ async def test_missing_automation_lists_only_the_automations_that_exist(
         pytest.param("ha_config_remove_script", {}, id="remove"),
     ],
 )
-async def test_missing_script_lists_the_bare_ids_of_the_scripts_that_exist(
+async def test_missing_script_lists_the_ids_of_the_scripts_that_exist(
     scripts: ConfigScriptTools, tool: str, kwargs: dict[str, Any]
 ) -> None:
-    """The ids come without the ``script.`` prefix, the form ``script_id``
-    takes; the automation is not one of them."""
+    """The ids are entity_ids, which ``script_id`` takes as given (a bare slug
+    can be another script's storage key); the automation is not one of them."""
     body = await rejected_call_body(
         getattr(scripts, tool)(script_id="missing_script", **kwargs)
     )
@@ -241,8 +241,8 @@ async def test_missing_script_lists_the_bare_ids_of_the_scripts_that_exist(
     assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert body["script_id"] == "missing_script"
     assert sorted(body["available_script_ids"]) == [
-        "evening_routine",
-        "morning_routine",
+        "script.evening_routine",
+        "script.morning_routine",
     ]
     assert any("ha_search(domain_filter='script')" in s for s in _suggestions(body))
 

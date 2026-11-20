@@ -402,7 +402,8 @@ def _graph_record(
     ever fetched, and the whole point is that it may be unfetchable (YAML-
     defined) or deprioritized past the budget. The per-bucket id fields mirror
     what the body-scan builders emit so a caller cannot tell the two apart by
-    shape.
+    shape; a script's ``script_id`` is its entity_id, which the script tools
+    take as given, where the body scan reports the storage key it read.
 
     ``resolve_scene_id`` is the scene branch's own storage-key resolver,
     injected rather than reimplemented. A scene's storage key is its registry
@@ -422,7 +423,7 @@ def _graph_record(
         "config": None,
     }
     if bucket == "scripts":
-        record["script_id"] = entity_id.removeprefix("script.")
+        record["script_id"] = entity_id
     elif bucket == "scenes":
         record["scene_id"] = resolve_scene_id(entity_id.removeprefix("scene."))
     return record

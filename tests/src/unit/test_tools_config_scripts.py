@@ -21,6 +21,7 @@ from homeassistant.util.yaml import dump, load_yaml_dict
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import entity_registration, tools_config_scripts
 from ha_mcp.tools.entity_registration import resolve_entity_id_after_write
+from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.tools.ws_waiters import wait_for_entity_registered
 
@@ -376,7 +377,7 @@ async def test_write_to_a_renamed_script_updates_its_storage_key(
     assert list(stored) == [KEY]
     assert stored[KEY] != BODY
     args, kwargs = upserts.call_args
-    assert args[1] == "renamed_script"
+    assert args[1] == renamed
     assert kwargs["resolved_id"] == threaded_key
 
 
@@ -481,3 +482,121 @@ async def test_category_lands_on_a_renamed_scripts_current_entity(
     entry = entity_registry.async_get(renamed)
     assert entry is not None
     assert entry.categories == {"script": category_id}
+
+
+class TestCollidingIds:
+    """``key_a`` is renamed to ``script.first``, then ``key_b`` to ``script.key_a``:
+    the bare key ``key_a`` names A, the entity id ``script.key_a`` names B, and
+    ``script.key_b``, which no entity has, names B by its key (run and the
+    category guard that a ``script.<x>`` id is not taken as its entity)."""
+
+    @pytest.fixture(autouse=True)
+    async def _collide(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        scripts = {
+            "key_a": {"alias": "A", "sequence": [{"event": "ran_a"}]},
+            "key_b": {"alias": "B", "sequence": [{"event": "ran_b"}]},
+        }
+        await write_config_files(hass, {"scripts.yaml": dump(scripts)})
+        await hass.services.async_call("script", "reload", blocking=True)
+        entity_registry.async_update_entity(
+            "script.key_a", new_entity_id="script.first"
+        )
+        entity_registry.async_update_entity(
+            "script.key_b", new_entity_id="script.key_a"
+        )
+        await hass.async_block_till_done()
+
+    async def test_get_by_entity_id_reads_that_entitys_script(
+        self, tools: ConfigScriptTools
+    ) -> None:
+        got = await tools.ha_config_get_script(script_id="script.key_a")
+
+        assert (got["script_id"], got["config"]["alias"]) == ("key_b", "B")
+
+    @pytest.mark.parametrize(
+        ("script_id", "aliases", "kept"),
+        [
+            ("key_a", {"key_a": "New", "key_b": "B"}, "key_b"),
+            ("script.key_a", {"key_a": "A", "key_b": "New"}, "key_a"),
+        ],
+    )
+    async def test_set_and_remove_reach_the_named_script(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        script_id: str,
+        aliases: dict[str, str],
+        kept: str,
+    ) -> None:
+        await tools.ha_config_set_script(
+            script_id=script_id, config={**BODY, "alias": "New"}, wait=False
+        )
+        stored = await _stored(hass)
+        assert {key: body["alias"] for key, body in stored.items()} == aliases
+
+        removed = await tools.ha_config_remove_script(script_id=script_id)
+
+        assert set(await _stored(hass)) == {kept}
+        # The removal wait watched the deleted script's entity, not the other one.
+        assert "warnings" not in removed
+
+    @pytest.mark.parametrize(
+        ("script_id", "event"),
+        [("key_a", "ran_a"), ("script.key_a", "ran_b"), ("script.key_b", "ran_b")],
+    )
+    async def test_run_starts_the_named_script(
+        self, hass: HomeAssistant, tools: ConfigScriptTools, script_id: str, event: str
+    ) -> None:
+        fired: list[str] = []
+        for name in ("ran_a", "ran_b"):
+            hass.bus.async_listen(name, lambda e: fired.append(str(e.event_type)))
+
+        await tools.ha_config_set_script(script_id=script_id, run="start")
+        await hass.async_block_till_done()
+
+        assert fired == [event]
+
+    @pytest.mark.parametrize(
+        ("script_id", "entity_id"),
+        [
+            ("key_a", "script.first"),
+            ("script.key_a", "script.key_a"),
+            ("script.key_b", "script.key_a"),
+        ],
+    )
+    async def test_get_reports_the_category_of_the_scripts_renamed_entity(
+        self,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+        script_id: str,
+        entity_id: str,
+    ) -> None:
+        category_id = category_registry.async_create(
+            name="Lighting", scope="script"
+        ).category_id
+        entity_registry.async_update_entity(
+            entity_id, categories={"script": category_id}
+        )
+
+        got = await tools.ha_config_get_script(script_id=script_id)
+
+        assert got["config"]["category"] == category_id
+
+    async def test_the_id_search_reports_opens_that_script(
+        self, tools: ConfigScriptTools, core_client: HomeAssistantClient
+    ) -> None:
+        result = await SmartSearchTools(client=core_client).deep_search(
+            query="B", search_types=["script"], limit=10, exact_match=True
+        )
+        (match,) = [m for m in result["scripts"] if m["entity_id"] == "script.key_a"]
+        assert match["script_id"] == "key_b"
+
+        got = await tools.ha_config_get_script(script_id=match["script_id"])
+
+        assert got["config"]["alias"] == "B"

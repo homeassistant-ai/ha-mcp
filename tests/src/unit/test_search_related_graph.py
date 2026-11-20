@@ -553,7 +553,9 @@ async def test_graph_script_hit_carries_its_script_id(
     """A script graph hit needs the id ha_config_get_script takes.
 
     Without it the agent has an entity_id and no way to open the script it
-    was just told references the entity.
+    was just told references the entity. The graph reads no config, so it
+    has no storage key, and the slug could be another script's key: the hit
+    carries the entity_id, which the tool takes as it is.
     """
     await load_configuration(hass, {YAML_SCRIPTS: {"good_night": script_sequence()}})
 
@@ -561,7 +563,7 @@ async def test_graph_script_hit_carries_its_script_id(
 
     found = record(response, "scripts", "script.good_night")
     assert (found["match_in_references"], found["match_in_config"]) == (True, False)
-    assert found["script_id"] == "good_night"
+    assert found["script_id"] == "script.good_night"
 
 
 async def test_graph_confirmed_scripts_are_read_last(
