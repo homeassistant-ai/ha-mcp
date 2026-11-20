@@ -323,7 +323,7 @@ async def test_a_failed_read_of_core_helper_flows_is_not_logged_as_no_helper(
     if list_read == "no-answer":
         monkeypatch.setattr(
             helper_flows,
-            "_fetch_helper_flow_types",
+            "fetch_helper_flow_types",
             AsyncMock(side_effect=HomeAssistantConnectionError("down")),
         )
 

@@ -142,7 +142,7 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
             # A store that is not installed answers as an unknown command; any
             # other failure (the Marketplace still loading included) is real:
             # let the retry loop see it.
-            if err.code == "unknown_command" or "unknown command" in str(err).lower():
+            if err.code == "unknown_command":
                 continue
             raise
         break
@@ -318,7 +318,7 @@ async def hacs_refresh_lifespan(_server: Any) -> AsyncIterator[dict[str, Any]]:
     Entered by ``server_lifespan``, the FastMCP ``lifespan``, so it runs on
     EVERY launcher — stdio, the HTTP CLI entry points, and the app's
     ``start.py``, which calls ``mcp.run()`` directly and never passes through
-    ``__main__``'s ``_run_with_shutdown`` (the wiring this replaces; the app
+    ``__main__``'s ``run_with_shutdown`` (the wiring this replaces; the app
     gap was found live, not by CI, because the e2e suites launch via the CLI
     entry points).
     """

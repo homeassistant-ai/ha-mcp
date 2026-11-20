@@ -19,16 +19,20 @@ from starlette.requests import Request
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import BackupManager
-from ha_mcp.settings_ui import build_settings_handlers
+from ha_mcp.client.rest_client import HomeAssistantClient
 
-from ._backup_restore_helpers import backup_tool, use_backup_manager
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import manage_backup
+from ._backup_core import snapshot_manager as snapshot_manager
+from ._backup_restore_helpers import settings_handlers
 
 Deletion = tuple[BackupManager, Path, Path, Path]
 
 
 @pytest.fixture
-def manager(backup_manager: BackupManager) -> BackupManager:
-    return backup_manager
+def manager(snapshot_manager: BackupManager) -> BackupManager:
+    """The manager the server's tool and Settings page reach for ``core_client``."""
+    return snapshot_manager
 
 
 async def _capture(hass: HomeAssistant, manager: BackupManager, title: str) -> Path:
@@ -87,12 +91,13 @@ async def test_bulk_delete_retains_only_safe_known_failure_reasons(
 
 
 async def test_mcp_bulk_delete_explains_retry_after_capture_or_restore(
-    deletion: Deletion, monkeypatch: pytest.MonkeyPatch
+    deletion: Deletion, core_client: HomeAssistantClient
 ) -> None:
     manager, pinned, unavailable, removable = deletion
-    tool = backup_tool(monkeypatch, manager)
     async with _in_restore(manager, pinned):
-        response = await tool(scope="edits", action="delete", domain="integration")
+        response = await manage_backup(
+            core_client, scope="edits", action="delete", domain="integration"
+        )
     assert response["data"]["deleted"] == [removable.name]
     assert set(response["data"]["failed"]) == {pinned.name, unavailable.name}
     assert response["data"]["failure_reasons"] == {pinned.name: "snapshot_in_use"}
@@ -103,11 +108,12 @@ async def test_mcp_bulk_delete_explains_retry_after_capture_or_restore(
 
 
 async def test_settings_bulk_delete_preserves_retryable_reason(
-    deletion: Deletion, monkeypatch: pytest.MonkeyPatch
+    deletion: Deletion,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager, pinned, unavailable, removable = deletion
-    use_backup_manager(monkeypatch, manager)
-    handlers = build_settings_handlers(None)
+    handlers = settings_handlers(monkeypatch, core_client)
     async with _in_restore(manager, pinned):
         response = await handlers["delete_backups_bulk"](
             Request({"type": "http", "query_string": b"domain=integration"})
@@ -133,6 +139,7 @@ async def test_bulk_delete_without_known_refusals_preserves_existing_shape(
 async def test_bulk_delete_reports_when_every_snapshot_is_in_use(
     hass: HomeAssistant,
     manager: BackupManager,
+    core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     consumer: str,
 ) -> None:
@@ -142,15 +149,15 @@ async def test_bulk_delete_reports_when_every_snapshot_is_in_use(
         if consumer == "manager":
             result = manager.delete_bulk(domain="integration")
         elif consumer == "mcp":
-            tool = backup_tool(monkeypatch, manager)
-            response = await tool(scope="edits", action="delete", domain="integration")
+            response = await manage_backup(
+                core_client, scope="edits", action="delete", domain="integration"
+            )
             result = response["data"]
             assert "retry" in " ".join(response["warnings"]).lower()
         else:
-            use_backup_manager(monkeypatch, manager)
-            reply = await build_settings_handlers(None)["delete_backups_bulk"](
-                Request({"type": "http", "query_string": b"domain=integration"})
-            )
+            reply = await settings_handlers(monkeypatch, core_client)[
+                "delete_backups_bulk"
+            ](Request({"type": "http", "query_string": b"domain=integration"}))
             result = json.loads(reply.body)
         assert result["deleted"] == []
         assert result["failed"] == [pinned.name]
@@ -160,20 +167,23 @@ async def test_bulk_delete_reports_when_every_snapshot_is_in_use(
 
 @pytest.mark.parametrize("consumer", ["mcp", "settings"])
 async def test_single_delete_preserves_retryable_in_use_reason(
-    deletion: Deletion, monkeypatch: pytest.MonkeyPatch, consumer: str
+    deletion: Deletion,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    consumer: str,
 ) -> None:
     manager, pinned, _, _ = deletion
     async with _in_restore(manager, pinned):
         if consumer == "mcp":
-            tool = backup_tool(monkeypatch, manager)
             with pytest.raises(ToolError) as caught:
-                await tool(scope="edits", action="delete", backup_name=pinned.name)
+                await manage_backup(
+                    core_client, scope="edits", action="delete", backup_name=pinned.name
+                )
             payload = json.loads(str(caught.value))
         else:
-            use_backup_manager(monkeypatch, manager)
-            response = await build_settings_handlers(None)["delete_backup"](
-                Request({"type": "http", "path_params": {"name": pinned.name}})
-            )
+            response = await settings_handlers(monkeypatch, core_client)[
+                "delete_backup"
+            ](Request({"type": "http", "path_params": {"name": pinned.name}}))
             assert response.status_code == 409
             payload = json.loads(response.body)
     assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
@@ -183,10 +193,11 @@ async def test_single_delete_preserves_retryable_in_use_reason(
 
 
 async def test_mcp_bulk_delete_omits_empty_warnings(
-    hass: HomeAssistant, manager: BackupManager, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant, manager: BackupManager, core_client: HomeAssistantClient
 ) -> None:
     removable = await _capture(hass, manager, "removable")
-    tool = backup_tool(monkeypatch, manager)
-    response = await tool(scope="edits", action="delete", domain="integration")
+    response = await manage_backup(
+        core_client, scope="edits", action="delete", domain="integration"
+    )
     assert response["data"]["deleted"] == [removable.name]
     assert "warnings" not in response

@@ -333,16 +333,16 @@ async def test_a_removed_entry_is_kept_while_its_config_entry_exists(
     other = entity_registry.async_get_or_create("light", "hue", "other")
     entity_registry.async_remove(other.entity_id)
     entity_registry.async_remove(desk.entity_id)
-    kept = {
-        "entity_id": "light.desk",
-        "config_entry_id": desk.config_entry_id,
-        "kept_until": None,
-    }
 
     read = await ws_result(component_ws, WS_ENTITY_ENTRY, entry_id=desk.id)
     write = await _restore(component_ws, desk)
 
-    assert read == {"entry": None, "deleted": kept}
+    assert read["entry"] is None
+    kept = read["deleted"]
+    assert set(kept) == {"entity_id", "config_entry_id", "kept_until"}
+    assert kept["entity_id"] == desk.entity_id
+    assert kept["config_entry_id"] == desk.config_entry_id
+    assert kept["kept_until"] is None
     assert write["error"]["code"] == "entry_deleted"
     assert write["error"]["deleted"] == kept
 

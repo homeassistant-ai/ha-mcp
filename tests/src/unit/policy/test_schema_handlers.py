@@ -196,6 +196,24 @@ async def test_set_integration_offers_the_config_entry_list(
     assert r.json()["value_sources"]["args.entry_id"] == "ha_config_entries"
 
 
+@pytest.mark.parametrize("provider_level", [False, True])
+async def test_disabled_tool_keeps_its_policy_schema(
+    tmp_path: Path, provider_level: bool
+) -> None:
+    """Rules can target a disabled tool even while clients cannot discover it."""
+    mcp = _catalog()
+    provider = mcp.local_provider if provider_level else mcp
+    provider.disable(names={"ha_call_service"})
+    assert "ha_call_service" not in {tool.name for tool in await mcp.list_tools()}
+
+    async for api in _app(tmp_path, SimpleNamespace(mcp=mcp, client=None)):
+        response = await api.get(f"{SCHEMA}?name=ha_call_service")
+
+    assert response.status_code == 200
+    assert response.json()["is_write_or_destructive"] is True
+    assert "args.domain" in {path["path"] for path in response.json()["paths"]}
+
+
 async def test_tool_schema_reports_a_broken_catalog_lookup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -204,7 +222,7 @@ async def test_tool_schema_reports_a_broken_catalog_lookup(
     mcp = _catalog()
     monkeypatch.setattr(
         mcp.local_provider,
-        "_list_tools",
+        "list_tools",
         AsyncMock(side_effect=AttributeError("FastMCP rename broke us")),
     )
     async for api in _app(tmp_path, SimpleNamespace(mcp=mcp, client=None)):

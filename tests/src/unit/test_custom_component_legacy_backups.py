@@ -292,6 +292,7 @@ class TestReadLegacyBackup:
     async def test_a_missing_backup_is_reported(self, files: FileService) -> None:
         assert await _read(files, "nope.bak") == {
             "success": False,
+            "error_code": "not_found",
             "error": "Backup does not exist: nope.bak",
         }
 
@@ -302,6 +303,7 @@ class TestReadLegacyBackup:
 
         assert await _read(files, "adir.bak") == {
             "success": False,
+            "error_code": "not_a_file",
             "error": "Path is not a file: adir.bak",
         }
 
@@ -314,6 +316,7 @@ class TestReadLegacyBackup:
 
         assert await _read(files, "link.bak") == {
             "success": False,
+            "error_code": "not_a_file",
             "error": "Path is not a file: link.bak",
         }
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import importlib.util
@@ -13,6 +12,7 @@ from typing import Any
 import pytest
 
 from ha_mcp._vendor import mcp_types
+from ha_mcp._vendor.fastmcp import Client, FastMCP
 
 _SHIM = Path(__file__).resolve().parents[3] / ".github" / "dev-ha-env" / "mcpshim.py"
 _PNG = b"\x89PNG\r\n\x1a\nshim"
@@ -26,8 +26,13 @@ def _load_shim() -> Any:
     return module
 
 
-class _Client:
-    async def call_tool_mcp(self, name: str, arguments: dict[str, Any]) -> Any:
+@pytest.fixture
+def call_screenshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Drive the CLI through a real MCP client and an in-memory MCP server."""
+    server = FastMCP("shim test")
+
+    @server.tool
+    def ha_get_dashboard_screenshot() -> mcp_types.CallToolResult:
         return mcp_types.CallToolResult.model_validate(
             {
                 "content": [
@@ -42,13 +47,25 @@ class _Client:
             }
         )
 
+    shim = _load_shim()
+    monkeypatch.setattr(shim, "Client", lambda _url, **kwargs: Client(server, **kwargs))
+    urls = tmp_path / "urls.txt"
+    urls.write_text("MCP: http://127.0.0.1:9583/mcp\n", encoding="utf-8")
+
+    def call():
+        shim.main(["mcpshim.py", str(urls), "call", "ha_get_dashboard_screenshot"])
+
+    return call
+
 
 def test_an_image_result_keeps_its_structured_content_and_meta(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    call_screenshot,
 ) -> None:
     """A screenshot's warnings live only in structuredContent beside the image."""
     monkeypatch.delenv("MCPSHIM_SAVE_MEDIA", raising=False)
-    asyncio.run(_load_shim()._call(_Client(), ["ha_get_dashboard_screenshot"]))
+    call_screenshot()
 
     printed = json.loads(capsys.readouterr().out)
     assert printed["structuredContent"] == {"warnings": ["engine changed the theme"]}
@@ -61,11 +78,12 @@ def test_media_saves_into_a_directory_that_does_not_exist_yet(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    call_screenshot,
 ) -> None:
     """A missing save directory must not lose the result of a call that ran."""
     save_dir = tmp_path / "new" / "media"
     monkeypatch.setenv("MCPSHIM_SAVE_MEDIA", str(save_dir))
-    asyncio.run(_load_shim()._call(_Client(), ["ha_get_dashboard_screenshot"]))
+    call_screenshot()
 
     saved = Path(json.loads(capsys.readouterr().out)["content"][0]["saved_to"])
     assert saved.parent == save_dir

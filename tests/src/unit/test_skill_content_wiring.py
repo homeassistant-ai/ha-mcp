@@ -47,6 +47,8 @@ import pytest
 from ha_mcp.tools.best_practice_checker import check_automation_config
 from ha_mcp.utils import skill_loader
 
+from ._tools_config_automations_core import require_vendored_skills
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TOOLS_DIR = REPO_ROOT / "src" / "ha_mcp" / "tools"
 
@@ -351,43 +353,28 @@ def _emit_file_refs() -> list[str]:
     return refs
 
 
-def _canonical_files_mappings() -> list[tuple[str, str]]:
-    """Statically extract every canonical-file mapping from the 6 write tools."""
-    mapping_names = {
-        "_AUTOMATION_SKILL_FILES",
-        "_SCRIPT_SKILL_FILES",
-        "_SCENE_SKILL_FILES",
-        "_HELPER_SKILL_FILES",
-        "_DASHBOARD_SKILL_FILES",
-        "_YAML_SKILL_FILES",
-    }
-    out: list[tuple[str, str]] = []
-    for module_file, _ in WRITE_TOOLS:
-        tree = ast.parse((TOOLS_DIR / module_file).read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                name = node.target.id
-                if name in mapping_names and isinstance(node.value, ast.Tuple):
-                    out.extend(
-                        (name, elt.value)
-                        for elt in node.value.elts
-                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                    )
+def _canonical_files_mappings() -> list[tuple[str, str, str]]:
+    """Statically extract every canonical-file mapping (a ``*_SKILL_FILES``
+    tuple) from the 6 write tools and the modules split out of them, as
+    ``(tool, mapping name, file ref)``."""
+    out: list[tuple[str, str, str]] = []
+    for tool_module, tool in WRITE_TOOLS:
+        for module_file in (tool_module, *_ATTACH_SIBLING_MODULES.get(tool_module, ())):
+            tree = ast.parse((TOOLS_DIR / module_file).read_text())
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and node.target.id.endswith("_SKILL_FILES")
+                    and isinstance(node.value, ast.Tuple)
+                ):
+                    continue
+                out.extend(
+                    (tool, node.target.id, elt.value)
+                    for elt in node.value.elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                )
     return out
-
-
-def _require_vendored_skills() -> Path:
-    """Skip the test cleanly when the submodule isn't initialised."""
-    skills_dir = skill_loader.get_skills_dir()
-    if (
-        skills_dir is None
-        or not (skills_dir / "home-assistant-best-practices").is_dir()
-    ):
-        pytest.skip(
-            "skills-vendor submodule not initialised; "
-            "run `git submodule update --init` to enable real-skill tests"
-        )
-    return skills_dir
 
 
 @pytest.mark.parametrize("file_ref", _emit_file_refs())
@@ -407,7 +394,7 @@ def test_every_checker_anchor_resolves_against_real_skills(file_ref: str) -> Non
     (the ``_emit`` helper prepends ``references/``); we apply that same
     prefix here.
     """
-    skills_dir = _require_vendored_skills()
+    skills_dir = require_vendored_skills()
     full_ref = f"references/{file_ref}"
     result = skill_loader.resolve_skill_files(
         skills_dir, "home-assistant-best-practices", [full_ref]
@@ -439,7 +426,17 @@ def test_anchor_scan_covers_every_ref_a_warning_embeds(config: dict) -> None:
     assert {ref.removeprefix("references/") for ref in embedded} <= scanned
 
 
-@pytest.mark.parametrize(("mapping_name", "file_ref"), _canonical_files_mappings())
+def test_the_canonical_file_scan_finds_a_mapping_for_every_write_tool() -> None:
+    """A mapping renamed away from ``*_SKILL_FILES`` would drop out of the
+    existence check below without failing it."""
+    mapped = {tool for tool, _, _ in _canonical_files_mappings()}
+    assert mapped == {tool for _, tool in WRITE_TOOLS}
+
+
+@pytest.mark.parametrize(
+    ("mapping_name", "file_ref"),
+    [(name, ref) for _, name, ref in _canonical_files_mappings()],
+)
 def test_every_canonical_skill_file_exists(mapping_name: str, file_ref: str) -> None:
     """Every per-tool canonical skill file must exist in the real submodule.
 
@@ -447,7 +444,7 @@ def test_every_canonical_skill_file_exists(mapping_name: str, file_ref: str) -> 
     vendor submodule would otherwise produce silent empty ``skill_content``
     for the affected write tool with no test signal.
     """
-    skills_dir = _require_vendored_skills()
+    skills_dir = require_vendored_skills()
     result = skill_loader.resolve_skill_files(
         skills_dir, "home-assistant-best-practices", [file_ref]
     )
@@ -519,7 +516,7 @@ def test_trigger_warning_embeds_its_subsections(
     at least one of them, and together they stay smaller than the
     ``#trigger-types`` chapter, which contains every trigger subsection.
     """
-    skills_dir = _require_vendored_skills()
+    skills_dir = require_vendored_skills()
     warnings = check_automation_config({"trigger": [trigger]})
     assert len(warnings) == 1, warnings
     refs = sorted(warnings.referenced_files)
@@ -539,7 +536,7 @@ def test_condition_template_warning_embeds_every_native_it_names() -> None:
     the sections it embeds show the syntax of each, and each section shows
     at least one of them.
     """
-    skills_dir = _require_vendored_skills()
+    skills_dir = require_vendored_skills()
     warnings = check_automation_config({"condition": [_GENERIC_TEMPLATE_CONDITION]})
     assert len(warnings) == 1, warnings
     refs = sorted(warnings.referenced_files)

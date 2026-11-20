@@ -1,111 +1,65 @@
-"""Unit tests for ``tests/src/e2e/utilities/component_services.py``.
+"""Exercise the E2E cleanup helpers against the real File & YAML Tools entry."""
 
-The E2E cleanup steps reset the component settings through these helpers and
-discard the response, so a failed reset only fails the test if the helper
-raises. The services report a rejected caller with HTTP 200 and
-``success: false``, which no status check catches. The request checks pin the
-service name, the admin token and the body keys the component reads.
-
-No Docker and no HA instance: HTTP goes to an ``httpx.MockTransport``.
-"""
-
-from __future__ import annotations
-
-import json
-from typing import Any
-
-import httpx
 import pytest
+from homeassistant.core import HomeAssistant
 
+from ha_mcp.client.rest_client import HomeAssistantClient
 from tests.src.e2e.utilities import component_services
-from tests.test_constants import TEST_TOKEN
+
+from ._core_setup import set_up_tools_entry
 
 
-def _serve(
-    monkeypatch: pytest.MonkeyPatch, status: int, body: dict[str, Any]
-) -> list[httpx.Request]:
-    real_client = httpx.AsyncClient
-    requests: list[httpx.Request] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(status, json=body)
-
-    def client(**kwargs: Any) -> httpx.AsyncClient:
-        return real_client(transport=httpx.MockTransport(respond), **kwargs)
-
-    monkeypatch.setattr(component_services.httpx, "AsyncClient", client)
-    return requests
+@pytest.fixture(autouse=True)
+def admin_token(hass_access_token: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(component_services, "TEST_TOKEN", hass_access_token)
 
 
-def _assert_admin_service_request(
-    request: httpx.Request, service: str, data: dict[str, Any]
+@pytest.mark.parametrize(
+    ("setter", "getter", "field", "values"),
+    [
+        (
+            component_services.set_allowed_paths,
+            "get_allowed_paths",
+            "paths",
+            ["pyscript"],
+        ),
+        (
+            component_services.set_extra_yaml_keys,
+            "get_extra_yaml_keys",
+            "keys",
+            ["test_key"],
+        ),
+    ],
+)
+async def test_a_successful_reset_updates_the_component(
+    hass: HomeAssistant, core_client: HomeAssistantClient, setter, getter, field, values
 ) -> None:
-    assert request.method == "POST"
-    assert request.url.path == f"/api/services/ha_mcp_tools/{service}"
-    assert "return_response" in request.url.params
-    assert request.headers["Authorization"] == f"Bearer {TEST_TOKEN}"
-    assert json.loads(request.content) == data
-
-
-@pytest.mark.parametrize(
-    ("call", "service", "data"),
-    [
-        pytest.param(
-            lambda: component_services.set_allowed_paths("http://ha", "t", ["/a"]),
-            "set_allowed_paths",
-            {"_ha_mcp_token": "t", "paths": ["/a"]},
-            id="set_allowed_paths",
-        ),
-        pytest.param(
-            lambda: component_services.set_extra_yaml_keys("http://ha", "t", ["k"]),
-            "set_extra_yaml_keys",
-            {"_ha_mcp_token": "t", "keys": ["k"]},
-            id="set_extra_yaml_keys",
-        ),
-    ],
-)
-async def test_a_successful_reset_calls_the_service_and_returns_its_response(
-    monkeypatch, call, service, data
-):
-    response = {"success": True}
-    requests = _serve(monkeypatch, 200, {"service_response": response})
-
-    assert await call() == response
-    [request] = requests
-    _assert_admin_service_request(request, service, data)
-
-
-@pytest.mark.parametrize(
-    ("status", "body"),
-    [
-        pytest.param(
-            200,
-            {"service_response": {"success": False, "error_code": "unauthorized"}},
-            id="success-false",
-        ),
-        pytest.param(400, {"message": "Service not found"}, id="http-error"),
-    ],
-)
-async def test_a_failed_reset_raises(monkeypatch, status, body):
-    _serve(monkeypatch, status, body)
-
-    with pytest.raises(AssertionError, match="set_extra_yaml_keys failed"):
-        await component_services.set_extra_yaml_keys("http://ha", "t", [])
-
-
-async def test_bootstrap_returns_the_caller_token(monkeypatch):
-    requests = _serve(
-        monkeypatch, 200, {"service_response": {"success": True, "token": "abc"}}
+    await set_up_tools_entry(hass)
+    url = core_client.base_url
+    token = await component_services.bootstrap_caller_token(url)
+    assert token
+    result = await setter(url, token, values)
+    assert result["success"] is True
+    response = await component_services.post_service(
+        url, core_client.token, getter, {"_ha_mcp_token": token}
     )
-
-    assert await component_services.bootstrap_caller_token("http://ha") == "abc"
-    [request] = requests
-    _assert_admin_service_request(request, "get_caller_token", {})
+    assert response.json()["service_response"][field] == values
 
 
-async def test_bootstrap_without_a_token_raises_naming_the_service(monkeypatch):
-    _serve(monkeypatch, 200, {"service_response": {"success": True}})
+@pytest.mark.parametrize("installed", [True, False])
+async def test_a_failed_reset_raises(
+    hass: HomeAssistant, core_client: HomeAssistantClient, installed: bool
+) -> None:
+    if installed:
+        await set_up_tools_entry(hass)
+    with pytest.raises(AssertionError, match="set_extra_yaml_keys failed"):
+        await component_services.set_extra_yaml_keys(
+            core_client.base_url, "invalid", []
+        )
 
-    with pytest.raises(AssertionError, match="get_caller_token"):
-        await component_services.bootstrap_caller_token("http://ha")
+
+async def test_bootstrap_names_the_missing_service(
+    core_client: HomeAssistantClient,
+) -> None:
+    with pytest.raises(AssertionError, match="get_caller_token failed"):
+        await component_services.bootstrap_caller_token(core_client.base_url)

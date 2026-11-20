@@ -143,6 +143,23 @@ async def _device_registry_rows(client: Any, entry_id: str) -> list[dict[str, An
     )
 
 
+def _row_entry_ids(row: dict[str, Any]) -> set[str]:
+    """The config entry a device row belongs to: ``config_entry_id``, and the
+    ``config_entries`` list Home Assistant still sends beside it."""
+    entries = [row.get("config_entry_id"), *(row.get("config_entries") or [])]
+    return {item for item in entries if isinstance(item, str)}
+
+
+def _device_id_pairs(row: dict[str, Any]) -> set[tuple[str, ...]]:
+    """A device row's connections and identifiers, as comparable pairs."""
+    return {
+        tuple(str(part) for part in pair)
+        for key in ("connections", "identifiers")
+        for pair in row.get(key) or []
+        if isinstance(pair, (list, tuple))
+    }
+
+
 async def _collect_reconfigure_identity(
     client: Any, entry_id: str
 ) -> ReconfigureIdentity:
@@ -159,19 +176,19 @@ async def _collect_reconfigure_identity(
     matching_device_rows = [
         row
         for row in device_rows
-        if row.get("id") in device_ids or entry_id in (row.get("config_entries") or [])
+        if row.get("id") in device_ids or entry_id in _row_entry_ids(row)
     ]
     device_ids |= {
         row["id"] for row in matching_device_rows if isinstance(row.get("id"), str)
     }
-    # Which other config entries share this entry's devices. HA maintains
-    # ``DeviceEntry.config_entries`` as the set of entries that contributed to
-    # the device, so it answers this without a second whole-registry scan.
+    # Which other config entries are on this entry's devices. Home Assistant
+    # gives each config entry its own device row, so the same physical device
+    # is every row that shares a connection or an identifier with this entry's.
+    own_ids = {pair for row in matching_device_rows for pair in _device_id_pairs(row)}
     related_entry_ids: set[str] = set()
-    for row in matching_device_rows:
-        related_entry_ids.update(
-            item for item in (row.get("config_entries") or []) if isinstance(item, str)
-        )
+    for row in device_rows:
+        if row in matching_device_rows or own_ids & _device_id_pairs(row):
+            related_entry_ids.update(_row_entry_ids(row))
 
     return ReconfigureIdentity(
         unique_id=entry_unique_id.value,

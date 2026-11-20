@@ -4,8 +4,7 @@
 
 - the filesystem under ``/config``, ``/data`` and ``/opt``, redirected under
   the test's ``fs_root`` (the same ``/config`` the component reads);
-- the Supervisor, which has no test double, so its answers are typed in
-  (``Supervisor``);
+- the Supervisor, served over HTTP using its client models (``Supervisor``);
 - Home Assistant Core's REST API, reached through the Supervisor's
   ``/core/api`` proxy. ``connect_core`` routes those requests to the real
   ``hass`` over real HTTP, so every Core reply is Core's own.
@@ -26,6 +25,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
+from ipaddress import IPv4Address
 from pathlib import Path, PurePath
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -33,10 +33,14 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from aiohasupervisor.models import AddonState
+from aiohttp import web
 from homeassistant import loader
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import ClientSessionGenerator, WebSocketGenerator
+
+from tests.src.unit._tools_addons_core import app_info
 
 from ._proxy import state_path
 from ._variants import REPO_ROOT, Variant, load_start
@@ -60,8 +64,7 @@ def redirect(fs_root: Path, path: str | PurePath) -> Path:
 
 @dataclass
 class Supervisor:
-    """The Supervisor's answers, typed in: the Supervisor is not Core and has
-    no test double. An unknown path is a request the Supervisor refuses."""
+    """Supervisor HTTP responses built from its client models."""
 
     addons: list[dict[str, Any]] = field(default_factory=list)
     info: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -72,14 +75,29 @@ class Supervisor:
     gets: list[str] = field(default_factory=list)
     posts: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
+    @staticmethod
+    def model_fields(fields: dict[str, Any]) -> dict[str, Any]:
+        changes = fields.copy()
+        if "state" in changes:
+            changes["state"] = AddonState(changes["state"])
+        if "ip_address" in changes:
+            changes["ip_address"] = IPv4Address(changes["ip_address"])
+        return app_info(**changes)
+
     def get(self, path: str) -> dict[str, Any] | None:
         self.gets.append(path)
         if not self.reachable:
             return None
         if path == "/addons":
-            return {"addons": self.addons} if self.lists_addons else None
+            return (
+                {"addons": [self.model_fields(item) for item in self.addons]}
+                if self.lists_addons
+                else None
+            )
         slug = path.removeprefix("/addons/").removesuffix("/info")
-        return self.info.get(slug) if path.endswith("/info") else None
+        if not path.endswith("/info") or slug not in self.info:
+            return None
+        return self.model_fields({"slug": slug, **self.info[slug]})
 
     def get_text(self, path: str) -> str | None:
         self.gets.append(path)
@@ -88,6 +106,21 @@ class Supervisor:
     def post(self, path: str, data: dict[str, Any]) -> bool:
         self.posts.append((path, data))
         return self.accepts_options
+
+    async def serve(self, request: web.Request) -> web.Response:
+        path = "/" + request.match_info["path"]
+        if request.method == "POST":
+            accepted = self.post(path, await request.json())
+            return web.json_response({"result": "ok"}, status=200 if accepted else 503)
+        if request.headers.get("Accept") == "text/plain":
+            body = self.get_text(path)
+            return web.Response(
+                text=body or "", status=200 if body is not None else 404
+            )
+        data = self.get(path)
+        return web.json_response(
+            {"result": "ok", "data": data}, status=200 if data is not None else 503
+        )
 
 
 @dataclass
@@ -163,6 +196,7 @@ class App:
     signals: Signals
     clock: Clock
     restarts_awaited: int = 0
+    restart_outage: bool = False
     on_restart: Callable[[], None] | None = None
     # (level, message) of every line start.py logged. start.py prints from
     # main()'s thread while Core's runs, and pytest's capture buffer is not
@@ -222,6 +256,9 @@ def _recording(
     def record(message: str) -> None:
         app.logged.append((level, message))
         log(message)
+        if message == "Waiting for Home Assistant to restart...":
+            app.wait_for_ha_restart()
+            app.restart_outage = True
 
     return record
 
@@ -256,10 +293,6 @@ def make_app(
     for name, value in list(vars(start).items()):
         if isinstance(value, Path) and str(value).startswith(START_ROOTS):
             monkeypatch.setattr(start, name, redirect(fs_root, value))
-    monkeypatch.setattr(start, "_supervisor_get", app.supervisor.get)
-    monkeypatch.setattr(start, "_supervisor_get_text", app.supervisor.get_text)
-    monkeypatch.setattr(start, "_supervisor_post", app.supervisor.post)
-    monkeypatch.setattr(start, "_wait_for_ha_restart", app.wait_for_ha_restart)
     monkeypatch.setattr(start, "time", app.clock.module())
     monkeypatch.setattr(start, "signal", signals.module())
     for level, name in (
@@ -290,6 +323,7 @@ class CoreLink:
     base_url: str
     requests: list[tuple[str, str]] = field(default_factory=list)
     on_request: Callable[[str, str], None] | None = None
+    oauth_available: Callable[[], bool] = lambda: True
 
     def send(self, request: urllib.request.Request, timeout: float) -> Any:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -349,18 +383,39 @@ async def connect_core(
     # router, so an integration set up after boot (as the app's config flow
     # does) can still bind views. The test server does not run start().
     monkeypatch.setattr(hass.http.app.router, "freeze", lambda: None)
+    hass.http.app.router.add_route(
+        "*", "/test-supervisor/{path:.*}", app.supervisor.serve
+    )
     server = await hass_client()
     link = CoreLink(base_url=str(server.make_url("")).rstrip("/"))
 
     def urlopen(request: urllib.request.Request, timeout: float) -> Any:
         url = request.full_url
-        assert url.startswith(CORE_API), f"unexpected Supervisor request {url}"
+        assert url.startswith("http://supervisor/"), (
+            f"unexpected Supervisor request {url}"
+        )
+        if not url.startswith(CORE_API):
+            routed = urllib.request.Request(
+                link.base_url
+                + "/test-supervisor"
+                + url.removeprefix("http://supervisor"),
+                data=request.data,
+                headers=dict(request.header_items()),
+                method=request.get_method(),
+            )
+            return link.send(routed, timeout)
         path = url.removeprefix(CORE_API)
         link.requests.append((request.get_method(), path))
         if link.on_request is not None:
             link.on_request(request.get_method(), path)
+        if app.restart_outage and path == "/config/config_entries/entry":
+            app.restart_outage = False
+            raise urllib.error.URLError("Core connection dropped during restart")
+        routed_path = path
+        if path.endswith("/oauth/authorization-server") and not link.oauth_available():
+            routed_path = "/test-missing-oauth-route"
         routed = urllib.request.Request(
-            f"{link.base_url}/api{path}",
+            f"{link.base_url}/api{routed_path}",
             data=request.data,
             headers=dict(request.header_items()),
             method=request.get_method(),

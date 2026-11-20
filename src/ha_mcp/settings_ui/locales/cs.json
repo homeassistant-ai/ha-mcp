@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Cesta k uloženým nástrojům",
     "advanced.code_mode_saved_tools_path.help": "Soubor JSON používaný k uchování vlastních nástrojů napříč restarty.",
     "advanced.extra_yaml_write_keys.label": "Další klíče pro zápis YAML",
-    "advanced.extra_yaml_write_keys.help": "Další klíče nejvyšší úrovně, které může ha_config_set_yaml zapisovat kromě vestavěných, pro integrace primárně využívající YAML na této instalaci (např. alert2). Zadejte jeden klíč na řádek nebo oddělte klíče čárkami. Klíče, které mění vlastní hranici důvěry Home Assistant, nelze nikdy přidat a jsou ignorovány. Vyžaduje vlastní komponentu (custom component) 1.2.4 nebo novější.",
+    "advanced.extra_yaml_write_keys.help": "Další klíče nejvyšší úrovně, které může ha_config_set_yaml zapisovat kromě vestavěných, pro integrace konfigurované primárně přes YAML na této instalaci (např. alert2). Zadejte jeden klíč na řádek nebo oddělte klíče čárkami. Klíče, které mění vlastní hranici důvěry Home Assistant, nelze nikdy přidat a budou ignorovány.",
     "advanced.redact_app_option_keys.label": "Další klíče možností aplikace k utajení",
     "advanced.redact_app_option_keys.help": "Názvy možností aplikace (doplňku), které se mají utajit podobně jako pole pro hesla, pro aplikace, jejichž schéma ukládá tajný údaj jako prostý text (například backup_password). Názvy oddělte čárkami nebo novými řádky. Název platí pro každou aplikaci; zápisem app_slug:name jej omezíte na jednu aplikaci. Pojmenování skupiny možností zahrnuje každou možnost v ní. Používá se pouze tehdy, když je zapnuto Skrýt tajné údaje. Ve výchozím nastavení prázdné.",
     "advanced.sidecar_pin_port.label": "Port sidecaru uživatelského rozhraní nastavení",
@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Vypsat patra a oblasti",
-      "description": "Vypsat patra seřazená vzestupně podle úrovně, každé s vnořenými přiřazenými oblastmi, plus oblasti bez patra."
+      "description": "Vypíše patra v pořadí, v jakém je uchovává Home Assistant, každé s vnořenými přiřazenými oblastmi a plus oblasti bez patra."
     },
     "ha_list_services": {
       "title": "Vypsat dostupné služby",
@@ -870,8 +870,8 @@
       "description": "Hledat entity (světla, senzory, vypínače, klima atd.) podle názvu, domény nebo oblasti — A uvnitř automatizace/skriptu/ů"
     },
     "ha_set_area_or_floor": {
-      "title": "Vytvořit nebo aktualizovat oblast nebo patro",
-      "description": "Vytvořit nebo aktualizovat oblast nebo patro Home Assistant."
+      "title": "Vytvořit, aktualizovat nebo změnit uspořádání oblastí nebo pater",
+      "description": "Vytvořte, aktualizujte nebo změňte uspořádání oblastí nebo pater v Home Assistant."
     },
     "ha_set_device": {
       "title": "Nastavit zařízení",

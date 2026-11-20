@@ -2,25 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import platform
 import sys
+from types import SimpleNamespace
 from typing import Any
 
-import httpx
 import pytest
 
 from ha_mcp import update_check
 from ha_mcp.update_check import (
-    PyPIRelease,
     UpdateInfo,
-    _is_newer,
     get_update_info,
     update_command_hint,
 )
 
-
-def _no_network(package: str) -> PyPIRelease | None:
-    raise AssertionError("_fetch_latest_from_pypi should not be called on this path")
+from ._core_client import refused_url
+from ._tools_addons_core import Supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
+from ._update_check_sources import PyPI, app_store
+from ._update_check_sources import pypi as pypi
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +35,15 @@ def _isolate(monkeypatch: pytest.MonkeyPatch):
     ``SUPERVISOR_TOKEN`` is cleared so the default path is non-add-on (PyPI);
     add-on tests set it explicitly.
     """
+    # Runtime simulations belong to update_check, not aiohttp/pytest or
+    # other threads sharing the interpreter. Keep real argv and environ.
+    # Copies of the whole modules, so a name update_check starts using is there.
+    monkeypatch.setattr(update_check, "sys", SimpleNamespace(**vars(sys)))
+    monkeypatch.setattr(
+        update_check,
+        "os",
+        SimpleNamespace(**{**vars(os), "path": SimpleNamespace(**vars(os.path))}),
+    )
     monkeypatch.delenv(update_check.DISABLE_ENV, raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0")
@@ -59,29 +71,57 @@ class TestVersionCompare:
             ("7.9.0.dev1", "7.8.0", True),  # next minor's dev > prior final
         ],
     )
-    def test_is_newer(self, latest: str, current: str, expected: bool) -> None:
-        assert _is_newer(latest, current) is expected
+    async def test_is_newer(
+        self, monkeypatch, pypi: PyPI, latest: str, current: str, expected: bool
+    ) -> None:
+        monkeypatch.setattr(update_check, "get_version", lambda: current)
+        package = "ha-mcp-dev" if ".dev" in current else "ha-mcp"
+        pypi.publish(package, latest)
+        info = await asyncio.to_thread(get_update_info)
+        assert info is not None
+        assert info.update_available is expected
 
     @pytest.mark.parametrize("bad", ["unknown", "garbage", "7.x", ""])
-    def test_unparseable_is_never_newer(self, bad: str) -> None:
-        assert _is_newer(bad, "7.8.0") is False
-        assert _is_newer("7.8.0", bad) is False
+    async def test_unparseable_is_never_newer(self, pypi: PyPI, bad: str) -> None:
+        pypi.publish("ha-mcp", bad)
+        info = await asyncio.to_thread(get_update_info)
+        assert info == UpdateInfo("7.8.0", bad, False)
+        assert pypi.asked == ["ha-mcp"]
+
+    @pytest.mark.parametrize("current", ["unknown", "garbage", "7.x", ""])
+    async def test_unparseable_current_version_is_never_newer(
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI, current: str
+    ) -> None:
+        monkeypatch.setattr(update_check, "get_version", lambda: current)
+        pypi.publish("ha-mcp", "7.9.0")
+        info = await asyncio.to_thread(get_update_info)
+        if current == "unknown":
+            # No version to compare against: PyPI is not asked at all.
+            assert info is None
+            assert pypi.asked == []
+        else:
+            assert info == UpdateInfo(current, "7.9.0", False)
+            assert pypi.asked == ["ha-mcp"]
 
 
 class TestGetUpdateInfoGating:
     """No-op (no network) for the excluded cases."""
 
-    def test_disabled_env_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_disabled_env_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
+    ) -> None:
         monkeypatch.setenv(update_check.DISABLE_ENV, "1")
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", _no_network)
-        assert get_update_info() is None
+        pypi.publish("ha-mcp", "7.9.0")
+        assert await asyncio.to_thread(get_update_info) is None
+        assert pypi.asked == []
 
-    def test_unknown_version_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_unknown_version_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
     ) -> None:
         monkeypatch.setattr(update_check, "get_version", lambda: "unknown")
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", _no_network)
-        assert get_update_info() is None
+        pypi.publish("ha-mcp", "7.9.0")
+        assert await asyncio.to_thread(get_update_info) is None
+        assert pypi.asked == []
 
     @pytest.mark.parametrize(
         "val,enabled",
@@ -98,90 +138,72 @@ class TestGetUpdateInfoGating:
             ("   ", True),
         ],
     )
-    def test_disable_env_parses_falsy_values(
-        self, monkeypatch: pytest.MonkeyPatch, val: str, enabled: bool
+    async def test_disable_env_parses_falsy_values(
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI, val: str, enabled: bool
     ) -> None:
         """HA_MCP_DISABLE_UPDATE_CHECK=0/false/no/off (or blank) keeps the check
         ENABLED — only truthy values disable it, so a user setting =0/=false to
         'keep it on' isn't surprised."""
         monkeypatch.setenv(update_check.DISABLE_ENV, val)
-        monkeypatch.setattr(
-            update_check, "_fetch_latest_from_pypi", lambda _p: PyPIRelease("7.9.0")
-        )
-        result = get_update_info()
+        pypi.publish("ha-mcp", "7.9.0")
+        result = await asyncio.to_thread(get_update_info)
         if enabled:
             assert result is not None  # the check ran
         else:
             assert result is None  # disabled
+            assert pypi.asked == []
 
-    def test_addon_sources_from_supervisor_not_pypi(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_addon_sources_from_supervisor_not_pypi(
+        self, monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor, pypi: PyPI
     ) -> None:
         """In the add-on the check reads the Supervisor add-on store, never PyPI
         (whose counter is unrelated to the add-on's own version)."""
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", _no_network)
-        monkeypatch.setattr(
-            update_check,
-            "_fetch_supervisor_addon_info",
-            lambda: {
-                "version": "7.8.0.dev443",
-                "version_latest": "7.8.0.dev450",
-                "update_available": True,
-            },
+        app_store(
+            monkeypatch,
+            supervisor,
+            installed="7.8.0.dev443",
+            latest="7.8.0.dev450",
+            update_available=True,
         )
-        info = get_update_info()
+        info = await asyncio.to_thread(get_update_info)
         assert info == UpdateInfo("7.8.0.dev443", "7.8.0.dev450", True)
+        assert pypi.asked == []
 
 
 class TestGetUpdateInfoChannels:
     """Stable vs dev: each channel compares against its own PyPI package."""
 
-    def test_stable_install_queries_ha_mcp_and_reports_update(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_stable_install_queries_ha_mcp_and_reports_update(
+        self, pypi: PyPI
     ) -> None:
-        captured: dict[str, str] = {}
-
-        def fetch(package: str) -> PyPIRelease | None:
-            captured["package"] = package
-            return PyPIRelease("7.9.0")
-
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", fetch)
-        info = get_update_info()
-        assert captured["package"] == "ha-mcp"
+        pypi.publish("ha-mcp", "7.9.0")
+        info = await asyncio.to_thread(get_update_info)
+        assert pypi.asked == ["ha-mcp"]
         assert info == UpdateInfo("7.8.0", "7.9.0", True)
 
-    def test_dev_install_queries_ha_mcp_dev_and_reports_update(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_dev_install_queries_ha_mcp_dev_and_reports_update(
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
     ) -> None:
         """Dev parity: a ``.dev`` install compares against the ``ha-mcp-dev``
         package and surfaces newer dev builds (matching the add-on dev channel)."""
-        captured: dict[str, str] = {}
-
-        def fetch(package: str) -> PyPIRelease | None:
-            captured["package"] = package
-            return PyPIRelease("7.8.0.dev720")
-
+        pypi.publish("ha-mcp-dev", "7.8.0.dev720")
         monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0.dev714")
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", fetch)
         get_update_info.cache_clear()
-        info = get_update_info()
-        assert captured["package"] == "ha-mcp-dev"
+        info = await asyncio.to_thread(get_update_info)
+        assert pypi.asked == ["ha-mcp-dev"]
         assert info == UpdateInfo("7.8.0.dev714", "7.8.0.dev720", True)
 
-    def test_up_to_date_reports_not_available(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            update_check, "_fetch_latest_from_pypi", lambda _p: PyPIRelease("7.8.0")
-        )
-        info = get_update_info()
+    async def test_up_to_date_reports_not_available(self, pypi: PyPI) -> None:
+        pypi.publish("ha-mcp", "7.8.0")
+        info = await asyncio.to_thread(get_update_info)
         assert info is not None and info.update_available is False
 
     def test_network_failure_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, socket_enabled: None
     ) -> None:
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", lambda _p: None)
+        monkeypatch.setattr(
+            update_check, "PYPI_JSON_URL", refused_url() + "/pypi/{package}/json"
+        )
         assert get_update_info() is None
 
     def test_never_raises_on_unexpected_error(
@@ -202,204 +224,102 @@ class TestAddonSupervisorSource:
     """In the add-on (stable OR dev), the update reference is the Supervisor
     add-on store (same counter as the installed add-on), not PyPI."""
 
-    def test_dev_addon_update_from_supervisor(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_dev_addon_update_from_supervisor(
+        self, monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor, pypi: PyPI
     ) -> None:
         """Dev add-on gets a real 'you're on X, Y is out' from the store."""
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
         monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0.dev443")
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", _no_network)
-        monkeypatch.setattr(
-            update_check,
-            "_fetch_supervisor_addon_info",
-            lambda: {
-                "version": "7.8.0.dev443",
-                "version_latest": "7.8.0.dev450",
-                "update_available": True,
-            },
+        app_store(
+            monkeypatch,
+            supervisor,
+            installed="7.8.0.dev443",
+            latest="7.8.0.dev450",
+            update_available=True,
         )
-        info = get_update_info()
+        info = await asyncio.to_thread(get_update_info)
         assert info == UpdateInfo("7.8.0.dev443", "7.8.0.dev450", True)
+        assert pypi.asked == []
 
-    def test_addon_up_to_date(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", _no_network)
-        monkeypatch.setattr(
-            update_check,
-            "_fetch_supervisor_addon_info",
-            lambda: {
-                "version": "7.8.1",
-                "version_latest": "7.8.1",
-                "update_available": False,
-            },
+    async def test_addon_up_to_date(
+        self, monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor, pypi: PyPI
+    ) -> None:
+        app_store(
+            monkeypatch,
+            supervisor,
+            installed="7.8.1",
+            latest="7.8.1",
+            update_available=False,
         )
-        info = get_update_info()
+        info = await asyncio.to_thread(get_update_info)
         assert info is not None and info.update_available is False
+        assert pypi.asked == []
 
     def test_addon_supervisor_unreachable_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, socket_enabled: None
     ) -> None:
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
         monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
-        monkeypatch.setattr(update_check, "_fetch_supervisor_addon_info", lambda: None)
+        monkeypatch.setenv("SUPERVISOR_BASE_URL", refused_url())
         assert get_update_info() is None
 
-    def test_addon_disable_env_short_circuits(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_addon_disable_env_short_circuits(
+        self, monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor, pypi: PyPI
     ) -> None:
         """The opt-out is honored before any add-on source is consulted."""
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
+        app_store(
+            monkeypatch,
+            supervisor,
+            installed="7.8.0",
+            latest="7.9.0",
+            update_available=True,
+        )
         monkeypatch.setenv(update_check.DISABLE_ENV, "1")
 
-        def boom() -> dict | None:
-            raise AssertionError("disabled check must not consult Supervisor")
+        assert await asyncio.to_thread(get_update_info) is None
+        assert supervisor.requests == []
+        assert pypi.asked == []
 
-        monkeypatch.setattr(update_check, "_fetch_supervisor_addon_info", boom)
-        assert get_update_info() is None
-
-    def test_dev_non_addon_still_uses_pypi(
-        self, monkeypatch: pytest.MonkeyPatch
+    async def test_dev_non_addon_still_uses_pypi(
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
     ) -> None:
         """Docker :dev / pip ha-mcp-dev (a .dev version, NO add-on token) IS a real
         PyPI version, so it stays on the PyPI path against ha-mcp-dev."""
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0.dev443")
-        monkeypatch.setattr(
-            update_check,
-            "_fetch_latest_from_pypi",
-            lambda _p: PyPIRelease("7.8.0.dev500"),
-        )
-        info = get_update_info()
+        pypi.publish("ha-mcp-dev", "7.8.0.dev500")
+        info = await asyncio.to_thread(get_update_info)
         assert info is not None and info.update_available is True
-
-
-class TestFetchSupervisorAddonInfo:
-    """The Supervisor /addons/self/info fetch: envelope handling + fail-silent."""
-
-    def test_unwraps_data_envelope(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
-
-        class FakeResp:
-            def raise_for_status(self) -> None:
-                pass
-
-            def json(self) -> dict:
-                return {
-                    "result": "ok",
-                    "data": {
-                        "version": "1",
-                        "version_latest": "2",
-                        "update_available": True,
-                    },
-                }
-
-        monkeypatch.setattr(update_check.httpx, "get", lambda *a, **k: FakeResp())
-        assert update_check._fetch_supervisor_addon_info() == {
-            "version": "1",
-            "version_latest": "2",
-            "update_available": True,
-        }
-
-    def test_no_token_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        assert update_check._fetch_supervisor_addon_info() is None
-
-    def test_http_error_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
-
-        def boom(*a: object, **k: object) -> object:
-            raise httpx.ConnectError("no supervisor")
-
-        monkeypatch.setattr(update_check.httpx, "get", boom)
-        assert update_check._fetch_supervisor_addon_info() is None
+        assert pypi.asked == ["ha-mcp-dev"]
 
 
 class TestInMemoryMemo:
     """The check runs once per process (memoized), not on every call."""
 
-    def test_memoized_until_cleared(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        calls: list[str] = []
-
-        def fetch(package: str) -> PyPIRelease | None:
-            calls.append(package)
-            return PyPIRelease("7.9.0")
-
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", fetch)
-        get_update_info()
-        get_update_info()
-        assert len(calls) == 1  # second call reused the in-memory result
+    async def test_memoized_until_cleared(self, pypi: PyPI) -> None:
+        pypi.publish("ha-mcp", "7.9.0")
+        await asyncio.to_thread(get_update_info)
+        await asyncio.to_thread(get_update_info)
+        assert len(pypi.asked) == 1  # second call reused the in-memory result
         get_update_info.cache_clear()
-        get_update_info()
-        assert len(calls) == 2  # re-checked after cache_clear
+        await asyncio.to_thread(get_update_info)
+        assert len(pypi.asked) == 2  # re-checked after cache_clear
 
 
 class TestFetchLatestFromPypi:
-    """The PyPI fetch itself — correct package URL, fail-silent on any error."""
+    async def test_malformed_payload_returns_none(self, pypi: PyPI) -> None:
+        pypi.releases["ha-mcp"] = {}
+        assert await asyncio.to_thread(get_update_info) is None
 
-    def test_parses_info_version_for_package(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        seen: dict[str, str] = {}
-
-        class FakeResp:
-            def raise_for_status(self) -> None:
-                pass
-
-            def json(self) -> dict:
-                return {"info": {"version": "7.8.0.dev720"}}
-
-        def fake_get(url: str, **kwargs: object) -> FakeResp:
-            seen["url"] = url
-            return FakeResp()
-
-        monkeypatch.setattr(update_check.httpx, "get", fake_get)
-        assert update_check._fetch_latest_from_pypi("ha-mcp-dev") == PyPIRelease(
-            "7.8.0.dev720"
-        )
-        assert seen["url"] == "https://pypi.org/pypi/ha-mcp-dev/json"
-
-    def test_http_error_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def boom(*a: object, **k: object) -> object:
-            raise httpx.ConnectError("no network")
-
-        monkeypatch.setattr(update_check.httpx, "get", boom)
-        assert update_check._fetch_latest_from_pypi("ha-mcp") is None
-
-    def test_malformed_payload_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        class FakeResp:
-            def raise_for_status(self) -> None:
-                pass
-
-            def json(self) -> dict:
-                return {"info": {}}  # missing "version" -> KeyError -> None
-
-        monkeypatch.setattr(update_check.httpx, "get", lambda *a, **k: FakeResp())
-        assert update_check._fetch_latest_from_pypi("ha-mcp") is None
-
-    def test_fetch_reads_requires_python(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        class FakeResp:
-            def raise_for_status(self) -> None:
-                pass
-
-            def json(self) -> dict:
-                return {"info": {"version": "9.2.0", "requires_python": ">=3.14"}}
-
-        monkeypatch.setattr(update_check.httpx, "get", lambda *a, **k: FakeResp())
-        assert update_check._fetch_latest_from_pypi("ha-mcp") == PyPIRelease(
-            "9.2.0", ">=3.14"
-        )
+    async def test_http_error_returns_none(self, pypi: PyPI) -> None:
+        assert await asyncio.to_thread(get_update_info) is None
+        assert pypi.asked == ["ha-mcp"]
 
 
 class TestGetUpdateField:
     """The async tool-facing helper: shapes the dict and never raises."""
 
-    async def test_returns_dict_when_update_available(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            update_check, "_fetch_latest_from_pypi", lambda _p: PyPIRelease("7.9.0")
-        )
+    async def test_returns_dict_when_update_available(self, pypi: PyPI) -> None:
+        pypi.publish("ha-mcp", "7.9.0")
         field = await update_check.get_update_field()
         assert field == {
             "current": "7.8.0",
@@ -429,16 +349,14 @@ class TestGetUpdateField:
         assert await update_check.get_update_field() is None
 
     async def test_warm_cache_skips_thread_offload(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
     ) -> None:
         """Once the memo is warm (currsize > 0 — the common post-startup case),
         get_update_field calls get_update_info directly and must NOT offload to a
         thread (only the cold first call does)."""
-        monkeypatch.setattr(
-            update_check, "_fetch_latest_from_pypi", lambda _p: PyPIRelease("7.9.0")
-        )
+        pypi.publish("ha-mcp", "7.9.0")
         # Prime the memo so the warm branch is the one exercised below.
-        assert update_check.get_update_info() is not None
+        assert await asyncio.to_thread(update_check.get_update_info) is not None
         assert update_check.get_update_info.cache_info().currsize == 1
 
         offloaded = False
@@ -462,19 +380,23 @@ class TestUpdateCommandHint:
     """Deployment- and channel-aware upgrade hint."""
 
     def test_stable_pip_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(update_check, "_running_in_docker", lambda: False)
+        monkeypatch.setattr(update_check.os.path, "exists", lambda path: False)
         assert update_command_hint("7.9.0") == "Upgrade with: pip install -U ha-mcp."
 
     def test_dev_pip_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(update_check, "_running_in_docker", lambda: False)
+        monkeypatch.setattr(update_check.os.path, "exists", lambda path: False)
         assert "pip install -U ha-mcp-dev" in update_command_hint("7.8.0.dev720")
 
     def test_stable_docker_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(update_check, "_running_in_docker", lambda: True)
+        monkeypatch.setattr(
+            update_check.os.path, "exists", lambda path: path == "/.dockerenv"
+        )
         assert "ha-mcp:stable" in update_command_hint("7.9.0")
 
     def test_dev_docker_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(update_check, "_running_in_docker", lambda: True)
+        monkeypatch.setattr(
+            update_check.os.path, "exists", lambda path: path == "/.dockerenv"
+        )
         assert "ha-mcp:dev" in update_command_hint("7.8.0.dev720")
 
     def test_addon_hint_points_to_supervisor_ui(
@@ -506,17 +428,13 @@ class TestReleaseNeedsNewerPython:
 
     @pytest.fixture(autouse=True)
     def _pip_install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(update_check, "_running_in_docker", lambda: False)
-        monkeypatch.setattr(update_check, "_running_python", lambda: "3.13.7")
+        monkeypatch.setattr(update_check.os.path, "exists", lambda path: False)
+        monkeypatch.setattr(update_check.sys, "version_info", (3, 13, 7, "final", 0))
 
     async def test_status_field_names_the_python_and_the_command(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, pypi: PyPI
     ) -> None:
-        monkeypatch.setattr(
-            update_check,
-            "_fetch_latest_from_pypi",
-            lambda _p: PyPIRelease("9.2.0", ">=3.14,<3.15"),
-        )
+        pypi.publish("ha-mcp", "9.2.0", ">=3.14,<3.15")
         field = await update_check.get_update_field()
         assert field is not None
         assert field["python_required"] == "3.14"
@@ -535,7 +453,7 @@ class TestReleaseNeedsNewerPython:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """uvx runs the script named like the package: ha-mcp is stdio."""
-        monkeypatch.setattr(sys, "argv", ["/venv/bin/ha-mcp-web"])
+        monkeypatch.setattr(update_check.sys, "argv", ["/venv/bin/ha-mcp-web"])
         info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.14")
         hint = update_command_hint("9.1.2", info)
         assert "uvx --python 3.14 --from ha-mcp@latest ha-mcp-web" in hint
@@ -547,14 +465,8 @@ class TestReleaseNeedsNewerPython:
         hint = update_command_hint("9.2.0.dev3", info)
         assert "uvx --python 3.14 ha-mcp-dev@latest" in hint
 
-    async def test_supported_python_keeps_the_plain_notice(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            update_check,
-            "_fetch_latest_from_pypi",
-            lambda _p: PyPIRelease("9.2.0", ">=3.13"),
-        )
+    async def test_supported_python_keeps_the_plain_notice(self, pypi: PyPI) -> None:
+        pypi.publish("ha-mcp", "9.2.0", ">=3.13")
         field = await update_check.get_update_field()
         assert field == {
             "current": "7.8.0",
@@ -569,15 +481,11 @@ class TestReleaseNeedsNewerPython:
         )
 
     async def test_patch_level_floor_names_that_patch(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
     ) -> None:
         """3.14.1 is excluded by >=3.14.2; naming "3.14" would let uvx reuse it."""
-        monkeypatch.setattr(update_check, "_running_python", lambda: "3.14.1")
-        monkeypatch.setattr(
-            update_check,
-            "_fetch_latest_from_pypi",
-            lambda _p: PyPIRelease("9.2.0", ">=3.14.2"),
-        )
+        monkeypatch.setattr(update_check.sys, "version_info", (3, 14, 1, "final", 0))
+        pypi.publish("ha-mcp", "9.2.0", ">=3.14.2")
         field = await update_check.get_update_field()
         assert field is not None
         assert field["python_required"] == "3.14.2"
@@ -600,7 +508,9 @@ class TestReleaseNeedsNewerPython:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The new image ships its own Python; the pull is still the fix."""
-        monkeypatch.setattr(update_check, "_running_in_docker", lambda: True)
+        monkeypatch.setattr(
+            update_check.os.path, "exists", lambda path: path == "/.dockerenv"
+        )
         info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.14")
         assert update_check.required_python(info) is None
         assert "docker pull" in update_command_hint("9.1.2", info)
@@ -617,8 +527,10 @@ class TestReleaseNeedsNewerPython:
             ("not a spec", None),
         ],
     )
-    def test_python_floor(self, spec: str, floor: str | None) -> None:
-        assert update_check._python_floor(spec) == floor
+    def test_python_floor(self, monkeypatch, spec: str, floor: str | None) -> None:
+        monkeypatch.setattr(update_check.sys, "version_info", (2, 7, 0, "final", 0))
+        info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=spec)
+        assert update_check.required_python(info) == floor
 
 
 def test_local_build_version_suffix_is_not_read_as_excluded(
@@ -626,7 +538,7 @@ def test_local_build_version_suffix_is_not_read_as_excluded(
 ) -> None:
     """A CPython built from an untagged checkout reports "3.14.0+", which
     packaging reads as outside every specifier."""
-    monkeypatch.setattr(update_check, "_running_in_docker", lambda: False)
+    monkeypatch.setattr(update_check.os.path, "exists", lambda path: False)
     monkeypatch.setattr(platform, "python_version", lambda: "3.14.0+")
     major, minor = sys.version_info[:2]
     spec = f">={major}.{minor},<{major}.{minor + 1}"

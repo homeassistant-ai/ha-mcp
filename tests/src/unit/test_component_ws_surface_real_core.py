@@ -55,6 +55,7 @@ _GATED_COMMANDS: dict[str, dict[str, Any]] = {
     c.WS_SYSTEM_SNAPSHOT: {},
     c.WS_ENTITY_LOOKUP: {"unique_id": "x"},
     c.WS_REGISTRIES: {"registries": []},
+    c.WS_REGISTRY_FIELDS: {"registry": "area", "item_id": "x"},
     c.WS_CALL_EVENT: {"event_type": "probe_event"},
 }
 
@@ -118,8 +119,12 @@ async def test_every_command_is_registered_and_config_get_is_not(
         c.WS_TRACE_CONTEXT,
         c.WS_OAUTH_CALLBACKS,
         c.WS_OAUTH_CALLBACKS_UPDATE,
-        *helper_collections.COMMANDS,
-        *entity_restore.COMMANDS,
+        helper_collections.WS_HELPER_SCHEMAS,
+        helper_collections.WS_HELPER_ITEM,
+        helper_collections.WS_HELPER_WRITE,
+        helper_collections.WS_HELPERS_NAMED,
+        entity_restore.WS_ENTITY_ENTRY,
+        entity_restore.WS_ENTITY_RESTORE,
         core_contract.COMMAND,
         core_contract.INTEGRATION_COMMAND,
         "ha_mcp_tools/statistics_units",
@@ -153,8 +158,10 @@ async def test_an_admin_gets_a_result_from_every_command(
     params: dict[str, Any],
 ) -> None:
     # Every install has Core's homeassistant integration, whose exposed-entities
-    # store the exposure read uses.
+    # store the exposure read uses, and its config integration, whose registry
+    # commands the registry_fields read names the fields of.
     assert await async_setup_component(hass, "homeassistant", {})
+    assert await async_setup_component(hass, "config", {})
     result = await ws_result(component_ws, command, **params)
 
     assert isinstance(result, dict)
@@ -286,6 +293,9 @@ async def test_well_formed_parameters_are_accepted(
         (c.WS_REGISTRIES, {"registries": ["bogus"]}),
         (c.WS_REGISTRIES, {"registries": "area"}),
         (c.WS_REGISTRIES, {"registries": ["area"], "category_scopes": "automation"}),
+        (c.WS_REGISTRY_FIELDS, {}),
+        (c.WS_REGISTRY_FIELDS, {"registry": "zone", "item_id": "x"}),
+        (c.WS_REGISTRY_FIELDS, {"registry": "area", "item_id": 5}),
     ],
 )
 async def test_malformed_parameters_are_refused_before_the_handler(

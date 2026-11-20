@@ -6,17 +6,18 @@ carries no ``warnings`` key.
 
 ``ha_search`` runs on the server's own client against a real ``hass``. Without
 the component, Core answers its capability probe with ``unknown_command`` and
-the search takes the legacy route; a surface's failure is set up by replacing
-that surface, which is this repository's own method.
+the search takes the legacy route. Failures enter through the public search
+collaborators or a client request that times out; successful replies come from
+Core.
 """
 
 from __future__ import annotations
 
 import json
-from contextlib import AbstractContextManager
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -24,42 +25,39 @@ from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools import tools_search
-from ha_mcp.tools.search import legacy as search_legacy
+from ha_mcp.errors import ErrorCode, create_error_response
+from ha_mcp.tools.smart_search import SmartSearchTools
 
 from ._search_tool import _build_ha_search, _setup_visibility_disabled
 
 
-def _surface(name: str, replacement: AsyncMock) -> AbstractContextManager[AsyncMock]:
-    """Replace one ``ha_search`` surface of every ``SearchTools``."""
-    return patch.object(tools_search.SearchTools, name, replacement)
-
-
-async def test_branch_exception_without_a_message_reports_its_type(
+async def test_empty_config_timeout_keeps_entity_results_and_reports_its_cause(
+    hass: HomeAssistant,
     core_client: HomeAssistantClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``str(TimeoutError())`` is "", which used to yield ``"entities: "``.
-
-    The config surface answers, so the response is partial, not an error."""
+    """A message-less timeout is structured before the surface is gathered."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        search_legacy,
-        "_prefetch_shared_search_snapshots",
-        AsyncMock(return_value=(None, None)),
-    )
+    assert await async_setup_component(hass, "config", {})
+    hass.states.async_set("light.lamp", "on", {"friendly_name": "Lamp"})
 
     # A query alone runs both the entity and the config surface.
-    with (
-        _surface("_ha_search_entities", AsyncMock(side_effect=TimeoutError)),
-        _surface("_ha_deep_search", AsyncMock(return_value={"total_matches": 0})),
+    with patch.object(
+        SmartSearchTools, "deep_search", AsyncMock(side_effect=TimeoutError)
     ):
         response = await _build_ha_search(core_client)(query="lamp")
 
     assert response["partial"] is True
-    assert response["errors"] == [{"surface": "entities", "error": "TimeoutError"}]
-    assert response["partial_reason"] == "entities: TimeoutError"
+    assert [entity["entity_id"] for entity in response["entities"]] == ["light.lamp"]
+    assert len(response["errors"]) == 1
+    failure = response["errors"][0]
+    assert failure["surface"] == "configs"
+    payload = json.loads(failure["error"])
+    assert payload["success"] is False
+    assert payload["error"]["code"] == "TIMEOUT_OPERATION"
+    assert payload["error"]["message"].strip()
+    assert response["partial_reason"] == f"configs: {failure['error']}"
 
 
 async def test_no_surface_answering_is_a_structured_error(
@@ -73,17 +71,22 @@ async def test_no_surface_answering_is_a_structured_error(
 
     # A domain listing runs the entity surface only.
     with (
-        _surface("_ha_search_entities", AsyncMock(side_effect=TimeoutError)),
+        patch.object(
+            core_client,
+            "guarded_request",
+            AsyncMock(side_effect=httpx.ReadTimeout("States response did not arrive")),
+        ),
         pytest.raises(ToolError) as excinfo,
     ):
         await _build_ha_search(core_client)(domain_filter="light")
 
     payload = json.loads(str(excinfo.value))
     assert payload["success"] is False
-    assert payload["error"]["code"] == "TIMEOUT_OPERATION"
+    assert payload["error"]["code"] == "CONNECTION_TIMEOUT"
 
 
 async def test_no_surface_answering_keeps_the_first_branch_tool_error(
+    hass: HomeAssistant,
     core_client: HomeAssistantClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -91,21 +94,29 @@ async def test_no_surface_answering_keeps_the_first_branch_tool_error(
     """The first surface's own structured error is re-raised as is, not the
     error of a surface after it."""
     _setup_visibility_disabled(tmp_path, monkeypatch)
-    branch_error = ToolError('{"success": false, "error": {"code": "X"}}')
-    monkeypatch.setattr(
-        search_legacy,
-        "_prefetch_shared_search_snapshots",
-        AsyncMock(return_value=(None, None)),
+    assert await async_setup_component(hass, "config", {})
+    branch_error = ToolError(
+        json.dumps(
+            create_error_response(ErrorCode.CONNECTION_FAILED, "entities unavailable")
+        )
     )
 
     with (
-        _surface("_ha_search_entities", AsyncMock(side_effect=branch_error)),
-        _surface("_ha_deep_search", AsyncMock(side_effect=TimeoutError)),
+        patch.object(
+            SmartSearchTools,
+            "smart_entity_search",
+            AsyncMock(side_effect=branch_error),
+        ) as entity_search,
+        patch.object(
+            SmartSearchTools, "deep_search", AsyncMock(side_effect=TimeoutError)
+        ) as config_search,
         pytest.raises(ToolError) as excinfo,
     ):
-        await _build_ha_search(core_client)(query="lamp")
+        await _build_ha_search(core_client)(query="lamp", exact_match=False)
 
     assert excinfo.value is branch_error
+    entity_search.assert_awaited_once()
+    config_search.assert_awaited_once()
 
 
 async def test_component_search_without_warnings_has_no_warnings_key(

@@ -59,11 +59,9 @@ def parse_mcp_result(result) -> dict[str, Any]:
     if isinstance(result, dict):
         return result
 
-    # Check if this is an error response (from ToolError). fastmcp's
-    # CallToolResult spells the flag ``is_error``; the raw MCP CallToolResult
-    # spells it ``isError``. Accept either so the gate holds whichever type
-    # reaches this helper.
-    if getattr(result, "is_error", False) or getattr(result, "isError", False):
+    # Check if this is an error response (from ToolError). fastmcp's and the
+    # vendored MCP CallToolResult both carry the flag as ``is_error``.
+    if getattr(result, "is_error", False):
         return _parse_error_result(result)
 
     # Tools that return a FastMCP ``ToolResult`` with a non-text content block

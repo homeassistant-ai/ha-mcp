@@ -102,23 +102,7 @@ class TestDeepSearchErrorHandling:
                 )
             )
         )
-        configs_answer = AsyncMock(
-            return_value={
-                "success": True,
-                "automations": [],
-                "scripts": [],
-                "scenes": [],
-                "helpers": [],
-                "warnings": [],
-                "errors": [],
-                "partial": False,
-            }
-        )
-
-        with (
-            patch.object(SmartSearchTools, "smart_entity_search", entities_down),
-            patch.object(SmartSearchTools, "deep_search", configs_answer),
-        ):
+        with patch.object(SmartSearchTools, "smart_entity_search", entities_down):
             response = await ha_search_tool(query="test_query", exact_match=False)
 
         assert response["partial"] is True

@@ -81,7 +81,7 @@ def skill_tool_hidden(settings: Settings) -> bool:
     non-resource access path.
     """
     try:
-        from .settings_ui._persistence import effective_tool_config
+        from .settings_ui import effective_tool_config
         from .settings_ui._tools_meta import effective_mandatory_tools
 
         states = effective_tool_config(settings).get("tools", {})

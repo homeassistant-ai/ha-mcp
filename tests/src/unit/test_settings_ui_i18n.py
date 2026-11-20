@@ -12,12 +12,10 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
-from starlette.requests import Request
 
 from ha_mcp.policy.approval_queue import Decision
 from ha_mcp.policy.model import PredicateOp
-from ha_mcp.settings_ui import render_settings_html
-from ha_mcp.settings_ui._i18n import (
+from ha_mcp.settings_ui.i18n import (
     CATALOGS,
     DEFAULT_LOCALE,
     LOCALES_DIR,
@@ -28,6 +26,8 @@ from ha_mcp.settings_ui._i18n import (
     serialize_payload,
 )
 from ha_mcp.settings_ui.locale_policy import BEST_EFFORT_LOCALES
+
+from ._settings_ui_app import settings_http
 
 
 def _shipped_locales() -> list[str]:
@@ -62,8 +62,8 @@ def _write_catalog(
     locale: str,
     *,
     native_name: str,
-    messages: dict[str, str],
-    tools: dict[str, dict[str, str]] | None = None,
+    messages: dict[str, object],
+    tools: dict[str, dict[str, object]] | None = None,
 ) -> None:
     (directory / f"{locale}.json").write_text(
         json.dumps(
@@ -100,7 +100,7 @@ def test_invalid_best_effort_catalog_warns_without_blocking_other_locales(
     _write_catalog(tmp_path, "de", native_name="Deutsch", messages={"a": "Eins"})
     (tmp_path / "tlh.json").write_bytes(payload)
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert sorted(catalogs) == ["de", "en"]
@@ -141,32 +141,6 @@ def test_incomplete_catalog_falls_back_to_english(tmp_path: Path) -> None:
     }
 
 
-def test_locale_normalization_and_priority(tmp_path: Path) -> None:
-    _write_catalog(tmp_path, "en", native_name="English", messages={})
-    _write_catalog(tmp_path, "ru", native_name="Русский", messages={})
-    catalogs = load_catalogs(tmp_path)
-
-    assert normalize_locale("ru-RU", catalogs) == "ru"
-    assert (
-        select_locale(
-            cookie_locale="ru",
-            ha_language="en-US",
-            accept_language="en;q=1.0",
-            catalogs=catalogs,
-        )
-        == "ru"
-    )
-    assert (
-        select_locale(
-            ha_language="de-DE",
-            accept_language="en;q=0.4, ru-RU;q=0.9",
-            catalogs=catalogs,
-        )
-        == "ru"
-    )
-    assert select_locale(accept_language="de-DE", catalogs=catalogs) == "en"
-
-
 def test_zh_cn_region_normalizes_to_zh_hans(tmp_path: Path) -> None:
     _write_catalog(tmp_path, "en", native_name="English", messages={})
     _write_catalog(
@@ -189,35 +163,16 @@ def test_zh_cn_region_normalizes_to_zh_hans(tmp_path: Path) -> None:
     )
 
 
-def test_traditional_chinese_regions_normalize_to_zh_hant(tmp_path: Path) -> None:
-    _write_catalog(tmp_path, "en", native_name="English", messages={})
-    _write_catalog(
-        tmp_path,
-        "zh-Hans",
-        native_name="简体中文",
-        messages={"greeting": "你好"},
-    )
-    _write_catalog(
-        tmp_path,
-        "zh-Hant",
-        native_name="繁體中文",
-        messages={"greeting": "您好"},
-    )
-    catalogs = load_catalogs(tmp_path)
-
-    for locale in ("zh-TW", "zh-HK", "zh-MO"):
-        assert normalize_locale(locale, catalogs) == "zh-hant"
-        assert select_locale(ha_language=locale, catalogs=catalogs) == "zh-hant"
-    assert normalize_locale("zh-Hans-HK", catalogs) == "zh-hans"
-    assert normalize_locale("zh-Hans-TW", catalogs) == "zh-hans"
-    assert normalize_locale("zh-Hant-CN", catalogs) == "zh-hant"
+async def test_traditional_chinese_regions_select_zh_hant() -> None:
+    """The page's language for each Chinese tag, with both scripts shipped."""
+    for tag in ("zh-TW", "zh-HK", "zh-MO", "zh-Hant-CN"):
+        assert await _page_language(f"?ha_lang={tag}") == "zh-hant"
+    for tag in ("zh-Hans-HK", "zh-Hans-TW"):
+        assert await _page_language(f"?ha_lang={tag}") == "zh-hans"
     # Bare "zh" keeps the Simplified fallback even once Traditional ships:
     # the Traditional catalog must claim only explicit script and region tags.
-    assert normalize_locale("zh", catalogs) == "zh-hans"
-    assert select_locale(ha_language="zh", catalogs=catalogs) == "zh-hans"
-    assert select_locale(accept_language="zh-TW,zh;q=0.9", catalogs=catalogs) == (
-        "zh-hant"
-    )
+    assert await _page_language("?ha_lang=zh") == "zh-hans"
+    assert await _page_language(language="zh-TW,zh;q=0.9") == "zh-hant"
 
 
 def test_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
@@ -254,7 +209,7 @@ def test_invalid_best_effort_message_falls_back_without_dropping_locale(
         messages={"saved": "pol", "greeting": "nuqneH"},
     )
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert catalogs["tlh"]["messages"] == {"greeting": "nuqneH"}
@@ -284,7 +239,7 @@ def test_invalid_best_effort_message_value_preserves_valid_siblings(
         messages={"invalid": invalid, "valid": "Qapla'"},
     )
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert catalogs["tlh"]["messages"] == {"valid": "Qapla'"}
@@ -345,7 +300,7 @@ def test_invalid_best_effort_tool_field_falls_back_without_dropping_siblings(
         },
     )
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert catalogs["tlh"]["tools"] == {"ha_example": {"title": "ghantoH"}}
@@ -379,7 +334,7 @@ def test_invalid_best_effort_tool_field_preserves_valid_siblings(
         tools={"ha_example": {"title": "ghantoH", "description": 7}},
     )
 
-    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui.i18n"):
         catalogs = load_catalogs(tmp_path)
 
     assert catalogs["tlh"]["tools"] == {"ha_example": {"title": "ghantoH"}}
@@ -489,27 +444,27 @@ def test_inline_payload_escapes_script_breakout() -> None:
     assert "\\u003c/script\\u003e" in serialized
 
 
-def _request(
-    *, query: bytes = b"", cookie: str | None = None, language: str | None = None
-) -> Request:
-    headers: list[tuple[bytes, bytes]] = []
-    if cookie:
-        headers.append((b"cookie", cookie.encode()))
-    if language:
-        headers.append((b"accept-language", language.encode()))
-    return Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": "/mcp/settings",
-            "query_string": query,
-            "headers": headers,
-        }
-    )
+async def _page(
+    query: str = "", *, cookie: str | None = None, language: str | None = None
+) -> str:
+    """The settings page the settings route serves for this request."""
+    given = {"cookie": cookie, "accept-language": language}
+    headers = {name: value for name, value in given.items() if value is not None}
+    async with settings_http() as http:
+        response = await http.get(f"/settings{query}", headers=headers)
+    assert response.status_code == 200
+    return response.text
 
 
-def test_render_uses_home_assistant_language_hint() -> None:
-    html = render_settings_html(_request(query=b"ha_lang=ru-RU"))
+async def _page_language(query: str = "", *, language: str | None = None) -> str:
+    """The language the served settings page is in."""
+    found = re.search(r'<html lang="([^"]*)"', await _page(query, language=language))
+    assert found
+    return found.group(1)
+
+
+async def test_render_uses_home_assistant_language_hint() -> None:
+    html = await _page("?ha_lang=ru-RU")
 
     assert '<html lang="ru" dir="ltr">' in html
     assert '"locale":"ru"' in html
@@ -517,22 +472,28 @@ def test_render_uses_home_assistant_language_hint() -> None:
     assert "__HA_MCP_" not in html
 
 
-def test_render_cookie_overrides_home_assistant_and_browser_language() -> None:
-    html = render_settings_html(
-        _request(
-            query=b"ha_lang=en",
-            cookie="ha_mcp_locale=ru",
-            language="en-US,en;q=0.9",
-        )
+async def test_render_cookie_overrides_home_assistant_and_browser_language() -> None:
+    html = await _page(
+        "?ha_lang=en", cookie="ha_mcp_locale=ru", language="en-US,en;q=0.9"
     )
 
     assert '<html lang="ru" dir="ltr">' in html
 
 
+async def test_unsupported_language_falls_through_to_the_next_source() -> None:
+    """A Home Assistant language no catalog has gives way to the browser's
+    languages, best quality first; with none supported the page is English.
+    ``qaa`` is reserved for local use, so no catalog will ever claim it."""
+    html = await _page("?ha_lang=qaa-QM", language="en;q=0.4, ru-RU;q=0.9")
+    assert '<html lang="ru" dir="ltr">' in html
+
+    assert '<html lang="en" dir="ltr">' in await _page(language="qaa-QM")
+
+
 def test_shipped_locales_are_discovered() -> None:
     """The parametrized check below collects nothing on an empty registry."""
     assert _shipped_locales(), (
-        "no non-English catalogs registered in ha_mcp.settings_ui._i18n.CATALOGS "
+        "no non-English catalogs registered in ha_mcp.settings_ui.i18n.CATALOGS "
         "— the per-locale check below would pass by collecting zero cases"
     )
 

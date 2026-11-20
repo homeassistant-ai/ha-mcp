@@ -83,6 +83,7 @@ from .resolver import (
     VisibilityDataUnavailable,
     config_has_active_hide_dimensions,
     config_needs_device_registry,
+    core_device_list_reply,
     load_hidden_set,
 )
 from .result_payloads import result_payloads, serialize_result
@@ -100,7 +101,7 @@ _config_load_warning_emitted: ContextVar[bool | None] = ContextVar(
 # does not re-fetch the registry each time; a config edit invalidates it sooner
 # (the cache is keyed on the hide dimensions), so the ~30s window only applies to
 # registry-side staleness (an area/label membership change in HA).
-_CACHE_TTL_SECONDS = 30.0
+CACHE_TTL_SECONDS = 30.0
 
 # Tools whose output cannot be text-scanned for a hidden entity_id.
 _SCREENSHOT_TOOL = "ha_get_dashboard_screenshot"
@@ -809,9 +810,7 @@ async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> _HiddenM
         client.send_websocket_message({"type": "config/entity_registry/list"}),
     ]
     if need_device:
-        coros.append(
-            client.send_websocket_message({"type": "config/device_registry/list"})
-        )
+        coros.append(core_device_list_reply(client))
     fetched = await asyncio.gather(*coros, return_exceptions=True)
     for item in fetched:
         if isinstance(item, BaseException):
@@ -904,11 +903,17 @@ class _HiddenSetCache:
                 raise VisibilityDataUnavailable("hidden set unavailable") from None
             self._matcher = matcher
             self._key = key
-            self._expiry = now + _CACHE_TTL_SECONDS
+            self._expiry = now + CACHE_TTL_SECONDS
             return matcher
 
 
 _hidden_cache = _HiddenSetCache()
+
+
+def reset_hidden_set_cache() -> None:
+    """Discard process-scoped visibility state between isolated server lifetimes."""
+    global _hidden_cache
+    _hidden_cache = _HiddenSetCache()
 
 
 async def _active_matcher(client: Any) -> _HiddenMatcher | None:

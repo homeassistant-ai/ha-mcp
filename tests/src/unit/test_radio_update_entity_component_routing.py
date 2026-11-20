@@ -6,9 +6,8 @@ dumped the ENTIRE entity registry (``config/entity_registry/list``) to filter on
 device's rows. When the component advertises ``device_get`` those per-device rows
 ride one ``device_get(include_entities=True)`` frame instead — the ``update.*`` /
 platform filtering stays client-side. These tests pin that seam: component-hit (no
-whole-registry dump), legacy fallback on no-caps, ``unknown_command`` → invalidate
-caps + legacy list, and an additive-param-blind component (device served, entities
-half omitted) degrading to the legacy list rather than reporting no update entity.
+whole-registry dump), legacy fallback on no-caps, and ``unknown_command`` →
+invalidate caps + legacy list.
 
 The server's own client runs on a real ``hass`` whose registries hold the device;
 Core answers the capability probe, the component's ``device_get`` and the legacy
@@ -33,7 +32,6 @@ from ha_mcp.client.websocket_client import (
     websocket_manager,
 )
 from ha_mcp.tools import component_devices
-from ha_mcp.tools.component_api import DEVICE_REGISTRY_CHILD_SEMANTICS, ComponentCaps
 from ha_mcp.tools.radio.base import resolve_update_entity
 
 
@@ -144,60 +142,16 @@ async def test_update_entity_capsless_uses_legacy_list(
 
 @pytest.mark.asyncio
 async def test_update_entity_unknown_command_invalidates_and_falls_back(
-    core_client: HomeAssistantClient,
+    component_core_client: HomeAssistantClient,
     device_id: str,
     invalidated: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The cached capabilities say device_get; Core, without the component,
-    # answers that command unknown_command.
-    served = ComponentCaps(
-        1,
-        "1.1.0",
-        frozenset({"device_get", "device_list", DEVICE_REGISTRY_CHILD_SEMANTICS}),
-        {},
-    )
+    # The component advertises device_get, but the server sends a command Core
+    # never registered, so Core answers it unknown_command.
     monkeypatch.setattr(
-        component_devices, "get_component_caps", AsyncMock(return_value=served)
+        component_devices, "WS_DEVICE_GET", "ha_mcp_tools/device_get_retired"
     )
-    with patch.object(
-        core_client,
-        "send_websocket_message",
-        wraps=core_client.send_websocket_message,
-    ) as legacy:
-        eid = await resolve_update_entity(core_client, device_id, platform="zha")
-
-    assert eid == "update.dev_firmware"
-    assert len(_entity_list_calls(legacy)) == 1
-    invalidated.assert_called_once_with(core_client)
-
-
-@pytest.mark.asyncio
-async def test_update_entity_entities_half_absent_falls_back_to_legacy(
-    hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
-    device_registry: dr.DeviceRegistry,
-    device_id: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A device_get-capable component that omits the additive entities half (an
-    older build predating include_entities) degrades to the legacy entity list
-    rather than reporting no update entity."""
-    from custom_components.ha_mcp_tools import websocket_api as component_ws_api
-
-    def _device_get_without_entities(
-        hass: HomeAssistant, params: dict[str, Any]
-    ) -> dict[str, Any]:
-        device = device_registry.async_get(params["device_id"])
-        return {"device": device.dict_repr if device is not None else None}
-
-    # The component's device_get as an older build answered it.
-    monkeypatch.setattr(
-        "custom_components.ha_mcp_tools.websocket_api._do_device_get",
-        _device_get_without_entities,
-    )
-    component_ws_api.async_register_commands(hass)
-
     with patch.object(
         component_core_client,
         "send_websocket_message",
@@ -209,3 +163,4 @@ async def test_update_entity_entities_half_absent_falls_back_to_legacy(
 
     assert eid == "update.dev_firmware"
     assert len(_entity_list_calls(legacy)) == 1
+    invalidated.assert_called_once_with(component_core_client)

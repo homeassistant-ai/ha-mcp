@@ -9,9 +9,9 @@ category / area / floor (``backup_registry_items.py``: capture, restore and diff
 each read the registry). When the component advertises the ``registries``
 capability, all of that becomes ONE in-process read: ``ha_mcp_tools/registries``
 returns exactly the requested registry kinds (``area`` / ``floor`` / ``label``
-/ ``category``) as their FULL-FIELD ``config/<x>_registry/list``-shaped rows —
-byte-compatible with the legacy WS list responses the consumers already parse
-(see ``custom_components/ha_mcp_tools/websocket_api/registries.py::_do_registries``).
+/ ``category``) as the rows Core's own ``config/<x>_registry/list`` sends (Core's serializers,
+so the consumers parse the same shape as the legacy WS list responses; see
+``custom_components/ha_mcp_tools/websocket_api/registries.py::_do_registries``).
 
 This module owns the caps-gated fetch so the routing discipline — probe caps,
 send one frame, invalidate on ``unknown_command``, fall back to the legacy
@@ -104,7 +104,7 @@ async def fetch_registries_via_component(
     failed (re)connect — is caught here and mapped to ``None``: the auto-backup capture fetchers'
     legacy ``_ws_send`` builds a DEDICATED one-shot WS client (which can succeed
     while the pooled socket is wedged) under a best-effort contract that requires
-    warn-and-skip, never a blocked write; ``ha_list_floors_areas``' legacy rides
+    warn-and-skip, never a blocked write; a tool's legacy list call rides
     the ``send_websocket_message`` bridge, which is the SAME pooled connection
     and raises on a dead transport (#1947) rather than degrading. Only the
     capture path's dedicated socket survives a wedged pool, so a
@@ -142,11 +142,51 @@ async def fetch_registries_via_component(
         )
         return None
     result = raw.get("result")
-    if not isinstance(result, dict):
-        return None
-    if not _has_valid_shape(result, registries, category_scopes):
+    if not isinstance(result, dict) or not _has_valid_shape(
+        result, registries, category_scopes
+    ):
         logger.warning(
             "%s returned an unexpected shape; fell back to legacy", WS_REGISTRIES
         )
         return None
     return result
+
+
+async def registry_list_reply(client: Any, kind: str) -> dict[str, Any]:
+    """What Core answers for ``config/<kind>_registry/list``, the component asked first.
+
+    ``kind`` is ``area``, ``floor`` or ``label``. The component's rows come in
+    the envelope ``send_websocket_message`` returns for the list command, so a
+    caller reads either answer the same way. Without the component's answer
+    Core's command is sent, and its reply or its exception is the caller's.
+    """
+    via_component = await fetch_registries_via_component(client, [kind])
+    if via_component is not None:
+        return {"success": True, "result": via_component[_LIST_SLICES[kind]]}
+    reply: dict[str, Any] = await client.send_websocket_message(
+        {"type": f"config/{kind}_registry/list"}
+    )
+    return reply
+
+
+async def registry_list_rows(client: Any, kind: str) -> list[Any]:
+    """The rows of :func:`registry_list_reply`; a reply that is not a success
+    is raised as ``HomeAssistantCommandError``."""
+    reply = await registry_list_reply(client, kind)
+    if not reply.get("success"):
+        raise HomeAssistantCommandError.from_reply(reply)
+    rows: list[Any] = reply["result"]
+    return rows
+
+
+async def category_list_reply(client: Any, scope: str) -> dict[str, Any]:
+    """:func:`registry_list_reply` for the categories of ``scope``."""
+    via_component = await fetch_registries_via_component(
+        client, ["category"], category_scopes=[scope]
+    )
+    if via_component is not None:
+        return {"success": True, "result": via_component["categories"][scope]}
+    reply: dict[str, Any] = await client.send_websocket_message(
+        {"type": "config/category_registry/list", "scope": scope}
+    )
+    return reply

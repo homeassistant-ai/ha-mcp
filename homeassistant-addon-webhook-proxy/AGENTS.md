@@ -108,5 +108,6 @@ source, the way `ha_auth_supported`, `none_autoapprove_supported`, and
 but never edits these tests, so a capability recorded as a table boolean stays `False` for stable
 after the code arrives, and the promote PR then asserts the old surface against the new
 one. `tests/src/unit/test_webhook_proxy_dev_isolation.py`
-separately guards the rename (no bare `mcp_proxy` token in the dev tree) and the dev-side
-mutual-exclusion constants.
+separately guards the rename (no bare `mcp_proxy` token in the dev tree) and the dev
+flavor's slug and domain; `tests/addon/webhook_proxy/test_start_mutex.py` tests that
+neither flavor starts beside the other.

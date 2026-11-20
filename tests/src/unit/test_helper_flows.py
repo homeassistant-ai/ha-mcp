@@ -101,16 +101,6 @@ def custom_helper_flow(
 
 
 @pytest.fixture
-def _server_helper_flows() -> None:
-    """The server reads Core's helper flow list itself."""
-
-
-@pytest.fixture
-def _core_helper_flows() -> None:
-    """The component's loader read is Core's own."""
-
-
-@pytest.fixture
 async def config_up(hass: HomeAssistant) -> None:
     """``config`` serves the flow list and the registry reads."""
     assert await async_setup_component(hass, "config", {})

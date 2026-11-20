@@ -10,6 +10,7 @@ from ..utilities.assertions import MCPAssertions, assert_mcp_success
 from ..utilities.topology import component_surface_available
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "source",
@@ -72,6 +73,7 @@ async def test_core_supported_last_reset_is_readable(mcp_client: Client) -> None
     assert all("last_reset" in row for row in rows)
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_explicit_units_change_values_without_using_default_unit_label(
     mcp_client: Client,
@@ -106,6 +108,7 @@ async def test_explicit_units_change_values_without_using_default_unit_label(
         assert small["unit_source"] == large["unit_source"] == "unknown"
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_energy_schema_exposes_native_battery_fields(mcp_client: Client) -> None:
     raw = assert_mcp_success(
@@ -154,6 +157,7 @@ async def test_core_parameter_errors_retain_validation_classification(
     assert "state_class" not in str(failure["error"]["suggestions"])
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fields", [None, ["entities"]])
 async def test_history_schema_does_not_warn_when_core_describes_it_completely(

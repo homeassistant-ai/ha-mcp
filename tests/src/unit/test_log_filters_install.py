@@ -22,7 +22,7 @@ def _make_stale_generation_filter(real_cls: type[logging.Filter]) -> logging.Fil
     class object is a genuinely DIFFERENT one -- simulating a filter instance
     left over from a previous ``ha_mcp.log_filters`` generation after the
     in-process embedded server purges and re-imports it (see
-    ``_purge_ha_mcp_modules``), without actually reloading any module.
+    ``purge_ha_mcp_modules``), without actually reloading any module.
     ``importlib.reload()`` mutates the real, shared module in place, which
     would corrupt every OTHER test file's already-imported reference to these
     same class names for the rest of the pytest session -- this builds an
@@ -66,7 +66,7 @@ class TestInstallSdkLogFiltersIdempotent:
 
 class TestInstallSdkLogFiltersReplacesStaleGeneration:
     """The in-process embedded server purges ``ha_mcp.*`` from ``sys.modules``
-    and re-imports on every reinstall (see ``_purge_ha_mcp_modules``), so
+    and re-imports on every reinstall (see ``purge_ha_mcp_modules``), so
     ``ha_mcp.log_filters`` is a fresh module with fresh classes after each
     reload -- a stale filter instance from before the reload (a DIFFERENT
     class object with the same name) must be replaced, not left to

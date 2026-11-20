@@ -34,6 +34,14 @@ def _build_ha_search(client: Any) -> Any:
     return registered["ha_search"]
 
 
+def _visibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: VisibilityConfig
+) -> None:
+    """Store ``config`` where the visibility resolver loads its config from."""
+    save_visibility_config(tmp_path, config)
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+
 def _setup_visibility_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)

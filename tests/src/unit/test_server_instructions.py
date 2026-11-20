@@ -1,21 +1,25 @@
 """The MCP initialize instructions: skills section, notices, owner text."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.config import Settings, get_global_settings
 from ha_mcp.server_instructions import (
     build_skills_instructions,
     compose_instructions,
     skill_tool_hidden,
 )
 from ha_mcp.server_tool_text import ISSUE_FILING_INSTRUCTIONS, SKILL_TOOL_NAME
+from ha_mcp.settings_ui import save_tool_config
+
+from ._server_factory import make_server
 
 
 @pytest.fixture
-def settings() -> MagicMock:
-    settings = MagicMock()
+def settings() -> Settings:
+    settings = get_global_settings()
     settings.read_only_mode = False
     settings.enable_tool_search = False
     settings.custom_instructions = ""
@@ -70,7 +74,7 @@ class TestSkillsSection:
         assert f"Call {SKILL_TOOL_NAME}()" not in result
 
     def test_the_skill_tool_counts_as_hidden_only_when_disabled_and_unlocked(
-        self, settings: MagicMock
+        self, settings: Settings
     ) -> None:
         """The strict-BPS lock keeps the tool served even when disabled."""
         settings.enable_mandatory_bps = True
@@ -81,13 +85,8 @@ class TestSkillsSection:
         ]
         for strict, tools, hidden in cases:
             settings.enable_strict_mandatory_bps = strict
-            with patch(
-                "ha_mcp.settings_ui._persistence.effective_tool_config",
-                return_value={"tools": tools},
-            ) as tool_config:
-                assert skill_tool_hidden(settings) is hidden
-            # The decision reads the settings it was given, not the global ones.
-            tool_config.assert_called_once_with(settings)
+            assert save_tool_config({"tools": tools})
+            assert skill_tool_hidden(settings) is hidden
 
     @pytest.mark.parametrize(
         "entry",
@@ -114,7 +113,7 @@ class TestSkillsSection:
 class TestNotices:
     @pytest.mark.parametrize("skills", [None, "SKILLS"])
     def test_agents_are_told_issues_need_a_report(
-        self, settings: MagicMock, skills: str | None
+        self, settings: Settings, skills: str | None
     ) -> None:
         """Agents that file issues without ha_report_issue output get them
         closed; the instructions must say so with or without skills."""
@@ -125,7 +124,7 @@ class TestNotices:
 
     @pytest.mark.parametrize("skills", [None, "SKILLS"])
     def test_read_only_mode_is_announced_alongside_the_issue_note(
-        self, settings: MagicMock, skills: str | None
+        self, settings: Settings, skills: str | None
     ) -> None:
         """A client started in Read Only Mode must be warned up front, without
         losing the issue-filing rule."""
@@ -136,7 +135,7 @@ class TestNotices:
 
     @pytest.mark.parametrize("skills", [None, "SKILLS"])
     def test_only_search_connections_are_told_how_to_discover_tools(
-        self, settings: MagicMock, skills: str | None
+        self, settings: Settings, skills: str | None
     ) -> None:
         """A full-catalog connection has no ha_search_tools, so only a search
         connection's instructions may tell the agent to use it; without skills
@@ -155,7 +154,7 @@ class TestCustomInstructions:
 
     @pytest.mark.parametrize("value", ["", "   \n  "])
     def test_an_unset_setting_adds_nothing_after_the_last_notice(
-        self, settings: MagicMock, value: str
+        self, settings: Settings, value: str
     ) -> None:
         settings.custom_instructions = value
         assert compose_instructions("SKILLS", settings, tool_search=False).endswith(
@@ -163,7 +162,7 @@ class TestCustomInstructions:
         )
 
     def test_every_client_receives_the_owners_text_under_its_heading(
-        self, settings: MagicMock
+        self, settings: Settings
     ) -> None:
         settings.custom_instructions = f"  {self.TEXT}\n"
         instructions = compose_instructions("SKILLS", settings, tool_search=False)
@@ -173,7 +172,7 @@ class TestCustomInstructions:
         )
 
     def test_line_breaks_in_the_owners_text_reach_the_agent(
-        self, settings: MagicMock
+        self, settings: Settings
     ) -> None:
         settings.custom_instructions = "First rule.\nSecond rule."
         assert compose_instructions(None, settings, tool_search=False).endswith(
@@ -182,29 +181,21 @@ class TestCustomInstructions:
 
 
 @pytest.mark.parametrize("hidden", [False, True])
-def test_the_search_tool_points_at_the_skill_tool_only_while_it_is_served(
-    hidden: bool,
+async def test_the_search_tool_points_at_the_skill_tool_only_while_it_is_served(
+    hidden: bool, core_client: HomeAssistantClient, monkeypatch
 ) -> None:
-    """#2802: with tool search on, the search tool's description is the one
-    skills hint every client sees; it must send agents to the served
-    ha_get_skill_guide, and never to a disabled one."""
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
-    srv.settings = MagicMock(
-        enable_tool_search=True, tool_search_max_results=5, enable_code_mode=False
+    """The served search description must point only to available guidance."""
+    assert save_tool_config({"tools": {SKILL_TOOL_NAME: "disabled"} if hidden else {}})
+    server = make_server(
+        core_client,
+        monkeypatch,
+        enable_tool_search=True,
+        enable_strict_mandatory_bps=False,
     )
-    srv.mcp = MagicMock()
-    srv._user_enabled_tools = set()
-    srv._user_pinned_tools = []
-    srv._instructions = {"full": "", "search": ""}
-    with (
-        patch("ha_mcp.server.skill_tool_hidden", return_value=hidden),
-        patch("ha_mcp.transforms.CategorizedSearchTransform") as transform,
-    ):
-        srv._apply_tool_search()
-
-    description = transform.call_args.kwargs["search_tool_description"]
+    tool = next(
+        tool for tool in await server.mcp.list_tools() if tool.name == "ha_search_tools"
+    )
+    description = tool.description
     if hidden:
         assert SKILL_TOOL_NAME not in description
         assert "locally installed copy" in description
@@ -213,25 +204,15 @@ def test_the_search_tool_points_at_the_skill_tool_only_while_it_is_served(
         assert "even if your client supports MCP resources" in description
 
 
-def test_the_server_starts_with_the_composed_instructions(tmp_path: Path) -> None:
-    """A regression that drops ``instructions=`` from FastMCP is caught here."""
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
+def test_the_server_starts_with_the_composed_instructions(
+    tmp_path: Path, core_client: HomeAssistantClient, monkeypatch
+) -> None:
+    """The instructions supplied to a real FastMCP include skills and owner text."""
     _write_skill(tmp_path)
-    with (
-        patch("ha_mcp.server.get_global_settings") as get_settings,
-        patch("ha_mcp.server.FastMCP") as fastmcp,
-        patch("ha_mcp.server.skill_tool_hidden", return_value=False),
-        patch.object(
-            HomeAssistantSmartMCPServer, "_get_skills_dir", return_value=tmp_path
-        ),
-        patch.object(HomeAssistantSmartMCPServer, "_initialize_server"),
-    ):
-        settings = get_settings.return_value
-        settings.read_only_mode = False
-        settings.enable_tool_search = False
-        settings.custom_instructions = "owner text"
-        HomeAssistantSmartMCPServer()
-    instructions = fastmcp.call_args.kwargs["instructions"]
+    server = make_server(
+        core_client, monkeypatch, tmp_path, custom_instructions="owner text"
+    )
+    instructions = server.mcp.instructions
+    assert instructions is not None
     assert "### Skill: my-skill" in instructions
     assert instructions.endswith("owner text")

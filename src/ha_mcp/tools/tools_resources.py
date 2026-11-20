@@ -45,8 +45,8 @@ from .resource_codec import (
     _is_preview_of,
     _looks_like_preview,
     _process_resource_list,
-    _summarize_resources,
     content_sha256,
+    summarize_resources,
 )
 from .resource_patch import (
     MAX_EDITS,
@@ -90,7 +90,7 @@ _LEGACY_MIGRATION_HINT = (
 # as a Lovelace module, creating orphaned, unreachable HA entities (see #1072).
 # Map: top-level key → the ha-mcp tool that creates that kind of config without
 # YAML (None where only YAML configuration can).
-_HA_CONFIG_YAML_MARKERS: dict[str, str | None] = {
+HA_CONFIG_YAML_MARKERS: dict[str, str | None] = {
     "automation": "ha_config_set_automation",
     "script": "ha_config_set_script",
     "scene": "ha_config_set_scene",
@@ -144,7 +144,7 @@ def _detect_ha_config_yaml(content: str) -> str | None:
         break
     if not first_line:
         return None
-    for domain in _HA_CONFIG_YAML_MARKERS:
+    for domain in HA_CONFIG_YAML_MARKERS:
         prefix = f"{domain}:"
         if first_line == prefix:
             # Block-form `automation:` exactly — unambiguous.
@@ -242,7 +242,7 @@ class ResourceTools:
             else:
                 resources = []
 
-            by_type_counts, inline_count, decoded_by_index = _summarize_resources(
+            by_type_counts, inline_count, decoded_by_index = summarize_resources(
                 resources, offset, offset + limit
             )
 
@@ -460,7 +460,7 @@ class ResourceTools:
         self, detected_yaml: str, resource_type: str
     ) -> NoReturn:
         """Raise the structured error for HA-config YAML misrouted as inline resource content."""
-        right_tool = _HA_CONFIG_YAML_MARKERS[detected_yaml]
+        right_tool = HA_CONFIG_YAML_MARKERS[detected_yaml]
         if right_tool:
             first = f"For `{detected_yaml}:` configuration, use {right_tool} instead"
         else:

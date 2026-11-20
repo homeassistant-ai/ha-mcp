@@ -29,9 +29,9 @@ down is a HUMAN: hand-edit the translations, run
 ``python scripts/update_locale_baseline.py``, and push — the next pipeline
 run sees nothing stale and no-ops. Hand-edits always win; the machine only
 touches strings whose English changed.
-Every returned string is validated (placeholder parity, the settings UI markup
-allowlist, formatting-tag parity, panel-link parity, and the on-screen names
-Python hardcodes staying untranslated) before it is written; a failure
+Every returned string is validated (placeholder parity, formatting-tag parity
+with English, and the on-screen names Python hardcodes staying untranslated)
+before it is written; a failure
 leaves that string unwritten and the run red rather than shipping a broken
 translation.
 
@@ -76,9 +76,7 @@ from update_locale_baseline import (  # type: ignore[import-not-found]  # noqa: 
     _load_test_module,
 )
 
-from ha_mcp.settings_ui._i18n import (  # noqa: E402
-    _ALLOWED_TAGS_RE,
-    _PANEL_LINK_RE,
+from ha_mcp.settings_ui.i18n import (  # noqa: E402
     _PLACEHOLDER_RE,
     _TAG_LIKE_RE,
 )
@@ -499,20 +497,14 @@ def _validate(item: WorkItem, translated: Any) -> str | None:
         _PLACEHOLDER_RE.findall(translated)
     ):
         return "placeholder set differs from English"
-    if item.section == "messages":
-        for tag in _TAG_LIKE_RE.findall(translated):
-            if _ALLOWED_TAGS_RE.fullmatch(tag) is None:
-                return f"markup {tag!r} not in the settings UI allowlist"
-        # Multiset parity, like panel links: a dropped </strong> or an
-        # invented <code> is all-allowlisted yet malforms what tHtml restores.
-        if Counter(_TAG_LIKE_RE.findall(translated)) != Counter(
-            _TAG_LIKE_RE.findall(item.english)
-        ):
-            return "formatting-tag set differs from English"
-        if Counter(_PANEL_LINK_RE.findall(translated)) != Counter(
-            _PANEL_LINK_RE.findall(item.english)
-        ):
-            return "panel-link targets differ from English"
+    # The same tags as English, as a multiset: a dropped </strong> or an
+    # invented <code> malforms what tHtml restores. English passed the settings
+    # UI's markup allowlist when i18n loaded it, and panel links are tags, so
+    # equal tags also keep the markup allowlisted and the panel links the same.
+    if item.section == "messages" and Counter(
+        _TAG_LIKE_RE.findall(translated)
+    ) != Counter(_TAG_LIKE_RE.findall(item.english)):
+        return "formatting-tag set differs from English"
     # The same comparison the merge gate runs, so the engine cannot produce
     # what that gate will later refuse. Without it a single dropped
     # identifier is accepted, lands as a backfilled key no later run
@@ -520,7 +512,7 @@ def _validate(item: WorkItem, translated: Any) -> str | None:
     # push is held back whole, the progress file is discarded, and the run
     # re-spends its quota planning the same work again. Rejecting the one
     # string instead costs one retry and leaves the key for tomorrow.
-    fault = locale_rules._parity_fault(item.english, translated)
+    fault = locale_rules.parity_fault(item.english, translated)
     if fault:
         return f"contradicts the English source: {fault}"
     return None

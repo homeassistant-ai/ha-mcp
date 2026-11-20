@@ -1,322 +1,181 @@
-"""Unit tests for ``get_device_operation_status`` polling behavior.
-
-Verifies the contract that the function polls in-memory state every 0.2s while
-the operation is PENDING, returning as soon as the status flips (completed,
-failed, timeout) or once ``timeout_seconds`` elapses.
-"""
+"""Polling and MCP validation against the real device operation store."""
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+import time
+from collections.abc import Iterator
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.exceptions import ValidationError as FastMCPValidationError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import device_control
 from ha_mcp.tools.device_control import DeviceControlTools
-from ha_mcp.utils.operation_manager import DeviceOperation, OperationStatus
+from ha_mcp.utils.operation_manager import OperationStatus, get_operation_manager
 
 
-def _make_operation(
-    status: OperationStatus = OperationStatus.PENDING,
-) -> DeviceOperation:
-    return DeviceOperation(
-        operation_id="op-1",
-        entity_id="light.a",
-        action="on",
-        service_domain="light",
-        service_name="turn_on",
-        service_data={},
-        status=status,
-        expected_state={"state": "on"},
-        result_state={"state": "on"},
+@pytest.fixture
+def pending(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    # A busy runner must not expire an operation during the test.
+    now = time.time()
+    monkeypatch.setattr(
+        "ha_mcp.utils.operation_manager.time", SimpleNamespace(time=lambda: now)
+    )
+    manager = get_operation_manager()
+    op = manager.create_operation("light.a", "on", "light", "turn_on", {})
+    try:
+        yield op
+    finally:
+        manager.operations.pop(op, None)
+
+
+@pytest.fixture(autouse=True)
+def poll_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Advance the tool's monotonic clock on sleep and let scheduled updates run."""
+    now = 0.0
+    delays: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        nonlocal now
+        assert delay > 0
+        delays.append(delay)
+        now += delay
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(device_control, "time", SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(device_control, "asyncio", SimpleNamespace(sleep=sleep))
+    return delays
+
+
+@pytest.fixture
+def tools(core_client: HomeAssistantClient) -> DeviceControlTools:
+    return DeviceControlTools(client=core_client)
+
+
+@pytest.mark.parametrize("completed", [True, False])
+async def test_completed_or_zero_timeout_never_polls(
+    tools: DeviceControlTools, pending: str, completed: bool
+) -> None:
+    manager = get_operation_manager()
+    if completed:
+        manager.update_operation_status(pending, OperationStatus.COMPLETED)
+    with patch.object(manager, "get_operation", wraps=manager.get_operation) as reads:
+        result = await tools.get_device_operation_status(
+            pending, timeout_seconds=5 if completed else 0
+        )
+    reads.assert_called_once_with(pending)
+    assert result["status"] == ("completed" if completed else "pending")
+    if completed:
+        assert result["success"] is True
+    else:
+        assert "time_remaining_ms" in result
+
+
+async def test_a_poll_sees_the_operation_complete(
+    tools: DeviceControlTools, pending: str, poll_sleeps: list[float]
+) -> None:
+    manager = get_operation_manager()
+    asyncio.get_running_loop().call_soon(
+        manager.update_operation_status, pending, OperationStatus.COMPLETED
     )
 
-
-def _client() -> MagicMock:
-    client = MagicMock()
-    client.base_url = "http://homeassistant.local"
-    client.token = "t"
-    client.verify_ssl = True
-    return client
-
-
-@pytest.mark.asyncio
-async def test_returns_immediately_when_completed() -> None:
-    """No polling when the operation is already completed — single read, fast return."""
-    op = _make_operation(OperationStatus.COMPLETED)
-    op.completion_time = op.start_time + 100  # 100 ms duration
-
-    tools = DeviceControlTools(client=_client())
-
-    with patch(
-        "ha_mcp.tools.device_control.get_operation_from_memory", return_value=op
-    ) as mock_get:
-        result = await tools.get_device_operation_status("op-1", timeout_seconds=5)
+    result = await tools.get_device_operation_status(pending, timeout_seconds=2)
 
     assert result["status"] == "completed"
-    assert result["success"] is True
-    # Single read — no polling loop ran.
-    assert mock_get.call_count == 1
+    # The first read was still pending: the answer came from a later poll.
+    assert poll_sleeps
 
 
-@pytest.mark.asyncio
-async def test_timeout_zero_skips_polling() -> None:
-    """timeout_seconds=0 must skip the polling loop entirely (single read, pending payload)."""
-    pending = _make_operation(OperationStatus.PENDING)
-    tools = DeviceControlTools(client=_client())
+@pytest.mark.parametrize(
+    ("gone", "code", "reason"),
+    [
+        (False, "SERVICE_CALL_FAILED", "device unreachable"),
+        (True, "RESOURCE_NOT_FOUND", "cleaned up"),
+    ],
+    ids=["failed", "cleaned"],
+)
+async def test_a_poll_reports_an_operation_that_failed_or_is_gone(
+    tools: DeviceControlTools, pending: str, gone: bool, code: str, reason: str
+) -> None:
+    manager = get_operation_manager()
+    loop = asyncio.get_running_loop()
+    if gone:
+        loop.call_soon(manager.operations.pop, pending)
+    else:
+        loop.call_soon(
+            manager.update_operation_status,
+            pending,
+            OperationStatus.FAILED,
+            None,
+            reason,
+        )
 
-    with patch(
-        "ha_mcp.tools.device_control.get_operation_from_memory", return_value=pending
-    ) as mock_get:
-        result = await tools.get_device_operation_status("op-1", timeout_seconds=0)
+    with pytest.raises(ToolError) as raised:
+        await tools.get_device_operation_status(pending, timeout_seconds=2)
 
-    assert result["status"] == "pending"
-    # No poll loop iterations — only the initial read.
-    assert mock_get.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_polls_until_completion_within_timeout() -> None:
-    """Pending → completed transition is observed within timeout_seconds."""
-    pending = _make_operation(OperationStatus.PENDING)
-    completed = _make_operation(OperationStatus.COMPLETED)
-    completed.completion_time = completed.start_time + 100
-
-    # Initial fetch (i=0) + 1st poll (i=1) see PENDING; 2nd poll (i=2) sees COMPLETED.
-    sequence = [pending, pending, completed]
-    call_index = {"i": 0}
-
-    def fake_get(_op_id: str) -> Any:
-        i = call_index["i"]
-        call_index["i"] = min(i + 1, len(sequence) - 1)
-        return sequence[i]
-
-    tools = DeviceControlTools(client=_client())
-
-    # Patch sleep to a no-op so we don't wait the real 0.2s × 2 = 400ms.
-    async def fast_sleep(_secs: float) -> None:
-        return None
-
-    with (
-        patch(
-            "ha_mcp.tools.device_control.get_operation_from_memory",
-            side_effect=fake_get,
-        ),
-        patch.object(asyncio, "sleep", new=fast_sleep),
-    ):
-        result = await tools.get_device_operation_status("op-1", timeout_seconds=2)
-
-    assert result["status"] == "completed"
-    # Initial fetch (1) + 2 poll fetches = 3 calls; index is min-capped at 2.
-    assert call_index["i"] == 2
+    assert code in str(raised.value)
+    assert reason in str(raised.value)
 
 
-@pytest.mark.asyncio
-async def test_returns_pending_when_timeout_expires() -> None:
-    """If the operation never leaves PENDING, return the pending payload after timeout.
-
-    Uses a fake monotonic clock that advances past the deadline on the second
-    poll so the loop exits cleanly without burning real wall time.
-    """
-    pending = _make_operation(OperationStatus.PENDING)
-    tools = DeviceControlTools(client=_client())
-
-    fake_sleep_calls = {"n": 0}
-
-    # Synthetic monotonic clock: deadline math + first-iter check pass; second
-    # iter check trips the break after the patched sleep advances the clock.
-    clock = {"t": 0.0}
-
-    def fake_monotonic() -> float:
-        return clock["t"]
-
-    async def advance_then_sleep(_secs: float) -> None:
-        fake_sleep_calls["n"] += 1
-        clock["t"] += 0.6  # bigger than timeout, so the next deadline check exits
-
-    with (
-        patch(
-            "ha_mcp.tools.device_control.get_operation_from_memory",
-            return_value=pending,
-        ),
-        patch("ha_mcp.tools.device_control.time.monotonic", new=fake_monotonic),
-        patch.object(asyncio, "sleep", new=advance_then_sleep),
-    ):
-        result = await tools.get_device_operation_status("op-1", timeout_seconds=0.5)
-
+async def test_fractional_deadline_returns_the_pending_operation(
+    tools: DeviceControlTools, pending: str, poll_sleeps: list[float]
+) -> None:
+    result = await tools.get_device_operation_status(pending, timeout_seconds=0.05)
     assert result["status"] == "pending"
     assert "time_remaining_ms" in result
-    # At least one poll cycle ran before the deadline check exited.
-    assert fake_sleep_calls["n"] >= 1
+    assert sum(poll_sleeps) == pytest.approx(0.05)
 
 
-@pytest.mark.asyncio
-async def test_fractional_timeout_bounds_polling_sleep() -> None:
-    """A polling sleep never exceeds the remaining timeout window."""
-    pending = _make_operation(OperationStatus.PENDING)
-    tools = DeviceControlTools(client=_client())
-    clock = {"t": 0.0}
-    sleep_calls: list[float] = []
-
-    def fake_monotonic() -> float:
-        return clock["t"]
-
-    async def advance_clock(seconds: float) -> None:
-        sleep_calls.append(seconds)
-        clock["t"] += seconds
-
-    with (
-        patch(
-            "ha_mcp.tools.device_control.get_operation_from_memory",
-            return_value=pending,
-        ),
-        patch("ha_mcp.tools.device_control.time.monotonic", new=fake_monotonic),
-        patch.object(asyncio, "sleep", new=advance_clock),
-    ):
-        result = await tools.get_device_operation_status("op-1", timeout_seconds=0.05)
-
-    assert result["status"] == "pending"
-    assert sleep_calls == [pytest.approx(0.05)]
-
-
-@pytest.mark.asyncio
-async def test_initial_not_found_raises_resource_not_found() -> None:
-    """Initial fetch returning None must raise RESOURCE_NOT_FOUND, not a generic error."""
-    tools = DeviceControlTools(client=_client())
-
-    with (
-        patch(
-            "ha_mcp.tools.device_control.get_operation_from_memory", return_value=None
-        ),
-        pytest.raises(ToolError) as exc_info,
-    ):
+async def test_initial_not_found_raises_resource_not_found(
+    tools: DeviceControlTools,
+) -> None:
+    with pytest.raises(ToolError) as raised:
         await tools.get_device_operation_status("missing-op", timeout_seconds=5)
-
-    # The tool serializes the structured error into ToolError's message as JSON.
-    err_text = str(exc_info.value)
-    assert "RESOURCE_NOT_FOUND" in err_text
-    assert "missing-op" in err_text
+    assert "RESOURCE_NOT_FOUND" in str(raised.value)
+    assert "missing-op" in str(raised.value)
 
 
 @pytest.mark.asyncio
-async def test_cleanup_mid_poll_raises_resource_not_found() -> None:
-    """If the operation is GC'd between polls, raise RESOURCE_NOT_FOUND.
-
-    Returning the stale "pending" payload would mislead the caller into
-    thinking the op is still in flight when it has actually been purged.
-    """
-    pending = _make_operation(OperationStatus.PENDING)
-    # Initial fetch returns pending; first poll sees None (cleaned up).
-    sequence: list[DeviceOperation | None] = [pending, None]
-    call_index = {"i": 0}
-
-    def fake_get(_op_id: str) -> Any:
-        i = call_index["i"]
-        call_index["i"] = min(i + 1, len(sequence) - 1)
-        return sequence[i]
-
-    async def fast_sleep(_secs: float) -> None:
-        return None
-
-    tools = DeviceControlTools(client=_client())
-
-    with (
-        patch(
-            "ha_mcp.tools.device_control.get_operation_from_memory",
-            side_effect=fake_get,
-        ),
-        patch.object(asyncio, "sleep", new=fast_sleep),
-        pytest.raises(ToolError) as exc_info,
-    ):
-        await tools.get_device_operation_status("op-1", timeout_seconds=2)
-
-    err_text = str(exc_info.value)
-    assert "RESOURCE_NOT_FOUND" in err_text
-    assert "cleaned up" in err_text.lower()
-
-
-@pytest.mark.asyncio
-async def test_failed_mid_poll_raises_service_call_failed() -> None:
-    """If status flips to FAILED mid-poll, raise SERVICE_CALL_FAILED with the error message."""
-    pending = _make_operation(OperationStatus.PENDING)
-    failed = _make_operation(OperationStatus.FAILED)
-    failed.error_message = "device unreachable"
-    failed.completion_time = failed.start_time + 200
-
-    sequence = [pending, failed]
-    call_index = {"i": 0}
-
-    def fake_get(_op_id: str) -> Any:
-        i = call_index["i"]
-        call_index["i"] = min(i + 1, len(sequence) - 1)
-        return sequence[i]
-
-    async def fast_sleep(_secs: float) -> None:
-        return None
-
-    tools = DeviceControlTools(client=_client())
-
-    with (
-        patch(
-            "ha_mcp.tools.device_control.get_operation_from_memory",
-            side_effect=fake_get,
-        ),
-        patch.object(asyncio, "sleep", new=fast_sleep),
-        pytest.raises(ToolError) as exc_info,
-    ):
-        await tools.get_device_operation_status("op-1", timeout_seconds=2)
-
-    err_text = str(exc_info.value)
-    assert "SERVICE_CALL_FAILED" in err_text
-    assert "device unreachable" in err_text
-
-
-@pytest.mark.asyncio
-async def test_registered_status_tool_accepts_fractional_timeout() -> None:
+async def test_registered_status_tool_accepts_fractional_timeout(
+    core_client: HomeAssistantClient, pending: str
+) -> None:
     """The MCP boundary preserves a fractional timeout for follow-up calls."""
     from ha_mcp._vendor.fastmcp import FastMCP
     from ha_mcp.tools.tools_service import register_service_tools
 
-    device_tools = MagicMock()
-    device_tools.get_device_operation_status = AsyncMock(
-        return_value={
-            "success": True,
-            "operation_id": "op-1",
-            "status": "pending",
-        }
-    )
     mcp = FastMCP("test")
-    register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+    tools = DeviceControlTools(client=core_client)
+    register_service_tools(mcp, core_client, device_tools=tools)
     tool = await mcp.get_tool("ha_get_operation_status")
-
-    result = await tool.run({"operation_id": "op-1", "timeout_seconds": 0.5})
-
-    assert result.structured_content["operation_id"] == "op-1"
-    device_tools.get_device_operation_status.assert_awaited_once_with(
-        operation_id="op-1",
-        timeout_seconds=0.5,
-    )
+    assert tool is not None
+    with patch.object(
+        tools, "get_device_operation_status", wraps=tools.get_device_operation_status
+    ) as status:
+        result = await tool.run({"operation_id": pending, "timeout_seconds": 0.05})
+    assert result.structured_content["operation_id"] == pending
+    assert result.structured_content["status"] == "pending"
+    status.assert_awaited_once_with(operation_id=pending, timeout_seconds=0.05)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_timeout", [float("inf"), "inf", float("nan")])
 async def test_registered_status_tool_rejects_non_finite_timeout(
-    invalid_timeout: float | str,
+    core_client: HomeAssistantClient, invalid_timeout: float | str
 ) -> None:
     """The public polling window must always have a finite deadline."""
     from ha_mcp._vendor.fastmcp import FastMCP
     from ha_mcp.tools.tools_service import register_service_tools
 
-    device_tools = MagicMock()
-    device_tools.get_device_operation_status = AsyncMock()
     mcp = FastMCP("test")
-    register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+    register_service_tools(
+        mcp, core_client, device_tools=DeviceControlTools(client=core_client)
+    )
     tool = await mcp.get_tool("ha_get_operation_status")
+    assert tool is not None
 
     with pytest.raises(FastMCPValidationError):
         await tool.run({"operation_id": "op-1", "timeout_seconds": invalid_timeout})
-
-    device_tools.get_device_operation_status.assert_not_awaited()

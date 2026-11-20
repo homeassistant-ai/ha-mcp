@@ -115,9 +115,10 @@ class TestAreaSensorReferences:
             },
         )
 
-        assert data["error"]["code"] == "SERVICE_CALL_FAILED", (
-            f"Expected SERVICE_CALL_FAILED, got: {data.get('error')}"
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", (
+            f"Expected VALIDATION_INVALID_PARAMETER, got: {data.get('error')}"
         )
+        assert data["ha_error_code"] == "invalid_info"
         assert "sensor.demo_temperature" in json.dumps(data), (
             f"Error must name the offending entity: {data}"
         )

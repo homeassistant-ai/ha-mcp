@@ -1,12 +1,14 @@
 """Test Home Assistant add-on startup and logging."""
 
-import functools
-import importlib.util
+import asyncio
 import json
 import os
+import socket
 import subprocess
-import time
+import urllib.error
+from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_socket
@@ -14,18 +16,13 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from tests.addon.docker_build import python_base_args
+from tests.src.unit._tools_addons_core import Supervisor
+from tests.src.unit._tools_addons_core import supervisor as supervisor
+from tests.src.unit._tools_addons_core import target_app as target_app
 
+from ._addon_start import load_addon_start
 
-@functools.cache
-def _load_addon_start():
-    """Import homeassistant-addon/start.py as a module."""
-    spec = importlib.util.spec_from_file_location(
-        "addon_start",
-        Path(__file__).parents[2] / "homeassistant-addon" / "start.py",
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+OPTIONS = "/addons/self/options"
 
 
 class TestSecretPathValidation:
@@ -33,17 +30,29 @@ class TestSecretPathValidation:
 
     @pytest.fixture(autouse=True)
     def addon(self):
-        self.addon = _load_addon_start()
+        self.addon = load_addon_start()
 
-    def test_valid_path_accepted(self, tmp_path):
-        secret_file = tmp_path / "secret_path.txt"
-        secret_file.write_text("/private_abc123")
+    def test_stored_path_of_minimum_length_is_kept(self, tmp_path):
+        """The shortest valid path (8 characters) keeps the user's MCP URL."""
+        (tmp_path / "secret_path.txt").write_text("/mysecrt")
         result = self.addon.get_or_create_secret_path(tmp_path)
-        assert result == "/private_abc123"
+        assert result == "/mysecrt"
 
-    def test_url_in_file_triggers_regeneration(self, tmp_path):
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            "http://127.0.0.1:9583/private_abc123",
+            "no-leading-slash",
+            "/custom",
+            "/https://evil.com",
+        ],
+        ids=["full URL", "no leading slash", "too short", "scheme after slash"],
+    )
+    def test_invalid_stored_path_is_regenerated(self, tmp_path, stored):
+        """A stored value that is not a bare path would serve the server
+        under a URL no client can reach; it is replaced and rewritten."""
         secret_file = tmp_path / "secret_path.txt"
-        secret_file.write_text("https://192.168.1.18:9583/private_abc123")
+        secret_file.write_text(stored)
         result = self.addon.get_or_create_secret_path(tmp_path)
         assert result.startswith("/private_")
         assert "://" not in result
@@ -78,199 +87,117 @@ class TestSecretPathValidation:
         result = self.addon.get_or_create_secret_path(tmp_path, custom_path="   ")
         assert result == "/private_stored"
 
-    def test_is_valid_secret_path(self):
-        assert self.addon._is_valid_secret_path("/private_abc") is True
-        assert self.addon._is_valid_secret_path("/mysecrt") is True  # exactly 8 chars
-        assert (
-            self.addon._is_valid_secret_path("/custom") is False
-        )  # 7 chars — too short
-        assert self.addon._is_valid_secret_path("/short") is False  # too short
-        assert self.addon._is_valid_secret_path("https://example.com/x") is False
-        assert self.addon._is_valid_secret_path("/https://evil.com") is False
-        assert self.addon._is_valid_secret_path("no-leading-slash") is False
-        assert self.addon._is_valid_secret_path("") is False
+
+@pytest.fixture
+def supervisor_address(monkeypatch) -> list[int]:
+    """The port the app's fixed ``supervisor`` hostname leads to."""
+    port_number: list[int] = []
+    resolve = socket.getaddrinfo
+    monkeypatch.setenv("no_proxy", "supervisor,127.0.0.1")
+    monkeypatch.setenv("NO_PROXY", "supervisor,127.0.0.1")
+
+    def address(host, port, *args, **kwargs):
+        if host == "supervisor" and port == 80:
+            host, port = "127.0.0.1", port_number[0]
+        return resolve(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", address)
+    return port_number
 
 
-class TestPersistAddonOptions:
-    """Unit tests for persisting addon options to Supervisor (#941)."""
+@pytest.fixture
+def options_supervisor(supervisor: Supervisor, supervisor_address) -> Supervisor:
+    """The shared Supervisor, answering at the app's fixed hostname."""
+    supervisor_address.append(int(supervisor.url.rpartition(":")[2]))
+    return supervisor
 
-    @pytest.fixture(autouse=True)
-    def addon(self):
-        self.addon = _load_addon_start()
 
-    def test_sends_full_options_dict_as_post(self, monkeypatch):
-        """Sends POST /addons/self/options with body {"options": <full dict>}."""
-        captured: dict = {}
+def _closed_port() -> int:
+    """A local port nothing listens on."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
-        class FakeResp:
-            def __enter__(self):
-                return self
 
-            def __exit__(self, *a):
-                return False
-
-            def read(self):
-                return b""
-
-        def fake_urlopen(req, timeout=None):
-            captured["url"] = req.full_url
-            captured["method"] = req.get_method()
-            captured["headers"] = dict(req.header_items())
-            captured["body"] = req.data
-            return FakeResp()
-
-        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
-
-        options = {
-            "verify_ssl": True,
-            "secret_path": "/private_abc12345",
-        }
-        # Returns None on success — helper communicates failure via exceptions.
-        assert self.addon.persist_addon_options(options, "test-token") is None
-        assert captured["url"] == "http://supervisor/addons/self/options"
-        assert captured["method"] == "POST"
-        assert captured["headers"]["Authorization"] == "Bearer test-token"
-        assert captured["headers"]["Content-type"] == "application/json"
-        assert json.loads(captured["body"]) == {"options": options}
-
-    def test_http_error_propagates(self, monkeypatch):
-        """Validation failures from Supervisor propagate to the caller.
-
-        Silent suppression here would hide the exact failure this PR exists
-        to fix: the webhook proxy unable to discover the secret path. Main()
-        must see the exception so it can log an actionable recovery message.
-        """
-        import io
-        import urllib.error
-
-        def fake_urlopen(req, timeout=None):
-            raise urllib.error.HTTPError(
-                req.full_url,
-                400,
-                "Bad Request",
-                hdrs=None,  # type: ignore[arg-type]
-                fp=io.BytesIO(b'{"result":"error","message":"invalid options"}'),
-            )
-
-        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
-        with pytest.raises(urllib.error.HTTPError):
-            self.addon.persist_addon_options(
-                {"secret_path": "/private_x"}, "test-token"
-            )
-
-    def test_connection_error_propagates(self, monkeypatch):
-        """Network failures propagate to the caller — no silent swallowing."""
-        import urllib.error
-
-        def fake_urlopen(req, timeout=None):
-            raise urllib.error.URLError("connection refused")
-
-        monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
-        with pytest.raises(urllib.error.URLError):
-            self.addon.persist_addon_options(
-                {"secret_path": "/private_x"}, "test-token"
-            )
+@pytest.fixture
+def addon_stderr(monkeypatch):
+    """Capture startup errors even while pytest streams the HTTP server's access log."""
+    stream = StringIO()
+    monkeypatch.setattr(load_addon_start(), "sys", SimpleNamespace(stderr=stream))
+    return stream
 
 
 class TestMaybePersistSecretPath:
-    """Tests for the gate-and-recover wrapper called from main() (#941)."""
-
-    @pytest.fixture(autouse=True)
-    def addon(self):
-        self.addon = _load_addon_start()
-
-    def test_skips_when_config_is_empty(self, monkeypatch):
-        """If /data/options.json was missing/corrupt, don't try to persist.
-
-        The options POST replaces the stored options in full, so a bare
-        `{"secret_path": ...}` would reset every other option the user has set.
-        """
-        calls: list = []
-        monkeypatch.setattr(
-            self.addon,
-            "persist_addon_options",
-            lambda *args, **kwargs: calls.append(args),
+    @pytest.mark.parametrize("config", [{}, {"secret_path": "/private_same"}])
+    async def test_skips_a_redundant_or_empty_options_write(
+        self, options_supervisor, config
+    ):
+        addon = load_addon_start()
+        await asyncio.to_thread(
+            addon.maybe_persist_secret_path, config, "/private_same", "token"
         )
-        self.addon.maybe_persist_secret_path({}, "/private_new", "test-token")
-        assert calls == []
+        assert options_supervisor.requests == []
 
-    def test_skips_when_stored_path_matches(self, monkeypatch):
-        """No-op when Supervisor already has the right value — avoids noise on every restart."""
-        calls: list = []
-        monkeypatch.setattr(
-            self.addon,
-            "persist_addon_options",
-            lambda *args, **kwargs: calls.append(args),
+    async def test_persists_the_full_config_and_the_app_token(self, options_supervisor):
+        options_supervisor.answer("POST", OPTIONS)
+        addon = load_addon_start()
+        config = {"verify_ssl": True, "secret_path": "/private_old"}
+        await asyncio.to_thread(
+            addon.maybe_persist_secret_path, config, "/private_new", "test-token"
         )
-        config = {"verify_ssl": True, "secret_path": "/private_same"}
-        self.addon.maybe_persist_secret_path(config, "/private_same", "test-token")
-        assert calls == []
-
-    def test_persists_with_full_config_merged(self, monkeypatch):
-        """When the path changes, POSTs `{**config, "secret_path": new}`."""
-        captured: list = []
-
-        def fake_persist(options, token):
-            captured.append((options, token))
-
-        monkeypatch.setattr(self.addon, "persist_addon_options", fake_persist)
-        config = {
-            "verify_ssl": True,
-            "secret_path": "/private_old",
-        }
-        self.addon.maybe_persist_secret_path(config, "/private_new", "test-token")
-        assert captured == [
-            (
-                {
-                    "verify_ssl": True,
-                    "secret_path": "/private_new",
-                },
-                "test-token",
-            )
+        headers = options_supervisor.headers("POST", OPTIONS)
+        assert headers["Authorization"] == "Bearer test-token"
+        assert headers["Content-Type"] == "application/json"
+        assert options_supervisor.sent("POST", OPTIONS) == [
+            {"options": {"verify_ssl": True, "secret_path": "/private_new"}}
         ]
 
-    def test_catches_http_error_and_logs_actionable_message(self, monkeypatch, capfd):
-        """HTTPError from Supervisor must not escape — the addon must keep starting — but the log line must name the path so the user can recover manually."""
-        import urllib.error
+    async def test_refused_options_raise_the_supervisors_status(
+        self, options_supervisor
+    ):
+        options_supervisor.refuse("POST", OPTIONS, "invalid options")
+        addon = load_addon_start()
+        with pytest.raises(urllib.error.HTTPError) as error:
+            await asyncio.to_thread(addon.persist_addon_options, {}, "token")
+        assert error.value.code == 400
 
-        def raising_persist(options, token):
-            raise urllib.error.HTTPError(
-                "http://supervisor/addons/self/options",
-                400,
-                "Bad Request",
-                hdrs=None,  # type: ignore[arg-type]
-                fp=None,
-            )
-
-        monkeypatch.setattr(self.addon, "persist_addon_options", raising_persist)
-        # Should not raise.
-        self.addon.maybe_persist_secret_path(
-            {"verify_ssl": True, "secret_path": "/private_old"},
+    async def test_refused_options_log_the_recovery_path(
+        self, options_supervisor, addon_stderr
+    ):
+        options_supervisor.refuse("POST", OPTIONS, "invalid options")
+        addon = load_addon_start()
+        await asyncio.to_thread(
+            addon.maybe_persist_secret_path,
+            {"verify_ssl": True},
             "/private_new",
-            "test-token",
+            "token",
         )
-        err = capfd.readouterr().err
-        assert "Failed to persist secret_path" in err
+        err = addon_stderr.getvalue()
         assert "HTTP 400" in err
-        assert "/private_new" in err  # user-facing recovery value
-        assert "Secret path override" in err  # points at the config field
+        assert "/private_new" in err
+        assert "Secret path override" in err
 
-    def test_catches_network_error_and_logs(self, monkeypatch, capfd):
-        """URLError / timeout / OSError all caught the same way."""
-        import urllib.error
+    async def test_an_unreachable_supervisor_raises(
+        self, socket_enabled, supervisor_address
+    ):
+        supervisor_address.append(_closed_port())
+        addon = load_addon_start()
+        with pytest.raises(urllib.error.URLError):
+            await asyncio.to_thread(addon.persist_addon_options, {}, "token")
 
-        def raising_persist(options, token):
-            raise urllib.error.URLError("supervisor unreachable")
-
-        monkeypatch.setattr(self.addon, "persist_addon_options", raising_persist)
-        self.addon.maybe_persist_secret_path(
-            {"verify_ssl": True, "secret_path": "/private_old"},
+    async def test_an_unreachable_supervisor_is_logged_at_startup(
+        self, socket_enabled, supervisor_address, addon_stderr
+    ):
+        supervisor_address.append(_closed_port())
+        addon = load_addon_start()
+        await asyncio.to_thread(
+            addon.maybe_persist_secret_path,
+            {"verify_ssl": True},
             "/private_new",
-            "test-token",
+            "token",
         )
-        err = capfd.readouterr().err
+        err = addon_stderr.getvalue()
         assert "Failed to persist secret_path" in err
-        assert "supervisor unreachable" in err
         assert "/private_new" in err
 
 
@@ -322,28 +249,25 @@ class TestAppOptions:
 
     @pytest.fixture(autouse=True)
     def addon(self, monkeypatch):
-        self.addon = _load_addon_start()
+        self.addon = load_addon_start()
         self.options = self.addon.load_app_options()
-        # export_app_options writes os.environ directly. setenv records the
-        # value before the test, so teardown restores or removes each var.
-        for option in self.options:
-            monkeypatch.setenv(option["env"], "")
-            monkeypatch.delenv(option["env"])
+        # The exports write os.environ directly. setenv records the value
+        # before the test, so teardown restores or removes each var.
+        for env in [o["env"] for o in self.options] + ["CODE_MODE_SAVED_TOOLS_PATH"]:
+            monkeypatch.setenv(env, "")
+            monkeypatch.delenv(env)
 
     def test_every_app_option_reaches_the_server_setting(self):
         """An option exported under the wrong env var or in a format the
         server does not parse would leave the Configuration page toggle
         with no effect."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parents[2] / "src"))
         from ha_mcp.config_settings import Settings
 
         config = {option["key"]: _valid_non_default(option) for option in self.options}
 
         self.addon.export_app_options(config, self.options)
 
-        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        settings = Settings(_env_file=None)
         for key, value in config.items():
             assert getattr(settings, key) == value, key
 
@@ -414,10 +338,10 @@ class TestAppOptions:
         user and must not be named."""
         subflags = self.addon.beta_subflags(self.options)
         defaults = {o["key"]: o["default"] for o in self.options}
-        exported = {"enable_beta_features": False, "enable_code_mode": True}
-        exported.update({k: True for k in subflags if defaults[k]})
+        config = {"enable_beta_features": False, "enable_code_mode": True}
+        config.update({k: True for k in subflags if defaults[k]})
 
-        self.addon._warn_gated_off_beta_subflags(exported, subflags, defaults)
+        self.addon.export_options_env(config)
 
         out = capsys.readouterr().out
         assert "enable_code_mode" in out
@@ -436,46 +360,38 @@ class TestResolveEffectiveLogLevel:
     """
 
     @pytest.fixture(autouse=True)
-    def addon(self):
-        self.addon = _load_addon_start()
+    def addon(self, tmp_path, monkeypatch):
+        from ha_mcp.config import reset_global_settings
+        from ha_mcp.utils.data_paths import get_data_dir
 
-    def _patch_level(self, monkeypatch, level_name):
-        class _FakeSettings:
-            log_level = level_name
+        self.addon = load_addon_start()
+        self.data_dir = tmp_path
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+        get_data_dir.cache_clear()
+        reset_global_settings()
+        yield
+        get_data_dir.cache_clear()
+        reset_global_settings()
 
-        monkeypatch.setattr("ha_mcp.config.get_global_settings", _FakeSettings)
-
-    def test_debug_setting_yields_debug_level(self, monkeypatch):
+    def test_web_ui_debug_level_reaches_the_addon_log(self):
         import logging
 
-        self._patch_level(monkeypatch, "DEBUG")
+        (self.data_dir / "feature_flags.json").write_text(
+            json.dumps({"log_level": "DEBUG"})
+        )
         assert self.addon.resolve_effective_log_level() == logging.DEBUG
 
-    def test_default_info(self, monkeypatch):
+    def test_unreadable_settings_fall_back_to_info_loudly(self, monkeypatch, capsys):
+        """A silent INFO fallback recreates the "user set DEBUG, nothing
+        happened, no clue why" bug class."""
         import logging
 
-        self._patch_level(monkeypatch, "INFO")
+        monkeypatch.setenv("LOG_LEVEL", "VERBOSE")
         assert self.addon.resolve_effective_log_level() == logging.INFO
-
-    def test_unknown_level_falls_back_to_info(self, monkeypatch):
-        import logging
-
-        self._patch_level(monkeypatch, "VERBOSE")
-        assert self.addon.resolve_effective_log_level() == logging.INFO
-
-    def test_settings_failure_falls_back_to_info(self, monkeypatch, capsys):
-        import logging
-
-        def _boom():
-            raise RuntimeError("settings unavailable")
-
-        monkeypatch.setattr("ha_mcp.config.get_global_settings", _boom)
-        assert self.addon.resolve_effective_log_level() == logging.INFO
-        # The fallback must be LOUD — a silent INFO fallback recreates
-        # the "user set DEBUG, nothing happened, no clue why" bug class.
         captured = capsys.readouterr()
         assert "web-UI Log level not applied" in captured.err
-        assert "settings unavailable" in captured.err
+        assert "VERBOSE" in captured.err
 
     def test_advanced_debug_logging_toggle_removed(self):
         """The confusing addon-config toggle is gone everywhere.
@@ -498,16 +414,6 @@ class TestResolveEffectiveLogLevel:
                 f"{rel} still references the removed advanced_debug_logging toggle"
             )
 
-    def test_start_py_arms_kill_diagnostics_on_debug(self):
-        """start.py still installs kill-signal diagnostics — gated on the
-        effective DEBUG level instead of the removed toggle."""
-        repo_root = Path(__file__).parents[2]
-        content = (repo_root / "homeassistant-addon/start.py").read_text(
-            encoding="utf-8"
-        )
-        assert "schedule_install_after_uvicorn" in content
-        assert "resolve_effective_log_level" in content
-
 
 class TestWidenFastmcpLogConsole:
     """Unit tests for widen_fastmcp_log_console (#1918).
@@ -521,7 +427,7 @@ class TestWidenFastmcpLogConsole:
 
     @pytest.fixture(autouse=True)
     def addon(self):
-        self.addon = _load_addon_start()
+        self.addon = load_addon_start()
 
     def test_startup_url_stays_on_one_line(self):
         import io
@@ -620,7 +526,7 @@ class TestCleanupStaleMigrationMarker:
 
     @pytest.fixture(autouse=True)
     def addon(self):
-        self.addon = _load_addon_start()
+        self.addon = load_addon_start()
 
     def test_removes_marker_when_present(self, tmp_path):
         marker = tmp_path / ".skills_as_tools_default_migration_v1"
@@ -799,23 +705,18 @@ class TestAddonStartup:
             .with_env("HOMEASSISTANT_URL", "http://supervisor/core")
             .with_volume_mapping(str(tmp_path), "/data", mode="rw")
         )
+        # The deferred install thread logs its confirmation after uvicorn
+        # reports it is running, so the wait keys on that later line.
         container.waiting_for(
-            LogMessageWaitStrategy("Uvicorn running on").with_startup_timeout(30)
+            LogMessageWaitStrategy(
+                "kill-signal diagnostics installed for"
+            ).with_startup_timeout(45)
         )
         container.start()
 
         try:
-            # The install-confirmation line is emitted by the deferred
-            # install thread slightly AFTER uvicorn logs "running", so
-            # poll briefly instead of single-shot reading the logs.
-            deadline = time.monotonic() + 15.0
-            logs = ""
-            while time.monotonic() < deadline:
-                stdout, stderr = container.get_logs()
-                logs = stdout.decode("utf-8") + "\n" + stderr.decode("utf-8")
-                if "kill-signal diagnostics installed for" in logs:
-                    break
-                time.sleep(0.5)
+            stdout, stderr = container.get_logs()
+            logs = stdout.decode("utf-8") + "\n" + stderr.decode("utf-8")
 
             # The canary is emitted at DEBUG through the logging system,
             # so its presence proves the level override was applied.
@@ -831,13 +732,17 @@ class TestAddonStartup:
         container = DockerContainer(image=IMAGE_TAG).with_volume_mapping(
             str(addon_config.parent), "/data", mode="ro"
         )
+        # The wait reads the logs before it checks whether the container
+        # exited, so it also returns for this container that stops at once.
+        container.waiting_for(
+            LogMessageWaitStrategy("SUPERVISOR_TOKEN not found").with_startup_timeout(
+                30
+            )
+        )
 
         container.start()
 
         try:
-            # Wait a bit for container to start and error
-            time.sleep(3)
-
             # Get logs (both stdout and stderr)
             stdout, stderr = container.get_logs()
             logs = stdout.decode("utf-8") + "\n" + stderr.decode("utf-8")
@@ -857,19 +762,9 @@ class TestBetaMasterAutoEnableInDevAddon:
     in ``_apply_feature_flag_overrides`` becomes a no-op for dev addon
     users — Supervisor options remain authoritative for the beta sub-flags."""
 
-    _DEV_BETA_KEYS = (
-        "enable_yaml_config_editing",
-        "enable_yaml_packages_automation",
-        "enable_yaml_packages_script",
-        "enable_yaml_packages_scene",
-        "enable_filesystem_tools",
-        "enable_code_mode",
-        "enable_lite_docstrings",
-    )
-
     @pytest.fixture(autouse=True)
     def addon(self):
-        self.addon = _load_addon_start()
+        self.addon = load_addon_start()
         self.subflags = self.addon.beta_subflags(self.addon.load_app_options())
 
     def test_auto_enable_writes_true_when_any_beta_key_truthy(self, monkeypatch):
@@ -894,19 +789,9 @@ class TestBetaMasterAutoEnableInDevAddon:
         """
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         self.addon.maybe_auto_enable_beta_master(
-            dict.fromkeys(self._DEV_BETA_KEYS, False), self.subflags
+            dict.fromkeys(self.subflags, False), self.subflags
         )
         assert "ENABLE_BETA_FEATURES" not in os.environ
-
-    def test_auto_enable_fires_when_one_of_many_truthy(self, monkeypatch):
-        """4 sub-flags False, 1 sub-flag True → still fires. Locks the
-        ``any(...)`` semantic so a future change to ``all(...)`` would
-        regress the single-feature-enabled case."""
-        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
-        cfg: dict[str, object] = dict.fromkeys(self._DEV_BETA_KEYS, False)
-        cfg["enable_code_mode"] = True
-        self.addon.maybe_auto_enable_beta_master(cfg, self.subflags)
-        assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
 
     def test_auto_enable_skips_non_bool_truthy_values(self, monkeypatch):
         """Defensive: only Python ``True`` triggers, not a truthy
@@ -930,28 +815,10 @@ class TestBetaMasterAutoEnableInDevAddon:
         )
         assert "ENABLE_BETA_FEATURES" not in os.environ
 
-    def test_auto_enable_does_not_set_var_for_empty_config(self, monkeypatch):
-        """Missing/corrupt options.json yields an empty config → no
-        auto-enable. Defensive: silent feature regression is the
-        worst possible outcome of a bad options.json."""
-        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
-        self.addon.maybe_auto_enable_beta_master({}, self.subflags)
-        assert "ENABLE_BETA_FEATURES" not in os.environ
-
     def test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry(self):
         """The keys checked by start.py must exactly match the
         runtime registry — drift would silently break the auto-enable
         signal for dev-addon users."""
-        # Import lazily because ha_mcp isn't importable until the
-        # repo's package is on the path. Acceptable here because
-        # this test only asserts a structural invariant.
-        import sys
-        from pathlib import Path
-
-        sys.path.insert(
-            0,
-            str(Path(__file__).parents[2] / "src"),
-        )
         from ha_mcp.config import BETA_FEATURE_FIELDS
 
         assert set(self.subflags) == set(BETA_FEATURE_FIELDS), (

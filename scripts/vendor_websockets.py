@@ -35,8 +35,6 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _VENDOR_DIR = _REPO_ROOT / "src" / "ha_mcp" / "_vendor"
-_PIN_FILE = _VENDOR_DIR / "requirements.txt"
-_TARGET = _VENDOR_DIR / "websockets"
 _SDIST_URL = "https://pypi.org/packages/source/w/websockets/websockets-{version}.tar.gz"
 
 
@@ -84,11 +82,11 @@ def _write_manifest(tree: Path) -> None:
     )
 
 
-def read_pin() -> str:
-    for raw_line in _PIN_FILE.read_text(encoding="utf-8").splitlines():
+def read_pin(pin_file: Path = _VENDOR_DIR / "requirements.txt") -> str:
+    for raw_line in pin_file.read_text(encoding="utf-8").splitlines():
         if match := re.fullmatch(r"websockets==([A-Za-z0-9.!+-]+)", raw_line.strip()):
             return match.group(1)
-    raise SystemExit(f"no 'websockets==<version>' pin found in {_PIN_FILE}")
+    raise SystemExit(f"no 'websockets==<version>' pin found in {pin_file}")
 
 
 def _stage_sdist(payload: bytes, version: str, staging: Path) -> int:
@@ -135,7 +133,7 @@ def _stage_sdist(payload: bytes, version: str, staging: Path) -> int:
     return extracted
 
 
-def _promote(staging: Path) -> None:
+def _promote(staging: Path, target: Path) -> None:
     """Swap the staged tree into place, keeping the live one until it lands.
 
     The live tree is moved ASIDE rather than deleted first: deleting it up
@@ -144,23 +142,24 @@ def _promote(staging: Path) -> None:
     the package imports only the vendored copy, so that is an unimportable
     checkout whose recovery is a git command the failure never mentions.
     """
-    backup = _TARGET.with_name(_TARGET.name + ".previous")
+    backup = target.with_name(target.name + ".previous")
     shutil.rmtree(backup, ignore_errors=True)
-    had_previous = _TARGET.exists()
+    had_previous = target.exists()
     if had_previous:
-        _TARGET.rename(backup)
+        target.rename(backup)
     try:
-        staging.rename(_TARGET)
+        staging.rename(target)
     except BaseException:
         if had_previous:
-            backup.rename(_TARGET)
+            backup.rename(target)
         shutil.rmtree(staging, ignore_errors=True)
         raise
     shutil.rmtree(backup, ignore_errors=True)
 
 
-def main() -> int:
-    version = read_pin()
+def main(vendor_dir: Path = _VENDOR_DIR) -> int:
+    target = vendor_dir / "websockets"
+    version = read_pin(vendor_dir / "requirements.txt")
     url = _SDIST_URL.format(version=version)
     print(f"downloading {url}")
     with urllib.request.urlopen(url, timeout=60) as response:
@@ -170,7 +169,7 @@ def main() -> int:
     # live tree would leave a half-populated vendored package behind on any
     # mid-loop failure (a rejected traversal member, a write error), and the
     # only recovery would be a git checkout the failure never mentions.
-    staging = _TARGET.with_name(_TARGET.name + ".incoming")
+    staging = target.with_name(target.name + ".incoming")
     if staging.exists():
         shutil.rmtree(staging)
 
@@ -191,8 +190,8 @@ def main() -> int:
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
-    _promote(staging)
-    print(f"vendored websockets=={version}: {extracted} files -> {_TARGET}")
+    _promote(staging, target)
+    print(f"vendored websockets=={version}: {extracted} files -> {target}")
     return 0
 
 

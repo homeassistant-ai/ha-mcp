@@ -132,7 +132,7 @@ async def test_retired_tool_names_are_resolved_before_the_policy_gate(
 ) -> None:
     """Registration order is inbound order (first added = outermost).
 
-    The gate resolves a retired name itself (``policy/test_middleware.py``);
+    The gate resolves a retired name itself (``policy/test_middleware_gating.py``);
     the alias still runs ahead of it, which keeps every other name-keyed
     middleware in the chain reading the current name.
     """

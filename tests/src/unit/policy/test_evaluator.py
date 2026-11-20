@@ -599,7 +599,7 @@ class TestBulkSelectorFailSafe:
         """Documents the exact bypass a raw ``evaluate()`` call is vulnerable to.
 
         This is what ``evaluate()`` sees BEFORE ``PolicyMiddleware`` applies
-        ``normalize_stringified_containers`` (see test_middleware.py's
+        ``normalize_stringified_containers`` (see test_middleware_gating.py's
         end-to-end coverage) -- a client that sends ``selector`` as a JSON
         string (Claude Desktop stdio does this; see
         ``tools/coercion.py``'s ``JSON_STRING_COERCION``) makes

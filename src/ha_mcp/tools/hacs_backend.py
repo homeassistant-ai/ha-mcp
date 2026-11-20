@@ -5,7 +5,6 @@ integration and removes the ``hacs/*`` WebSocket commands. The HACS tools
 talk to whichever API the instance serves, Marketplace first.
 """
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
@@ -98,12 +97,6 @@ DUPLICATE_RECORD_SUGGESTIONS = [
     + ".storage/marketplace.repositories (.storage/hacs.repositories on HACS), "
     + "start Core, then update the kept record.",
 ]
-# Core's ``integration_owned`` message: "The {domain} directory belongs to
-# {owner}." The store sends no error code for it, so the whole sentence is
-# matched, owner as ``owner/repo``, never a fragment of some other message.
-_OWNED_DIRECTORY = re.compile(
-    r"^(?:Command failed: )?The \S+ directory belongs to ([\w.-]+/[\w-][\w.-]*?)\.?$"
-)
 
 
 def _owned_directory_suggestions(owner: str) -> list[str]:
@@ -163,34 +156,32 @@ HACS_API = StoreApi("hacs")
 STORE_APIS = (StoreApi("marketplace"), HACS_API)
 
 
-async def _probe(ws_client: Any, command: str) -> tuple[dict[str, Any] | None, str]:
-    """``(result, "")`` on success, else ``(None, error code or message)``."""
+async def _probe(
+    ws_client: Any, command: str
+) -> tuple[dict[str, Any] | None, str | None, str]:
+    """Return the store reply, or its refusal code and display message."""
     try:
         reply = await ws_client.send_command(command)
     except HomeAssistantCommandError as err:
-        return None, err.code or str(err)
+        return None, err.code, str(err)
     if reply.get("success") is False:
         error = reply.get("error")
         if isinstance(error, dict):
-            return None, error.get("code") or error.get("message") or ""
-        return None, str(error)
-    return reply.get("result") or {}, ""
-
-
-def _is_unknown(code: str) -> bool:
-    return code == "unknown_command" or "unknown command" in code.lower()
+            return None, error.get("code"), str(error.get("message") or error)
+        return None, reply.get("error_code"), str(error)
+    return reply.get("result") or {}, None, ""
 
 
 async def detect_store_api(ws_client: Any) -> StoreApi:
     """Return the store API that answers, or raise COMPONENT_NOT_INSTALLED."""
-    result, code = await _probe(ws_client, "marketplace/info")
+    result, code, reason = await _probe(ws_client, "marketplace/info")
     if result is not None:
         return StoreApi("marketplace", result)
-    if not _is_unknown(code):
+    if code != "unknown_command":
         raise_tool_error(
             create_error_response(
                 ErrorCode.COMPONENT_NOT_INSTALLED,
-                f"The Marketplace is not available ({code}).",
+                f"The Marketplace is not available ({reason}).",
                 suggestions=[
                     "Check Settings > Devices & services > Marketplace and the "
                     "Home Assistant log for why it failed to load",
@@ -198,14 +189,14 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
             )
         )
 
-    result, code = await _probe(ws_client, "hacs/info")
+    result, code, reason = await _probe(ws_client, "hacs/info")
     if result is not None:
         return StoreApi("hacs", result)
-    if not _is_unknown(code):
+    if code != "unknown_command":
         raise_tool_error(
             create_error_response(
                 ErrorCode.COMPONENT_NOT_INSTALLED,
-                f"HACS is installed but not responding: {code}",
+                f"HACS is installed but not responding: {reason}",
                 suggestions=[
                     "Restart Home Assistant",
                     "Check Home Assistant logs for HACS errors",
@@ -229,10 +220,17 @@ async def detect_store_api(ws_client: Any) -> StoreApi:
     return HACS_API  # unreachable: raise_tool_error always raises
 
 
+def _directory_owner(err: HomeAssistantCommandError) -> str | None:
+    """The installed record that owns the integration's directory, when the
+    Marketplace refused for that (``integration_owned``)."""
+    if err.translation_key != "integration_owned":
+        return None
+    owner = (err.translation_placeholders or {}).get("owner")
+    return owner if isinstance(owner, str) else None
+
+
 def is_owned_directory_refusal(err: HomeAssistantCommandError) -> bool:
-    """Whether the store refused because another installed record owns the
-    integration's directory."""
-    return _OWNED_DIRECTORY.match(str(err).strip()) is not None
+    return _directory_owner(err) is not None
 
 
 def raise_store_error(
@@ -252,13 +250,13 @@ def raise_store_error(
     owner hint whatever ha-mcp's own records look like.
     """
     suggestions = _GATE_SUGGESTIONS.get(err.code or "")
-    if match := _OWNED_DIRECTORY.match(str(err).strip()):
+    if owner := _directory_owner(err):
         owners = {r.lower() for r in installed_records or []}
-        if len(owners) > 1 and match[1].lower() in owners:
+        if len(owners) > 1 and owner.lower() in owners:
             suggestions = DUPLICATE_RECORD_SUGGESTIONS
             context = {**context, "installed": installed_records}
         else:
-            suggestions = _owned_directory_suggestions(match[1])
+            suggestions = _owned_directory_suggestions(owner)
     if suggestions:
         raise_tool_error(
             create_error_response(

@@ -207,3 +207,19 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
         )
         return None
     return result
+
+
+async def device_list_reply(client: Any) -> dict[str, Any]:
+    """The device registry as a ``config/device_registry/list`` reply, the
+    component asked first; without its answer Core's command is sent.
+
+    Not for rows the visibility resolver or the bulk selector judges: those
+    read :func:`~ha_mcp.visibility.resolver.core_device_list_reply`.
+    """
+    via_component = await fetch_device_list_via_component(client)
+    if via_component is not None:
+        return {"success": True, "result": via_component["devices"]}
+    reply: dict[str, Any] = await client.send_websocket_message(
+        {"type": "config/device_registry/list"}
+    )
+    return reply

@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import pytest
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
@@ -22,6 +23,21 @@ class HeldCommand:
         self.arrived = asyncio.Event()
         self.release = asyncio.Event()
         self.calls = 0
+
+    async def reached_by(self, call: asyncio.Task[Any]) -> None:
+        """Wait until ``call``'s request is held at Core.
+
+        A call that ends first never reached Core: its own error is raised, and a
+        call that returned fails the test, instead of the wait hanging.
+        """
+        arrived = asyncio.ensure_future(self.arrived.wait())
+        try:
+            await asyncio.wait({call, arrived}, return_when=asyncio.FIRST_COMPLETED)
+            if not arrived.done():
+                pytest.fail(f"the call ended before Core had it: {call.result()!r}")
+        finally:
+            arrived.cancel()
+            await asyncio.gather(arrived, return_exceptions=True)
 
 
 @asynccontextmanager

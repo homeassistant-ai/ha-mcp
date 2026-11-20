@@ -17,14 +17,13 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 
 from custom_components.ha_mcp_tools.websocket_api import system as component_system
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools import tools_search
-from ha_mcp.tools.component_api import DEVICE_REGISTRY_CHILD_SEMANTICS, ComponentCaps
 from ha_mcp.tools.search import component as search_component
 from ha_mcp.tools.tools_config_dashboards import WS_DASHBOARDS
 
@@ -46,7 +45,7 @@ def _fail_component_search(monkeypatch: pytest.MonkeyPatch) -> None:
         raise HomeAssistantError("boom")
 
     monkeypatch.setattr(
-        "custom_components.ha_mcp_tools.websocket_api.search._search_config_surface",
+        "custom_components.ha_mcp_tools.websocket_api.search.search_config_surface",
         _boom,
     )
 
@@ -243,32 +242,29 @@ class TestDashboardSplitComponentLegFailure:
     async def test_unknown_command_falls_back_silently(
         self,
         hass: HomeAssistant,
-        core_client: HomeAssistantClient,
+        component_core_client: HomeAssistantClient,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Capabilities cached as serving search, but Core, without the
-        component, answers ``ha_mcp_tools/search`` unknown_command: the stale
+        """A component downgraded since the probe no longer registers
+        ``ha_mcp_tools/search``, so Core answers it unknown_command: the stale
         capabilities are dropped and the route is a silent legacy one, with no
         warning naming a failed component."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
         assert await async_setup_component(hass, "config", {})
-        served = ComponentCaps(
-            1, "2.2.2", frozenset({"search", DEVICE_REGISTRY_CHILD_SEMANTICS}), {}
-        )
-        monkeypatch.setattr(
-            tools_search, "get_component_caps", AsyncMock(return_value=served)
-        )
+        monkeypatch.delitem(hass.data[websocket_api.DOMAIN], _COMPONENT_SEARCH)
         invalidated = MagicMock(wraps=search_component.invalidate_caps)
         monkeypatch.setattr(search_component, "invalidate_caps", invalidated)
         monkeypatch.setattr(
-            core_client, "get_states", AsyncMock(wraps=core_client.get_states)
+            component_core_client,
+            "get_states",
+            AsyncMock(wraps=component_core_client.get_states),
         )
-        ha_search = _build_ha_search(core_client)
+        ha_search = _build_ha_search(component_core_client)
 
         resp = await ha_search(**_QUERY)
 
         assert resp["success"] is True
-        invalidated.assert_called_once_with(core_client)
-        assert cast("AsyncMock", core_client.get_states).await_count == 1
+        invalidated.assert_called_once_with(component_core_client)
+        assert cast("AsyncMock", component_core_client.get_states).await_count == 1
         assert not any("served via legacy path" in w for w in resp["warnings"])

@@ -881,7 +881,7 @@ class ComponentSearchMixin(LegacySearchMixin):
         """
         semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_LIMIT)
         try:
-            records, failed = await self._smart_tools._search_dashboards_surface(
+            records, failed = await self._smart_tools.search_dashboards_surface(
                 req.query_text.lower(),
                 req.exact_match,
                 semaphore,

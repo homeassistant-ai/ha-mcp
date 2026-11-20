@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Vojo de konservitaj iloj",
     "advanced.code_mode_saved_tools_path.help": "JSON-dosiero uzata por persisti proprajn ilojn tra restartigoj.",
     "advanced.extra_yaml_write_keys.label": "Ekstraj YAML-skribaj ŝlosiloj",
-    "advanced.extra_yaml_write_keys.help": "Kromaj ĉefnivelaj ŝlosiloj, kiujn ha_config_set_yaml povas skribi krom la enkonstruitaj, por YAML-unuaj integriĝoj en ĉi tiu instalo (ekz. alert2). Enigu unu ŝlosilon por ĉiu linio aŭ disigu ŝlosilojn per komoj. Ŝlosiloj, kiuj redefinas la propran fidlimon de Home Assistant, neniam povas esti aldoniĝaj kaj estas ignoritaj. Postulas la propran komponaĵon 1.2.4 aŭ pli novan.",
+    "advanced.extra_yaml_write_keys.help": "Kromaj ĉefnivelaj ŝlosiloj, kiujn ha_config_set_yaml rajtas skribi krom la enkonstruitaj, por YAML-unuarangaj integriĝoj en ĉi tiu instalo (ekz. alert2). Enigu unu ŝlosilon po linio aŭ disigu ŝlosilojn per komoj. Ŝlosiloj, kiuj redifinas la propran fidlimon de Home Assistant, neniam povas esti aldonitaj kaj estas ignorataj.",
     "advanced.redact_app_option_keys.label": "Pliaj aplikaĵopciaj ŝlosiloj por kaŝi",
     "advanced.redact_app_option_keys.help": "Nomoj de aplikaĵaj (aldonaĵaj) opcioj kaŝendaj kiel pasvortkampoj, por aplikaĵoj kies skemo konservas sekreton kiel plata teksto (ekzemple backup_password). Disigu nomojn per komoj aŭ novaj linioj. Nomo aplikiĝas al ĉiu aplikaĵo; skribu app_slug:name por limigi ĝin al unu aplikaĵo. Nomi opciogrupon kovras ĉiun opcion en ĝi. Uzata nur dum \"Redact Secrets\" estas ŝaltita. Malplena defaŭlte.",
     "advanced.sidecar_pin_port.label": "Flankveturila pordo de Agorda UI",
@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Listigi Etaĝojn kaj Areojn",
-      "description": "Listigu etaĝojn ordigitajn laŭ nivelo kreskante, ĉiu kun siaj asignitaj areoj nestitaj, plus areoj sen etaĝo."
+      "description": "Listu etaĝojn en la ordo, kiel Home Assistant konservas ilin, ĉiu kun siaj asignitaj areoj ennestigitaj, kaj krome areojn sen etaĝo."
     },
     "ha_list_services": {
       "title": "Listigi Disponeblajn Servojn",
@@ -870,8 +870,8 @@
       "description": "Serĉi entojn (lumoj, sensiloj, ŝaltiloj, klimato, ktp.) laŭ nomo, domajno, aŭ areo — KAJ ene de aŭtomatigo/skripto/j"
     },
     "ha_set_area_or_floor": {
-      "title": "Krei aŭ Ĝisdatigi Areon aŭ Etaĝon",
-      "description": "Krei aŭ ĝisdatigi areon aŭ etaĝon de Home Assistant."
+      "title": "Krei, Ĝisdatigi aŭ Reordigi Areojn aŭ Etaĝojn",
+      "description": "Krei, ĝisdatigi aŭ reordigi areojn aŭ etaĝojn de Home Assistant."
     },
     "ha_set_device": {
       "title": "Agordi Aparaton",

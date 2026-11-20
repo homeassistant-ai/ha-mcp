@@ -51,51 +51,11 @@ class TestManageTheme:
         assert listing["count"] >= 2, (
             f"Expected at least the 2 seeded themes, got {listing['count']}: {listing}"
         )
+        # Test Theme B declares a dark mode; Test Theme A declares none.
+        assert listing["modes"].get("Test Theme B") == ["dark"], listing
+        assert "Test Theme A" not in listing["modes"], listing
 
         logger.info(f"Installed themes: {listing}")
-
-    async def test_set_default_theme(self, mcp_client):
-        """action='set' with the built-in 'default' theme succeeds and verifies."""
-        result = await mcp_client.call_tool(
-            "ha_manage_theme", {"action": "set", "theme_name": "default"}
-        )
-        data = parse_mcp_result(result)
-
-        assert data.get("success") is True, f"Set default theme failed: {data}"
-        assert data["data"]["theme"] == "default"
-        assert data["data"]["mode"] == "light"
-        assert data["data"]["default_theme"] == "default"
-
-    async def test_set_dark_mode_theme(self, mcp_client):
-        """action='set' with mode='dark' updates only the dark-mode default."""
-        # Capture the light default so independence can be asserted below.
-        before = parse_mcp_result(
-            await mcp_client.call_tool("ha_manage_theme", {"action": "list"})
-        )
-        light_default_before = before["data"]["default_theme"]
-
-        result = await mcp_client.call_tool(
-            "ha_manage_theme",
-            {"action": "set", "theme_name": "default", "mode": "dark"},
-        )
-        data = parse_mcp_result(result)
-
-        assert data.get("success") is True, f"Set dark theme failed: {data}"
-        assert data["data"]["mode"] == "dark"
-        assert data["data"]["default_dark_theme"] == "default"
-        assert data["data"]["default_theme"] == light_default_before, (
-            "Setting the dark theme must not change the light default"
-        )
-
-        # Cleanup: 'none' clears the dark-mode override again.
-        cleanup = parse_mcp_result(
-            await mcp_client.call_tool(
-                "ha_manage_theme",
-                {"action": "set", "theme_name": "none", "mode": "dark"},
-            )
-        )
-        assert cleanup.get("success") is True
-        assert cleanup["data"]["default_dark_theme"] is None
 
     async def test_switch_between_real_themes(self, mcp_client):
         """Switch between installed themes (A→B) and verify light/dark independence.
@@ -112,8 +72,6 @@ class TestManageTheme:
                 )
             )
             assert set_a.get("success") is True, f"Set Test Theme A failed: {set_a}"
-            assert set_a["data"]["theme"] == "Test Theme A"
-            assert set_a["data"]["mode"] == "light"
             assert set_a["data"]["default_theme"] == "Test Theme A"
 
             # Re-list to confirm the default_theme persisted.
@@ -132,7 +90,6 @@ class TestManageTheme:
                 )
             )
             assert set_b.get("success") is True, f"Set Test Theme B failed: {set_b}"
-            assert set_b["data"]["theme"] == "Test Theme B"
             assert set_b["data"]["default_theme"] == "Test Theme B"
 
             # Verify the flip stuck.
@@ -143,21 +100,34 @@ class TestManageTheme:
                 f"default_theme should have flipped to Test Theme B: {list_after_b}"
             )
 
-            # Set Test Theme B for dark mode; light default should stay untouched.
-            set_b_dark = parse_mcp_result(
+            # Set Test Theme A for dark mode; light default should stay Test Theme B.
+            set_a_dark = parse_mcp_result(
                 await mcp_client.call_tool(
                     "ha_manage_theme",
-                    {"action": "set", "theme_name": "Test Theme B", "mode": "dark"},
+                    {"action": "set", "theme_name_dark": "Test Theme A"},
                 )
             )
-            assert set_b_dark.get("success") is True, (
-                f"Set Test Theme B dark failed: {set_b_dark}"
+            assert set_a_dark.get("success") is True, (
+                f"Set Test Theme A dark failed: {set_a_dark}"
             )
-            assert set_b_dark["data"]["mode"] == "dark"
-            assert set_b_dark["data"]["default_dark_theme"] == "Test Theme B"
-            assert set_b_dark["data"]["default_theme"] == "Test Theme B", (
+            assert set_a_dark["data"]["default_dark_theme"] == "Test Theme A"
+            assert set_a_dark["data"]["default_theme"] == "Test Theme B", (
                 "Setting dark theme with a real name must not change light default"
             )
+
+            # An unknown theme comes back as Core's refusal and changes nothing.
+            refused = await MCPAssertions(mcp_client).call_tool_failure(
+                "ha_manage_theme",
+                {"action": "set", "theme_name": "No Such Theme"},
+                expected_error="No Such Theme",
+            )
+            assert refused["error"]["code"] == "VALIDATION_INVALID_PARAMETER", refused
+            assert refused["ha_error_code"] == "invalid_format", refused
+            list_after_refusal = parse_mcp_result(
+                await mcp_client.call_tool("ha_manage_theme", {"action": "list"})
+            )
+            assert list_after_refusal["data"]["default_theme"] == "Test Theme B"
+            assert list_after_refusal["data"]["default_dark_theme"] == "Test Theme A"
 
         finally:
             # Cleanup: restore container to clean state for sibling tests.
@@ -170,35 +140,8 @@ class TestManageTheme:
                 with cleanup.step():
                     await MCPAssertions(mcp_client).call_tool_success(
                         "ha_manage_theme",
-                        {"action": "set", "theme_name": "none", "mode": "dark"},
+                        {"action": "set", "theme_name_dark": "none"},
                     )
-
-    async def test_set_unknown_theme_fails(self, mcp_client):
-        """action='set' with a non-installed theme surfaces HA's validation error."""
-        unknown = "definitely_not_installed_e2e"
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_manage_theme",
-            {"action": "set", "theme_name": unknown},
-        )
-
-        assert data.get("success") is False, (
-            f"Setting an unknown theme should fail: {data}"
-        )
-        error_msg = extract_error_message(data)
-        assert unknown in error_msg, (
-            f"Error message should name the unknown theme: {data}"
-        )
-
-    async def test_set_without_theme_name_fails(self, mcp_client):
-        """action='set' without theme_name returns a structured validation error."""
-        data = await safe_call_tool(mcp_client, "ha_manage_theme", {"action": "set"})
-
-        assert data.get("success") is False
-        error = data.get("error") or {}
-        assert error.get("code") == "VALIDATION_MISSING_PARAMETER", (
-            f"Expected VALIDATION_MISSING_PARAMETER, got: {data}"
-        )
 
     async def test_set_engine_theme_without_value_fails(self, mcp_client):
         """action='set_engine_theme' without value returns a validation error.

@@ -1,49 +1,46 @@
 """Recurring and one-off event creation in ``ha_config_set_calendar_event``.
 
-The ``calendar.create_event`` REST service schema has no ``rrule`` field;
-recurrence is only accepted by the WebSocket command ``calendar/event/create``,
-which since issue #1813 goes through the shared pooled client
-(``client.send_websocket_message``).
+Both go through the WebSocket command ``calendar/event/create`` on the shared
+pooled client (``client.send_websocket_message``): the ``calendar.create_event``
+REST service schema has no ``rrule`` field and answers a refusal with a bare
+status, while the command returns Core's own reason.
 
 The tool runs on the server's own client against a real ``hass`` with two
 calendars: ``calendar.writable`` is Core's Local Calendar, whose create method
 is spied on to see each event Core hands it; ``calendar.read_only`` is Core's
 Remote Calendar, which supports no event creation, so Core refuses every create
-on it. A wrong rule or a too-short event is refused by Core's own schemas.
+on it. A wrong rule, a too-short event or a mix of a date and a time is
+refused by Core's own schema, and the refusal carries Core's text; one such
+refusal stands for all of them.
 """
 
 import datetime as dt
 from collections.abc import AsyncIterator
-from contextlib import AbstractContextManager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
+from ha_mcp.tools.helpers import exception_to_structured_error
 from ha_mcp.tools.tools_calendar import CalendarTools
 
 from ._calendars import (
+    NO_EVENTS,
     calendar_config_dir,
     listed_events,
     local_calendar,
     remote_calendar,
 )
-from ._tool_errors import error_of
-
-_RRULE_HINT = "Check RRULE syntax"
-_EXCLUSIVE_END_HINT = "For an all-day event the end date is exclusive"
-_NO_EVENTS = """BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//ha-mcp tests//EN
-END:VCALENDAR
-"""
-
+from ._command_faults import pooled_socket
+from ._tool_errors import error_body, error_of
 
 # Core's config directory is this test's ``tmp_path``.
 hass_config_dir = calendar_config_dir
@@ -55,7 +52,7 @@ async def writable(
 ) -> AsyncIterator[MagicMock | AsyncMock]:
     """A spy on ``calendar.writable``'s create; ``calendar.read_only`` beside it."""
     entity = await local_calendar(hass, "Writable")
-    await remote_calendar(hass, "Read only", _NO_EVENTS)
+    await remote_calendar(hass, "Read only", NO_EVENTS)
     with patch.object(
         entity, "async_create_event", wraps=entity.async_create_event
     ) as create:
@@ -67,34 +64,20 @@ def _created(create: MagicMock | AsyncMock) -> list[dict[str, Any]]:
     return [dict(call.kwargs) for call in create.await_args_list]
 
 
-def _spy(
-    client: HomeAssistantClient, method: str
-) -> AbstractContextManager[MagicMock | AsyncMock]:
-    """A spy on one client method; Core still answers."""
-    return patch.object(client, method, wraps=getattr(client, method))
-
-
-async def test_rrule_creates_series_over_websocket_not_rest(
+async def test_a_rule_reaches_the_calendar_as_a_series(
     writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
 ) -> None:
-    """A rule reaches the calendar: the REST service would refuse it."""
-    tools = CalendarTools(core_client)
-    with (
-        _spy(core_client, "send_websocket_message") as ws,
-        _spy(core_client, "call_service") as rest,
-    ):
-        result = await tools.ha_config_set_calendar_event(
-            entity_id="calendar.writable",
-            summary="Weekly sync",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T10:30:00",
-            description="desc",
-            location="loc",
-            rrule="FREQ=WEEKLY;BYDAY=MO;COUNT=10",
-        )
+    """The calendar gets the rule and Core lists every occurrence."""
+    result = await CalendarTools(core_client).ha_config_set_calendar_event(
+        entity_id="calendar.writable",
+        summary="Weekly sync",
+        start="2026-06-15T10:00:00",
+        end="2026-06-15T10:30:00",
+        description="desc",
+        location="loc",
+        rrule="FREQ=WEEKLY;BYDAY=MO;COUNT=10",
+    )
 
-    assert ws.await_args_list[0].args[0]["type"] == "calendar/event/create"
-    rest.assert_not_awaited()
     [created] = _created(writable)
     assert created["summary"] == "Weekly sync"
     assert created["rrule"] == "FREQ=WEEKLY;BYDAY=MO;COUNT=10"
@@ -148,24 +131,16 @@ async def test_explicit_empty_description_and_location_reach_the_calendar(
     assert created["location"] == ""
 
 
-async def test_no_rrule_creates_timed_event_through_rest_service(
+async def test_no_rrule_creates_a_timed_event(
     writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
 ) -> None:
-    tools = CalendarTools(core_client)
-    with (
-        _spy(core_client, "send_websocket_message") as ws,
-        _spy(core_client, "call_service") as rest,
-    ):
-        result = await tools.ha_config_set_calendar_event(
-            entity_id="calendar.writable",
-            summary="One-off",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-        )
+    result = await CalendarTools(core_client).ha_config_set_calendar_event(
+        entity_id="calendar.writable",
+        summary="One-off",
+        start="2026-06-15T10:00:00",
+        end="2026-06-15T11:00:00",
+    )
 
-    rest.assert_awaited_once()
-    assert rest.await_args_list[0].args[:2] == ("calendar", "create_event")
-    ws.assert_not_awaited()
     [created] = _created(writable)
     assert created["summary"] == "One-off"
     assert "location" not in created
@@ -193,112 +168,41 @@ async def test_no_rrule_date_only_values_create_all_day_event(
     assert created["dtend"] == dt.date(2026, 8, 10)
 
 
-async def test_mixed_date_and_datetime_values_are_rejected_before_any_call(
-    writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
-) -> None:
-    """Mixed all-day and timed boundaries are ambiguous and invalid."""
-    tools = CalendarTools(core_client)
-    with (
-        _spy(core_client, "call_service") as rest,
-        pytest.raises(ToolError) as exc_info,
-    ):
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.writable",
-            summary="Mixed event",
-            start="2026-07-04",
-            end="2026-07-04T12:00:00",
-        )
-
-    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
-    rest.assert_not_awaited()
-    assert _created(writable) == []
-
-
-async def test_rejected_rrule_leads_with_rrule_syntax_hint(
-    writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
-) -> None:
-    """Core refuses an unknown frequency; the hint must point at the rule."""
+async def _refused_create(
+    core_client: HomeAssistantClient, **fields: Any
+) -> dict[str, Any]:
+    """The body of a create the tool reports as refused."""
     with pytest.raises(ToolError) as exc_info:
         await CalendarTools(core_client).ha_config_set_calendar_event(
-            entity_id="calendar.writable",
-            summary="Weekly sync",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T10:30:00",
-            rrule="FREQ=FORTNIGHTLY",
+            **{"entity_id": "calendar.writable", "summary": "Refused", **fields}
         )
-
-    assert error_of(exc_info)["suggestions"][0].startswith(_RRULE_HINT)
-    assert _created(writable) == []
+    return error_body(exc_info)
 
 
-async def test_failed_create_without_rrule_gives_no_rrule_hint(
+async def test_a_calendar_without_creates_says_so(
     writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
 ) -> None:
-    """The RRULE-syntax hint must not appear when no rule was supplied."""
-    tools = CalendarTools(core_client)
-    with (
-        _spy(core_client, "send_websocket_message") as ws,
-        pytest.raises(ToolError) as exc_info,
-    ):
-        await tools.ha_config_set_calendar_event(
-            entity_id="calendar.read_only",
-            summary="One-off",
-            start="2026-06-15T10:00:00",
-            end="2026-06-15T11:00:00",
-        )
+    """A one-off create on a read-only calendar gets Core's reason, not a
+    bare status the agent has to guess at."""
+    body = await _refused_create(
+        core_client,
+        entity_id="calendar.read_only",
+        start="2026-06-15T10:00:00",
+        end="2026-06-15T11:00:00",
+    )
 
-    suggestions = error_of(exc_info)["suggestions"]
-    assert not any(s.startswith(_RRULE_HINT) for s in suggestions)
-    ws.assert_not_awaited()
+    assert "Calendar does not support event creation" in body["error"]["message"]
+    assert "integration does not offer" in body["error"]["suggestion"]
 
 
-async def test_single_day_all_day_event_leads_with_exclusive_end_hint(
+async def test_a_single_day_all_day_event_ending_on_its_start_gets_cores_reason(
     writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
 ) -> None:
-    """Core refuses end == start for a date range; the end date is exclusive.
+    """The all-day end date is exclusive, so end == start is an empty event."""
+    body = await _refused_create(core_client, start="2026-07-04", end="2026-07-04")
 
-    The hint is keyed on the supplied boundaries: the REST service answers a
-    bare 400, so Core's "Expected minimum event duration" never reaches us.
-    """
-    with pytest.raises(ToolError) as exc_info:
-        await CalendarTools(core_client).ha_config_set_calendar_event(
-            entity_id="calendar.writable",
-            summary="Single day off",
-            start="2026-07-04",
-            end="2026-07-04",
-        )
-
-    assert error_of(exc_info)["suggestions"][0].startswith(_EXCLUSIVE_END_HINT)
-    assert _created(writable) == []
-
-
-@pytest.mark.parametrize(
-    ("calendar", "start", "end"),
-    [
-        # A valid all-day range that fails for another reason.
-        ("calendar.read_only", "2026-07-04", "2026-07-11"),
-        # A timed event hits the same minimum duration but needs a later time.
-        ("calendar.writable", "2026-06-15T10:00:00", "2026-06-15T10:00:00"),
-    ],
-    ids=["valid-all-day-range", "zero-length-timed-event"],
-)
-async def test_exclusive_end_hint_only_for_empty_all_day_range(
-    writable: MagicMock | AsyncMock,
-    core_client: HomeAssistantClient,
-    calendar: str,
-    start: str,
-    end: str,
-) -> None:
-    with pytest.raises(ToolError) as exc_info:
-        await CalendarTools(core_client).ha_config_set_calendar_event(
-            entity_id=calendar,
-            summary="Not a single day",
-            start=start,
-            end=end,
-        )
-
-    suggestions = error_of(exc_info)["suggestions"]
-    assert not any(s.startswith(_EXCLUSIVE_END_HINT) for s in suggestions)
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "Expected minimum event duration" in body["error"]["message"]
     assert _created(writable) == []
 
 
@@ -324,4 +228,66 @@ async def test_rrule_create_with_no_answer_reports_connection_failure(
 
     err = error_of(exc_info)
     assert err["code"] in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
-    assert not any("RRULE" in s for s in err.get("suggestions", []))
+    assert not any("calendar" in s.lower() for s in err.get("suggestions", []))
+
+
+async def test_an_empty_rule_is_refused_not_dropped(
+    writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
+) -> None:
+    """An empty rule reaches Core, which refuses it; dropping it would create a
+    one-off event the caller did not ask for."""
+    with pytest.raises(ToolError) as exc_info:
+        await CalendarTools(core_client).ha_config_set_calendar_event(
+            entity_id="calendar.writable",
+            summary="No rule",
+            start="2026-06-15T10:00:00",
+            end="2026-06-15T10:30:00",
+            rrule="",
+        )
+
+    assert "rrule" in error_of(exc_info)["message"]
+    assert _created(writable) == []
+
+
+async def test_a_create_the_calendar_fails_is_not_blamed_on_a_uid(
+    writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
+) -> None:
+    """Core reports the integration's failure as ``failed``; a create has no
+    uid to check, so the event-lookup hint stays out."""
+    writable.side_effect = HomeAssistantError("the calendar store is read-only")
+
+    with pytest.raises(ToolError) as exc_info:
+        await CalendarTools(core_client).ha_config_set_calendar_event(
+            entity_id="calendar.writable",
+            summary="Blocked",
+            start="2026-06-15T10:00:00",
+            end="2026-06-15T10:30:00",
+        )
+
+    body = error_body(exc_info)
+    assert body["ha_error_code"] == "failed"
+    assert "the calendar store is read-only" in body["error"]["message"]
+    assert "ha_config_get_calendar_events" not in str(body)
+
+
+async def test_a_command_core_times_out_on_is_a_timeout(
+    writable: MagicMock | AsyncMock, core_client: HomeAssistantClient
+) -> None:
+    """Core answers a handler's TimeoutError with its ``timeout`` code."""
+    writable.side_effect = TimeoutError
+    ws = await pooled_socket(core_client)
+
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command(
+            "calendar/event/create",
+            entity_id="calendar.writable",
+            event={
+                "summary": "Slow",
+                "dtstart": "2026-06-15T10:00:00",
+                "dtend": "2026-06-15T10:30:00",
+            },
+        )
+
+    assert refused.value.code == "timeout"
+    result = exception_to_structured_error(refused.value, raise_error=False)
+    assert result["error"]["code"] == "TIMEOUT_OPERATION"

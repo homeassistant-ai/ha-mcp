@@ -1,10 +1,10 @@
-"""Unit tests for ``ha_config_remove_calendar_event`` pooled-WS routing (#1813).
+"""Unit tests for ``ha_config_remove_calendar_event`` pooled-WS routing.
 
 ``calendar.delete_event`` is not a REST service — delete lives exclusively on
-the WebSocket command ``calendar/event/delete``, now routed through the shared
-pooled client (``client.send_websocket_message``) instead of a per-call
-dedicated connection. A failed WS command comes back as ``{"success": False}``
-and is re-raised so the failure reaches the tool's existing error handler.
+the WebSocket command ``calendar/event/delete``, routed through the shared
+pooled client (``client.send_websocket_message``). A refused command comes
+back as ``{"success": False}`` with Core's error code, which decides the
+tool's error code.
 
 The tool runs on the server's own client against a real ``hass`` whose
 ``calendar.test`` is Core's Local Calendar; what a delete removed is read back
@@ -12,7 +12,6 @@ from Core's calendar view.
 """
 
 import datetime as dt
-import json
 from contextlib import AbstractContextManager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,6 +25,7 @@ from ha_mcp.tools import tools_calendar
 from ha_mcp.tools.tools_calendar import CalendarTools
 
 from ._calendars import calendar_config_dir, listed_events, local_calendar, write_event
+from ._tool_errors import error_body
 
 START = dt.datetime(2026, 1, 1, 10)
 
@@ -104,12 +104,10 @@ async def test_delete_forwards_recurrence_params(
     assert [event["recurrence_id"] for event in left] == [first["recurrence_id"]]
 
 
-async def test_delete_failure_surfaces_structured_error(
+async def test_a_delete_on_an_unknown_calendar_is_not_found(
     ws: MockHAClientWebSocket, core_client: HomeAssistantClient
 ) -> None:
-    # Core refuses the delete (no such calendar); the pooled client collapses
-    # that into {"success": False} and the tool re-raises so the outer handler
-    # builds the delete-specific suggestions.
+    """Core's not_found reaches the caller as such, with Core's text."""
     await write_event(ws, "calendar.test", "Dentist", START)
     [event] = await listed_events(core_client, "calendar.test")
     tools = CalendarTools(core_client)
@@ -119,13 +117,10 @@ async def test_delete_failure_surfaces_structured_error(
             uid=event["uid"],
         )
 
-    err = json.loads(str(exc_info.value))["error"]
-    suggestions = err.get("suggestions") or [err.get("suggestion", "")]
-    # The delete handler prepends a not-found hint referencing entity/uid.
-    assert any(
-        "not found" in s.lower() or "uid" in s.lower() or "event" in s.lower()
-        for s in suggestions
-    )
+    body = error_body(exc_info)
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert body["ha_error_code"] == "not_found"
+    assert "Entity not found" in body["error"]["message"]
     assert await listed_events(core_client, "calendar.test") == [event]
 
 
@@ -133,7 +128,8 @@ async def test_delete_failure_surfaces_structured_error(
 async def test_delete_rejects_blank_recurrence_id(
     core_client: HomeAssistantClient, bad: str
 ) -> None:
-    """A blank recurrence_id reaches HA as a real one and matches nothing."""
+    """An empty recurrence_id reaches HA as none at all and deletes the whole
+    series; a whitespace one matches nothing."""
     tools = CalendarTools(core_client)
     with _spy(core_client) as send, pytest.raises(ToolError) as exc_info:
         await tools.ha_config_remove_calendar_event(

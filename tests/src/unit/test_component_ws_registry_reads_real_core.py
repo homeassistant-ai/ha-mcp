@@ -379,21 +379,16 @@ def health(hass: HomeAssistant, entity_registry: er.EntityRegistry) -> er.Regist
 
 
 async def test_the_snapshot_reads_every_health_slice_in_one_pass(
-    component_ws: MockHAClientWebSocket, health: er.RegistryEntry
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket, health: er.RegistryEntry
 ) -> None:
+    assert await async_setup_component(hass, "config", {})
+
     result = await ws_result(component_ws, WS_SYSTEM_SNAPSHOT)
 
     # Identity only: the health view has no use for options or subentries.
-    assert result["config_entries"] == [
-        {
-            "entry_id": "cfg1",
-            "domain": "mqtt",
-            "title": "Mosquitto",
-            "state": "loaded",
-            "source": "user",
-            "disabled_by": None,
-        }
-    ]
+    (core,) = await ws_result(component_ws, "config_entries/get", domain="mqtt")
+    identity = ("entry_id", "domain", "title", "state", "source", "disabled_by")
+    assert result["config_entries"] == [{key: core[key] for key in identity}]
     assert "DATA_SECRET_XYZ" not in json.dumps(result)
     issue = next(i for i in result["issues"] if i["issue_id"] == "iss1")
     assert issue["severity"] == "warning"
@@ -452,21 +447,32 @@ async def _matches(ws: MockHAClientWebSocket, **params: Any) -> Any:
 
 
 async def test_every_entity_with_the_unique_id_is_returned(
-    component_ws: MockHAClientWebSocket, shared_unique_id: None
+    component_ws: MockHAClientWebSocket,
+    entity_registry: er.EntityRegistry,
+    shared_unique_id: None,
 ) -> None:
     matches = await _matches(component_ws, unique_id="shared")
 
     assert {m["entity_id"] for m in matches} == {"sensor.a", "binary_sensor.b"}
-    assert next(m for m in matches if m["entity_id"] == "sensor.a") == {
-        "entity_id": "sensor.a",
-        "unique_id": "shared",
-        "platform": "zha",
-        "domain": "sensor",
-        "config_entry_id": "cfg1",
-        "categories": {"automation": "cat1"},
-        "disabled_by": "user",
-        "hidden_by": "integration",
-    }
+    match = next(m for m in matches if m["entity_id"] == "sensor.a")
+    entry = entity_registry.async_get("sensor.a")
+    assert entry is not None
+    core = _as_sent(entry.as_partial_dict)
+    fields = (
+        "entity_id",
+        "unique_id",
+        "platform",
+        "config_entry_id",
+        "categories",
+        "disabled_by",
+        "hidden_by",
+    )
+    assert match == {**{key: core[key] for key in fields}, "domain": entry.domain}
+    assert (match["config_entry_id"], match["categories"]) == (
+        "cfg1",
+        {"automation": "cat1"},
+    )
+    assert (match["disabled_by"], match["hidden_by"]) == ("user", "integration")
 
 
 @pytest.mark.parametrize(

@@ -22,9 +22,9 @@ from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
+from .component_registries import registry_list_reply
 from .helpers import (
     clearable_value,
-    core_error_message,
     exception_to_structured_error,
     log_tool_usage,
     raise_core_refusal,
@@ -72,14 +72,14 @@ class LabelTools:
     ) -> list[dict[str, Any]]:
         """Return all labels from the registry (shared by get/set).
 
+        The ha_mcp_tools component is asked first; without its answer Core's
+        list command is sent.
         Raises ToolError (SERVICE_CALL_FAILED) if the list call fails or returns
         an unexpected non-list envelope — a degraded response must not collapse
         to an empty registry, or callers would confidently report a real label
         as missing (mirrors ``backup_manager._require_list``).
         """
-        result = await self._client.send_websocket_message(
-            {"type": "config/label_registry/list"}
-        )
+        result = await registry_list_reply(self._client, "label")
         if not result.get("success"):
             raise_tool_error(
                 create_error_response(
@@ -137,10 +137,9 @@ class LabelTools:
     async def _list_area_registry(
         self, *, context: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        """Return the area registry, failing closed on a degraded envelope."""
-        list_result = await self._client.send_websocket_message(
-            {"type": "config/area_registry/list"}
-        )
+        """Return the area registry: the ha_mcp_tools component's rows, or
+        without its answer Core's list, failing closed on a degraded envelope."""
+        list_result = await registry_list_reply(self._client, "area")
         areas = list_result.get("result") if list_result.get("success") else None
         if not isinstance(areas, list):
             # An auth rejection, a protocol error and a malformed payload all
@@ -846,9 +845,7 @@ class LabelTools:
                     "message": f"Successfully deleted label: {label_id}",
                 }
             context = {"label_id": label_id}
-            # Core answers an unknown id with the generic ``invalid_info`` code, so
-            # its exact message is what tells it from any other refusal.
-            if core_error_message(result.get("error", "")) == "Label ID doesn't exist":
+            if result.get("error_code") == "invalid_info":
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.RESOURCE_NOT_FOUND,

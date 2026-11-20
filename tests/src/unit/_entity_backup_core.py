@@ -40,6 +40,12 @@ LOOKUP_COMMANDS = {
     "websocket": "config/entity_registry/list",
     "component": "ha_mcp_tools/entity_entry",
 }
+# The reads a restore checks an area id with: the component's first, and Core's
+# list command when that read fails.
+AREA_READS = {
+    "websocket": ("config/area_registry/list",),
+    "component": ("ha_mcp_tools/registries", "config/area_registry/list"),
+}
 WRITE_COMMANDS = (
     "config/entity_registry/update",
     "homeassistant/expose_entity",
@@ -196,8 +202,8 @@ def backup_dir(settings: config.Settings) -> Path:
 
 
 def backup_files(directory: Path) -> list[str]:
-    """The names in the backup directory (empty before the first snapshot)."""
-    return sorted(p.name for p in directory.glob("*")) if directory.exists() else []
+    """The snapshot names in the backup directory, excluding its lock file."""
+    return sorted(p.name for p in directory.glob("*.yaml"))
 
 
 @contextmanager

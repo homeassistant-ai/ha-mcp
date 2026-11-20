@@ -53,7 +53,7 @@ from .stdio_settings_sidecar import _TRUTHY  # shared HA_MCP_DISABLE_* truthy se
 logger = logging.getLogger(__name__)
 
 DISABLE_ENV = "HA_MCP_DISABLE_UPDATE_CHECK"
-_PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
+PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 _STABLE_PACKAGE = "ha-mcp"
 _DEV_PACKAGE = "ha-mcp-dev"
 # Tight timeout so the once-per-process check can never add more than a blip of
@@ -123,7 +123,7 @@ def _fetch_latest_from_pypi(package: str) -> PyPIRelease | None:
         # follow_redirects=True mirrors the sibling fetch in tools_updates.py and
         # survives any future PyPI redirect (the JSON API serves 200 directly today).
         resp = httpx.get(
-            _PYPI_JSON_URL.format(package=package),
+            PYPI_JSON_URL.format(package=package),
             timeout=_HTTP_TIMEOUT_SECONDS,
             follow_redirects=True,
         )

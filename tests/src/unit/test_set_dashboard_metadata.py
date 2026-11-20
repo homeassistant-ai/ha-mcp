@@ -1,216 +1,232 @@
-"""Unit tests for ha_config_set_dashboard metadata-update path."""
+"""ha_config_set_dashboard's create-or-update path, against Core's own ``lovelace``.
 
-import json
+The tool runs on the server's own client connected to a real ``hass``: every
+registry row, stored config and refusal is Core's. Core stores a dashboard
+under an id slugified from its url_path (``my-dash`` becomes ``my_dash``), and
+refuses a new hyphenless url_path unless the creator allows a single word, as
+its own onboarding does for ``map``.
+"""
+
+from __future__ import annotations
+
+import logging
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.components.lovelace.const import LOVELACE_DATA
+from homeassistant.const import EVENT_LOVELACE_UPDATED
+from homeassistant.core import Event, HomeAssistant
+from homeassistant.setup import async_setup_component
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 from ha_mcp.utils.config_hash import compute_config_hash
 
-# Core's ws_create_item answer for DashboardsCollection._process_create_data's
-# vol.Invalid, as the client's send_websocket_message relays it.
-_CORE_HYPHEN_REJECTION = {
-    "success": False,
-    "error": "Command failed: Url path needs to contain a hyphen (-). Got {...}",
-    "error_code": "invalid_format",
-}
+from ._client_spies import sent_messages
+from ._config_dir_yaml import write_config_files
+from ._entity_registry_core import sent_types
+from ._tool_errors import rejected_call_body
+
+_LOGGER_NAME = "ha_mcp.tools.tools_config_dashboards"
+_STRATEGY = {"strategy": {"type": "map"}}
+
+
+@pytest.fixture
+async def lovelace(hass: HomeAssistant) -> None:
+    assert await async_setup_component(hass, "lovelace", {})
+
+
+async def _create(client: HomeAssistantClient, url_path: str, **fields: Any) -> None:
+    created = await client.send_websocket_message(
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": url_path,
+            "title": "Original",
+            **fields,
+        }
+    )
+    assert created["success"], created
+
+
+async def _save(
+    client: HomeAssistantClient, url_path: str, config: dict[str, Any]
+) -> None:
+    saved = await client.send_websocket_message(
+        {"type": "lovelace/config/save", "url_path": url_path, "config": config}
+    )
+    assert saved["success"], saved
+
+
+async def _row(client: HomeAssistantClient, url_path: str) -> dict[str, Any]:
+    """Core's registry row for ``url_path``."""
+    listed = await client.send_websocket_message({"type": "lovelace/dashboards/list"})
+    rows: list[dict[str, Any]] = listed["result"]
+    return next(row for row in rows if row["url_path"] == url_path)
+
+
+async def _stored(client: HomeAssistantClient, url_path: str | None) -> Any:
+    """Core's reply to reading the config of ``url_path`` (``None``: the default)."""
+    message: dict[str, Any] = {"type": "lovelace/config", "force": True}
+    if url_path is not None:
+        message["url_path"] = url_path
+    return await client.send_websocket_message(message)
+
+
+def _set_tool(client: HomeAssistantClient) -> Any:
+    return DashboardConfigTools(client).ha_config_set_dashboard
+
+
+@pytest.fixture
+async def my_dashboard(lovelace: None, core_client: HomeAssistantClient) -> None:
+    """``my-dashboard``, stored by Core under the id ``my_dashboard``."""
+    await _create(core_client, "my-dashboard")
+
+
+@pytest.fixture
+async def floorplan(lovelace: None, core_client: HomeAssistantClient) -> None:
+    """``floorplan``, a hyphenless dashboard holding an empty config."""
+    await _create(core_client, "floorplan", allow_single_word=True)
+    await _save(core_client, "floorplan", {"views": []})
+
+
+@pytest.fixture
+async def strategy_map(lovelace: None, core_client: HomeAssistantClient) -> None:
+    """``map`` as Core's onboarding stores it: a map strategy dashboard."""
+    await _create(core_client, "map", allow_single_word=True)
+    await _save(core_client, "map", _STRATEGY)
 
 
 class TestSetDashboardMetadataUpdate:
-    """Test the metadata update path introduced by merging ha_config_update_dashboard_metadata."""
+    """Metadata changes on an existing dashboard reach Core's registry."""
 
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock(base_url=None, token=None)
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def set_tool(self, mock_client):
-        return DashboardConfigTools(mock_client).ha_config_set_dashboard
-
-    def _make_dashboard_list(self, url_path: str, dashboard_id: str = "dash-1"):
-        """Helper: mock existing dashboards list response."""
-        return {"result": [{"url_path": url_path, "id": dashboard_id}]}
-
-    @pytest.mark.asyncio
-    async def test_metadata_updated_true_when_title_provided_for_existing(
-        self, set_tool, mock_client
-    ):
-        """metadata_updated=True when title provided for an existing dashboard."""
-        mock_client.send_websocket_message.side_effect = [
-            self._make_dashboard_list("my-dashboard"),  # lovelace/dashboards/list
-            {"success": True},  # lovelace/dashboards/update (metadata)
-            {"result": {"views": []}},  # authoritative post-write config
-        ]
-
-        result = await set_tool(url_path="my-dashboard", title="New Title")
+    @pytest.mark.usefixtures("my_dashboard")
+    async def test_title_change_on_an_existing_dashboard_is_stored(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        result = await _set_tool(core_client)(url_path="my-dashboard", title="New")
 
         assert result["success"] is True
+        assert result["action"] == "update"
         assert result["metadata_updated"] is True
         assert result["dashboard_created"] is False
+        assert (await _row(core_client, "my-dashboard"))["title"] == "New"
 
-        # Verify the metadata update call was made with correct args
-        calls = mock_client.send_websocket_message.call_args_list
-        meta_call = calls[1][0][0]
-        assert meta_call["type"] == "lovelace/dashboards/update"
-        assert meta_call["dashboard_id"] == "dash-1"
-        assert meta_call["title"] == "New Title"
-
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("my_dashboard")
     async def test_existing_dashboard_with_no_changes_is_rejected(
-        self, set_tool, mock_client
-    ):
+        self, core_client: HomeAssistantClient
+    ) -> None:
         """An existing dashboard cannot report a successful update with no write."""
-        mock_client.send_websocket_message.return_value = self._make_dashboard_list(
-            "my-dashboard"
-        )
+        with sent_messages(core_client) as spy:
+            body = await rejected_call_body(
+                _set_tool(core_client)(url_path="my-dashboard")
+            )
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="my-dashboard")
-
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert body["error"]["message"] == "No dashboard changes were requested"
-        assert mock_client.send_websocket_message.call_count == 1
+        assert sent_types(spy) == ["lovelace/dashboards/list"]
 
-    @pytest.mark.asyncio
-    async def test_metadata_update_multiple_fields(self, set_tool, mock_client):
-        """Multiple metadata fields are sent in a single update call."""
-        mock_client.send_websocket_message.side_effect = [
-            self._make_dashboard_list("my-dashboard"),
-            {"success": True},
-            {"result": {"views": []}},
-        ]
+    @pytest.mark.usefixtures("my_dashboard")
+    async def test_every_metadata_field_is_stored_in_one_update(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        with sent_messages(core_client) as spy:
+            result = await _set_tool(core_client)(
+                url_path="my-dashboard",
+                title="Updated",
+                icon="mdi:home",
+                require_admin=True,
+                show_in_sidebar=False,
+            )
 
-        result = await set_tool(
-            url_path="my-dashboard",
-            title="Updated",
-            icon="mdi:home",
-            require_admin=True,
-            show_in_sidebar=False,
+        assert result["metadata_updated"] is True
+        assert sent_types(spy).count("lovelace/dashboards/update") == 1
+        row = await _row(core_client, "my-dashboard")
+        assert row["title"] == "Updated"
+        assert row["icon"] == "mdi:home"
+        assert row["require_admin"] is True
+        assert row["show_in_sidebar"] is False
+
+    @pytest.mark.usefixtures("lovelace")
+    async def test_empty_icon_clears_stored_icon(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        await _create(core_client, "my-dashboard", icon="mdi:home")
+
+        result = await _set_tool(core_client)(url_path="my-dashboard", icon="")
+
+        assert result["metadata_updated"] is True
+        assert "icon" not in await _row(core_client, "my-dashboard")
+
+    @pytest.mark.usefixtures("my_dashboard")
+    async def test_refused_metadata_update_is_reported_with_cores_reason(
+        self,
+        core_client: HomeAssistantClient,
+        read_only_client: HomeAssistantClient,
+    ) -> None:
+        """Core lets only an admin update a dashboard."""
+        body = await rejected_call_body(
+            _set_tool(read_only_client)(url_path="my-dashboard", title="Mine")
         )
 
-        assert result["success"] is True
-        assert result["metadata_updated"] is True
+        assert body["success"] is False
+        assert "metadata" in body["error"]["message"].lower()
+        assert "Unauthorized" in body["error"]["message"]
+        assert (await _row(core_client, "my-dashboard"))["title"] == "Original"
 
-        meta_call = mock_client.send_websocket_message.call_args_list[1][0][0]
-        assert meta_call["title"] == "Updated"
-        assert meta_call["icon"] == "mdi:home"
-        assert meta_call["require_admin"] is True
-        assert meta_call["show_in_sidebar"] is False
-
-    @pytest.mark.asyncio
-    async def test_empty_icon_clears_stored_icon(
-        self, set_tool: Any, mock_client: MagicMock
-    ) -> None:
-        """icon='' sends None, which Core's update schema accepts and drops."""
-        mock_client.send_websocket_message.side_effect = [
-            self._make_dashboard_list("my-dashboard"),
-            {"success": True},
-            {"result": {"views": []}},
-        ]
-
-        result = await set_tool(url_path="my-dashboard", icon="")
-
-        assert result["metadata_updated"] is True
-        meta_call = mock_client.send_websocket_message.call_args_list[1][0][0]
-        assert meta_call == {
-            "type": "lovelace/dashboards/update",
-            "dashboard_id": "dash-1",
-            "icon": None,
-        }
-
-    @pytest.mark.asyncio
-    async def test_metadata_update_fails_returns_error(self, set_tool, mock_client):
-        """When the metadata update WS call fails, the tool raises ToolError."""
-        mock_client.send_websocket_message.side_effect = [
-            self._make_dashboard_list("my-dashboard"),
-            {"success": False, "error": {"message": "Permission denied"}},
-        ]
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="my-dashboard", title="Unauthorized")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert "metadata" in error_data["error"]["message"].lower()
-        assert "Permission denied" in error_data["error"]["message"]
-
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("my_dashboard")
     async def test_core_rejection_of_a_metadata_value_is_reported_as_invalid_input(
-        self, set_tool: Any, mock_client: MagicMock
+        self, core_client: HomeAssistantClient
     ) -> None:
         """A bad icon on an existing dashboard is the caller's input, as on create."""
-        mock_client.send_websocket_message.side_effect = [
-            self._make_dashboard_list("my-dashboard"),
-            {
-                "success": False,
-                "error": "Command failed: Icons should be specified in the form "
-                "\"prefix:name\" at 'icon'. Got 'not an icon'",
-                "error_code": "invalid_format",
-            },
-        ]
+        body = await rejected_call_body(
+            _set_tool(core_client)(url_path="my-dashboard", icon="not an icon")
+        )
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="my-dashboard", icon="not an icon")
-
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "prefix:name" in body["error"]["message"]
 
-    @pytest.mark.asyncio
     async def test_blank_view_path_rejected_before_write_on_return_screenshot(
-        self, set_tool, mock_client
-    ):
+        self, core_client: HomeAssistantClient
+    ) -> None:
         """A blank view_path with return_screenshot fails before any write."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
-                url_path="my-dashboard",
-                config={"views": []},
-                return_screenshot=True,
-                view_path="   ",
+        with sent_messages(core_client) as spy:
+            body = await rejected_call_body(
+                _set_tool(core_client)(
+                    url_path="my-dashboard",
+                    config={"views": []},
+                    return_screenshot=True,
+                    view_path="   ",
+                )
             )
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        # Validation is pre-mutation: no dashboard write must have been attempted.
-        mock_client.send_websocket_message.assert_not_called()
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        spy.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_metadata_only_update_without_dashboard_id_is_rejected(
-        self, set_tool, mock_client
-    ):
-        """A skipped metadata write cannot report a successful dashboard update."""
-        # Lovelace dashboard not in the list (fresh install scenario)
-        mock_client.send_websocket_message.return_value = {"result": []}
+    @pytest.mark.usefixtures("lovelace")
+    async def test_metadata_only_update_of_the_unlisted_default_is_rejected(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """Core does not list the default dashboard on a fresh install, so there
+        is no storage id to update: a skipped write is not a success."""
+        with sent_messages(core_client) as spy:
+            body = await rejected_call_body(
+                _set_tool(core_client)(url_path="lovelace", title="My Home")
+            )
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="lovelace", title="My Home")
-
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert body["error"]["message"] == "No dashboard changes were applied"
         assert "no storage ID" in body["error"]["details"]
-        assert mock_client.send_websocket_message.call_count == 1
+        assert sent_types(spy) == ["lovelace/dashboards/list"]
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_config_write_with_unavailable_metadata_uses_warning(
-        self, set_tool, mock_client
-    ):
-        """A committed config write reports skipped metadata as a top-level warning."""
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """A committed config write reports skipped metadata as a top-level
+        warning, and the config lands in Core's default dashboard."""
         replacement = {"views": [{"title": "Home"}]}
-        mock_client.send_websocket_message.side_effect = [
-            {"result": []},  # default dashboard is absent from the registry
-            {"result": {"views": []}},  # replacement safety/hash pre-read
-            {"success": True},  # config save
-            {"result": replacement},  # authoritative post-write config
-        ]
 
-        result = await set_tool(
+        result = await _set_tool(core_client)(
             url_path="lovelace", title="My Home", config=replacement
         )
 
@@ -218,579 +234,404 @@ class TestSetDashboardMetadataUpdate:
         assert result["config_updated"] is True
         assert result["metadata_updated"] is False
         assert "hint" not in result
-        # No url_path: Core saves to its lovelace item, else its default store.
-        assert mock_client.send_websocket_message.call_args_list[2][0][0] == {
-            "type": "lovelace/config/save",
-            "config": replacement,
-        }
+        assert (await _stored(core_client, None))["result"] == replacement
         metadata_warning = next(
             warning for warning in result["warnings"] if "no storage ID" in warning
         )
         assert "Dashboard config was saved" in metadata_warning
 
-    @pytest.mark.asyncio
-    async def test_false_booleans_are_not_filtered_out(self, set_tool, mock_client):
-        """False bool values for require_admin/show_in_sidebar must be passed through."""
-        mock_client.send_websocket_message.side_effect = [
-            self._make_dashboard_list("my-dashboard"),
-            {"success": True},
-            {"result": {"views": []}},
-        ]
+    @pytest.mark.usefixtures("lovelace")
+    async def test_false_booleans_are_not_filtered_out(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """False for require_admin/show_in_sidebar is a change, not an omission."""
+        await _create(core_client, "my-dashboard", require_admin=True)
 
-        await set_tool(
-            url_path="my-dashboard",
-            require_admin=False,
-            show_in_sidebar=False,
+        await _set_tool(core_client)(
+            url_path="my-dashboard", require_admin=False, show_in_sidebar=False
         )
 
-        meta_call = mock_client.send_websocket_message.call_args_list[1][0][0]
-        assert meta_call["require_admin"] is False
-        assert meta_call["show_in_sidebar"] is False
+        row = await _row(core_client, "my-dashboard")
+        assert row["require_admin"] is False
+        assert row["show_in_sidebar"] is False
 
-    @pytest.mark.asyncio
-    async def test_full_config_write_uses_authoritative_render_paths(
-        self, set_tool, mock_client
-    ):
+    @pytest.mark.usefixtures("my_dashboard")
+    async def test_render_paths_follow_the_config_core_holds_after_the_write(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Another edit lands right after the save: the routes reported are
+        those of the config Core holds, not of the one submitted."""
+        await _save(core_client, "my-dashboard", {"views": []})
         submitted = {"views": [{"title": "Home", "path": "submitted"}]}
-        authoritative = {"views": [{"title": "Home", "path": "normalized"}]}
-        mock_client.send_websocket_message.side_effect = [
-            self._make_dashboard_list("my-dashboard"),
-            {"result": {"views": []}},  # pre-write conflict/size read
-            {"success": True},  # lovelace/config/save
-            {"result": authoritative},  # authoritative post-write readback
-        ]
+        elsewhere = {"views": [{"title": "Home", "path": "edited-elsewhere"}]}
+        edits: list[str] = []
 
-        result = await set_tool(url_path="my-dashboard", config=submitted)
+        async def edit_elsewhere(event: Event) -> None:
+            if event.data["url_path"] == "my-dashboard" and not edits:
+                edits.append("done")
+                store = hass.data[LOVELACE_DATA].dashboards["my-dashboard"]
+                await store.async_save(elsewhere)
+
+        unsubscribe = hass.bus.async_listen(EVENT_LOVELACE_UPDATED, edit_elsewhere)
+        try:
+            result = await _set_tool(core_client)(
+                url_path="my-dashboard", config=submitted
+            )
+        finally:
+            unsubscribe()
 
         assert result["success"] is True
-        assert result["render_paths"][0]["view_path"] == "normalized"
-        assert result["render_paths"][0]["render_path"] == ("my-dashboard/normalized")
-        requests = [
-            call.args[0] for call in mock_client.send_websocket_message.call_args_list
-        ]
-        assert requests[2]["type"] == "lovelace/config/save"
-        assert requests[2]["config"] == submitted
-        assert requests[3] == {
-            "type": "lovelace/config",
-            "force": True,
-            "url_path": "my-dashboard",
-        }
+        assert result["post_write_verified"] is True
+        assert result["config_hash"] == compute_config_hash(elsewhere)
+        assert result["render_paths"][0]["view_path"] == "edited-elsewhere"
+        assert result["render_paths"][0]["render_path"] == (
+            "my-dashboard/edited-elsewhere"
+        )
 
 
 class TestSetDashboardListCallDedup:
-    """When the pre-resolver fires (internal-id branch), the existence-check
-    site reuses the pre-fetched dashboards list rather than issuing a second
-    ``lovelace/dashboards/list`` round-trip.
+    """When the pre-resolver fires (internal-id branch), the existence check
+    reuses its dashboards list rather than issuing a second
+    ``lovelace/dashboards/list`` round-trip; the canonical branch still
+    fetches once."""
 
-    The other-branch tests act as regression guards so a future change
-    that re-introduces a redundant list call (or accidentally drops the
-    one fetch on the canonical-url_path branch) is caught here."""
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock(base_url=None, token=None)
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def set_tool(self, mock_client):
-        return DashboardConfigTools(mock_client).ha_config_set_dashboard
-
-    @staticmethod
-    def _list_call_count(mock_client) -> int:
-        return sum(
-            1
-            for c in mock_client.send_websocket_message.call_args_list
-            if c.args and c.args[0].get("type") == "lovelace/dashboards/list"
-        )
-
-    @pytest.mark.asyncio
-    async def test_internal_id_branch_calls_list_only_once(self, set_tool, mock_client):
-        """Pre-resolver fires (hyphenless ``my_dash``) and matches; the
-        existence-check site MUST reuse that list instead of fetching
-        again. Total ``lovelace/dashboards/list`` calls = 1."""
-        dashboards_list = {"result": [{"url_path": "my-dash", "id": "my_dash"}]}
-        mock_client.send_websocket_message.side_effect = [
-            dashboards_list,  # pre-resolver fetch
-            {"success": True},  # metadata update
-            {"result": {"views": []}},  # authoritative post-write config
-        ]
-
-        result = await set_tool(url_path="my_dash", title="Renamed")
-
-        assert self._list_call_count(mock_client) == 1, (
-            "internal-id branch must reuse the pre-resolver's dashboards list"
-        )
-        assert result["success"] is True
-        # Pre-resolver rewrote my_dash -> my-dash; surface marker stays.
-        assert result.get("resolved_from") == "my_dash"
-        # Metadata update did fire on the canonical url_path.
-        meta_call = mock_client.send_websocket_message.call_args_list[1].args[0]
-        assert meta_call["type"] == "lovelace/dashboards/update"
-        assert meta_call["dashboard_id"] == "my_dash"
-
-    @pytest.mark.asyncio
-    async def test_canonical_url_path_branch_still_calls_list_once(
-        self, set_tool, mock_client
-    ):
-        """Already-canonical ``my-dash`` (hyphen present) skips the
-        pre-resolver; the existence-check site still fetches once.
-        Regression guard: total list calls = 1, not 0 (pre-resolver
-        didn't fire) and not 2 (no redundant fetch)."""
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "my-dash", "id": "my_dash"}]},
-            {"success": True},
-            {"result": {"views": []}},
-        ]
-
-        result = await set_tool(url_path="my-dash", title="Renamed")
-
-        assert self._list_call_count(mock_client) == 1
-        assert result["success"] is True
-        assert result.get("resolved_from") is None
-
-    @pytest.mark.asyncio
-    async def test_internal_id_no_match_reuses_list_for_create(
-        self, set_tool: Any, mock_client: MagicMock
+    @pytest.mark.usefixtures("lovelace")
+    async def test_internal_id_branch_calls_list_only_once(
+        self, core_client: HomeAssistantClient
     ) -> None:
-        """Hyphenless identifier with no matching dashboard: the pre-resolver's
-        list is reused for the existence check, and the create goes to Core.
-        Total list calls = 1."""
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "other-dash", "id": "other_dash"}]},
-            _CORE_HYPHEN_REJECTION,
+        await _create(core_client, "my-dash")
+
+        with sent_messages(core_client) as spy:
+            result = await _set_tool(core_client)(url_path="my_dash", title="Renamed")
+
+        assert sent_types(spy).count("lovelace/dashboards/list") == 1
+        assert result["success"] is True
+        assert result["resolved_from"] == "my_dash"
+        assert (await _row(core_client, "my-dash"))["title"] == "Renamed"
+
+    @pytest.mark.usefixtures("lovelace")
+    async def test_canonical_url_path_branch_still_calls_list_once(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        await _create(core_client, "my-dash")
+
+        with sent_messages(core_client) as spy:
+            result = await _set_tool(core_client)(url_path="my-dash", title="Renamed")
+
+        assert sent_types(spy).count("lovelace/dashboards/list") == 1
+        assert result["success"] is True
+        assert "resolved_from" not in result
+
+    @pytest.mark.usefixtures("lovelace")
+    async def test_internal_id_no_match_reuses_list_for_create(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """A hyphenless identifier matching nothing: the pre-resolver's list
+        serves the existence check, and the create goes to Core."""
+        await _create(core_client, "other-dash")
+
+        with sent_messages(core_client) as spy:
+            await rejected_call_body(
+                _set_tool(core_client)(url_path="ghost", title="X")
+            )
+
+        assert sent_types(spy) == [
+            "lovelace/dashboards/list",
+            "lovelace/dashboards/create",
         ]
 
-        with pytest.raises(ToolError):
-            await set_tool(url_path="ghost", title="X")
-
-        assert self._list_call_count(mock_client) == 1
-        create_call = mock_client.send_websocket_message.call_args_list[1].args[0]
-        assert create_call["type"] == "lovelace/dashboards/create"
-
-    @pytest.mark.asyncio
     async def test_canonical_url_path_branch_rejects_unreadable_registry(
-        self, set_tool, mock_client, caplog
-    ):
-        """An unexpected registry shape is not treated as an empty registry."""
-        import logging
-
-        mock_client.send_websocket_message.return_value = "unexpected string"
-
+        self, core_client: HomeAssistantClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Core without ``lovelace`` refuses the registry read: that is not an
+        empty registry, and nothing is created."""
         with (
-            caplog.at_level(
-                logging.WARNING, logger="ha_mcp.tools.tools_config_dashboards"
-            ),
-            pytest.raises(ToolError) as exc_info,
+            sent_messages(core_client) as spy,
+            caplog.at_level(logging.WARNING, logger=_LOGGER_NAME),
         ):
-            await set_tool(url_path="my-dash", title="New")
+            body = await rejected_call_body(
+                _set_tool(core_client)(url_path="my-dash", title="New")
+            )
 
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "dashboard registry" in body["error"]["message"]
         assert body["url_path"] == "my-dash"
-        assert mock_client.send_websocket_message.call_count == 1
+        assert sent_types(spy) == ["lovelace/dashboards/list"]
         assert any(
-            "unexpected shape" in rec.message and "type=str" in rec.message
+            "unexpected shape" in rec.message and "type=dict" in rec.message
             for rec in caplog.records
-        ), (
-            f"expected an 'unexpected shape' warning naming the response "
-            f"type; got {[rec.message for rec in caplog.records]}"
-        )
+        ), [rec.message for rec in caplog.records]
 
 
 class TestSetDashboardUrlPathCreationContract:
     """Core, not HA-MCP, decides whether a new url_path is acceptable."""
 
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock(base_url=None, token=None)
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def set_tool(self, mock_client):
-        return DashboardConfigTools(mock_client).ha_config_set_dashboard
-
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("floorplan")
     async def test_existing_hyphenless_dashboard_update_is_allowed(
-        self, set_tool, mock_client
-    ):
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "map", "id": "map"}]},
-            {"success": True},
-            {"result": {"views": []}},
-        ]
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        result = await _set_tool(core_client)(url_path="floorplan", title="Plan")
 
-        result = await set_tool(url_path="map", title="Updated Map")
-
-        assert result["success"] is True
         assert result["action"] == "update"
-        assert result["url_path"] == "map"
+        assert result["url_path"] == "floorplan"
         assert result["dashboard_created"] is False
         assert "resolved_from" not in result
-        assert mock_client.send_websocket_message.call_args_list[1].args[0]["type"] == (
-            "lovelace/dashboards/update"
-        )
+        assert (await _row(core_client, "floorplan"))["title"] == "Plan"
 
-    @pytest.mark.asyncio
-    async def test_existing_hyphenated_dashboard_update_is_allowed(
-        self, set_tool, mock_client
-    ):
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "floor-map", "id": "floor_map"}]},
-            {"success": True},
-            {"result": {"views": []}},
-        ]
-
-        result = await set_tool(url_path="floor-map", title="Updated Floor Map")
-
-        assert result["success"] is True
-        assert result["action"] == "update"
-        assert result["dashboard_created"] is False
-        assert mock_client.send_websocket_message.call_args_list[1].args[0]["type"] == (
-            "lovelace/dashboards/update"
-        )
-
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_new_hyphenless_dashboard_relays_core_rejection(
-        self, set_tool: Any, mock_client: MagicMock
+        self, core_client: HomeAssistantClient
     ) -> None:
-        mock_client.send_websocket_message.side_effect = [
-            {"result": []},
-            _CORE_HYPHEN_REJECTION,
-        ]
+        body = await rejected_call_body(
+            _set_tool(core_client)(url_path="newmap", title="New Map")
+        )
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="newmap", title="New Map")
-
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "Url path needs to contain a hyphen (-)" in body["error"]["message"]
         # Only Core's own wording; the error code's default suggestions remain.
-        assert "Try '" not in json.dumps(body["error"])
-        create_call = mock_client.send_websocket_message.call_args_list[1].args[0]
-        assert create_call["type"] == "lovelace/dashboards/create"
-        assert create_call["url_path"] == "newmap"
+        assert "Try '" not in str(body["error"])
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_core_hyphen_rejection_suggests_hyphenated_path(
-        self, set_tool: Any, mock_client: MagicMock
+        self, core_client: HomeAssistantClient
     ) -> None:
-        mock_client.send_websocket_message.side_effect = [
-            {"result": []},
-            _CORE_HYPHEN_REJECTION,
-        ]
+        body = await rejected_call_body(
+            _set_tool(core_client)(url_path="my_dash", title="Mine")
+        )
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="my_dash", title="Mine")
-
-        body = json.loads(str(exc_info.value))
         assert body["error"]["suggestion"] == "Try 'my-dash' instead"
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_other_core_create_error_gets_no_hyphen_suggestion(
-        self, set_tool: Any, mock_client: MagicMock
+        self, core_client: HomeAssistantClient
     ) -> None:
-        mock_client.send_websocket_message.side_effect = [
-            {"result": []},
-            {
-                "success": False,
-                "error": "Command failed: The URL my_dash is already in use",
-                "error_code": "home_assistant_error",
-            },
-        ]
+        """Core refuses the create for its icon: an underscore in the url_path
+        does not earn a hyphen suggestion."""
+        body = await rejected_call_body(
+            _set_tool(core_client)(
+                url_path="wall_panel-1", title="Wall", icon="not an icon"
+            )
+        )
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="my_dash", title="Mine")
+        assert "prefix:name" in body["error"]["message"]
+        assert "Try 'wall-panel-1' instead" not in str(body)
 
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "already in use" in body["error"]["message"]
-        assert "Try 'my-dash' instead" not in json.dumps(body)
-
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_internal_id_match_rewrites_to_hyphenless_url_path(
-        self, set_tool: Any, mock_client: MagicMock
+        self, core_client: HomeAssistantClient
     ) -> None:
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "map", "id": "map_internal"}]},
-            {"success": True},
-            {"result": {"views": []}},
-        ]
+        """``floor-plan`` took the id ``floor_plan``, so Core stores the
+        hyphenless ``floor_plan`` under ``floor_plan_2``."""
+        await _create(core_client, "floor-plan")
+        await _create(core_client, "floor_plan", allow_single_word=True)
+        assert (await _row(core_client, "floor_plan"))["id"] == "floor_plan_2"
 
-        result = await set_tool(url_path="map_internal", title="Updated Map")
+        result = await _set_tool(core_client)(url_path="floor_plan_2", title="Plan")
 
         assert result["action"] == "update"
-        assert result["url_path"] == "map"
-        assert result["resolved_from"] == "map_internal"
-        meta_call = mock_client.send_websocket_message.call_args_list[1].args[0]
-        assert meta_call["dashboard_id"] == "map_internal"
+        assert result["url_path"] == "floor_plan"
+        assert result["resolved_from"] == "floor_plan_2"
+        assert (await _row(core_client, "floor_plan"))["title"] == "Plan"
+        assert (await _row(core_client, "floor-plan"))["title"] == "Original"
 
-    @pytest.mark.asyncio
     async def test_unreadable_registry_is_not_reported_as_bad_hyphenless_input(
-        self, set_tool, mock_client
-    ):
-        mock_client.send_websocket_message.return_value = "unexpected string"
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """Core without ``lovelace`` refuses the pre-resolver's registry read."""
+        with sent_messages(core_client) as spy:
+            body = await rejected_call_body(
+                _set_tool(core_client)(url_path="map", title="Updated Map")
+            )
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="map", title="Updated Map")
-
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "dashboard registry" in body["error"]["message"]
         assert "hyphen" not in body["error"]["message"]
         assert body["url_path"] == "map"
-        assert mock_client.send_websocket_message.call_count == 1
+        assert sent_types(spy) == ["lovelace/dashboards/list"]
 
-    @pytest.mark.asyncio
-    async def test_new_hyphenated_dashboard_is_allowed(self, set_tool, mock_client):
-        mock_client.send_websocket_message.side_effect = [
-            {"result": []},
-            {"success": True, "result": {"id": "new_map"}},
-            {"result": {"views": []}},
-        ]
-
-        result = await set_tool(url_path="new-map", title="New Map")
+    @pytest.mark.usefixtures("lovelace")
+    async def test_new_hyphenated_dashboard_is_created_with_cores_defaults(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        result = await _set_tool(core_client)(url_path="new-map", title="New Map")
 
         assert result["success"] is True
         assert result["action"] == "create"
         assert result["dashboard_created"] is True
-        # Core's create schema supplies require_admin/show_in_sidebar defaults.
-        assert mock_client.send_websocket_message.call_args_list[1].args[0] == {
-            "type": "lovelace/dashboards/create",
-            "url_path": "new-map",
-            "title": "New Map",
-        }
+        assert result["dashboard_id"] == "new_map"
+        row = await _row(core_client, "new-map")
+        assert row["title"] == "New Map"
+        assert row["require_admin"] is False
+        assert row["show_in_sidebar"] is True
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_create_without_a_title_gets_cores_refusal_not_an_invented_title(
-        self, set_tool: Any, mock_client: MagicMock
+        self, core_client: HomeAssistantClient
     ) -> None:
         """Core requires a title on create; the tool sends only what it was given
         (a blank icon is left out) and relays Core's refusal as invalid input."""
-        mock_client.send_websocket_message.side_effect = [
-            {"result": []},
-            {
-                "success": False,
-                "error": "Command failed: required key not provided at 'title'. "
-                "Got None",
-                "error_code": "invalid_format",
-            },
-        ]
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
-                url_path="new-map", icon="", require_admin=True, show_in_sidebar=False
+        with sent_messages(core_client) as spy:
+            body = await rejected_call_body(
+                _set_tool(core_client)(
+                    url_path="new-map",
+                    icon="",
+                    require_admin=True,
+                    show_in_sidebar=False,
+                )
             )
 
-        assert mock_client.send_websocket_message.call_args_list[1].args[0] == {
-            "type": "lovelace/dashboards/create",
-            "url_path": "new-map",
-            "require_admin": True,
-            "show_in_sidebar": False,
-        }
-        body = json.loads(str(exc_info.value))
+        creates = [
+            call.args[0]
+            for call in spy.call_args_list
+            if call.args[0]["type"] == "lovelace/dashboards/create"
+        ]
+        assert creates == [
+            {
+                "type": "lovelace/dashboards/create",
+                "url_path": "new-map",
+                "require_admin": True,
+                "show_in_sidebar": False,
+            }
+        ]
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "title" in body["error"]["message"]
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("floorplan")
     async def test_existing_hyphenless_dashboard_full_config_update_is_allowed(
-        self, set_tool, mock_client
-    ):
+        self, core_client: HomeAssistantClient
+    ) -> None:
         replacement = {"views": [{"title": "Updated"}]}
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "panel", "id": "panel"}]},
-            {"result": {"views": []}},
-            {"success": True},
-            {"result": replacement},
-        ]
 
-        result = await set_tool(url_path="panel", config=replacement)
+        result = await _set_tool(core_client)(url_path="floorplan", config=replacement)
 
-        assert result["success"] is True
         assert result["action"] == "update"
         assert result["config_updated"] is True
         assert "resolved_from" not in result
-        save_call = mock_client.send_websocket_message.call_args_list[2].args[0]
-        assert save_call["type"] == "lovelace/config/save"
-        assert save_call["config"] == replacement
+        assert (await _stored(core_client, "floorplan"))["result"] == replacement
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_create_then_write_config_to_dashboard_without_stored_config(
-        self, set_tool, mock_client
-    ):
+        self, core_client: HomeAssistantClient
+    ) -> None:
         replacement = {"views": [{"title": "Populated"}]}
-        no_config = {
-            "success": False,
-            "error": "Command failed: No config found.",
-            "error_code": "config_not_found",
-        }
-        mock_client.send_websocket_message.side_effect = [
-            {"result": []},
-            {"success": True, "result": {"id": "no_config"}},
-            no_config,
-            {"result": [{"url_path": "no-config", "id": "no_config"}]},
-            no_config,
-            {"success": True},
-            {"result": replacement},
-        ]
 
-        create_result = await set_tool(url_path="no-config", title="No Config")
-        assert create_result["success"] is True
+        create_result = await _set_tool(core_client)(
+            url_path="no-config", title="No Config"
+        )
         assert create_result["action"] == "create"
         assert any(
             "No config found" in warning
             for warning in create_result.get("warnings", [])
         )
 
-        update_result = await set_tool(url_path="no-config", config=replacement)
+        update_result = await _set_tool(core_client)(
+            url_path="no-config", config=replacement
+        )
 
-        assert update_result["success"] is True
         assert update_result["action"] == "update"
         assert update_result["config_updated"] is True
-        save_call = mock_client.send_websocket_message.call_args_list[5].args[0]
-        assert save_call["type"] == "lovelace/config/save"
-        assert save_call["config"] == replacement
-        assert mock_client.send_websocket_message.call_count == 7
+        assert (await _stored(core_client, "no-config"))["result"] == replacement
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("lovelace")
     async def test_dashboard_without_stored_config_rejects_supplied_hash(
-        self, set_tool, mock_client
-    ):
-        no_config = {
-            "success": False,
-            "error": "Command failed: No config found.",
-            "error_code": "config_not_found",
-        }
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "no-config", "id": "no_config"}]},
-            no_config,
-        ]
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        await _create(core_client, "no-config")
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
+        body = await rejected_call_body(
+            _set_tool(core_client)(
                 url_path="no-config",
                 config={"views": [{"title": "Populated"}]},
                 config_hash="stale-hash",
             )
+        )
 
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert body["error"]["message"] == "Dashboard has no saved config"
         assert body["reason"] == "conflict"
         assert body["write_committed"] is False
         assert body["url_path"] == "no-config"
-        assert mock_client.send_websocket_message.call_count == 2
+        assert (await _stored(core_client, "no-config"))["success"] is False
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("floorplan")
     async def test_existing_hyphenless_dashboard_python_transform_is_allowed(
-        self, set_tool, mock_client
-    ):
-        current = {"views": []}
-        transformed = {"views": [{"title": "Added"}]}
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "panel", "id": "panel"}]},
-            {"result": current},
-            {"success": True},
-            {"result": transformed},
-        ]
-
-        result = await set_tool(
-            url_path="panel",
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        result = await _set_tool(core_client)(
+            url_path="floorplan",
             python_transform='config["views"].append({"title": "Added"})',
-            config_hash=compute_config_hash(current),
+            config_hash=compute_config_hash({"views": []}),
         )
 
-        assert result["success"] is True
         assert result["action"] == "python_transform"
         assert "resolved_from" not in result
-        save_call = mock_client.send_websocket_message.call_args_list[2].args[0]
-        assert save_call["type"] == "lovelace/config/save"
-        assert save_call["config"] == transformed
+        assert (await _stored(core_client, "floorplan"))["result"] == {
+            "views": [{"title": "Added"}]
+        }
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("strategy_map")
     async def test_full_config_cannot_take_control_of_strategy_dashboard(
-        self, set_tool, mock_client
-    ):
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "map", "id": "map"}]},
-            {"result": {"strategy": {"type": "map"}}},
-        ]
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        body = await rejected_call_body(
+            _set_tool(core_client)(url_path="map", config={"views": []})
+        )
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="map", config={"views": []})
-
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_FAILED"
         assert "cannot be converted" in body["error"]["message"]
         assert "Take Control" in body["error"]["suggestion"]
-        assert mock_client.send_websocket_message.call_count == 2
+        assert (await _stored(core_client, "map"))["result"] == _STRATEGY
 
-    @pytest.mark.parametrize(
-        ("read_response", "read_error"),
-        [
-            (
-                {"success": False, "error": {"message": "temporary read failure"}},
-                "temporary read failure",
-            ),
-            (
-                {
-                    "success": False,
-                    "error": {
-                        "code": "config_not_found",
-                        "message": "Command failed: Unknown config specified: map",
-                    },
-                },
-                "Command failed: Unknown config specified: map",
-            ),
-            (
-                {"success": False, "error": "Command failed: No config found."},
-                "Command failed: No config found.",
-            ),
-        ],
-    )
-    @pytest.mark.asyncio
     async def test_full_config_pre_read_failure_blocks_unverified_replacement(
-        self, set_tool, mock_client, read_response, read_error
-    ):
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "map", "id": "map"}]},
-            read_response,
-        ]
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Core cannot read the dashboard's current config (its YAML file holds
+        no mapping): whether it is a strategy dashboard is unknown, so the
+        replacement is not written."""
+        await write_config_files(hass, {"broken.yaml": "- not a dashboard\n"})
+        assert await async_setup_component(
+            hass,
+            "lovelace",
+            {
+                "lovelace": {
+                    "dashboards": {
+                        "broken-dash": {
+                            "mode": "yaml",
+                            "filename": "broken.yaml",
+                            "title": "Broken",
+                        }
+                    }
+                }
+            },
+        )
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(url_path="map", config={"views": []})
+        with sent_messages(core_client) as spy:
+            body = await rejected_call_body(
+                _set_tool(core_client)(url_path="broken-dash", config={"views": []})
+            )
 
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "Cannot verify" in body["error"]["message"]
-        assert read_error in body["error"]["details"]
+        assert "broken.yaml" in body["error"]["details"]
         assert body["reason"] == "load_failed"
         assert body["write_committed"] is False
         assert body["post_write_verified"] is False
-        assert body["url_path"] == "map"
-        assert mock_client.send_websocket_message.call_count == 2
+        assert body["url_path"] == "broken-dash"
+        assert "lovelace/config/save" not in sent_types(spy)
 
-    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("strategy_map")
     async def test_python_transform_cannot_take_control_of_strategy_dashboard(
-        self, set_tool, mock_client
-    ):
-        current = {"strategy": {"type": "map"}}
-        mock_client.send_websocket_message.side_effect = [
-            {"result": [{"url_path": "map", "id": "map"}]},
-            {"result": current},
-        ]
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_tool(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        body = await rejected_call_body(
+            _set_tool(core_client)(
                 url_path="map",
                 python_transform='config = {"views": []}',
-                config_hash=compute_config_hash(current),
+                config_hash=compute_config_hash(_STRATEGY),
             )
+        )
 
-        body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_FAILED"
         assert "cannot be converted" in body["error"]["message"]
         assert body["action"] == "python_transform"
-        assert mock_client.send_websocket_message.call_count == 2
+        assert (await _stored(core_client, "map"))["result"] == _STRATEGY

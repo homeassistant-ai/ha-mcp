@@ -1,27 +1,23 @@
 """``ha_mcp_tools/call_service`` on a real Home Assistant.
 
 The command fires one blocking service call and reports the real state
-transition of its ``entity_ids``. Each test registers the service it calls on
-the real ``hass.services``; the handler changes states through
-``hass.states``, so the ``state_changed`` events the component waits on come
-from Core's own bus.
+transition of its ``entity_ids``. Lights, the lock, the thermostat and the
+media player are devices below Core's own integrations (``_switched_states``),
+a response comes from a Core script and ``automation.trigger`` is Core's
+automation integration, so the services and the ``state_changed`` events the
+component waits on are Core's own.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 from homeassistant.const import EVENT_STATE_CHANGED
-from homeassistant.core import (
-    HomeAssistant,
-    ServiceCall,
-    ServiceResponse,
-    SupportsResponse,
-)
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import async_capture_events
 
 from custom_components.ha_mcp_tools.websocket_api.constants import (
     CALL_SERVICE_MAX_TIMEOUT,
@@ -29,11 +25,23 @@ from custom_components.ha_mcp_tools.websocket_api.constants import (
 )
 
 from ._component_core import ws_call, ws_result
-from ._switched_states import set_later
+from ._switched_states import (
+    RANG,
+    Devices,
+    Received,
+    listeners_at_call,
+    recording_service,
+    set_up_devices,
+    set_up_ringing_automation,
+)
 
 # Long enough for a handler's state change to arrive, short enough that a test
 # expecting the wait to lapse stays fast.
 _LAPSE = 0.2
+
+# The target Core's light service needs, as the server sends it beside the
+# confirmation's ``entity_ids``.
+_LAMP = {"entity_id": "light.a"}
 
 # Case, whitespace and NBSP variants of the reserved domain. Core resolves the
 # case variants to the registered ``ha_mcp_tools`` service; the padded ones it
@@ -52,29 +60,27 @@ def _state_listeners(hass: HomeAssistant) -> int:
     return hass.bus.async_listeners().get(EVENT_STATE_CHANGED, 0)
 
 
-def _register(
-    hass: HomeAssistant,
-    domain: str,
-    service: str,
-    effect: Callable[[ServiceCall], ServiceResponse] | None = None,
-    *,
-    supports_response: SupportsResponse = SupportsResponse.NONE,
-) -> list[dict[str, Any]]:
-    """Register a service; return the calls it receives.
+async def _lamp(hass: HomeAssistant, state: str = "off") -> Devices:
+    """``light.a``, a device below Core's ``light`` integration."""
+    return await set_up_devices(hass, {"light.a": state})
 
-    Each call records its data and how many ``state_changed`` listeners were
-    on the bus while it ran.
-    """
-    calls: list[dict[str, Any]] = []
 
-    async def _handler(call: ServiceCall) -> ServiceResponse:
-        calls.append({"data": dict(call.data), "listeners": _state_listeners(hass)})
-        return effect(call) if effect is not None else None
-
-    hass.services.async_register(
-        domain, service, _handler, supports_response=supports_response
+async def _answering_script(hass: HomeAssistant, reply: dict[str, Any]) -> None:
+    """``script.answer``: a Core script that stops with ``reply`` as its response."""
+    assert await async_setup_component(
+        hass,
+        "script",
+        {
+            "script": {
+                "answer": {
+                    "sequence": [
+                        {"variables": {"reply": reply}},
+                        {"stop": "answered", "response_variable": "reply"},
+                    ]
+                }
+            }
+        },
     )
-    return calls
 
 
 async def _call(client: Any, **params: Any) -> dict[str, Any]:
@@ -90,7 +96,7 @@ class TestRefusedBeforeDispatch:
         """A caller must never reach the component's own admin services
         (``get_caller_token``, then every file/YAML service) through this
         command, whatever the domain's case or padding."""
-        calls = _register(hass, "ha_mcp_tools", "get_caller_token")
+        calls = recording_service(hass, "ha_mcp_tools", "get_caller_token")
         before = _state_listeners(hass)
 
         reply = await ws_call(
@@ -129,13 +135,9 @@ class TestConfirmedTransition:
         self, hass: HomeAssistant, component_ws: Any
     ) -> None:
         """The reply carries the state change the call caused, confirmed, and
-        the service receives the caller's data exactly once."""
-        hass.states.async_set("light.a", "off", {"brightness": 100})
-
-        def _turn_on(call: ServiceCall) -> None:
-            hass.states.async_set("light.a", "on", dict(call.data))
-
-        calls = _register(hass, "light", "turn_on", _turn_on)
+        the device receives the caller's data exactly once."""
+        devices = await _lamp(hass)
+        listeners = listeners_at_call(hass, devices)
         before = _state_listeners(hass)
 
         res = await _call(
@@ -143,7 +145,7 @@ class TestConfirmedTransition:
             domain="light",
             service="turn_on",
             entity_ids=["light.a"],
-            service_data={"brightness": 255},
+            service_data={"entity_id": "light.a", "brightness": 255},
         )
 
         assert res["dispatched"] is True
@@ -155,10 +157,11 @@ class TestConfirmedTransition:
         assert transition["old_state"]["state"] == "off"
         assert transition["new_state"]["state"] == "on"
         assert transition["changed"] is True
-        assert transition["attributes_changed"] == ["brightness"]
-        assert [c["data"] for c in calls] == [{"brightness": 255}]
+        # A light reports its brightness and color mode only while on.
+        assert transition["attributes_changed"] == ["brightness", "color_mode"]
+        assert devices.calls == [Received("light.a", "turn_on", {"brightness": 255})]
         # The confirmation listener was on the bus before the call ran, and is gone.
-        assert calls[0]["listeners"] == before + 1
+        assert listeners == [before + 1]
         assert _state_listeners(hass) == before
 
     async def test_attribute_only_change_names_just_that_attribute(
@@ -166,17 +169,13 @@ class TestConfirmedTransition:
     ) -> None:
         """With no expected state, the first change confirms; the transition
         lists only the attributes that moved, not the unchanged ones."""
-        hass.states.async_set("climate.a", "heat", {"temperature": 19, "hvac": "x"})
-
-        def _set_temperature(call: ServiceCall) -> None:
-            hass.states.async_set("climate.a", "heat", {"temperature": 21, "hvac": "x"})
-
-        _register(hass, "climate", "set_temperature", _set_temperature)
+        await set_up_devices(hass, {"climate.a": "heat"})
 
         res = await _call(
             component_ws,
             domain="climate",
             service="set_temperature",
+            service_data={"entity_id": "climate.a", "temperature": 21},
             entity_ids=["climate.a"],
             expected_state=None,
         )
@@ -191,18 +190,13 @@ class TestConfirmedTransition:
     ) -> None:
         """Without waiting for events, the reply still reflects the finished
         call: the dispatch blocks until the service handler returns."""
-        hass.states.async_set("light.a", "off")
-
-        async def _slow_turn_on(call: ServiceCall) -> None:
-            await asyncio.sleep(0)
-            hass.states.async_set("light.a", "on")
-
-        hass.services.async_register("light", "turn_on", _slow_turn_on)
+        await _lamp(hass)
 
         res = await _call(
             component_ws,
             domain="light",
             service="turn_on",
+            service_data=_LAMP,
             entity_ids=["light.a"],
             wait=False,
         )
@@ -217,19 +211,20 @@ class TestUnconfirmedWrite:
     ) -> None:
         """A call that landed but whose entity never reported is ``partial``,
         never an error the server would retry (a double write)."""
-        hass.states.async_set("light.a", "off")
-        calls = _register(hass, "light", "turn_on")
+        devices = await _lamp(hass)
+        devices.behaviour["light.a"] = "stay"
         before = _state_listeners(hass)
 
         res = await _call(
             component_ws,
             domain="light",
             service="turn_on",
+            service_data=_LAMP,
             entity_ids=["light.a"],
             timeout=_LAPSE,
         )
 
-        assert len(calls) == 1
+        assert len(devices.calls) == 1
         assert res["dispatched"] is True
         assert res["confirmed"] is False
         assert res["partial"] is True
@@ -243,17 +238,14 @@ class TestUnconfirmedWrite:
     ) -> None:
         """An entity that disappears mid-call did not reach a new state: the
         write must not be reported as confirmed."""
-        hass.states.async_set("light.a", "on")
-
-        def _remove(call: ServiceCall) -> None:
-            hass.states.async_remove("light.a")
-
-        _register(hass, "light", "turn_off", _remove)
+        devices = await _lamp(hass, "on")
+        devices.behaviour["light.a"] = "remove"
 
         res = await _call(
             component_ws,
             domain="light",
             service="turn_off",
+            service_data=_LAMP,
             entity_ids=["light.a"],
             timeout=_LAPSE,
         )
@@ -267,12 +259,9 @@ class TestUnconfirmedWrite:
     ) -> None:
         """A service that raises answers the caller with its error, and the
         confirmation listener registered for it does not stay on the bus."""
-        hass.states.async_set("light.a", "off")
-
-        def _fail(call: ServiceCall) -> None:
-            raise HomeAssistantError("dispatch failed")
-
-        calls = _register(hass, "light", "turn_on", _fail)
+        devices = await _lamp(hass)
+        devices.behaviour["light.a"] = "fail_once"
+        listeners = listeners_at_call(hass, devices)
         before = _state_listeners(hass)
 
         reply = await ws_call(
@@ -280,13 +269,13 @@ class TestUnconfirmedWrite:
             WS_CALL_SERVICE,
             domain="light",
             service="turn_on",
+            service_data=_LAMP,
             entity_ids=["light.a"],
         )
 
         assert not reply["success"]
-        assert "dispatch failed" in reply["error"]["message"]
-        assert len(calls) == 1
-        assert calls[0]["listeners"] == before + 1
+        assert "light.a did not answer" in reply["error"]["message"]
+        assert listeners == [before + 1]
         assert _state_listeners(hass) == before
 
 
@@ -296,23 +285,17 @@ class TestExpectedState:
     ) -> None:
         """A lock passes through ``locking``; with ``locked`` expected, the
         reply waits for ``locked`` and reports it, not the intermediate state."""
-        hass.states.async_set("lock.front", "unlocked")
-        later: list[asyncio.Task[None]] = []
-
-        def _lock(call: ServiceCall) -> None:
-            hass.states.async_set("lock.front", "locking")
-            later.append(set_later(hass, "lock.front", "locked"))
-
-        _register(hass, "lock", "lock", _lock)
+        await set_up_devices(hass, {"lock.front": "unlocked"})
 
         res = await _call(
             component_ws,
             domain="lock",
             service="lock",
+            service_data={"entity_id": "lock.front"},
             entity_ids=["lock.front"],
             expected_state="locked",
         )
-        await asyncio.gather(*later)
+        await hass.async_block_till_done()
 
         assert res["confirmed"] is True
         assert res["partial"] is False
@@ -326,23 +309,17 @@ class TestExpectedState:
     ) -> None:
         """A position update while still ``playing`` is noise: with ``paused``
         expected, the reply reports the later real ``paused``."""
-        hass.states.async_set("media_player.a", "playing", {"media_position": 0})
-        later: list[asyncio.Task[None]] = []
-
-        def _pause(call: ServiceCall) -> None:
-            hass.states.async_set("media_player.a", "playing", {"media_position": 5})
-            later.append(set_later(hass, "media_player.a", "paused"))
-
-        _register(hass, "media_player", "media_pause", _pause)
+        await set_up_devices(hass, {"media_player.a": "playing"})
 
         res = await _call(
             component_ws,
             domain="media_player",
             service="media_pause",
+            service_data={"entity_id": "media_player.a"},
             entity_ids=["media_player.a"],
             expected_state="paused",
         )
-        await asyncio.gather(*later)
+        await hass.async_block_till_done()
 
         assert res["confirmed"] is True
         assert res["transitions"][0]["new_state"]["state"] == "paused"
@@ -352,8 +329,7 @@ class TestExpectedState:
     ) -> None:
         """Core emits no event for a no-op, so a light already at the expected
         state must confirm at once instead of stalling to the timeout."""
-        hass.states.async_set("light.a", "on", {"brightness": 255})
-        _register(hass, "light", "turn_on")
+        await _lamp(hass, "on")
         before = _state_listeners(hass)
 
         # A stall would run to the command's 30 s timeout; the test allows 5 s.
@@ -362,6 +338,7 @@ class TestExpectedState:
                 component_ws,
                 domain="light",
                 service="turn_on",
+                service_data=_LAMP,
                 entity_ids=["light.a"],
                 expected_state="on",
                 timeout=30,
@@ -381,45 +358,23 @@ class TestServiceResponse:
         self, hass: HomeAssistant, component_ws: Any
     ) -> None:
         """A caller that asks for the service's response gets it."""
-        response: ServiceResponse = {"changed_states": [{"entity_id": "light.a"}]}
-        hass.states.async_set("light.a", "off")
-
-        def _turn_on(call: ServiceCall) -> ServiceResponse:
-            hass.states.async_set("light.a", "on")
-            return response
-
-        _register(
-            hass,
-            "light",
-            "turn_on",
-            _turn_on,
-            supports_response=SupportsResponse.OPTIONAL,
-        )
+        reply = {"answer": 42}
+        await _answering_script(hass, reply)
 
         res = await _call(
-            component_ws,
-            domain="light",
-            service="turn_on",
-            entity_ids=["light.a"],
-            return_response=True,
+            component_ws, domain="script", service="answer", return_response=True
         )
 
-        assert res["service_response"] == response
+        assert res["service_response"] == reply
 
     async def test_response_is_left_out_unless_requested(
         self, hass: HomeAssistant, component_ws: Any
     ) -> None:
         """A frame that does not ask for the response gets none, even from a
         service that has one."""
-        _register(
-            hass,
-            "light",
-            "turn_on",
-            lambda call: {"x": 1},
-            supports_response=SupportsResponse.OPTIONAL,
-        )
+        await _answering_script(hass, {"answer": 42})
 
-        res = await _call(component_ws, domain="light", service="turn_on")
+        res = await _call(component_ws, domain="script", service="answer")
 
         assert res["dispatched"] is True
         assert "service_response" not in res
@@ -429,17 +384,24 @@ class TestFrame:
     async def test_service_without_entities_reports_dispatch_only(
         self, hass: HomeAssistant, component_ws: Any
     ) -> None:
-        """A frame with only domain and service fires the call once with no
-        data and reports it dispatched, with nothing to confirm."""
-        calls = _register(hass, "automation", "trigger")
+        """A frame with no ``entity_ids`` fires the call once and reports it
+        dispatched, with nothing to confirm."""
+        automation = await set_up_ringing_automation(hass)
+        rang = async_capture_events(hass, RANG)
 
-        res = await _call(component_ws, domain="automation", service="trigger")
+        res = await _call(
+            component_ws,
+            domain="automation",
+            service="trigger",
+            service_data={"entity_id": automation},
+        )
+        await hass.async_block_till_done()
 
         assert res["dispatched"] is True
         assert res["confirmed"] is False
         assert res["partial"] is False
         assert res["transitions"] == []
-        assert [c["data"] for c in calls] == [{}]
+        assert len(rang) == 1
 
     @pytest.mark.parametrize(
         "frame",
@@ -459,26 +421,32 @@ class TestFrame:
         self, hass: HomeAssistant, component_ws: Any, frame: dict[str, Any]
     ) -> None:
         """A malformed frame is answered ``invalid_format`` and fires nothing."""
-        calls = _register(hass, "light", "turn_on")
+        devices = await _lamp(hass)
 
-        reply = await ws_call(component_ws, WS_CALL_SERVICE, **frame)
+        reply = await ws_call(
+            component_ws,
+            WS_CALL_SERVICE,
+            **frame,
+            service_data=_LAMP,
+        )
 
         assert not reply["success"]
         assert reply["error"]["code"] == "invalid_format"
-        assert calls == []
+        assert devices.calls == []
 
     async def test_timeout_at_the_cap_is_accepted(
         self, hass: HomeAssistant, component_ws: Any
     ) -> None:
         """The largest allowed timeout is a valid frame."""
-        calls = _register(hass, "light", "turn_on")
+        devices = await _lamp(hass)
 
         res = await _call(
             component_ws,
             domain="light",
             service="turn_on",
+            service_data=_LAMP,
             timeout=CALL_SERVICE_MAX_TIMEOUT,
         )
 
         assert res["dispatched"] is True
-        assert len(calls) == 1
+        assert devices.targets() == ["light.a"]

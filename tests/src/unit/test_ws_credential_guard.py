@@ -26,6 +26,7 @@ from ha_mcp.tools.tools_service import ServiceTools
 from ha_mcp.tools.util_helpers import is_credential_ws_command
 
 from ._code_mode import run_custom_tool
+from ._haos_build_core import core_info
 from ._supervisor_core import load_supervisor_api, supervisor_requests
 
 
@@ -47,7 +48,9 @@ async def supervisor_calls(
         aioclient_mock,
         monkeypatch,
         {
-            ("get", path): {"version": "2026.11.1"}
+            ("get", path): core_info(
+                "2026.11.1", version_latest="2026.11.1", update_available=False
+            )
             for path in ("/core/info", "/v2/core/info")
         },
     )

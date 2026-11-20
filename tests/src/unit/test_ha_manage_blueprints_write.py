@@ -180,6 +180,19 @@ async def test_save_invalid_blueprint_is_validation_failed(
     assert await installed_text(hass, "automation", PATH) is None
 
 
+async def test_missing_blueprint_input_named_already_exists_is_validation_failed(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await set_up_core(hass)
+    yaml_text = MOTION.replace("!input motion_sensor", "!input 'already exists'")
+
+    body = await rejected_call_body(_save(core_client, path=PATH, yaml=yaml_text))
+
+    assert "already exists" in body["error"]["message"]
+    assert body["error"]["code"] == "VALIDATION_FAILED"
+    assert await installed_text(hass, "automation", PATH) is None
+
+
 async def test_save_invalid_yaml_classifies_by_cores_error_code(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:

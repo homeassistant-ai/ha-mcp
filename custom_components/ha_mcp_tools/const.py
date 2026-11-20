@@ -217,40 +217,6 @@ YAML_KEY_DENYLIST = frozenset(
     }
 )
 
-# Post-edit action required for each YAML key.
-# template, mqtt, group, automation, script, and scene have first-party
-# reload services in HA core. All others require a full HA restart.
-# ``TestPostActionTableContract`` pins the in-repo shape; the HA-core
-# side of the contract is a write-time snapshot, not a continuous check.
-YAML_KEY_POST_ACTIONS: dict[str, dict[str, str]] = {
-    "template": {
-        "post_action": "reload_available",
-        "reload_service": "homeassistant.reload_custom_templates",
-    },
-    "mqtt": {
-        "post_action": "reload_available",
-        "reload_service": "mqtt.reload",
-    },
-    "group": {
-        "post_action": "reload_available",
-        "reload_service": "group.reload",
-    },
-    "automation": {
-        "post_action": "reload_available",
-        "reload_service": "automation.reload",
-    },
-    "script": {
-        "post_action": "reload_available",
-        "reload_service": "script.reload",
-    },
-    "scene": {
-        "post_action": "reload_available",
-        "reload_service": "scene.reload",
-    },
-}
-# Default for keys not in YAML_KEY_POST_ACTIONS:
-YAML_KEY_DEFAULT_POST_ACTION = {"post_action": "restart_required"}
-
 # YAML-mode dashboard url_path validation (issue #1034).
 # Pattern: lowercase letters/digits, hyphen-separated, must contain at least
 # one hyphen (HA's lovelace dashboard rule). No leading/trailing/double hyphens.
@@ -311,10 +277,9 @@ CHANNEL_STABLE = "stable"
 CHANNEL_DEV = "dev"
 
 # Options-flow keys (stored in entry.options).
-# Retired: entries saved before the paired-release change may still carry
-# ``channel`` and ``auto_update``. Nothing acts on them; only the server_entry
+# Retired keys, no longer defined here: entries saved before the
+# paired-release change may still carry ``channel`` and ``auto_update``. Nothing acts on them; only the server_entry
 # / server_entry_update WS commands still echo ``channel`` for older servers.
-OPT_CHANNEL = "channel"
 OPT_SERVER_PORT = "server_port"
 OPT_BIND_HOST = "bind_host"
 OPT_WEBHOOK_AUTH = "webhook_auth"

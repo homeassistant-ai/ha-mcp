@@ -34,7 +34,9 @@ from ha_mcp.tools import auto_backup, helper_flows
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._client_spies import sent_messages
-from ._core_helper_flows import CORE_HELPER_FLOWS
+from ._core_setup import install_custom_helper
+
+CUSTOM = "my_custom_helper"
 
 
 @pytest.fixture
@@ -151,6 +153,40 @@ async def test_a_flow_helper_is_removed_by_its_entity_without_naming_its_type(
     assert result["helper_type"] == platform
     assert result["entry_id"] == entry.entry_id
     assert hass.config_entries.async_get_entry(entry.entry_id) is None
+
+
+async def test_a_subentry_id_with_an_entity_target_never_removes_that_entitys_helper(
+    hass: HomeAssistant,
+    tools: IntegrationTools,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """A caller who names a subentry means that subentry. An entity_id is not
+    its parent entry, so Core finds nothing, and the entity's helper stays."""
+    entity_id, entry = _flow_entity(hass, entity_registry, "otp")
+
+    with pytest.raises(ToolError) as exc_info:
+        await _remove(tools, entity_id, subentry_id="s1")
+
+    error = json.loads(str(exc_info.value))["error"]
+    assert error["code"] == "RESOURCE_NOT_FOUND"
+    assert hass.config_entries.async_get_entry(entry.entry_id) is not None
+
+
+async def test_a_subentry_id_with_another_helper_type_is_refused_and_removes_nothing(
+    hass: HomeAssistant,
+    tools: IntegrationTools,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """``helper_type`` names the entity's own helper and ``subentry_id`` a
+    subentry: the caller cannot mean both, and guessing would delete one."""
+    entity_id, entry = _flow_entity(hass, entity_registry, "otp")
+
+    with pytest.raises(ToolError) as exc_info:
+        await _remove(tools, entity_id, helper_type="otp", subentry_id="s1")
+
+    error = json.loads(str(exc_info.value))["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert hass.config_entries.async_get_entry(entry.entry_id) is not None
 
 
 async def test_a_storage_helper_is_removed_by_its_entity_without_naming_its_type(
@@ -350,7 +386,7 @@ async def test_entity_route_backs_up_the_resolved_helper_before_deleting(
     ("platform", "reason"),
     [
         ("otp", "has no stored options to back up or restore"),
-        ("my_custom_helper", "whose options the component withholds"),
+        (CUSTOM, "whose options the component withholds"),
     ],
     ids=["otp", "custom_only"],
 )
@@ -358,7 +394,9 @@ async def test_a_helper_whose_options_are_not_backed_up_is_removed_with_the_reas
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    enable_custom_integrations: None,
     caplog: pytest.LogCaptureFixture,
     platform: str,
     reason: str,
@@ -368,18 +406,7 @@ async def test_a_helper_whose_options_are_not_backed_up_is_removed_with_the_reas
 
     otp keeps everything in entry.data, so the component lists empty options;
     a custom helper integration's options are withheld by the component."""
-    from custom_components.ha_mcp_tools.websocket_api import flow_domains
-
-    flows = CORE_HELPER_FLOWS | {"my_custom_helper"}
-    # A custom helper integration is listed by Core's loader and by Core's
-    # flow_handlers?type=helper, which a unit test's Core cannot install;
-    # conftest's ``_server_helper_flows`` names the read to patch for that.
-    monkeypatch.setattr(
-        flow_domains, "async_get_config_flows", AsyncMock(return_value=set(flows))
-    )
-    monkeypatch.setattr(
-        helper_flows, "_fetch_helper_flow_types", AsyncMock(return_value=flows)
-    )
+    install_custom_helper(tmp_path, monkeypatch, CUSTOM)
     assert await async_setup_component(hass, "config", {})
     entity_id, entry = _flow_entity(
         hass,

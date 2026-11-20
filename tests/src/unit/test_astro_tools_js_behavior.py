@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from ._js_harness import HarnessResult, extract_script_body, run_script
+from ._js_harness import _assert_clean_init, extract_script_body, run_script
 
 TOOLS_ASTRO = (
     Path(__file__).resolve().parents[3] / "site" / "src" / "pages" / "tools.astro"
@@ -112,15 +112,6 @@ def _build_tools_dom(
         ]
     )
     return "\n".join(parts)
-
-
-def _assert_clean_init(result: HarnessResult) -> None:
-    init_errors = [
-        e
-        for e in result.errors
-        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
-    ]
-    assert not init_errors, f"script failed to initialise: {init_errors}"
 
 
 def _card_class(dom: str, tool_name: str) -> str:

@@ -70,13 +70,13 @@ def _do_template_diagnose(
 # =============================================================================
 # ha_mcp_tools/info
 # =============================================================================
-def _do_info(hass: HomeAssistant | None = None) -> dict[str, Any]:
+def do_info(hass: HomeAssistant | None = None) -> dict[str, Any]:
     """Return the handshake payload.
 
     ``timezone`` (``hass.config.time_zone``) is an additive field consumers
     detect by presence — it carries NO capability entry and does NOT bump
     ``schema_version``. ``hass`` is optional (defaulting to ``None`` so a direct
-    ``_do_info()`` still works for callers that only need the static handshake);
+    ``do_info()`` still works for callers that only need the static handshake);
     when absent, it and ``webhook_auth`` degrade to ``None``.
 
     ``webhook_auth`` (#2584) is the server entry's webhook auth mode, shown by

@@ -31,11 +31,13 @@ def set_config(
 
 
 @pytest.fixture(autouse=True)
-def _fresh_hidden_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+def _fresh_hidden_cache():
     """Isolate the module-shared hidden-set cache per test.
 
     The cache is deliberately module-global (a process can hold several server
     instances — see _HiddenSetCache), so without this every test would inherit
     the previous test's cached hidden set.
     """
-    monkeypatch.setattr(enforcement, "_hidden_cache", enforcement._HiddenSetCache())
+    enforcement.reset_hidden_set_cache()
+    yield
+    enforcement.reset_hidden_set_cache()

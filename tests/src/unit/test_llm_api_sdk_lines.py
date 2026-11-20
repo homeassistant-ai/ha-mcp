@@ -28,8 +28,8 @@ from ._llm_api_server import (
     call,
     mirrored_tool,
     payload,
+    refused_port,
     serve,
-    unused_port,
     use_sdk_v2,
 )
 
@@ -105,21 +105,22 @@ class TestLoopbackClient:
     async def test_an_environment_proxy_is_not_consulted_for_the_loopback_call(
         self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        dead_proxy = f"http://127.0.0.1:{unused_port()}"
-        for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
-            monkeypatch.setenv(name, dead_proxy)
-        for name in ("NO_PROXY", "no_proxy"):
-            monkeypatch.delenv(name, raising=False)
+        with refused_port() as proxy_port:
+            dead_proxy = f"http://127.0.0.1:{proxy_port}"
+            for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+                monkeypatch.setenv(name, dead_proxy)
+            for name in ("NO_PROXY", "no_proxy"):
+                monkeypatch.delenv(name, raising=False)
 
-        async with serve() as srv:
-            # Control: a client that trusts the environment does take the proxy.
-            async with httpx2.AsyncClient() as trusting:
-                with pytest.raises(httpx2.HTTPError):
-                    await trusting.post(f"http://127.0.0.1:{srv.port}/private_x")
+            async with serve() as srv:
+                # Control: a client that trusts the environment does take the proxy.
+                async with httpx2.AsyncClient() as trusting:
+                    with pytest.raises(httpx2.HTTPError):
+                        await trusting.post(f"http://127.0.0.1:{srv.port}/private_x")
 
-            instance = await api_instance(hass, srv.port, EXPOSURE_FULL)
+                instance = await api_instance(hass, srv.port, EXPOSURE_FULL)
 
-        assert [tool.name for tool in instance.tools] == ["ha_search"]
+            assert [tool.name for tool in instance.tools] == ["ha_search"]
 
 
 class TestPreRenameSdk:
@@ -174,8 +175,11 @@ class TestSdkV2:
     ) -> None:
         use_sdk_v2(monkeypatch)
 
-        with pytest.raises(HomeAssistantError, match="Could not reach"):
-            await api_instance(hass, unused_port(), EXPOSURE_FULL)
+        with (
+            refused_port() as port,
+            pytest.raises(HomeAssistantError, match="Could not reach"),
+        ):
+            await api_instance(hass, port, EXPOSURE_FULL)
 
     async def test_a_protocol_error_is_a_transport_failure(
         self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
@@ -281,5 +285,8 @@ class TestResultKeysMatchAcrossSdkLines:
 
         monkeypatch.setattr(importlib, "import_module", never_loads)
 
-        with pytest.raises(HomeAssistantError, match="Could not reach"):
-            await api_instance(hass, unused_port(), EXPOSURE_FULL)
+        with (
+            refused_port() as port,
+            pytest.raises(HomeAssistantError, match="Could not reach"),
+        ):
+            await api_instance(hass, port, EXPOSURE_FULL)

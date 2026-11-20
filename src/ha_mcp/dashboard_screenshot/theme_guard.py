@@ -87,7 +87,7 @@ def _read_only_mode() -> bool:
         return False
 
 
-def _refusal_reason(url: str) -> str | None:
+def refusal_reason(url: str) -> str | None:
     """Why ``url`` must not carry the engine token, or None when it may.
 
     The two refusals are distinct and must say so. An unsupported scheme is
@@ -278,7 +278,7 @@ class ThemeGuard:
         from ..client.websocket_client import HomeAssistantWebSocketClient
 
         assert self.credential is not None
-        refusal = _refusal_reason(self.credential.url)
+        refusal = refusal_reason(self.credential.url)
         if refusal is not None:
             raise ConnectionError(refusal)
         ws = HomeAssistantWebSocketClient(

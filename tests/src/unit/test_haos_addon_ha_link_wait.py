@@ -25,7 +25,7 @@ from tests.src.haos_runtime import (
     _ADDON_HA_LINK_PROBE_S,
     _addon_link_transient_errors,
     _is_transient_link_error,
-    _probe_addon_ha_link,
+    probe_addon_ha_link,
     wait_for_addon_ha_link_ready,
 )
 
@@ -63,7 +63,7 @@ def _run(
     """
     clock = clock or _Clock()
     with (
-        patch("tests.src.haos_runtime._probe_addon_ha_link", probe),
+        patch("tests.src.haos_runtime.probe_addon_ha_link", probe),
         patch("tests.src.haos_runtime.time", clock),
     ):
         return wait_for_addon_ha_link_ready(_URL, timeout=timeout), clock
@@ -127,7 +127,7 @@ def test_each_attempt_is_bounded_by_the_remaining_deadline() -> None:
 
     Without a per-attempt bound the call inherits FastMCP's Streamable HTTP
     read default and can outlive this helper's own budget — see
-    ``_probe_addon_ha_link`` for the default it would otherwise inherit.
+    ``probe_addon_ha_link`` for the default it would otherwise inherit.
     """
     budgets: list[float] = []
 
@@ -294,7 +294,7 @@ def test_transient_classifier_accepts_a_pure_cancellation_group() -> None:
 def test_probe_honors_its_budget_against_a_silent_listener() -> None:
     """The real probe gives up on a socket that accepts and never answers.
 
-    Every other test stubs ``_probe_addon_ha_link`` out, so nothing else
+    Every other test stubs ``probe_addon_ha_link`` out, so nothing else
     executes the timeout wiring this module exists for: drop a ``timeout=``
     kwarg or the ``asyncio.wait_for`` wrapper and they all still pass while a
     stall silently reverts to FastMCP's ~300s read default. This binds a
@@ -328,7 +328,7 @@ def test_probe_honors_its_budget_against_a_silent_listener() -> None:
     try:
         started = real_time.monotonic()
         with pytest.raises(_addon_link_transient_errors()) as excinfo:
-            _probe_addon_ha_link(f"http://127.0.0.1:{port}/mcp", 2.0)
+            probe_addon_ha_link(f"http://127.0.0.1:{port}/mcp", 2.0)
         elapsed = real_time.monotonic() - started
         assert _is_transient_link_error(excinfo.value), excinfo.value
         # Budget 2s; allow generous slack for FastMCP's shielded teardown.

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote_plus
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from ha_mcp import __version__
 from ha_mcp._vendor.fastmcp import Context
@@ -139,7 +139,7 @@ KNOWN_CLIENT_ISSUES_HINT = (
 )
 
 # A slow or missing Supervisor must not hold up the whole report.
-_SUPERVISOR_PROBE_TIMEOUT = 10.0
+SUPERVISOR_PROBE_TIMEOUT = 10.0
 
 
 def _detect_installation_method() -> str:
@@ -203,7 +203,7 @@ def _instance_identity() -> dict[str, Any]:
     }
 
 
-def _format_websockets_dependency_value(diagnostic_info: dict[str, Any]) -> str:
+def format_websockets_dependency_value(diagnostic_info: dict[str, Any]) -> str:
     """Render the websockets probe for the human-pasteable report.
 
     Mirrors the sibling ``_format_*_value`` helpers: a degraded probe stays
@@ -231,7 +231,7 @@ def _format_websockets_dependency_value(diagnostic_info: dict[str, Any]) -> str:
     return f"{value} | shared env copy: {shared}"
 
 
-def _websockets_dependency_state() -> dict[str, Any]:
+def websockets_dependency_state() -> dict[str, Any]:
     """Report the vendored websockets copy plus the shared copy's state.
 
     ha-mcp runs on its private ``ha_mcp._vendor.websockets``, immune to the
@@ -311,10 +311,10 @@ def _tool_policy_summary() -> str:
         logger.warning("Tool policy probe failed: %s (%s)", e, type(e).__name__)
         # load_policy's message can quote rule contents, so only its kind
         # reaches the report.
-        if "not valid JSON" in str(e):
-            return "unreadable (invalid JSON)"
-        if "schema validation" in str(e):
+        if isinstance(e.__cause__, ValidationError):
             return "unreadable (schema validation failed)"
+        if isinstance(e.__cause__, ValueError):  # the JSON or its encoding
+            return "unreadable (invalid JSON)"
         return f"unreadable ({type(e).__name__})"
     count = len(policy.rules)
     rules = "1 rule" if count == 1 else f"{count} rules"
@@ -327,7 +327,7 @@ def _http_user_agent() -> str:
     return str(value).strip()
 
 
-def _detect_mcp_transport() -> str:
+def detect_mcp_transport() -> str:
     """Best-effort MCP transport detection.
 
     Returns ``stdio`` / ``http`` / ``sse`` / ``unknown``. We can't observe the
@@ -449,7 +449,7 @@ def _build_formatted_report(
         f"Supervisor: {_format_supervisor_value(diagnostic_info)}",
         f"Connection Status: {diagnostic_info['connection_status']}",
         f"Entity Count: {diagnostic_info['entity_count']}",
-        f"websockets Dependency: {_format_websockets_dependency_value(diagnostic_info)}",
+        f"websockets Dependency: {format_websockets_dependency_value(diagnostic_info)}",
     ]
     if "location_name" in diagnostic_info:
         report_lines.append(f"Location Name: {diagnostic_info['location_name']}")
@@ -594,7 +594,7 @@ class BugReportTools:
         try:
             response = await asyncio.wait_for(
                 _supervisor_api_call(self._client, "/info"),
-                timeout=_SUPERVISOR_PROBE_TIMEOUT,
+                timeout=SUPERVISOR_PROBE_TIMEOUT,
             )
         except Exception as e:  # noqa: BLE001
             logger.info("Supervisor info probe failed: %s (%s)", e, type(e).__name__)
@@ -811,7 +811,7 @@ class BugReportTools:
         platform_info = detect_platform()
         config_toggles = _get_config_toggles()
         tool_policy = await asyncio.to_thread(_tool_policy_summary)
-        mcp_transport = _detect_mcp_transport()
+        mcp_transport = detect_mcp_transport()
         client_info = extract_client_info(ctx)
         (known_identifiers, identifier_warning), ha_install = await asyncio.gather(
             collect_known_identifiers(self._client), fetch_ha_install(self._client)
@@ -842,7 +842,7 @@ class BugReportTools:
             "instance": _instance_identity(),
             "installation_method": install_method,
             "platform": platform_info,
-            "websockets_dependency": _websockets_dependency_state(),
+            "websockets_dependency": websockets_dependency_state(),
             "mcp_transport": mcp_transport,
             "mcp_client_info": client_info,
             "mcp_protocol_version": mcp_protocol_version,

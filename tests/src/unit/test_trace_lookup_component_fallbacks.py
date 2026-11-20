@@ -3,7 +3,7 @@
 The server reads a context from the component's live trace store only when the
 component answered the trace-context command. These tests resolve a context on
 the real client: the component's own schema and trace store answer it, and Core
-answers ``unknown_command`` when the component is absent. A component that
+answers ``unknown_command`` for a command it never registered. A component that
 gives no answer at all is the one client replacement allowed
 (``tests/AGENTS.md``).
 """
@@ -80,27 +80,32 @@ async def test_a_component_that_gives_no_answer_still_tries_core(
 
 async def test_an_unknown_component_command_falls_back_and_drops_the_capability(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,
+    component_core_client: HomeAssistantClient,
     invalidated: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A downgraded component must not keep the capability that routes to a
-    command Core refuses, and Core's own store still answers the lookup."""
+    """A capability that routes to a command Core refuses is dropped, and Core's
+    own store still answers the lookup. The component advertises the lookup;
+    the server sends a command Core never registered."""
     run_id = await _store_run(hass)
+    retired = "ha_mcp_tools/trace_context_retired"
+    monkeypatch.setattr(trace_lookup, "TRACE_CONTEXT_COMMAND", retired)
     monkeypatch.setattr(
-        core_client,
+        component_core_client,
         "send_websocket_message",
-        AsyncMock(wraps=core_client.send_websocket_message),
-    )
-    monkeypatch.setattr(
-        trace_lookup, "component_supports", lambda _caps, _capability: True
+        AsyncMock(wraps=component_core_client.send_websocket_message),
     )
 
-    match = await resolve_context_trace(core_client, "automation", "uid_1", "ctx-1")
+    match = await resolve_context_trace(
+        component_core_client, "automation", "uid_1", "ctx-1"
+    )
 
     assert match.run_id == run_id
-    assert _sent(core_client) == [COMPONENT_LOOKUP, CORE_LOOKUP]
-    invalidated.assert_called_once_with(core_client)
+    assert _sent(component_core_client) == [
+        {**COMPONENT_LOOKUP, "type": retired},
+        CORE_LOOKUP,
+    ]
+    invalidated.assert_called_once_with(component_core_client)
 
 
 async def test_home_assistant_without_a_trace_store_reports_core_s_answer(

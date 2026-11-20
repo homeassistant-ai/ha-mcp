@@ -21,6 +21,9 @@ from ha_mcp.backup_manager import BackupManager, get_backup_manager
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.utils.config_write_lock import file_write_lock
 
+from ._backup_core import SnapshotClock
+from ._backup_core import snapshot_clock as snapshot_clock
+
 
 @pytest.fixture
 async def manager(
@@ -74,11 +77,11 @@ async def test_rotation_does_not_prune_another_identity_with_the_same_stem(
 
 
 async def test_legacy_digest_lists_both_filename_generations(
-    hass: HomeAssistant, manager: BackupManager
+    hass: HomeAssistant, manager: BackupManager, snapshot_clock: SnapshotClock
 ) -> None:
     identity = f"config:{'a' * 120}"
-    with patch("ha_mcp.backup_manager._now_ts", return_value="20260102_000000"):
-        current = await capture(hass, manager, identity)
+    snapshot_clock.set("2026-01-02T00:00:00")
+    current = await capture(hass, manager, identity)
     digest = hashlib.sha256(identity.encode()).hexdigest()[:8]
     legacy_stem = f"{identity.replace(':', '_')}-{digest}"
     legacy = current.with_name(f"integration.{legacy_stem}.20260101_000000.yaml")
@@ -105,7 +108,10 @@ async def test_long_identities_get_separate_files_with_complete_headers(
 
 @pytest.mark.parametrize("link_supported", [True, False])
 async def test_parallel_captures_with_the_same_stem_do_not_overwrite(
-    hass: HomeAssistant, manager: BackupManager, link_supported: bool
+    hass: HomeAssistant,
+    manager: BackupManager,
+    link_supported: bool,
+    snapshot_clock: SnapshotClock,
 ) -> None:
     longer = "a" * 113
     digest = hashlib.sha256(longer.encode()).hexdigest()[:8]
@@ -127,7 +133,6 @@ async def test_parallel_captures_with_the_same_stem_do_not_overwrite(
     )
     with (
         link,
-        patch("ha_mcp.backup_manager._now_ts", return_value="20260101_000000"),
         patch("ha_mcp.backup_manager.tempfile", SimpleNamespace(mkstemp=overlap)),
     ):
         first, second = await asyncio.gather(
@@ -142,7 +147,7 @@ async def test_parallel_captures_with_the_same_stem_do_not_overwrite(
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows uses rename without replacement")
 async def test_parallel_publication_with_mixed_hard_link_permissions(
-    hass: HomeAssistant, manager: BackupManager
+    hass: HomeAssistant, manager: BackupManager, snapshot_clock: SnapshotClock
 ) -> None:
     longer = "a" * 113
     digest = hashlib.sha256(longer.encode()).hexdigest()[:8]
@@ -168,7 +173,6 @@ async def test_parallel_publication_with_mixed_hard_link_permissions(
         return file_write_lock(*args, **kwargs)
 
     with (
-        patch("ha_mcp.backup_manager._now_ts", return_value="20260101_000000"),
         patch("ha_mcp.backup_manager.file_write_lock", side_effect=observe_lock),
         patch("ha_mcp.backup_manager.os", wraps=os) as backup_os,
     ):
@@ -186,12 +190,12 @@ async def test_parallel_publication_with_mixed_hard_link_permissions(
 
 
 async def test_publication_preserves_a_snapshot_created_at_the_selected_name(
-    hass: HomeAssistant, manager: BackupManager
+    hass: HomeAssistant, manager: BackupManager, snapshot_clock: SnapshotClock
 ) -> None:
     longer = "a" * 113
     digest = hashlib.sha256(longer.encode()).hexdigest()[:8]
     shorter = f"{longer[:103]}-{digest}"
-    stamp = "20260101_000000"
+    stamp = snapshot_clock.moment.strftime("%Y%m%d_%H%M%S")
     existing = await capture(hass, manager, shorter)
     payload = existing.read_bytes()
     occupied = existing.with_name(f"integration.{shorter}.{stamp}.yaml")
@@ -206,10 +210,7 @@ async def test_publication_preserves_a_snapshot_created_at_the_selected_name(
 
         return competing_write
 
-    with (
-        patch("ha_mcp.backup_manager._now_ts", return_value=stamp),
-        patch("ha_mcp.backup_manager.os", wraps=os) as backup_os,
-    ):
+    with patch("ha_mcp.backup_manager.os", wraps=os) as backup_os:
         backup_os.name = os.name
         backup_os.rename.side_effect = occupy_before_publish(os.rename)
         backup_os.link.side_effect = occupy_before_publish(os.link)

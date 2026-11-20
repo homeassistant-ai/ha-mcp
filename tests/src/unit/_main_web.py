@@ -25,10 +25,10 @@ def start_main_web(
 ) -> WebStart:
     """Run ``main_web`` with ``env`` set; a ``None`` value unsets the variable.
 
-    The in-process server is a bare ``FastMCP``, and the runner keeps the
-    coroutine it is handed instead of running it: ``serve`` is closed unless
-    ``keep_serve``, for a test that awaits it. Logging is left as pytest set
-    it up, so ``caplog`` sees the startup lines.
+    ``main_web`` builds the real server; the runner keeps the coroutine it is
+    handed instead of running it: ``serve`` is closed unless ``keep_serve``,
+    for a test that awaits it. Logging is left as pytest set it up, so
+    ``caplog`` sees the startup lines.
     """
     monkeypatch.setenv("HOMEASSISTANT_URL", "http://homeassistant.invalid:8123")
     monkeypatch.setenv("HOMEASSISTANT_TOKEN", "test-token")
@@ -38,26 +38,24 @@ def start_main_web(
         else:
             monkeypatch.setenv(name, value)
 
-    mcp = FastMCP("test")
     handed: list[Coroutine[Any, Any, Any]] = []
-    monkeypatch.setattr("ha_mcp.__main__._get_mcp", lambda: mcp)
-    # The settings routes only bind the server for their handlers' later use.
-    monkeypatch.setattr("ha_mcp.__main__._get_server", lambda: None)
-    monkeypatch.setattr("ha_mcp.__main__._setup_logging", lambda *a, **kw: None)
+    monkeypatch.setattr("ha_mcp.__main__.setup_logging", lambda *a, **kw: None)
     monkeypatch.setattr(
-        "ha_mcp.__main__._run_entrypoint", lambda coro, label: handed.append(coro)
+        "ha_mcp.__main__.run_entrypoint", lambda coro, label: handed.append(coro)
     )
     # Process-wide state a startup leaves behind, put back after the test.
     access_log = logging.getLogger("uvicorn.access")
     monkeypatch.setattr(access_log, "filters", list(access_log.filters))
-    monkeypatch.setattr("ha_mcp.__main__._shutdown_event", None)
-    monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", None)
-    monkeypatch.setattr("ha_mcp.settings_ui._http_settings_mounted", False)
+    from ha_mcp.__main__ import get_mcp, main_web, reset_main_runtime
+    from ha_mcp.config import reset_global_settings
+    from ha_mcp.settings_ui import reset_http_settings_state
 
-    from ha_mcp.__main__ import main_web
+    reset_main_runtime()
+    reset_http_settings_state()
+    reset_global_settings()
 
     main_web()
     [serve] = handed
     if not keep_serve:
         serve.close()
-    return WebStart(mcp, serve)
+    return WebStart(get_mcp(), serve)

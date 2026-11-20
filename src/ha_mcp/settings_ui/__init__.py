@@ -34,12 +34,6 @@ from ._handlers_server import (
 )
 from ._handlers_theme import build_theme_handlers
 from ._handlers_tools import build_tools_handlers
-from ._i18n import (
-    LOCALE_COOKIE,
-    build_payload,
-    select_locale,
-    serialize_payload,
-)
 from ._persistence import (
     _atomic_write_json,
     _get_backup_settings_override_path,
@@ -72,6 +66,13 @@ from ._tools_meta import (
     _get_tool_metadata,
     apply_tool_visibility,
     effective_mandatory_tools,
+    primary_tag,
+)
+from .i18n import (
+    LOCALE_COOKIE,
+    build_payload,
+    select_locale,
+    serialize_payload,
 )
 
 if TYPE_CHECKING:
@@ -594,6 +595,13 @@ _http_settings_mounted: bool = False
 def is_http_settings_mounted() -> bool:
     """Return True when the settings UI is HTTP-mounted (not the stdio sidecar)."""
     return _http_settings_mounted
+
+
+def reset_http_settings_state() -> None:
+    """Forget process-local route advertisement between isolated server starts."""
+    global _http_settings_prefix, _http_settings_mounted
+    _http_settings_prefix = None
+    _http_settings_mounted = False
 
 
 # Every settings route except the add-on-only root mount is defined once in

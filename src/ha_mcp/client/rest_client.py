@@ -15,6 +15,7 @@ import httpx
 from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
+from ..error_wording import service_call_unauthorized
 from .admin_routes import is_admin_only_route
 from .error_log_journald import (
     JournaldPage,
@@ -47,8 +48,9 @@ from .exceptions import (
     HomeAssistantError as HomeAssistantError,
 )
 from .models import ErrorLogPage
+from .service_identifiers import service_rest_path
 from .supervisor_client import make_supervisor_httpx_client
-from .transport_errors import is_ssl_error, redirect_message
+from .transport_errors import is_ssl_error, redirect_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -378,9 +380,7 @@ class HomeAssistantClient:
                     )
 
                 if 300 <= response.status_code < 400:
-                    raise HomeAssistantConnectionError(
-                        redirect_message(self.base_url, response)
-                    )
+                    raise redirect_refusal(self.base_url, response)
 
                 if response.status_code >= 400:
                     message, error_data = self._error_message_from_response(response)
@@ -598,15 +598,13 @@ class HomeAssistantClient:
         data: dict[str, Any] | None = None,
         return_response: bool = False,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """
-        Call Home Assistant service.
+        """Call a Home Assistant service.
 
         Args:
             domain: Service domain (e.g., 'light', 'climate')
             service: Service name (e.g., 'turn_on', 'set_temperature')
             data: Optional service data
-            return_response: If True, returns the service response data (for services
-                           that support SupportsResponse.ONLY or SupportsResponse.OPTIONAL)
+            return_response: Request response data from a service that supports it.
 
         Returns:
             Service response data - list of affected states normally, or dict with
@@ -649,7 +647,6 @@ class HomeAssistantClient:
         A 401 means Home Assistant refused before running the service, so the
         WebSocket retry cannot apply it twice.
         """
-        # Build query params for return_response
         params = {}
         if return_response:
             params["return_response"] = "true"
@@ -657,7 +654,7 @@ class HomeAssistantClient:
         try:
             result = await self._request(
                 "POST",
-                f"/services/{domain}/{service}",
+                service_rest_path(domain, service),
                 json=payload,
                 params=params if params else None,
             )
@@ -702,7 +699,7 @@ class HomeAssistantClient:
         )
         if not reply.get("success"):
             error = str(reply.get("error", "Service call failed"))
-            if error.removeprefix("Command failed: ") == "Unauthorized":
+            if service_call_unauthorized(reply.get("error_code"), error):
                 raise HomeAssistantAdminRequiredError(
                     f"Service {domain}.{service} is admin-only in Home Assistant "
                     "and this token's user is not an administrator"
@@ -1424,7 +1421,7 @@ class HomeAssistantClient:
     # cadence-measurement instrumentation also retired with the loop;
     # the WS waiter logs `time.monotonic()` elapsed via its own debug
     # line at ``ws_waiters._ws_wait_for_condition``.
-    _POLL_BUDGET_S: float = 6.0
+    POLL_BUDGET_S: float = 6.0
 
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
         """Discover the entity_id assigned to a newly created automation.
@@ -1442,7 +1439,7 @@ class HomeAssistantClient:
 
         try:
             entity_id = await wait_for_automation_entity_by_unique_id(
-                self, unique_id, timeout=self._POLL_BUDGET_S
+                self, unique_id, timeout=self.POLL_BUDGET_S
             )
         except HomeAssistantError as e:
             # Narrow catch: programming bugs (TypeError/KeyError/etc.) propagate.
@@ -1488,11 +1485,7 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            # Core's DELETE answers a missing id with 400, not 404.
-            if (
-                e.status_code == 400
-                and (e.response_data or {}).get("message") == "Resource not found"
-            ):
+            if e.config_not_found:
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
@@ -1839,7 +1832,9 @@ class HomeAssistantClient:
             # decides the policy. ``send_command`` re-raises the original
             # ``ConnectionClosed`` / ``ConnectionResetError`` to keep writes
             # at-most-once, so those arrive untranslated.
-            logger.error(f"WebSocket transport failed ({message.get('type')}): {e}")
+            # A caller that waits zero seconds sent a command Core never answers.
+            log = logger.debug if message.get("_wait_timeout") == 0 else logger.error
+            log(f"WebSocket transport failed ({message.get('type')}): {e}")
             if isinstance(e, HomeAssistantConnectionError):
                 # Re-raised unchanged so subtypes and the traceback survive.
                 raise
@@ -1848,19 +1843,6 @@ class HomeAssistantClient:
             # Home Assistant's own answer (or a proxy's), or a local bug.
             error_str = str(e)
             code = getattr(e, "code", None)
-            if "403" in error_str and "Forbidden" in error_str:
-                logger.error(f"WebSocket 403 error: {error_str}")
-                return {
-                    "success": False,
-                    "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
-                    "error_code": code,
-                    "suggestions": [
-                        "This may be caused by a reverse proxy or security filter",
-                        "Try simplifying the request (e.g., shorter templates, fewer parameters)",
-                        "If using complex templates, try breaking them into smaller parts",
-                        "Check if your Home Assistant is behind a reverse proxy with security rules",
-                    ],
-                }
             # Name the command in the log line: a bare "Command failed:
             # Unknown command." is undiagnosable from a user's log
             # (issue #1889 took a live reproduction to attribute).
@@ -1871,7 +1853,12 @@ class HomeAssistantClient:
             # Preserve HA's structured error code (e.g. ``not_found``) so callers
             # can distinguish HA's authoritative verdict from a transient failure
             # instead of only seeing the stringified message.
-            return {"success": False, "error": error_str, "error_code": code}
+            fields = (
+                e.refusal_fields()
+                if isinstance(e, HomeAssistantCommandError)
+                else {"error_code": code}
+            )
+            return {"success": False, "error": error_str, **fields}
 
     async def _handle_render_template(
         self, ws_client: Any, message: dict[str, Any]
@@ -1915,7 +1902,7 @@ class HomeAssistantClient:
                 "error": str(e).removeprefix(
                     "subscribe_command('render_template') failed: "
                 ),
-                "error_code": e.code,
+                **e.refusal_fields(),
                 "template": template,
             }
         except TimeoutError:
@@ -2086,7 +2073,7 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            if e.status_code == 404:
+            if e.config_not_found:
                 msg = f"Script not found: {script_id}"
                 if resolved_id != script_id:
                     msg += f" (resolved storage key: {resolved_id})"
@@ -2365,7 +2352,7 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            if e.status_code == 404:
+            if e.config_not_found:
                 await self._raise_scene_config_404(scene_id, resolved_id, resolution)
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(

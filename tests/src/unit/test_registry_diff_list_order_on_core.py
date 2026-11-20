@@ -1,0 +1,439 @@
+"""A backup diff's list order and points in time, on real Core.
+
+Core keeps the labels of an entity and of a device, and a device's identifiers
+and connections, in sets, and lists a set in hash order. Which lists those are
+is the component's answer, read from Core's registry entry: with the component
+their order is no difference, and without it the diff reports the order and
+says so. The same answer names the points in time Core sets itself, which no
+restore puts back: with the component they are no difference, and without it
+the diff of a device reports them and says so. The snapshot is taken from
+Core's registry through the server's own client. An order test then edits the
+snapshot file to hold a list in the reverse of the order Core lists it in, so
+it does not depend on the hash seed.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import cast
+
+import orjson
+import pytest
+import yaml
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
+from starlette.requests import Request
+
+from custom_components.ha_mcp_tools.websocket_api import registries
+from custom_components.ha_mcp_tools.websocket_api.constants import WS_REGISTRY_FIELDS
+from ha_mcp.backup_diff import DiffResponse
+from ha_mcp.backup_manager import BackupManager
+from ha_mcp.client.rest_client import HomeAssistantClient
+
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import manage_backup
+from ._backup_core import snapshot_manager as snapshot_manager
+from ._backup_restore_helpers import settings_handlers
+from ._command_faults import received, taking
+from ._registry_item_snapshots import _snapshot
+
+
+async def _snapshot_reversing(
+    backup_manager: BackupManager, domain: str, entity_id: str, *keys: str
+) -> str:
+    """Snapshot the item, then store each of ``keys`` in the reverse of Core's order."""
+    path = await backup_manager.maybe_snapshot(domain, entity_id, force=True)
+    assert path is not None
+    stored = yaml.safe_load(path.read_text())
+    for key in keys:
+        assert len(stored["config"][key]) > 1
+        stored["config"][key].reverse()
+    path.write_text(yaml.safe_dump(stored))
+    return path.name
+
+
+def _device(hass: HomeAssistant) -> dr.DeviceEntry:
+    """A device with two identifiers, two connections and two labels."""
+    entry = MockConfigEntry(domain="test")
+    entry.add_to_hass(hass)
+    devices = dr.async_get(hass)
+    device = devices.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("test", "1"), ("test", "2")},
+        connections={
+            (dr.CONNECTION_NETWORK_MAC, "aa:bb:cc:00:00:01"),
+            (dr.CONNECTION_NETWORK_MAC, "aa:bb:cc:00:00:02"),
+        },
+    )
+    updated = devices.async_update_device(device.id, labels={"first", "second"})
+    assert updated is not None
+    return updated
+
+
+def _changed_fields(diff: DiffResponse) -> set[str]:
+    return {op["path"].split("/")[1] for op in diff["patch"]}
+
+
+async def test_an_entity_diff_ignores_the_order_core_lists_labels_in(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """An entity's labels are a set in Core, so the order the snapshot holds
+    them in is no difference."""
+    entities = er.async_get(hass)
+    entity = entities.async_get_or_create("light", "test", "1")
+    entities.async_update_entity(entity.entity_id, labels={"first", "second"})
+    snapshot = await _snapshot_reversing(
+        backup_manager, "entity", entity.entity_id, "labels"
+    )
+
+    diff = await backup_manager.diff_snapshot(snapshot)
+
+    assert diff["unchanged"] is True, diff
+
+
+async def test_an_entity_diff_reports_aliases_in_another_order(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Core keeps an entity's aliases in the order they were given, and a restore
+    puts that order back, so another order is a difference. The component says
+    they are no set, so the diff has nothing to add."""
+    entities = er.async_get(hass)
+    entity = entities.async_get_or_create("light", "test", "1")
+    entities.async_update_entity(entity.entity_id, aliases=["first", "second"])
+    snapshot = await _snapshot_reversing(
+        backup_manager, "entity", entity.entity_id, "aliases"
+    )
+
+    diff = await backup_manager.diff_snapshot(snapshot)
+
+    assert diff["unchanged"] is False, diff
+    assert "warnings" not in diff
+
+
+async def test_a_device_diff_ignores_the_order_core_lists_its_sets_in(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """A device's labels, identifiers and connections are sets in Core, so the
+    order the snapshot holds them in is no difference."""
+    device = _device(hass)
+    snapshot = await _snapshot_reversing(
+        backup_manager, "device", device.id, "labels", "identifiers", "connections"
+    )
+
+    diff = await backup_manager.diff_snapshot(snapshot)
+
+    assert diff["unchanged"] is True, diff
+
+
+async def test_a_diff_without_the_component_reports_the_order_and_says_so(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Only the component can say which lists Core keeps in a set. Without it
+    the diff does not guess: the order is a difference, with a warning that
+    names the lists and the component."""
+    device = _device(hass)
+    snapshot = await _snapshot_reversing(
+        backup_manager, "device", device.id, "labels", "identifiers", "connections"
+    )
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"labels", "identifiers", "connections"}, diff
+    (warning,) = diff["warnings"]
+    assert "connections, identifiers, labels" in warning
+    assert "only the ha_mcp_tools component can tell" in warning
+    assert "install or update it via HACS" in warning
+
+
+async def test_a_diff_the_component_names_no_set_for_reports_the_order_only(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a Core that keeps none of a device's lists in a set, the component's
+    empty answer is still its ruling: the order is a difference and there is
+    nothing to warn about."""
+    monkeypatch.setattr(registries, "declared_fields", lambda entry: ())
+    device = _device(hass)
+    snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"labels"}, diff
+    assert "warnings" not in diff
+
+
+async def test_a_device_diff_with_the_component_reports_a_label_that_changed(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """The component names labels as a set. That makes their order no
+    difference; a label that was swapped for another still is one."""
+    device = _device(hass)
+    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
+    assert path is not None
+    dr.async_get(hass).async_update_device(device.id, labels={"first", "third"})
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(path.name))
+
+    assert _changed_fields(diff) == {"labels"}, diff
+
+
+async def test_a_floor_diff_ignores_the_order_core_lists_aliases_in(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """A floor's aliases are a set in Core, and a floor is asked about as a
+    floor: the same aliases in another order are no difference."""
+    floor = fr.async_get(hass).async_create("Ground", aliases={"downstairs", "base"})
+    snapshot = await _snapshot_reversing(
+        backup_manager, "area_or_floor", f"floor:{floor.floor_id}", "aliases"
+    )
+
+    diff = await backup_manager.diff_snapshot(snapshot)
+
+    assert diff["unchanged"] is True, diff
+    assert "warnings" not in diff
+
+
+async def test_a_diff_of_an_unchanged_device_asks_the_component_nothing(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """The component is asked only when the live row differs from the snapshot:
+    an unchanged device costs no question."""
+    device = _device(hass)
+    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
+    assert path is not None
+
+    with received(hass, WS_REGISTRY_FIELDS) as seen:
+        diff = await backup_manager.diff_snapshot(path.name)
+
+    assert diff["unchanged"] is True, diff
+    assert seen[WS_REGISTRY_FIELDS] == []
+
+
+async def test_the_backup_tool_puts_the_diff_warning_beside_the_diff(
+    hass: HomeAssistant,
+    snapshot_manager: BackupManager,
+    core_client: HomeAssistantClient,
+) -> None:
+    """A tool's warnings are a top-level list, never part of its data."""
+    device = _device(hass)
+    snapshot = await _snapshot_reversing(
+        snapshot_manager, "device", device.id, "labels"
+    )
+
+    result = await manage_backup(
+        core_client, scope="edits", action="diff", backup_name=snapshot
+    )
+
+    (warning,) = result["warnings"]
+    assert "labels" in warning
+    assert "warnings" not in result["data"]
+
+
+async def test_the_settings_diff_carries_the_diff_warning(
+    hass: HomeAssistant,
+    snapshot_manager: BackupManager,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The settings page shows the same comparison, so it gets the warning too."""
+    device = _device(hass)
+    snapshot = await _snapshot_reversing(
+        snapshot_manager, "device", device.id, "labels"
+    )
+    handler = settings_handlers(monkeypatch, core_client)["diff_backup"]
+
+    response = await handler(
+        Request({"type": "http", "path_params": {"name": snapshot}})
+    )
+
+    (warning,) = orjson.loads(response.body)["warnings"]
+    assert "labels" in warning
+
+
+async def _snapshot_then_rename(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> str:
+    """Snapshot a device, then give it a name, which gives it a new
+    ``modified_at`` too."""
+    device = _device(hass)
+    snapshot = await _snapshot(backup_manager, "device", device.id)
+    dr.async_get(hass).async_update_device(device.id, name_by_user="Renamed")
+    return snapshot
+
+
+async def test_a_device_diff_names_the_changed_field_and_not_modified_at(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Core gives a device a new ``modified_at`` whenever a write changes a field
+    it stores, and its update command does not take one: the component names it
+    as a point in time Core sets itself, so the diff names only the field that
+    changed."""
+    snapshot = await _snapshot_then_rename(hass, backup_manager)
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"name_by_user"}, diff
+    assert "warnings" not in diff
+
+
+async def test_a_point_in_time_the_snapshot_lacks_is_no_difference(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """A snapshot from a Core whose device row had no ``created_at`` is compared
+    without it: Core sets that point in time itself and no restore puts it back,
+    so the diff names only the field that changed."""
+    device = _device(hass)
+    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
+    assert path is not None
+    stored = yaml.safe_load(path.read_text())
+    del stored["config"]["created_at"]
+    path.write_text(yaml.safe_dump(stored))
+    dr.async_get(hass).async_update_device(device.id, name_by_user="Renamed")
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(path.name))
+
+    assert _changed_fields(diff) == {"name_by_user"}, diff
+
+
+async def test_a_point_in_time_cores_update_command_takes_is_compared(
+    hass: HomeAssistant,
+    backup_manager: BackupManager,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Which points in time no restore puts back is read from Core: on a release
+    whose device update takes ``modified_at``, the diff reports it."""
+    snapshot = await _snapshot_then_rename(hass, backup_manager)
+
+    with taking(hass, "config/device_registry/update", "modified_at"):
+        diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"name_by_user", "modified_at"}, diff
+    assert "warnings" not in diff
+
+
+async def test_a_device_diff_without_the_component_reports_modified_at_and_says_so(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """Only the component can say which points in time Core sets itself. Without
+    it the diff of a device does not guess: ``modified_at`` is a difference,
+    with a warning that names it and the component."""
+    snapshot = await _snapshot_then_rename(hass, backup_manager)
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(snapshot))
+
+    assert _changed_fields(diff) == {"name_by_user", "modified_at"}, diff
+    (warning,) = diff["warnings"]
+    assert "reports modified_at as" in warning
+    assert "only the ha_mcp_tools component can tell" in warning
+    assert "install or update it via HACS" in warning
+
+
+async def test_a_device_diff_names_a_list_the_snapshot_does_not_hold(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """A snapshot taken before Core's row had a list is compared as it is: the
+    diff names the list instead of failing on the missing key."""
+    device = _device(hass)
+    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
+    assert path is not None
+    stored = yaml.safe_load(path.read_text())
+    del stored["config"]["labels"]
+    path.write_text(yaml.safe_dump(stored))
+
+    diff = cast(DiffResponse, await backup_manager.diff_snapshot(path.name))
+
+    assert "/labels" in [op["path"] for op in diff["patch"]], diff
+
+
+async def test_a_device_diff_answers_for_a_snapshot_whose_config_is_no_mapping(
+    hass: HomeAssistant, backup_manager: BackupManager
+) -> None:
+    """A snapshot file edited by hand can hold a config that is no mapping; the
+    diff reports it as a difference instead of failing on it."""
+    device = _device(hass)
+    path = await backup_manager.maybe_snapshot("device", device.id, force=True)
+    assert path is not None
+    stored = yaml.safe_load(path.read_text())
+    stored["config"] = "text"
+    path.write_text(yaml.safe_dump(stored))
+
+    diff = await backup_manager.diff_snapshot(path.name)
+
+    assert diff["unchanged"] is False, diff
+
+
+async def test_a_helper_diff_reports_options_in_another_order(
+    hass: HomeAssistant, core_client: HomeAssistantClient, backup_manager: BackupManager
+) -> None:
+    """A helper is no registry row the component is asked about, so its lists
+    are compared in the order given: an input_select keeps its options in that
+    order, and another order is a difference."""
+    assert await async_setup_component(hass, "input_select", {})
+    name = f"Mode {uuid.uuid4().hex[:8]}"
+    created = await core_client.send_websocket_message(
+        {"type": "input_select/create", "name": name, "options": ["first", "second"]}
+    )
+    item_id = created["result"]["id"]
+    path = await backup_manager.maybe_snapshot(
+        "helper_input_select", item_id, force=True
+    )
+    assert path is not None
+    await core_client.send_websocket_message(
+        {
+            "type": "input_select/update",
+            "input_select_id": item_id,
+            "name": name,
+            "options": ["second", "first"],
+        }
+    )
+
+    diff = await backup_manager.diff_snapshot(path.name)
+
+    assert diff["unchanged"] is False, diff
+
+
+async def test_a_warning_stored_in_the_snapshot_file_is_not_the_diffs(
+    hass: HomeAssistant, core_client: HomeAssistantClient, backup_manager: BackupManager
+) -> None:
+    """The diff's warnings are what the comparison found, never a key the
+    snapshot file carries."""
+    assert await async_setup_component(hass, "input_select", {})
+    created = await core_client.send_websocket_message(
+        {
+            "type": "input_select/create",
+            "name": f"Mode {uuid.uuid4().hex[:8]}",
+            "options": ["first", "second"],
+        }
+    )
+    path = await backup_manager.maybe_snapshot(
+        "helper_input_select", created["result"]["id"], force=True
+    )
+    assert path is not None
+    stored = yaml.safe_load(path.read_text())
+    path.write_text(yaml.safe_dump({**stored, "warnings": ["from the file"]}))
+
+    diff = await backup_manager.diff_snapshot(path.name)
+
+    assert "warnings" not in diff

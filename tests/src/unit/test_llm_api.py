@@ -42,8 +42,8 @@ from ._llm_api_server import (
     call,
     mirrored_tool,
     payload,
+    refused_port,
     serve,
-    unused_port,
 )
 
 _LOOPBACK = pytest.mark.usefixtures("socket_enabled")
@@ -85,8 +85,11 @@ async def test_a_call_passes_its_arguments_and_returns_the_servers_result(
 async def test_a_refused_connection_raises_homeassistanterror(
     hass: HomeAssistant,
 ) -> None:
-    with pytest.raises(HomeAssistantError, match="ha_search"):
-        await call(hass, mirrored_tool(unused_port()), {})
+    with (
+        refused_port() as port,
+        pytest.raises(HomeAssistantError, match="ha_search"),
+    ):
+        await call(hass, mirrored_tool(port), {})
 
 
 @_LOOPBACK

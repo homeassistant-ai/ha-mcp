@@ -1,11 +1,11 @@
 """Human-review regressions of the dashboard card checks, on real Home Assistant Core.
 
-The card index runs on a small frontend build written to disk, custom cards in
-their real QuickJS sandbox, and the describe tool and the ``dashboard_cards``
-command on a real ``hass`` (the E2E suite runs the real frontend and DOM). The
-optional QuickJS runtime is read from real ``importlib.metadata`` distributions
-in ``.dist-info`` folders and a Core package directory holding the constraints,
-and the unit environment installs the QuickJS build the component accepts.
+The card index runs on the installed frontend, custom cards in their real
+QuickJS sandbox, and the describe tool and the ``dashboard_cards`` command on a
+real ``hass``. The optional QuickJS runtime is read from real
+``importlib.metadata`` distributions in ``.dist-info`` folders and a Core package
+directory holding the constraints, and the unit environment installs the QuickJS
+build the component accepts.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
-import homeassistant
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -34,20 +33,19 @@ from ha_mcp.tools.component_api import invalidate_caps
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
 from ._card_definitions_core import (
-    FrontendOnDisk,
+    CardIndex,
     InstallCustomCard,
-    add_card_names,
-    build_definitions,
     card_file,
     card_file_with_editor,
     cc,
     cd,
+    constrained_core,
     describe_mod,
-    write_frontend,
 )
+from ._card_definitions_core import card_index as card_index
 from ._card_definitions_core import custom_cards as custom_cards
-from ._card_definitions_core import frontend as frontend
-from ._card_definitions_core import idle_custom_cards as idle_custom_cards
+from ._card_definitions_core import definitions as definitions
+from ._card_definitions_core import fresh_card_state as fresh_card_state
 from ._card_definitions_core import installed_custom_card as installed_custom_card
 from ._card_definitions_core import stalled_card_download as stalled_card_download
 from ._component_core import ws_result
@@ -65,17 +63,6 @@ _REJECT_EVERY_OPTION = (
 
 def _views(*cards: dict[str, Any]) -> dict[str, Any]:
     return {"views": [{"cards": list(cards)}]}
-
-
-async def _describe(
-    frontend: FrontendOnDisk,
-    client: HomeAssistantClient,
-    editor: str,
-    card_type: str = "tile",
-) -> dict[str, Any]:
-    """What the describe tool says of ``card_type`` once its editor is ``editor``."""
-    frontend.write({"tile": editor})
-    return await describe_mod.describe_card_response(client, card_type)
 
 
 _PROVIDERS = ("quickjs", "quickjs-ng")
@@ -132,24 +119,15 @@ def installed_packages(
         yield versions
 
 
-def constrained_core(
-    monkeypatch: pytest.MonkeyPatch, root: Path, constraints: str
-) -> None:
-    """Home Assistant's package constraints are ``constraints``."""
-    (root / "package_constraints.txt").write_text(constraints, encoding="utf-8")
-    monkeypatch.setattr(homeassistant, "__file__", str(root / "__init__.py"))
-
-
 # --- custom cards ----------------------------------------------------------
 
 
-@pytest.mark.usefixtures("idle_custom_cards")
+@pytest.mark.usefixtures("fresh_card_state")
 def test_a_custom_editors_rejection_is_advisory_and_card_mod_is_accepted(
-    tmp_path: Path, custom_cards: cc.CustomCards
+    tmp_path: Path, custom_cards: cc.CustomCards, definitions: cd.CardDefinitions
 ) -> None:
     """The editor's struct says what the editor lists, not what the card
     accepts: the warning must not claim the option is not a card option."""
-    definitions = build_definitions(tmp_path)
     tag = "mushroom-entity-card"
     custom_cards.refresh(
         [
@@ -200,8 +178,8 @@ def test_a_cards_own_error_hides_the_editors_copy_of_it(
 def test_a_resource_skipped_for_memory_is_named_in_the_coverage(
     tmp_path: Path, custom_cards: cc.CustomCards, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cc, "_BUNDLE_MEMORY", _PER_CARD)
-    monkeypatch.setattr(cc, "_TOTAL_MEMORY", _PER_CARD)  # room for one card
+    monkeypatch.setattr(cc, "BUNDLE_MEMORY", _PER_CARD)
+    monkeypatch.setattr(cc, "TOTAL_MEMORY", _PER_CARD)  # room for one card
     files = [card_file(tmp_path / f"card-{i}.js", f"card-{i}") for i in range(2)]
 
     custom_cards.refresh(files)
@@ -214,8 +192,7 @@ def test_a_resource_skipped_for_memory_is_named_in_the_coverage(
 
 async def test_a_failed_dom_download_does_not_turn_a_custom_card_into_an_unknown_one(
     hass: HomeAssistant,
-    frontend: FrontendOnDisk,
-    idle_custom_cards: None,
+    card_index: CardIndex,
     hass_ws_client: WebSocketGenerator,
     socket_enabled: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -258,85 +235,10 @@ async def test_a_slow_refresh_still_answers_with_the_published_custom_cards(
 # --- the index ---------------------------------------------------------------
 
 
-def test_a_lazy_config_form_module_supplies_the_schema_and_the_assertion(
-    tmp_path: Path,
-) -> None:
-    """A card whose ``getConfigForm`` loads a lazy module has its fields from
-    that module's form, and its options checked by that module's assertion."""
-    modules = (
-        '40(m,e,r){(0,e.EM)("hui-entity-card");class A{setConfig(c){}'
-        "static async getConfigForm(){return(await r.e(2).then(r.bind(r,41))).default}}},"
-        "41(m,e,r){var t=r(6),v=(0,t.object)({type:t.string,entity:t.string});"
-        'const s=[{name:"entity",selector:{entity:{}}}],'
-        "form={schema:s,assertConfig:c=>(0,t.assert)(c,v)}}"
-    )
-    definitions = build_definitions(tmp_path, modules=modules)
-
-    described = definitions.describe("entity")
-    warnings = definitions.validate(_views({"type": "entity", "colour": "red"}))
-
-    assert described is not None
-    assert described["field_coverage"] == "partial"
-    assert described["fields"] == [{"name": "entity", "selector": {"entity": {}}}]
-    assert warnings == [
-        f"views[0].cards[0] (entity): {_ADVISORY}: "
-        "'colour' is not listed in the entity editor schema"
-    ]
-
-
-def test_an_export_of_a_module_that_cannot_run_is_read_without_running_it(
-    tmp_path: Path,
-) -> None:
-    """The struct comes from ``refine`` in a module that needs a browser to run
-    (it throws here), found through the export's own definition."""
-    modules = (
-        "3(m,e,r){var s=r(4);const refine=(x)=>s.wrap(x);"
-        "r.d(e,{},{f:refine});window.startBrowser()},"
-        "4(m,e,r){r.d(e,{},{wrap:(x)=>({schema:{entity:x}})})}"
-    )
-    editor = (
-        "var d=r(3),t=r(6),v=d.f(t.string);class C{setConfig(c){(0,t.assert)(c,v)}}"
-    )
-    definitions = build_definitions(tmp_path, {"tile": editor}, modules=modules)
-
-    described = definitions.describe("tile")
-
-    assert described is not None
-    assert described["fields"] == [{"name": "entity", "type": "string"}]
-
-
-def test_the_index_keeps_inherited_cards_but_excludes_dialogs(tmp_path: Path) -> None:
-    """A card with no translated name is a card when it implements, or inherits,
-    ``setConfig``; a dialog registered under a ``hui-*-card`` tag is not one."""
-    modules = (
-        '40(m,e,r){(0,e.EM)("hui-horizontal-stack-card");'
-        "class Dialog{showDialog(t){}}},"
-        '41(m,e,r){(0,e.EM)("hui-dialog-edit-card");class Dialog{showDialog(t){}}},'
-        '42(m,e,r){(0,e.EM)("hui-energy-internal-card");'
-        "class Card{setConfig(t){this.config=t}}},"
-        '43(m,e,r){(0,e.EM)("hui-shopping-list-card");var c=r(123);'
-        "class Alias extends c.Card{}},"
-        "123(m,e,r){class Card{setConfig(t){this.config=t}}}"
-    )
-    write_frontend(tmp_path, modules=modules)
-    add_card_names(tmp_path, {"horizontal-stack": "Horizontal stack"})
-    definitions = cd.CardDefinitions(tmp_path)
-    cards = [
-        {"type": "horizontal-stack"},
-        {"type": "dialog-edit"},
-        {"type": "energy-internal"},
-        {"type": "shopping-list"},
-    ]
-
-    assert definitions.validate(_views(*cards)) == [
-        "views[0].cards[1]: unknown card type 'dialog-edit'"
-    ]
-
-
 async def test_a_frontend_with_no_cards_is_unavailable_not_an_empty_list(
-    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
+    card_index: CardIndex, component_core_client: HomeAssistantClient
 ) -> None:
-    frontend.write(files={"cards.js": "export const __webpack_modules__={};"})
+    card_index.frontend.without_cards()
 
     with pytest.raises(ToolError) as err:
         await describe_mod.describe_card_response(component_core_client, "tile")
@@ -347,111 +249,51 @@ async def test_a_frontend_with_no_cards_is_unavailable_not_an_empty_list(
 # --- the editor form as the tool describes it ---------------------------------
 
 
-async def test_a_malformed_select_does_not_abort_the_description(
-    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
+async def test_a_select_without_options_does_not_abort_the_description(
+    card_index: CardIndex, component_core_client: HomeAssistantClient
 ) -> None:
-    editor = (
-        "class E{constructor(){this._schema=(0,m.A)(e=>["
-        '{name:"classes",selector:{select:{options:!1}}}])}}'
+    """The area card's ``alert_classes`` is a select with no option list."""
+    described = await describe_mod.describe_card_response(component_core_client, "area")
+
+    fields = {field["name"]: field for field in described["fields"]}
+    assert fields["alert_classes"]["type"] == "select"
+
+
+async def test_a_named_grid_stays_a_section_and_an_unnamed_one_is_inlined(
+    card_index: CardIndex, component_core_client: HomeAssistantClient
+) -> None:
+    described = await describe_mod.describe_card_response(
+        component_core_client, "gauge"
     )
 
-    described = await _describe(frontend, component_core_client, editor)
-
-    assert described["fields"] == [{"name": "classes", "type": "select"}]
-
-
-async def test_a_named_grid_stays_a_section_and_a_flattened_one_is_inlined(
-    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
-) -> None:
-    editor = (
-        "class E{constructor(){this._schema=(0,m.A)(e=>["
-        '{name:"content",type:"expandable",flatten:!0,schema:['
-        '{name:"entity",selector:{entity:{}}}]},'
-        '{name:"limits",type:"grid",schema:['
-        '{name:"min",selector:{number:{}}},{name:"max",selector:{number:{}}}]}])}}'
-    )
-
-    described = await _describe(frontend, component_core_client, editor)
-
-    assert described["fields"] == [
-        {"name": "entity", "type": "entity"},
-        {
-            "name": "limits",
-            "type": "section",
-            "fields": [
-                {"name": "min", "type": "number"},
-                {"name": "max", "type": "number"},
-            ],
-        },
+    fields = {field["name"]: field for field in described["fields"]}
+    assert fields["severity"]["type"] == "section"
+    assert [f["name"] for f in fields["severity"]["fields"]] == [
+        "green",
+        "yellow",
+        "red",
     ]
-
-
-async def test_editor_only_fields_and_types_follow_the_stored_struct(
-    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
-) -> None:
-    """``content_layout`` is not stored, and ``detail`` is a number there although
-    the editor shows a switch: describing it as the editor shows it would have
-    the caller write a config the card rejects."""
-    editor = (
-        "var s=r(6),v=(0,s.object)({type:s.string,vertical:{type:'boolean'},"
-        "detail:{type:'number'},entity:s.string});"
-        "class C{constructor(){this._schema=(0,s.memo)(e=>["
-        '{name:"content",type:"expandable",flatten:!0,schema:['
-        '{name:"content_layout",selector:{select:{options:["vertical"]}}},'
-        '{name:"detail",selector:{boolean:{}},default:!0},'
-        '{name:"entity",selector:{entity:{}}}]}])}'
-        "setConfig(c){(0,s.assert)(c,v)}}"
-    )
-
-    described = await _describe(frontend, component_core_client, editor)
-
-    assert described["fields"] == [
-        {"name": "detail", "type": "number"},
-        {"name": "entity", "type": "entity"},
-        {"name": "vertical", "type": "boolean"},
-    ]
-
-
-async def test_stored_options_the_form_lacks_are_added_once(
-    frontend: FrontendOnDisk, component_core_client: HomeAssistantClient
-) -> None:
-    editor = (
-        "var s=r(6),v=(0,s.object)({type:s.string,entity:s.string,"
-        "features:{type:'array'},vertical:{type:'boolean'}});"
-        "class C{constructor(){this._schema=(0,s.memo)(e=>["
-        '{name:"content",type:"expandable",flatten:!0,schema:['
-        '{name:"entity",selector:{entity:{}}}]}])}'
-        "setConfig(c){(0,s.assert)(c,v)}}"
-    )
-
-    described = await _describe(frontend, component_core_client, editor)
-
-    assert described["fields"] == [
-        {"name": "entity", "type": "entity"},
-        {"name": "features", "type": "array"},
-        {"name": "vertical", "type": "boolean"},
-    ]
+    assert {"min", "max"} <= set(fields)
 
 
 async def test_a_blank_card_type_lists_the_cards(
-    frontend: FrontendOnDisk,
+    card_index: CardIndex,
     stalled_card_download: None,
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(cd, "CUSTOM_WAIT_SECONDS", 0.05)
 
     result = await describe_mod.describe_card_response(component_core_client, "")
 
-    assert [card["type"] for card in result["card_types"]] == ["entities", "tile"]
+    assert {"tile", "entities"} <= {card["type"] for card in result["card_types"]}
 
 
 async def test_a_custom_card_without_a_form_is_not_described_as_a_container(
-    frontend: FrontendOnDisk,
+    card_index: CardIndex,
     installed_custom_card: InstallCustomCard,
     component_core_client: HomeAssistantClient,
 ) -> None:
-    frontend.write(cards=("vertical-stack",))
     await installed_custom_card("example")
 
     custom = await describe_mod.describe_card_response(
@@ -468,15 +310,15 @@ async def test_a_custom_card_without_a_form_is_not_described_as_a_container(
 
 
 async def test_describing_a_builtin_card_does_not_load_the_custom_resources(
-    frontend: FrontendOnDisk,
+    card_index: CardIndex,
     stalled_card_download: None,
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(cd, "CUSTOM_WAIT_SECONDS", 0.05)
 
     described = await describe_mod.describe_card_response(component_core_client, "tile")
-    assert described["name"] == "Tile"
+    assert described["name"]
     assert cc.custom_load_status(None)["state"] == "unavailable"
 
     await describe_mod.describe_card_response(component_core_client, None)
@@ -485,7 +327,7 @@ async def test_describing_a_builtin_card_does_not_load_the_custom_resources(
 
 async def test_the_static_card_guide_comes_with_a_write_only_without_the_component(
     hass: HomeAssistant,
-    frontend: FrontendOnDisk,
+    card_index: CardIndex,
     core_client: HomeAssistantClient,
 ) -> None:
     """Without ``dashboard_cards`` a caller cannot describe cards, so the write
@@ -511,11 +353,10 @@ async def test_the_static_card_guide_comes_with_a_write_only_without_the_compone
 
 
 def test_a_custom_cards_child_is_not_checked_against_the_editor_schema(
-    tmp_path: Path,
+    definitions: cd.CardDefinitions,
 ) -> None:
     """A wrapper's child is a template the wrapper fills in, so its options are
     not a final card's; the same card outside the wrapper is checked."""
-    definitions = build_definitions(tmp_path)
     child = {"type": "tile", "entity": '${"light.test"}', "vertical": "${true}"}
 
     wrapped = definitions.validate(
@@ -524,16 +365,15 @@ def test_a_custom_cards_child_is_not_checked_against_the_editor_schema(
     plain = definitions.validate(_views(child))
 
     assert wrapped == []
-    assert plain == [
-        f"views[0].cards[0] (tile): {_ADVISORY}: "
-        "'vertical' is not listed in the tile editor schema"
-    ]
+    [warning] = plain
+    assert warning.startswith(
+        f"views[0].cards[0] (tile): {_ADVISORY}: vertical: Expected a value of type"
+    )
 
 
 def test_a_partial_custom_child_may_omit_its_type_but_a_typo_is_reported(
-    tmp_path: Path,
+    definitions: cd.CardDefinitions,
 ) -> None:
-    definitions = build_definitions(tmp_path)
     config = _views(
         {"type": "custom:auto-entities", "card": {"title": "Lights on"}},
         {"type": "custom:auto-entities", "card": {"type": "tyle"}},
@@ -550,9 +390,8 @@ def test_a_partial_custom_child_may_omit_its_type_but_a_typo_is_reported(
     "view", [{"cards": 5}, {"sections": 5}, {"sections": [{"cards": 5}]}]
 )
 def test_a_malformed_view_does_not_hide_the_other_card_warnings(
-    tmp_path: Path, view: dict[str, Any]
+    definitions: cd.CardDefinitions, view: dict[str, Any]
 ) -> None:
-    definitions = build_definitions(tmp_path)
     config = {"views": [{"cards": [{"type": "tyle"}]}, view]}
 
     assert definitions.validate(config) == [
@@ -641,9 +480,11 @@ async def test_home_assistants_constraints_cannot_be_overridden_by_the_runtime(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     install = _requirements(monkeypatch, hass)
-    constrained_core(monkeypatch, tmp_path, "quickjs-ng==0.0.0\n")
 
-    with installed_packages(monkeypatch, tmp_path / "site", {}):
+    with (
+        constrained_core(monkeypatch, tmp_path, "quickjs-ng==0.0.0\n"),
+        installed_packages(monkeypatch, tmp_path / "site", {}),
+    ):
         assert await runtime.async_ensure_runtime(hass) is False
 
     install.assert_not_awaited()

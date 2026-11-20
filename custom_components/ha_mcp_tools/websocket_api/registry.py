@@ -420,25 +420,6 @@ def _enum_value(value: Any) -> Any:
     return getattr(value, "value", str(value))
 
 
-def _timestamp(value: Any) -> float | None:
-    """Serialize a datetime-ish registry timestamp as a float, like core.
-
-    core's registry WS list responses emit ``created_at`` / ``modified_at`` via
-    ``entry.created_at.timestamp()`` (a float, seconds since epoch), so mirror
-    that. A value that is already numeric passes through; anything else (or a
-    ``.timestamp()`` that raises) degrades to ``None``.
-    """
-    if value is None:
-        return None
-    ts = getattr(value, "timestamp", None)
-    if callable(ts):
-        try:
-            return float(ts())
-        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
-            return None
-    return float(value) if isinstance(value, (int, float)) else None
-
-
 def _reg_name(reg: Any) -> str | None:
     """Current display name from a registry entry: user override, else original."""
     if reg is None:
@@ -562,7 +543,7 @@ def _device_dict_repr(entry: Any) -> dict[str, Any] | None:
 
     Returned UNMODIFIED so the WS transport encodes it with the same JSON
     serializer ``config/device_registry/list`` uses (byte-parity — see
-    :func:`_do_device_get`). Guarded against core drift: a missing/raising
+    :func:`do_device_get`). Guarded against core drift: a missing/raising
     ``dict_repr`` yields ``None`` rather than propagating.
     """
     try:

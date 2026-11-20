@@ -27,6 +27,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
+from ha_mcp.tools.component_api import get_component_caps
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.visibility.model import VisibilityConfig
 
@@ -135,6 +136,9 @@ async def test_overview_reads_states_first_then_optional_slices_together(
     """States are read first; the services and registry reads are all sent
     before Core serves the services request, so they overlap."""
     set_config(enabled=False)
+    # As in ``ha_get_overview``, which asks for the component before these
+    # reads: the area read then goes to Core without waiting for that answer.
+    assert await get_component_caps(core_client) is None
     order = Mock()
     with (
         patch.object(

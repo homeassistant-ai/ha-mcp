@@ -451,7 +451,7 @@ def _ipv6_lan_guard() -> dict[str, Any]:
     return {"middleware": [Middleware(IPv6LanGuard, allowed_networks=allowed)]}
 
 
-def _run_mcp_server(
+def run_mcp_server(
     mcp: Any,
     bind_host: str,
     port: int,
@@ -633,9 +633,9 @@ def main() -> int:
     # Import and register browser landing before server start
     log_info("Importing ha_mcp module...")
     from ha_mcp.__main__ import (
-        _get_server,
         _get_timestamped_uvicorn_log_config,
         _log_startup_version,
+        get_server,
         mcp,
         register_browser_landing,
     )
@@ -681,24 +681,24 @@ def main() -> int:
     # register_settings_routes docstring for the auth model. Use the
     # server's actual FastMCP instance (not the _DeferredMCP wrapper)
     # so mypy doesn't trip over the duck-typed __getattr__ forwarding.
-    server_instance = _get_server()
+    server_instance = get_server()
     register_settings_routes(
         server_instance.mcp, server_instance, secret_path=secret_path
     )
     install_sdk_log_filters()
 
-    # fastmcp's DNS-rebinding guard is defaulted off in ha_mcp's _create_server
-    # (reached above via _get_server() / the `mcp` proxy, before the app is
+    # fastmcp's DNS-rebinding guard is defaulted off in ha_mcp's create_server
+    # (reached above via get_server() / the `mcp` proxy, before the app is
     # built), so the addon -- ingress, direct port, and reverse proxies / tunnels
     # on arbitrary hosts -- is covered. See ha_mcp.transport_security.
 
     # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
     # reach it inside the container, widened to IPv6 as well by
-    # _run_mcp_server (#2915); MCP_HOST override is provided for
+    # run_mcp_server (#2915); MCP_HOST override is provided for
     # parity with the standard CLI entry points (see issue #1434).
     bind_host = os.getenv("MCP_HOST", "0.0.0.0")
 
-    return _run_mcp_server(
+    return run_mcp_server(
         mcp,
         bind_host,
         port,

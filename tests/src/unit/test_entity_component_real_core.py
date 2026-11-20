@@ -276,7 +276,7 @@ async def test_a_listing_whose_component_probe_fails_says_it_could_not_ask(
     def unreadable(*_: Any) -> None:
         raise HomeAssistantError("Info unreadable")
 
-    monkeypatch.setattr(websocket_api, "_do_info", unreadable)
+    monkeypatch.setattr(websocket_api, "do_info", unreadable)
 
     result = await tools.ha_get_entity()
 

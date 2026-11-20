@@ -13,6 +13,12 @@ from .client.rest_client import HomeAssistantError
 LINE_ENDINGS_CAPABILITY = "read_file_line_endings"
 
 
+def file_read_error_code(result: dict[str, Any]) -> str | None:
+    """The ``error_code`` of a failed file service reply."""
+    code = result.get("error_code")
+    return code if isinstance(code, str) else None
+
+
 async def _fetch_file(
     client: Any, entity_id: str, *, keep_line_endings: bool = False
 ) -> Any:
@@ -40,10 +46,10 @@ async def _fetch_file(
         content = result.get("content")
         return content if isinstance(content, str) else None
     error = str(result.get("error", ""))
-    skips = ("does not exist", "not a file", "Cannot read binary file")
-    if any(marker in error for marker in skips):
+    code = file_read_error_code(result)
+    if code in {"not_found", "not_a_file", "binary_file"}:
         return None
-    if error.startswith("Path not allowed"):
+    if code == "path_not_allowed":
         raise PathNotAllowedError(entity_id, error)
     raise HomeAssistantError(f"read_file failed for {entity_id!r}: {error}")
 

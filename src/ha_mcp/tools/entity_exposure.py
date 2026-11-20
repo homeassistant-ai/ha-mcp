@@ -176,13 +176,11 @@ async def unregistered_lookup(
         *(bounded_state_entity_id(eid) for eid in entity_ids),
     )
     if not reply.get("success"):
-        # The "Command failed:" prefix is what the shared classifier reads as
-        # a refused command (SERVICE_CALL_FAILED) when nothing more specific
-        # matches.
-        raise HomeAssistantCommandError(
+        # A command error with no more specific code is SERVICE_CALL_FAILED.
+        raise HomeAssistantCommandError.from_reply(
+            reply,
             "Command failed: reading the exposed entities failed: "
             + core_error_message(_extract_ws_error(reply)),
-            code=reply.get("error_code"),
         )
     exposed_entities = (reply.get("result") or {}).get("exposed_entities") or {}
     known: dict[str, tuple[str, dict[str, Any]]] = {}

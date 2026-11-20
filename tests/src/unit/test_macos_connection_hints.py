@@ -6,7 +6,9 @@ when connection errors occur (Local Network Privacy, SSH tunnel, http vs https).
 
 from unittest.mock import patch
 
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+import pytest
+
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
 from ha_mcp.tools.helpers import exception_to_structured_error
 
@@ -28,7 +30,8 @@ class TestMacOSConnectionHints:
 
     def test_hints_appear_on_darwin_for_connection_timeout(self):
         """macOS hints should appear for CONNECTION_TIMEOUT on darwin."""
-        error = HomeAssistantConnectionError("Request timeout: timed out")
+        error = HomeAssistantConnectionError("Request timed out")
+        error.__cause__ = TimeoutError()
         with patch("ha_mcp.tools.helpers.sys") as mock_sys:
             mock_sys.platform = "darwin"
             result = exception_to_structured_error(error, raise_error=False)
@@ -89,13 +92,14 @@ class TestMacOSConnectionHints:
             "Custom suggestion",
         ]
 
-    def test_string_matched_connection_errors_get_hints(self):
-        """Generic exceptions classified as connection errors via string matching
-        should also get macOS hints."""
-        error = Exception("connection refused to host")
+    async def test_a_refused_connection_gets_macos_hints(
+        self, unreachable_client: HomeAssistantClient
+    ) -> None:
+        with pytest.raises(HomeAssistantConnectionError) as failure:
+            await unreachable_client.get_states()
         with patch("ha_mcp.tools.helpers.sys") as mock_sys:
             mock_sys.platform = "darwin"
-            result = exception_to_structured_error(error, raise_error=False)
+            result = exception_to_structured_error(failure.value, raise_error=False)
 
         assert result["error"]["code"] == ErrorCode.CONNECTION_FAILED
         suggestions = result["error"].get("suggestions", [])

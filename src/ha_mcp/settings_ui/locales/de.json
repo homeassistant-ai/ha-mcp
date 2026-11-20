@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Pfad für gespeicherte Tools",
     "advanced.code_mode_saved_tools_path.help": "JSON-Datei zum Speichern von benutzerdefinierten Tools über Neustarts hinweg.",
     "advanced.extra_yaml_write_keys.label": "Zusätzliche YAML-Schreib-Keys",
-    "advanced.extra_yaml_write_keys.help": "Zusätzliche Top-Level-Schlüssel, die ha_config_set_yaml zusätzlich zu den integrierten für YAML-erste Integrationen auf dieser Installation schreiben kann (z. B. alert2). Gib einen Schlüssel pro Zeile ein oder trenne Schlüssel mit Kommas. Schlüssel, die Home Assistants eigene Vertrauensgrenze neu definieren, können niemals hinzugefügt werden und werden ignoriert. Erfordert die Custom Component 1.2.4 oder neuer.",
+    "advanced.extra_yaml_write_keys.help": "Zusätzliche Root-Schlüssel, die ha_config_set_yaml zusätzlich zu den integrierten für YAML-First-Integrationen auf dieser Installation schreiben darf (z. B. alert2). Gib einen Schlüssel pro Zeile ein oder trenne Schlüssel durch Kommas. Schlüssel, die Home Assistants eigene Vertrauensgrenze neu definieren, können niemals hinzugefügt werden und werden ignoriert.",
     "advanced.redact_app_option_keys.label": "Zusätzliche App-Optionsschlüssel zum Schwärzen",
     "advanced.redact_app_option_keys.help": "App- (Add-on-)Optionsnamen zum Schwärzen wie Passwortfelder für Apps, deren Schema ein Geheimnis im Klartext speichert (zum Beispiel backup_password). Trenne Namen mit Kommas oder Zeilenumbrüchen. Ein Name gilt für jede App; schreibe app_slug:name, um ihn auf eine App zu beschränken. Das Benennen einer Optionsgruppe deckt jede Option darin ab. Wird nur verwendet, wenn Geheimnisse schwärzen aktiv ist. Standardmäßig leer.",
     "advanced.sidecar_pin_port.label": "Einstellungs-UI-Sidecar-Port",
@@ -806,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Etagen und Bereiche auflisten",
-      "description": "Zeigt Etagen mit verschachtelten Bereichen, einschließlich Bereiche ohne Etage."
+      "description": "Liste die Stockwerke in der Reihenfolge auf, in der Home Assistant sie führt, jeweils mit ihren zugewiesenen Bereichen verschachtelt sowie Bereichen ohne Stockwerk."
     },
     "ha_list_services": {
       "title": "Dienste auflisten",
@@ -901,8 +901,8 @@
       "description": "Durchsucht Entitäten und Inhalte von Automatisierungen, Skripten, Szenen, Helfern und Dashboards."
     },
     "ha_set_area_or_floor": {
-      "title": "Bereich oder Etage erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert einen Bereich oder eine Etage in Home Assistant."
+      "title": "Bereiche oder Stockwerke erstellen, aktualisieren oder neu anordnen",
+      "description": "Erstelle, aktualisiere oder ordne Home Assistant Bereiche oder Stockwerke neu an."
     },
     "ha_set_device": {
       "title": "Gerät aktualisieren",

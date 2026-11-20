@@ -2,19 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
-
-from custom_components.ha_mcp_tools import llm_api
-from custom_components.ha_mcp_tools.const import DOMAIN, EXPOSURE_FULL
-
-FULL_ID = f"{DOMAIN}-entry-1745"
 
 
 def llm_context() -> llm.LLMContext:
@@ -31,67 +22,3 @@ def llm_context() -> llm.LLMContext:
 def registered_apis(hass: HomeAssistant) -> dict[str, Any]:
     """The LLM APIs registered in Core's registry for ``hass``, by id."""
     return {api.id: api for api in llm.async_get_apis(hass)}
-
-
-def tool_entry(
-    name: str = "ha_search",
-    *,
-    exposed: bool = True,
-    pinned: bool = False,
-    stamped: bool = True,
-    description: str | None = None,
-    params: str | None = "query (string)",
-) -> SimpleNamespace:
-    namespace: dict[str, Any] = {"llm_api_exposed": exposed, "pinned": pinned}
-    if params is not None:
-        namespace["params"] = params
-    meta = {"ha_mcp": namespace} if stamped else None
-    return SimpleNamespace(
-        name=name,
-        description=description if description is not None else f"{name} description",
-        inputSchema={"type": "object", "properties": {"query": {"type": "string"}}},
-        meta=meta,
-    )
-
-
-def fake_session(
-    monkeypatch,
-    *,
-    tools: list[Any] | None = None,
-    instructions: str | None = "Use the skills-first workflow.",
-    call_result: Any = None,
-    raise_on_open: BaseException | None = None,
-    delay: float = 0.0,
-) -> SimpleNamespace:
-    """Patch ``llm_api._mcp_session`` with a fake and return the session."""
-    # The default lists ha_search exposed, the tool the call tests forward;
-    # every forwarded call re-reads exposure from this list.
-    listed = [tool_entry()] if tools is None else tools
-    session = SimpleNamespace(
-        list_tools=AsyncMock(return_value=SimpleNamespace(tools=listed)),
-        call_tool=AsyncMock(return_value=call_result),
-    )
-    init_result = SimpleNamespace(instructions=instructions)
-
-    @asynccontextmanager
-    async def fake_mcp_session(url):
-        """Stand in for ``_mcp_session``: record the url, yield the fake session."""
-        session.url = url
-        if raise_on_open is not None:
-            raise raise_on_open
-        if delay:
-            await asyncio.sleep(delay)
-        yield session, init_result
-
-    monkeypatch.setattr(llm_api, "_mcp_session", fake_mcp_session)
-    return session
-
-
-def make_api(hass: HomeAssistant, mode: str = EXPOSURE_FULL) -> Any:
-    return llm_api.HaMcpLlmApi(
-        hass=hass,
-        id=FULL_ID,
-        name="HA-MCP Server",
-        server_url="http://127.0.0.1:9584/private_x",
-        mode=mode,
-    )

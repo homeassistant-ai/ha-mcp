@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.metadata
 import logging
+import os
 import sys
 from collections.abc import Callable
+from types import SimpleNamespace
 
 import pytest
 
+from ha_mcp import update_check
+
 from ._main_web import start_main_web
+from ._tools_addons_core import Supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
+from ._update_check_sources import PyPI, app_store
+from ._update_check_sources import pypi as pypi
 
 
 @pytest.fixture
@@ -47,6 +57,19 @@ def _startup_records(
             MCP_HOST="127.0.0.1",
         )
     return [r for r in caplog.records if r.name == "ha_mcp.__main__"]
+
+
+async def _checked_start(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    version: str,
+    supervisor_token: str | None,
+) -> list[logging.LogRecord]:
+    """``_startup_records`` in a thread, so this loop serves what the start's
+    update check asks."""
+    return await asyncio.to_thread(
+        _startup_records, monkeypatch, caplog, version, supervisor_token
+    )
 
 
 def _warnings(records: list[logging.LogRecord]) -> list[str]:
@@ -223,7 +246,7 @@ class TestLogStartupVersion:
     on standalone dev installs and must be suppressed under HA Supervisor so
     add-on users don't get noise (they already see the channel in the HAOS UI).
     The self-update check is off in every unit test (``conftest.py``) unless a
-    test replaces it.
+    test turns it on.
     """
 
     def test_logs_version_at_info(
@@ -266,78 +289,84 @@ class TestLogStartupVersion:
         stable users."""
         assert _warnings(_startup_records(monkeypatch, caplog, "7.3.0", None)) == []
 
-    def test_stable_emits_update_banner_when_newer_available(
+    async def test_stable_emits_update_banner_when_newer_available(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        pypi: PyPI,
     ) -> None:
         """A standalone stable install with a newer PyPI release gets an
         update banner (the dev-channel banner stays silent)."""
-        from ha_mcp import update_check
-
-        monkeypatch.setattr(
-            update_check,
-            "get_update_info",
-            lambda: update_check.UpdateInfo("7.8.0", "7.9.0", True),
-        )
-        warnings = _warnings(_startup_records(monkeypatch, caplog, "7.8.0", None))
+        monkeypatch.delenv(update_check.DISABLE_ENV)
+        pypi.publish("ha-mcp", "7.9.0")
+        warnings = _warnings(await _checked_start(monkeypatch, caplog, "7.8.0", None))
         assert any("available: 7.9.0" in m for m in warnings), warnings
         assert not any("dev channel" in m for m in warnings), warnings
 
-    def test_update_banner_names_the_python_the_release_needs(
+    async def test_update_banner_names_the_python_the_release_needs(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        pypi: PyPI,
     ) -> None:
         """The banner passes the release's requires_python on: a pip hint
         would reinstall the old version on a Python the release excludes."""
-        from ha_mcp import update_check
-
-        monkeypatch.setattr(update_check, "_running_in_docker", lambda: False)
-        monkeypatch.setattr(update_check, "_running_python", lambda: "3.13.7")
         monkeypatch.setattr(
             update_check,
-            "get_update_info",
-            lambda: update_check.UpdateInfo(
-                "9.1.2", "9.2.0", True, requires_python=">=3.14"
+            "os",
+            # No container marker files: a bare-metal install.
+            SimpleNamespace(
+                **{
+                    **vars(os),
+                    "path": SimpleNamespace(
+                        **{**vars(os.path), "exists": lambda path: False}
+                    ),
+                }
             ),
         )
-        warnings = _warnings(_startup_records(monkeypatch, caplog, "9.1.2", None))
+        monkeypatch.setattr(
+            update_check,
+            "sys",
+            SimpleNamespace(**{**vars(sys), "version_info": (3, 13, 7, "final", 0)}),
+        )
+        monkeypatch.delenv(update_check.DISABLE_ENV)
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+        pypi.publish("ha-mcp", "9.2.0", ">=3.14")
+        warnings = _warnings(await _checked_start(monkeypatch, caplog, "9.1.2", None))
         assert any("uvx --python 3.14 ha-mcp@latest" in m for m in warnings), warnings
         assert not any("pip install" in m for m in warnings), warnings
 
-    def test_stable_no_update_banner_when_current(
+    async def test_stable_no_update_banner_when_current(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        pypi: PyPI,
     ) -> None:
         """No banner when already on the latest stable."""
-        from ha_mcp import update_check
+        monkeypatch.delenv(update_check.DISABLE_ENV)
+        pypi.publish("ha-mcp", "7.9.0")
+        assert _warnings(await _checked_start(monkeypatch, caplog, "7.9.0", None)) == []
+        assert pypi.asked == ["ha-mcp"]
 
-        monkeypatch.setattr(
-            update_check,
-            "get_update_info",
-            lambda: update_check.UpdateInfo("7.9.0", "7.9.0", False),
-        )
-        assert _warnings(_startup_records(monkeypatch, caplog, "7.9.0", None)) == []
-
-    def test_update_banner_fires_under_supervisor_token(
+    async def test_update_banner_fires_under_supervisor_token(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        supervisor: Supervisor,
     ) -> None:
         """The update banner fires in the add-on too (copying FastMCP, which
         announces on every startup regardless of deployment) — an add-on user who
         ignored the Supervisor prompt still sees it in the logs. The add-on
         upgrade hint points at the Supervisor UI, not pip/docker."""
-        from ha_mcp import update_check
-
-        monkeypatch.setattr(
-            update_check,
-            "get_update_info",
-            lambda: update_check.UpdateInfo("7.8.0", "7.9.0", True),
+        monkeypatch.delenv(update_check.DISABLE_ENV)
+        app_store(
+            monkeypatch,
+            supervisor,
+            installed="7.8.0",
+            latest="7.9.0",
+            update_available=True,
         )
-        records = _startup_records(monkeypatch, caplog, "7.8.0", "hassio-abc")
+        records = await _checked_start(monkeypatch, caplog, "7.8.0", "hassio-abc")
         warnings = _warnings(records)
         assert any("available: 7.9.0" in m for m in warnings), warnings
         # add-on upgrade hint, not the dev-channel banner (suppressed in add-on)

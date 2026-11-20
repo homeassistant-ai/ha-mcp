@@ -27,6 +27,7 @@ import yaml  # type: ignore[import-untyped]
 from homeassistant.components import persistent_notification
 from homeassistant.config import async_check_ha_config_file
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import SERVICE_RELOAD
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -57,9 +58,7 @@ from .const import (
     RESERVED_DASHBOARD_URL_PATHS,
     TOOLS_ENTRY_LEGACY_TITLE,
     TOOLS_ENTRY_TITLE,
-    YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_DENYLIST,
-    YAML_KEY_POST_ACTIONS,
 )
 from .entry_device import async_register_entry_device
 from .entry_migration import async_migrate_entry as async_migrate_entry
@@ -67,6 +66,7 @@ from .file_ops import (
     SERVICE_EDIT_FILE,
     _delete_file_sync,
     _replace_file_sync,
+    file_read_error,
     register_edit_file,
     run_file_job,
     run_locked,
@@ -79,6 +79,7 @@ from .yaml_find import SERVICE_FIND_YAML_KEY, register_find_yaml_key
 from .yaml_rt import (
     apply_seq_indent,
     detect_seq_indent,
+    drop_key,
     make_yaml,
     yaml_dumps,
     yaml_jsonify,
@@ -1920,8 +1921,7 @@ def _apply_lovelace_dashboard_action(
                     f"Dashboard '{url_path}' not found under lovelace.dashboards."
                 ),
             }
-        del dashboards[url_path]
-        # Clean up empty parent containers to keep the file tidy
+        drop_key(dashboards, url_path)
         if not dashboards:
             del lovelace["dashboards"]
         if not lovelace:
@@ -1984,7 +1984,7 @@ def _apply_single_key_edit(
                 "success": False,
                 "error": f"{label} '{yaml_key}' not found in '{rel_path}'.",
             }
-        del data[yaml_key]
+        drop_key(data, yaml_key)
     return None
 
 
@@ -2111,18 +2111,17 @@ def _maybe_build_confirm_preview(
 async def _resolve_post_action(
     hass: HomeAssistant, kind: str, path_parts: tuple[str, ...]
 ) -> dict[str, Any]:
-    """Return the post-edit activation info (restart/reload) for the edit kind."""
-    # Surface the post-edit action required to activate the change
-    post_info: dict[str, Any]
-    if kind == "lovelace_dashboard":
-        post_info = {"post_action": "restart_required"}
-    elif kind == "theme":
-        post_info = await reload_after_edit(hass, "frontend", "reload_themes")
-    else:
-        post_info = YAML_KEY_POST_ACTIONS.get(
-            path_parts[0], YAML_KEY_DEFAULT_POST_ACTION
-        )
-    return post_info
+    """What makes the edit live: a reload Core has for the key, or a restart."""
+    if kind == "theme":
+        return await reload_after_edit(hass, "frontend", "reload_themes")
+    # Core registers ``<domain>.reload`` while the key's integration is loaded.
+    # It registers a YAML dashboard at start-up only, whatever lovelace reloads.
+    if kind != "lovelace_dashboard" and hass.services.has_service(
+        path_parts[0], SERVICE_RELOAD
+    ):
+        reload_service = f"{path_parts[0]}.{SERVICE_RELOAD}"
+        return {"post_action": "reload_available", "reload_service": reload_service}
+    return {"post_action": "restart_required"}
 
 
 async def _apply_yaml_key_edit(
@@ -2875,10 +2874,10 @@ def _build_read_file_handler(
                 + ["custom_components/**/*.py"]
                 + [f"{d}/**" for d in extra_dirs]
             )
-            return {
-                "success": False,
-                "error": f"Path not allowed. Allowed paths: {', '.join(allowed_patterns)}",
-            }
+            return file_read_error(
+                "path_not_allowed",
+                f"Path not allowed. Allowed paths: {', '.join(allowed_patterns)}",
+            )
 
         target_file = config_dir / rel_path
 
@@ -2899,34 +2898,24 @@ def _build_read_file_handler(
                 )
         except PermissionError:
             _LOGGER.error("Permission denied reading: %s", rel_path)
-            return {
-                "success": False,
-                "error": f"Permission denied: {rel_path}",
-            }
+            return file_read_error(
+                "permission_denied", f"Permission denied: {rel_path}"
+            )
         except UnicodeDecodeError:
             _LOGGER.error("Cannot read binary file: %s", rel_path)
-            return {
-                "success": False,
-                "error": f"Cannot read binary file: {rel_path}. Only text files are supported.",
-            }
+            return file_read_error(
+                "binary_file",
+                f"Cannot read binary file: {rel_path}. Only text files are supported.",
+            )
         except OSError as err:
             _LOGGER.error("Error reading file %s: %s", rel_path, err)
-            return {
-                "success": False,
-                "error": str(err),
-            }
+            return file_read_error("read_failed", str(err))
 
         err_kind = result.get("_error")
         if err_kind == "not_found":
-            return {
-                "success": False,
-                "error": f"File does not exist: {rel_path}",
-            }
+            return file_read_error(err_kind, f"File does not exist: {rel_path}")
         if err_kind == "not_a_file":
-            return {
-                "success": False,
-                "error": f"Path is not a file: {rel_path}",
-            }
+            return file_read_error(err_kind, f"Path is not a file: {rel_path}")
 
         return await _shape_read_file_response(
             hass,
@@ -3337,9 +3326,9 @@ def _build_read_legacy_backup_handler(
 
         err_kind = result.get("_error")
         if err_kind == "not_found":
-            return {"success": False, "error": f"Backup does not exist: {filename}"}
+            return file_read_error(err_kind, f"Backup does not exist: {filename}")
         if err_kind == "not_a_file":
-            return {"success": False, "error": f"Path is not a file: {filename}"}
+            return file_read_error(err_kind, f"Path is not a file: {filename}")
 
         modified_dt = datetime.fromtimestamp(result["mtime"])
         decoded = _decode_legacy_backup_name(filename)

@@ -97,7 +97,11 @@ adequate author testing solely to satisfy this requirement.
    still applies to anything not rerun. If live testing is unavailable, fails,
    or leaves required behavior unverified, report validation as incomplete and
    keep the PR unready for merge. Static review, green CI, or a checked box
-   without supporting evidence does not satisfy the requirement.
+   without supporting evidence does not satisfy the requirement. The exception
+   is behavior that needs hardware neither the dev environment nor an emulator
+   provides (a Zigbee radio, for example): a maintainer may accept tests on the
+   real Core integration for it, and the Testing section records what was not
+   live-tested and why.
 5. Clean up test resources and cancel a dev-environment run when finished.
 
 Reviewers without live access can assess live evidence supplied by the author
@@ -241,8 +245,9 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `renovate-validation.yml` | Relevant pull request or manual | Validate configuration with the scanner’s pinned Renovate engine, without credentials. |
 | `renovate-auto-merge.yml` | Renovate enables auto-merge or updates its PR | Approve the verified current head with the separate maintainer account; GitHub enforces merge requirements. |
 | `mirror-python-base.yml` | Push touching a Dockerfile or the workflow, weekly, or manual | Copy the Dockerfiles' pinned `python` base digests unchanged to `ghcr.io/homeassistant-ai/ha-mcp-python-base`, which CI image builds and the HAOS bake pull first. |
-| `e2e-tests.yml` | Push to `master` touching code, or manual | Full container-backend E2E validation on the pinned stable Core image. |
-| `haos-e2e-tests.yml` | Pull request or manual | Six HAOS lanes against a baked qcow2; required status checks. |
+| `e2e-tests.yml` | Push to `master` touching code, or manual | Full container-backend E2E validation on the pinned stable Core image, including the whole-run no-component and server-entry-only lanes that pull requests cover in a combined lane. |
+| `haos-e2e-tests.yml` | Pull request or manual | External, embedded and app HAOS lanes against a baked qcow2; embedded and app cover both tool-entry states. A dispatch picks one `lane` and can keep the tools entry absent (`topology: without-tools`). |
+| `haos-e2e-stdio.yml` | Manual | The HAOS lane over the installed `ha-mcp` command's stdio transport. |
 | `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
 | `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
 | `publish-dev.yml` | Push to `master`, or manual; this repository only | Development `<next>.devN` release, published as `ha-mcp-dev`; its GitHub pre-release tags a commit with the component stamped to pin that build, for HACS, and the mirror sync pins the same build via its `dev-version` artifact. |
@@ -311,11 +316,25 @@ Passing the same file as action-global `configurationFile` as well duplicates
 custom managers and dependency-dashboard entries.
 
 The private websockets and FastMCP pins each have a narrowly scoped
-post-upgrade task. Renovate installs Python 3.14, runs
-`python3 -I scripts/vendor_websockets.py` or `python3 -I scripts/vendor_fastmcp.py`,
-and includes only that generator's `src/ha_mcp/_vendor/<package>/**` trees as
-generated artifacts alongside the pin. The scanner allows only those exact
-commands, with shell execution disabled. These dependencies retain the ordinary
+post-upgrade task. For websockets, Renovate installs Python 3.14, runs
+`python3 -I scripts/vendor_websockets.py` and includes only
+`src/ha_mcp/_vendor/websockets/**` as generated artifacts alongside the pin.
+For FastMCP, it installs Python 3.14.2 or later and uv (`uv lock` resolves the
+dev group's `homeassistant`, which needs at least 3.14.2), runs
+`uv run --no-project --with packaging python -I scripts/vendor_fastmcp.py`,
+then `uv lock`, and includes the FastMCP / MCP SDK trees plus `pyproject.toml`
+and `uv.lock`. The generator raises each `[project.dependencies]` floor the new
+versions need on a supported Python and platform: Home Assistant keeps any
+installed version that meets the published floor, so a floor left behind would
+keep the older release installed. It prints every floor it raises and every
+entry it leaves alone. An entry without a single `>=` floor, or whose other
+specifiers exclude the need (a ceiling, an exact pin), and a new requirement
+still fail `test_vendored_fastmcp.py` for a person to resolve. Fast Checks runs
+the Core constraint check against current Core and the `hacs.json` minimum, so
+a raised floor that excludes a version Core pins exactly fails there; for a
+package Core constrains loosely, the embedded no-stomp E2E guard is the
+backstop. The scanner allows only those exact commands, with shell execution
+disabled. These dependencies retain the ordinary
 schedule and release-age policy. Source, license, manifest, drift, and API
 checks still gate the update; a failed generator is an artifact error, not an
 accepted pin-only update. The credential-free vendoring fixture exercises the
@@ -324,18 +343,22 @@ pinned Renovate executor for both generators.
 The dev group pins `homeassistant` and `pytest-homeassistant` to the e2e
 image's Core version (`tests/test_constants.py`). Both carry the image's
 `# renovate:` annotation, so the Core image update changes all three in one
-pull request. Its post-upgrade tasks run `uv lock`, which takes the new Core's
-requirement pins, then `scripts/check_ha_constraint_alignment.py --sync-lock`,
-which moves the runtime packages Core pins only in `package_constraints.txt`
-(pydantic, httpx). Fast Checks compare the lock with that file on every pull
-request (they warn instead when the file is unreachable). Dependabot ignores
-the runtime dependencies Core pins exactly, since a bump of one would only
-fail that check.
+pull request. Its post-upgrade tasks run
+`scripts/sync_dev_integration_pins.py`, which rewrites the dev group's Core
+integration pins and their Dependabot ignore entries from the new Core's
+manifests, then `uv lock`, which takes the new Core's requirement pins, then
+`scripts/check_ha_constraint_alignment.py --sync-lock`, which moves the
+runtime packages Core pins only in `package_constraints.txt` (pydantic,
+httpx). Fast Checks compare the lock with that file on every pull request
+(they warn instead when the file is unreachable). Dependabot ignores the
+runtime dependencies Core pins exactly and the integration pins, since a bump
+of one would only fail that check or the unit tests.
 
 Renovate moves those pins only to stable releases. `pr.yml`'s
-`Unit Tests (beta Core)` job covers the beta: it reads the current beta Core
-from `beta.json`, installs that `homeassistant` and `pytest-homeassistant`
-over the locked environment, and runs the unit and app suites. Unlike the E2E
+`Unit Tests (beta Core, ...)` job covers the beta: it reads the current beta
+Core from `beta.json`, installs that `homeassistant` and `pytest-homeassistant`
+over the locked environment, and runs the unit suite on two runners, split
+the way the stable unit job is, and the app suite on the first. Unlike the E2E
 beta lanes it runs on every pull request, because these suites take minutes.
 It is not a required check, so a beta Core change reports without blocking
 a merge, and it skips while beta equals the dev group's pin.

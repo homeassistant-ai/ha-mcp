@@ -459,7 +459,7 @@ def _loopback_httpx_client_factory(
     That deprecated entry point takes no ``http_client`` — it always builds
     its own via this factory — but the factory itself IS overridable, so the
     same ``verify=False`` / ``trust_env=False`` posture as the canonical path
-    in :func:`_mcp_session` still applies: this fallback is loopback-only
+    in :func:`mcp_session` still applies: this fallback is loopback-only
     too, so a real SSL context is pure waste and this call must never be
     diverted through an environment proxy (which would also leak the URL's
     embedded ``secret_path`` to it).
@@ -495,7 +495,7 @@ def _loopback_httpx_client_factory(
 
 
 @asynccontextmanager
-async def _mcp_session(
+async def mcp_session(
     url: str,
 ) -> AsyncIterator[tuple[ClientSession, mcp_types.InitializeResult]]:
     """Open an initialized MCP session against the loopback server.
@@ -638,7 +638,7 @@ async def _forward_tool_call(
     try:
         async with (
             asyncio.timeout(CALL_TOOL_TIMEOUT_SECONDS),
-            _mcp_session(server_url) as (session, _init),
+            mcp_session(server_url) as (session, _init),
         ):
             exposed, _pinned, _stamped = partition_tools(
                 (await session.list_tools()).tools
@@ -752,7 +752,7 @@ class HaMcpLlmApi(llm.API):
         try:
             async with (
                 asyncio.timeout(LIST_TOOLS_TIMEOUT_SECONDS),
-                _mcp_session(self.server_url) as (
+                mcp_session(self.server_url) as (
                     session,
                     init_result,
                 ),

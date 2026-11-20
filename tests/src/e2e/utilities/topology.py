@@ -2,16 +2,41 @@
 
 The no-tools lanes (``E2E_NO_TOOLS_ENTRY=1``) come in two shapes, and tests that
 degrade differently between them need to tell the shapes apart without each
-re-deriving the env logic. See the "No-tools lanes" section of
-``tests/AGENTS.md`` for the full lane table.
+re-deriving the env logic. Combined lanes (``E2E_COMBINE_TOPOLOGIES=1``) run
+both states in one session, so a collected item's own phase decides which
+state it sees (``item_topology``). See the "Combined PR lanes" and "No-tools
+lanes" sections of ``tests/AGENTS.md``.
 """
 
 from __future__ import annotations
 
 import os
+from typing import Any
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"", "0", "false", "no", "off"})
+
+
+def combined_topologies() -> bool:
+    """Whether this session covers absence followed by live installation."""
+    value = os.environ.get("E2E_COMBINE_TOPOLOGIES", "").strip().lower()
+    if value not in _TRUE_VALUES | _FALSE_VALUES:
+        raise RuntimeError(f"Unrecognized E2E_COMBINE_TOPOLOGIES value: {value!r}")
+    return value in _TRUE_VALUES
+
+
+def item_topology(item: Any) -> str | None:
+    """Return a collected item's phase, before fixtures have changed state."""
+    callspec = getattr(item, "callspec", None)
+    return callspec.params.get("e2e_topology") if callspec is not None else None
+
+
+def item_tools_entry_absent(item: Any) -> bool:
+    """The item's phase on combined lanes; the lane's env everywhere else."""
+    phase = item_topology(item)
+    if phase is not None:
+        return phase == "topology_without_tools"
+    return tools_entry_absent()
 
 
 def tools_entry_absent() -> bool:
@@ -39,7 +64,7 @@ def tools_entry_absent() -> bool:
     )
 
 
-def component_surface_available() -> bool:
+def component_surface_available(*, no_tools_entry: bool | None = None) -> bool:
     """True wherever a live ha_mcp_tools component surface can answer.
 
     The ordinary lanes all have the component's tools entry, and the embedded
@@ -53,12 +78,16 @@ def component_surface_available() -> bool:
     those capabilities have no source and server code must degrade to whatever
     the legacy REST path can see. On HAOS inaddon a test can still enable the
     baked server entry later in the session; this predicate does not track it.
+
+    ``no_tools_entry`` overrides the env for a state other than the current
+    one. Collection uses it to ask whether a combined lane's absent phase has
+    the surface, before ``E2E_NO_TOOLS_ENTRY`` reflects that phase.
     """
     # Same normalization as conftest's backend selectors, so a padded or
     # differently-cased env value can't make this predicate disagree with
     # the dispatch that actually selects the embedded backend.
     return (
-        not tools_entry_absent()
+        not (tools_entry_absent() if no_tools_entry is None else no_tools_entry)
         or os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded"
         or os.environ.get("HAOS_TEST_MODE", "").strip().lower() == "embedded"
     )

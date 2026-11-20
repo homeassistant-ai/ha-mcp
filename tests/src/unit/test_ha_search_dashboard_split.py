@@ -366,6 +366,9 @@ class TestDashboardSplitPagination:
         assert await async_setup_component(
             hass, "scene", {"scene": [{"name": "Kitchen", "entities": {}}]}
         )
+        # Core adds the platform's entities after the setup call returns.
+        await hass.async_block_till_done()
+        assert hass.states.get("scene.kitchen") is not None
         await _lovelace(hass)
         types = ["script", "scene", "dashboard"]
 
@@ -443,7 +446,7 @@ class TestDashboardSplitPartialSemantics:
 
         with patch.object(
             SmartSearchTools,
-            "_search_dashboards_surface",
+            "search_dashboards_surface",
             AsyncMock(side_effect=RuntimeError("dashboards backend exploded")),
         ):
             resp = await _search(client, search_types=_MIXED)

@@ -67,8 +67,12 @@ uv run hamcp-test-env --no-interactive
 
 Locally, `-n2` limits the number of simultaneous Home Assistant containers;
 more workers usually add memory pressure without proportional speed. CI uses
-`-n3`, a value tuned for CI's 2-vCPU, 15 GB runners. The roughly 11,000 unit
+`-n3`, a value tuned for CI's 2-vCPU, 15 GB runners. The unit
 tests take more than 25 minutes serial, so run them in parallel as shown.
+CI runs them on two runners: each
+takes its share by test id from `UNIT_TEST_SHARD` (`1/2`, `2/2`;
+`tests/src/unit/_shards.py`), and the required `Unit Tests` check passes when
+both did. The beta Core unit job is split the same way.
 The root `pyproject.toml` sets `--maxfail=3`, so
 a report with three failures may be an early stop; use `--maxfail=0` only when
 the complete failure set is actually needed.
@@ -113,14 +117,19 @@ URL dynamically. The shared token is in `tests/test_constants.py`.
 uv run ruff format src/ tests/
 uv run ruff check src/ tests/ --fix
 uv run mypy src/
-uv run python scripts/mypy_tests_exact.py
+uv run mypy tests/src/unit/ tests/addon/
 uv run ast-grep scan
+uv run python scripts/error_wording.py
 ```
 
 The unit and app test trees carry extra checks that keep a test on real Home
-Assistant Core: nine ast-grep rules, ruff's `SLF001` (their own `ruff.toml`)
-and the mypy script above. [`tests/AGENTS.md`](../../tests/AGENTS.md#unit-tests-run-on-real-home-assistant-core)
-owns the rules and the lists of files written before them.
+Assistant Core: twelve ast-grep rules, ruff's `SLF001` (their own `ruff.toml`)
+and the mypy run above. [`tests/AGENTS.md`](../../tests/AGENTS.md#unit-tests-run-on-real-home-assistant-core)
+owns these rules; every grandfather list is empty.
+
+`scripts/error_wording.py` enforces the
+[native contracts](native-core-contracts.md#decide-on-the-code-not-the-wording)
+rule on deciding by an error's wording.
 
 C901 complexity is capped at 10 repository-wide with no per-file exemptions;
 issue #925 removed the grandfathered list, so extract helpers instead of

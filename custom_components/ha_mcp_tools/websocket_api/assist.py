@@ -9,6 +9,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from ..error_wording import unknown_entity
+
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
 _LOGGER = logging.getLogger(__package__)
@@ -44,16 +46,9 @@ def _async_get_assistant_settings(hass: HomeAssistant) -> dict[str, Any]:
 
 
 def _is_unknown_entity_error(exc: Exception) -> bool:
-    """True for core's ``HomeAssistantError('Unknown entity')`` from the settings helper.
-
-    The type alone is too wide: core raises a plain ``HomeAssistantError`` for
-    other faults too, so the message is also required to carry ``unknown entity``
-    (case-insensitive). A store-read failure that raises a bare
-    ``HomeAssistantError`` therefore propagates instead of being silently reported
-    as not-exposed; the audit guardrail (junk id → not-exposed default) still
-    matches because that raise carries the ``Unknown entity`` message.
-    """
-    return isinstance(exc, HomeAssistantError) and "unknown entity" in str(exc).lower()
+    """Core's "Unknown entity" from the settings helper; any other
+    ``HomeAssistantError``, a failed store read included, propagates."""
+    return unknown_entity(exc)
 
 
 def _assist_should_expose(hass: HomeAssistant, entity_id: str) -> bool:

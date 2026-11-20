@@ -732,9 +732,9 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_manage_app` — Manage Home Assistant apps (add-ons) or proxy an app API.
 
 ### Areas & Floors
-- `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
+- `ha_list_floors_areas` — List floors in the order Home Assistant keeps them, each with their assigned areas nested, plus areas without a floor.
 - `ha_remove_area_or_floor` — Remove a Home Assistant area or floor.
-- `ha_set_area_or_floor` — Create or update a Home Assistant area or floor.
+- `ha_set_area_or_floor` — Create, update or reorder Home Assistant areas or floors.
 
 ### Assist
 - `ha_manage_pipeline` — Manage Home Assistant Assist pipelines.

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Iterator
 
 import pytest
 from aiohttp import ClientResponse
@@ -46,14 +47,13 @@ class RefusalClock:
 
 
 @pytest.fixture(autouse=True)
-def refusal_clock(monkeypatch: pytest.MonkeyPatch) -> RefusalClock:
+def refusal_clock(monkeypatch: pytest.MonkeyPatch) -> Iterator[RefusalClock]:
     """Each test gets a fixed clock and a refusal log with no earlier refusal."""
     clock = RefusalClock(1_000.0)
     monkeypatch.setattr(oauth_autoapprove, "time", clock)
-    monkeypatch.setattr(
-        oauth_autoapprove, "_refusal_log", {"last": float("-inf"), "suppressed": 0}
-    )
-    return clock
+    oauth_autoapprove.reset_callback_refusal_log()
+    yield clock
+    oauth_autoapprove.reset_callback_refusal_log()
 
 
 async def authorize(surface: OAuthSurface, **overrides: str) -> ClientResponse:

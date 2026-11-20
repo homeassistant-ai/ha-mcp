@@ -94,17 +94,25 @@ async def search_related(
 
 
 def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
-    """Summarize a ``frontend/get_themes`` result into names plus defaults.
+    """Summarize a ``frontend/get_themes`` result into names, modes and defaults.
 
-    Returns theme NAMES, not the full per-theme CSS variable dicts (installed
-    community themes can carry hundreds of variables; listings are a
-    discovery/verify surface, not a content dump).
+    Returns theme NAMES and the mode names of each theme's ``modes`` block, not
+    the full per-theme CSS variable dicts (installed community themes can carry
+    hundreds of variables; listings are a discovery/verify surface, not a
+    content dump).
     """
-    themes_value = raw_themes.get("themes") or {}
-    theme_names = sorted(themes_value.keys() if isinstance(themes_value, dict) else [])
+    themes_value = raw_themes.get("themes")
+    if not isinstance(themes_value, dict):
+        themes_value = {}
+    theme_names = sorted(themes_value)
     return {
         "themes": theme_names,
         "count": len(theme_names),
+        "modes": {
+            name: sorted(theme["modes"])
+            for name, theme in sorted(themes_value.items())
+            if "modes" in theme
+        },
         "default_theme": raw_themes.get("default_theme"),
         "default_dark_theme": raw_themes.get("default_dark_theme"),
     }
@@ -482,43 +490,6 @@ def merge_visibility_warnings(
     if warnings:
         response.setdefault("warnings", []).extend(warnings)
     return response
-
-
-# Error strings produced by the pooled WebSocket path when the transport (not
-# the command) fails: the manager's connect raise, send timeouts, and socket
-# drops. Callers that attach domain-specific suggestions match on these so an
-# HA restart is not presented as a domain problem (issue #1832 review).
-#
-# Since #1947 ``send_websocket_message`` raises on a dead transport rather than
-# collapsing it into ``{"success": False, "error": ...}``, so these signatures
-# now only have to catch transport-shaped text that reaches a caller by another
-# route (a component-side error frame, or an error string threaded through a
-# response body). They are kept as a belt-and-braces match, not as the primary
-# detection path.
-WS_CONNECTION_SIGNATURES = (
-    "failed to connect",
-    "timed out",
-    "timeout",
-    "connection closed",
-    # reset_connection: "WebSocket connection to Home Assistant closed while
-    # waiting for a response" — "connection closed" is not adjacent there.
-    "closed while waiting",
-    # listener close reason: "connection dropped without a close frame".
-    "connection dropped",
-    "disconnected",
-    "not connected",
-    "not authenticated",
-)
-
-
-def is_connection_error_message(error_msg: Any) -> bool:
-    """True when a pooled-WS failure payload is connection/transport-shaped.
-
-    Accepts any payload shape: HA error frames can carry a dict (or None)
-    in the error slot, so the value is stringified before matching.
-    """
-    lowered = str(error_msg).lower()
-    return any(sig in lowered for sig in WS_CONNECTION_SIGNATURES)
 
 
 async def list_visible_registry_ids(

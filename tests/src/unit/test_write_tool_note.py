@@ -8,14 +8,16 @@ description replacement.
 
 from __future__ import annotations
 
-import inspect
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.transforms import DESKTOP_APPROVAL_NOTE, WriteToolNoteTransform
+
+from ._server_factory import make_server
 
 
 def _make_tool(name: str, *, destructive: bool, description: str = "Does X.") -> Tool:
@@ -116,23 +118,19 @@ def test_note_preserves_manual_approval() -> None:
     assert "always allow" not in lowered
 
 
-def test_server_installs_transform_after_lite_docstrings() -> None:
-    """The note must be appended AFTER lite docstrings replace descriptions."""
-    from ha_mcp.server import HomeAssistantSmartMCPServer
+async def test_server_installs_transform_after_lite_docstrings(
+    core_client: HomeAssistantClient, monkeypatch
+) -> None:
+    """The real catalog keeps the note after lite descriptions replace the text."""
+    from ha_mcp.server_tool_text import LITE_DOCSTRINGS
 
-    server = MagicMock(spec=HomeAssistantSmartMCPServer)
-    server.mcp = MagicMock()
-    HomeAssistantSmartMCPServer._apply_write_tool_note(server)
-
-    server.mcp.add_transform.assert_called_once()
-    assert isinstance(
-        server.mcp.add_transform.call_args.args[0], WriteToolNoteTransform
+    server = make_server(
+        core_client,
+        monkeypatch,
+        enabled_tool_modules="tools_config_dashboards",
+        enable_lite_docstrings=True,
     )
-
-    body = inspect.getsource(HomeAssistantSmartMCPServer._initialize_server)
-    assert body.index("_apply_lite_docstrings()") < body.index(
-        "_apply_write_tool_note()"
-    )
-    assert body.index("_apply_write_tool_note()") < body.index(
-        "_apply_search_keyword_enrichment()"
-    )
+    tool = await server.mcp.get_tool("ha_config_set_dashboard")
+    assert tool is not None
+    assert tool.description.startswith(LITE_DOCSTRINGS["ha_config_set_dashboard"])
+    assert DESKTOP_APPROVAL_NOTE in tool.description

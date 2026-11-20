@@ -2,15 +2,13 @@
 it (Core was not restarted after an app update): the app takes the webhook
 down until Core restarts, then brings it back.
 
-Which component code Core has loaded cannot be staged in a unit test, so the
-app's probe for it answers as scripted; everything it does about the answer
-goes through the real Core. Restarting Core cannot be staged either:
-``App.wait_for_ha_restart`` stands in for the user's restart.
+Missing OAuth routes are requested from Core, so its real 404 models the
+older integration. The restart drops one HTTP connection before Core comes
+back; the probe then reaches either the missing or the real OAuth route.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -53,11 +51,6 @@ async def core(
     return await connect_core(app, hass, hass_client, hass_access_token, monkeypatch)
 
 
-def _probe_answers(app: App, monkeypatch: pytest.MonkeyPatch, *answers: bool) -> None:
-    remaining: Iterator[bool] = iter(answers)
-    monkeypatch.setattr(app.start, "_probe_oauth_active", lambda: next(remaining))
-
-
 def _what_the_user_sees_while_restarting(
     hass: HomeAssistant,
     hass_ws_client: WebSocketGenerator,
@@ -97,7 +90,7 @@ async def test_stale_component_code_takes_the_webhook_down(
     unauthenticated) and a click-to-restart Repair is up; when the restarted
     Core still does not enforce OAuth, the webhook stays down and the user is
     told the automatic recovery failed."""
-    _probe_answers(app, monkeypatch, False, False)
+    core.oauth_available = lambda: False
     app.set_options(mcp_server_url=upstream.target_url(), enable_oauth=True)
     app.deploy_component()
     seen: dict[str, Any] = {}
@@ -128,7 +121,7 @@ async def test_webhook_comes_back_once_core_runs_the_new_code(
 ) -> None:
     """After the restart the webhook is set up again, and the "restart
     required" notification and marker do not outlive the problem."""
-    _probe_answers(app, monkeypatch, False, True)
+    core.oauth_available = lambda: app.restarts_awaited > 0
     app.set_options(mcp_server_url=upstream.target_url(), enable_oauth=True)
     app.deploy_component()
     seen: dict[str, Any] = {}

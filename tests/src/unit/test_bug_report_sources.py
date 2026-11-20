@@ -52,23 +52,6 @@ LOOPBACK = ifaddr.Adapter(
     [ifaddr.IP("127.0.0.1", 8, "lo"), ifaddr.IP(("::1", 0, 0), 128, "lo")],
     index=1,
 )
-# What Core reports for a Home Assistant Container install, which a unit test
-# cannot be.
-CONTAINER_INFO = {
-    "version": "2026.10.4",
-    "installation_type": "Home Assistant Container",
-    "dev": False,
-    "hassio": False,
-    "docker": True,
-    "container_arch": "amd64",
-    "user": "root",
-    "virtualenv": False,
-    "python_version": "3.14.9",
-    "os_name": "Linux",
-    "os_version": "7.0.0-1017-azure",
-    "arch": "x86_64",
-    "timezone": "America/Toronto",
-}
 
 
 async def _set_up_network(hass: HomeAssistant, *adapters: ifaddr.Adapter) -> None:
@@ -330,18 +313,12 @@ def log_file(hass: HomeAssistant, tmp_path: Path) -> Path:
     return path
 
 
-async def _set_up_reporting_core(hass: HomeAssistant, info: dict[str, Any]) -> Any:
-    """Core with its network, an internal URL and ``system_health``.
-
-    Returns the patch that makes Core report ``info`` as its system info.
-    """
+async def _set_up_reporting_core(hass: HomeAssistant) -> None:
+    """Load the services the report consults, including the real system info."""
     await _set_up_network(hass, ETH0)
     await hass.config.async_update(internal_url="http://172.17.0.3:8123")
     assert await async_setup_component(hass, "homeassistant", {})
     assert await async_setup_component(hass, "system_health", {})
-    return patch(
-        "homeassistant.helpers.system_info.async_get_system_info", return_value=info
-    )
 
 
 class TestReport:
@@ -354,7 +331,7 @@ class TestReport:
         log_file: Path,
         core_client: HomeAssistantClient,
     ) -> None:
-        system_info = await _set_up_reporting_core(hass, CONTAINER_INFO)
+        await _set_up_reporting_core(hass)
         log_tool_call(
             "ha_call_service",
             {},
@@ -363,10 +340,9 @@ class TestReport:
             error_message="Setup failed for 172.17.0.3",
         )
 
-        with system_info:
-            result = await BugReportTools(core_client).ha_report_issue(
-                report_type="runtime_bug"
-            )
+        result = await BugReportTools(core_client).ha_report_issue(
+            report_type="runtime_bug"
+        )
 
         body = result["issue_body"]
         assert "172.17.0.3" not in body
@@ -374,17 +350,18 @@ class TestReport:
         assert "172.17.0.3" not in result["core_error_log"]
         assert "Lost [IP] link" in body
         assert "Setup failed for [IP]" in body
-        assert (
-            "- **Home Assistant Install:** Home Assistant Container; Linux "
-            "7.0.0-1017-azure (x86_64, container amd64); Python 3.14.9" in body
-        )
+        info = await async_get_system_info(hass)
+        assert f"- **Home Assistant Install:** {info['installation_type']}" in body
+        assert info["python_version"] in body
         assert "warnings" not in result
 
     async def test_install_without_container_arch(
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
+        await _set_up_reporting_core(hass)
         core_install = {
-            **CONTAINER_INFO,
+            **await async_get_system_info(hass),
+            "os_name": "Linux",
             "installation_type": "Home Assistant Core",
             "docker": False,
             "container_arch": None,
@@ -392,9 +369,10 @@ class TestReport:
             "arch": "aarch64",
             "python_version": "3.13.7",
         }
-        system_info = await _set_up_reporting_core(hass, core_install)
-
-        with system_info:
+        with patch(
+            "homeassistant.helpers.system_info.async_get_system_info",
+            return_value=core_install,
+        ):
             result = await BugReportTools(core_client).ha_report_issue(
                 report_type="runtime_bug"
             )
@@ -423,12 +401,11 @@ class TestReport:
         monkeypatch.setenv(
             "SUPERVISOR_BASE_URL", str(supervisor.make_url("")).rstrip("/")
         )
-        system_info = await _set_up_reporting_core(hass, CONTAINER_INFO)
+        await _set_up_reporting_core(hass)
 
-        with system_info:
-            result = await BugReportTools(core_client).ha_report_issue(
-                report_type="runtime_bug"
-            )
+        result = await BugReportTools(core_client).ha_report_issue(
+            report_type="runtime_bug"
+        )
 
         assert "172.17.0.3" not in result["addon_logs"]
         assert "upstream is [IP]" in result["addon_logs"]

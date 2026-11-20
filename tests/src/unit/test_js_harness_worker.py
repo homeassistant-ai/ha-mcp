@@ -20,9 +20,9 @@ skip_if_unsupported()
 @pytest.fixture(autouse=True)
 def _own_worker():
     """Start and end each test without a harness worker."""
-    _js_harness._stop_worker()
+    _js_harness.stop_worker()
     yield
-    _js_harness._stop_worker()
+    _js_harness.stop_worker()
 
 
 def _logged(result: _js_harness.HarnessResult) -> list[str]:
@@ -65,15 +65,23 @@ def test_a_run_that_kills_node_fails_alone_and_the_next_run_still_works():
     assert _logged(result) == ["after"]
 
 
-def test_node_dying_between_runs_is_reported_not_hidden():
+def test_node_dying_between_runs_is_reported_not_hidden(monkeypatch):
     """Node can exit after a run has replied. Replacing it silently would
     hide that failure; the next run must report it, and the one after must
     work."""
+    processes = []
+    real_popen = subprocess.Popen
+
+    def capture_process(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", capture_process)
     run_script("console.log('before');")
-    worker = _js_harness._worker
-    assert worker is not None
-    worker._proc.kill()
-    worker._proc.wait()
+    [process] = processes
+    process.kill()
+    process.wait()
 
     with pytest.raises(AssertionError, match=r"exited .* between runs"):
         run_script("console.log('reported');")

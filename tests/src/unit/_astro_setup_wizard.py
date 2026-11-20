@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from ._js_harness import (
-    HarnessResult,
     bundle_inline_script,
     extract_script_body,
     module_exports,
@@ -56,17 +55,6 @@ def bundle_setup_script() -> str:
 def load_wizard_vars() -> dict[str, Any]:
     """The production ``data.ts`` arrays the DOM builder and premise checks read."""
     return module_exports(WIZARD_DATA, WIZARD_VAR_NAMES)
-
-
-def _assert_clean_init(result: HarnessResult) -> None:
-    """Fail loud on script-init / transpile / jsdom errors so a
-    regression that breaks init isn't reported as "feature didn't fire"."""
-    init_errors = [
-        e
-        for e in result.errors
-        if e.startswith(("script init:", "transpile failure", "invoke:", "jsdom error"))
-    ]
-    assert not init_errors, f"script failed to initialise: {init_errors}"
 
 
 def _section_has_hidden_class(dom: str, section_id: str) -> bool:

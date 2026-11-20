@@ -46,7 +46,7 @@ _LOGGER = logging.getLogger(__package__)
 # =============================================================================
 # ha_mcp_tools/helpers_list
 # =============================================================================
-def _do_helpers_list(
+def do_helpers_list(
     hass: HomeAssistant,
     params: dict[str, Any],
     *,
@@ -117,7 +117,7 @@ async def _helpers_list_prep(
     Only the flow-helper ``options`` are scrubbed, so the blocking ``secrets.yaml``
     read is skipped entirely when ``include_flow_helpers`` is false (perf gate,
     mirroring ``search``'s entity-only skip). The read runs in the executor via
-    :meth:`hass.async_add_executor_job`, keeping :func:`_do_helpers_list` a pure
+    :meth:`hass.async_add_executor_job`, keeping :func:`do_helpers_list` a pure
     in-memory read. See :func:`_load_secret_scrub`.
     """
     if not msg.get("include_flow_helpers", True):

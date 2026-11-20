@@ -16,6 +16,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from ..client.exceptions import http_failure_status
 from ..client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
@@ -915,12 +916,7 @@ class UpdateTools:
         entity_ids: list[str] | str | None,
     ) -> NoReturn:
         """Map a failure to a structured tool error; always raises."""
-        error_msg = str(e)
-        if (
-            action == "get"
-            and entity_ids
-            and ("404" in error_msg or "not found" in error_msg.lower())
-        ):
+        if action == "get" and entity_ids and http_failure_status(e) == 404:
             eid = entity_ids if isinstance(entity_ids, str) else entity_ids[0]
             raise_tool_error(
                 create_error_response(

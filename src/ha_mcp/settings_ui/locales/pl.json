@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Ścieżka zapisanych narzędzi",
     "advanced.code_mode_saved_tools_path.help": "Plik JSON używany do trwałego zachowania niestandardowych narzędzi między ponownymi uruchomieniami.",
     "advanced.extra_yaml_write_keys.label": "Dodatkowe klucze zapisu YAML",
-    "advanced.extra_yaml_write_keys.help": "Dodatkowe klucze najwyższego poziomu, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na plikach YAML w tej instalacji (np. alert2). Wpisz jeden klucz w linii lub oddziel klucze przecinkami. Klucze redefiniujące własną granicę zaufania Home Assistant nigdy nie mogą zostać dodane i są ignorowane. Wymaga niestandardowego komponentu 1.2.4 lub nowszego.",
+    "advanced.extra_yaml_write_keys.help": "Dodatkowe klucze najwyższego poziomu, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na YAML w tej instalacji (np. alert2). Wprowadź jeden klucz w linii lub oddziel klucze przecinkami. Klucze, które redefiniują własną granicę zaufania Home Assistant, nigdy nie mogą zostać dodane i są ignorowane.",
     "advanced.redact_app_option_keys.label": "Dodatkowe klucze opcji aplikacji do ukrycia",
     "advanced.redact_app_option_keys.help": "Nazwy opcji aplikacji (dodatku) do ukrycia, tak jak pola haseł, dla aplikacji, których schemat przechowuje sekret jako zwykły tekst (na przykład backup_password). Rozdziel nazwy przecinkami lub nowymi liniami. Nazwa dotyczy każdej aplikacji; wpisz app_slug:name, aby ograniczyć ją do jednej aplikacji. Podanie nazwy grupy opcji obejmuje każdą opcję w niej zawartą. Używane tylko wtedy, gdy funkcja ukrywania sekretów jest włączona. Domyślnie puste.",
     "advanced.sidecar_pin_port.label": "Port sidecar interfejsu ustawień",
@@ -775,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Wyświetl piętra i obszary",
-      "description": "Wyświetl piętra posortowane rosnąco według poziomu, każde z zagnieżdżonymi przypisanymi obszarami, plus obszary bez przypisanego piętra."
+      "description": "Wyświetl listę pięter w kolejności utrzymywanej przez Home Assistant, każde z przypisanymi do niego obszarami oraz obszary bez przypisanego piętra."
     },
     "ha_list_services": {
       "title": "Wyświetl dostępne usługi",
@@ -870,8 +870,8 @@
       "description": "Szukaj encji (świateł, czujników, przełączników, klimatyzacji itp.) według nazwy, domeny lub obszaru — ORAZ wewnątrz automatyzacji/skryptów"
     },
     "ha_set_area_or_floor": {
-      "title": "Utwórz lub zaktualizuj obszar lub piętro",
-      "description": "Utwórz lub zaktualizuj obszar lub piętro Home Assistant."
+      "title": "Tworzenie, aktualizacja lub zmiana kolejności obszarów lub pięter",
+      "description": "Twórz, aktualizuj lub zmieniaj kolejność obszarów lub pięter w Home Assistant."
     },
     "ha_set_device": {
       "title": "Ustaw urządzenie",

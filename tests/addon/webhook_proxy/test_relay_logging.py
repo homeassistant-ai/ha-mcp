@@ -329,8 +329,7 @@ async def test_inbound_mirror_stays_capped_and_keeps_the_newest_line(
 ) -> None:
     """A long debug session must not grow ``/config`` without bound, and the
     trimming keeps the most recent lines whole."""
-    cap = 400
-    monkeypatch.setattr(component, "_INBOUND_LOG_CAP", cap)
+    cap = 256 * 1024
     statuses = iter([200] * 5 + [201])
 
     async def answer(request: web.Request) -> web.Response:
@@ -342,6 +341,7 @@ async def test_inbound_mirror_stays_capped_and_keeps_the_newest_line(
     )
 
     mirror = state_path(fs_root, variant.inbound_log)
+    mirror.write_text("old incomplete line" + "x" * (cap + 1024) + "\n")
     for _ in range(6):
         await post_once(hass_client_no_auth)
         await hass.async_block_till_done()

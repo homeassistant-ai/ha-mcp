@@ -457,7 +457,12 @@ async function backupAction(act, name) {
         else if (line.startsWith('-')) cls = 'diff-rem';
         return `<span class="${cls}">${escapeHtml(line)}</span>`;
       }).join('\n');
-      showModal(t('backup.modal.diff', {name}, 'Diff: ' + name), '<pre>' + html + '</pre>');
+      const icon = '<svg class="ha-alert-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+        '<path d="M12,2L1,21H23M12,6L19.53,19H4.47M11,10V14H13V10M11,16V18H13V16"/></svg>';
+      const notes = (data.warnings || []).map(w =>
+        `<div class="ha-alert ha-alert-warning" role="note">${icon}<div class="ha-alert-body">${escapeHtml(w)}</div></div>`
+      ).join('');
+      showModal(t('backup.modal.diff', {name}, 'Diff: ' + name), notes + '<pre>' + html + '</pre>');
     } catch (err) {
       showToast(t('backup.errors.diff', {name, message: String(err)}, 'Could not diff backup "' + name + '": ' + String(err)), {isError: true});
     }

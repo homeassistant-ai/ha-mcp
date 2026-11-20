@@ -94,6 +94,7 @@ from .embedded_worker_teardown import (
 )
 from .loopback_url import derive_loopback_url
 from .pip_compat import pip_kwargs
+from .purged_modules import release_purged_modules
 from .server_credentials import (
     CredentialNeeded,
     async_release_credentials,
@@ -119,11 +120,11 @@ _LOGGER = logging.getLogger(__name__)
 # the port out from under the retry. The module count is process-wide (see
 # _progress_signature), so a wedged worker trips the stall budget on a quiet
 # instance and the absolute cap below at the latest.
-_READY_STALL_TIMEOUT_SECONDS = 90.0
+READY_STALL_TIMEOUT_SECONDS = 90.0
 # Absolute ceiling on one bring-up regardless of apparent progress, matching
 # the HAOS e2e lane's own 600s readiness deadline.
-_READY_TOTAL_CAP_SECONDS = 600.0
-_READY_POLL_INTERVAL_SECONDS = 0.5
+READY_TOTAL_CAP_SECONDS = 600.0
+READY_POLL_INTERVAL_SECONDS = 0.5
 
 # How long to wait for the worker thread to exit on stop before giving up and
 # leaking it rather than blocking HA shutdown.
@@ -205,7 +206,7 @@ def _install_log_filters_if_available() -> None:
     Only a ``ModuleNotFoundError`` for exactly ``ha_mcp.log_filters`` is that
     "older ha-mcp" case and is swallowed silently. Anything else -- a version
     mismatch in a third-party dependency this import touches (fastmcp,
-    pydantic), which ``_purge_ha_mcp_modules`` deliberately does NOT
+    pydantic), which ``purge_ha_mcp_modules`` deliberately does NOT
     reinstall per config entry, so a stale one left over from a previous
     install can break this import -- is logged instead of silently doing
     nothing: log cosmetics must never block startup, but they also must
@@ -300,7 +301,7 @@ class EmbeddedServerManager:
         self._orphaned_thread: threading.Thread | None = None
         # Version reported by the CURRENT worker thread (stashed by _serve).
         # Compared against the installed distribution after start to detect a
-        # stale-code worker (see _purge_ha_mcp_modules).
+        # stale-code worker (see purge_ha_mcp_modules).
         self._running_version: str | None = None
         # Startup phase marker (plain attribute writes: init markers from the
         # main thread, _note_startup_phase transitions from the worker). Read
@@ -351,7 +352,7 @@ class EmbeddedServerManager:
                 kind="start",
             )
 
-        self._paired_spec = await _async_paired_server_requirement(self._hass)
+        self._paired_spec = await async_paired_server_requirement(self._hass)
         if self._paired_spec is None and not self._pip_spec_override:
             _LOGGER.warning(
                 "This component's manifest pins no ha-mcp server; running "
@@ -363,12 +364,12 @@ class EmbeddedServerManager:
         # the distribution's files on disk under a live importer corrupts it
         # exactly like the sys.modules purge does (review finding), so a
         # mutating install is deferred while any registered worker is alive.
-        ready_version = await self._async_ensure_package(
+        ready_version = await self.async_ensure_package(
             defer_mutations=_prune_and_check_importing_workers()
         )
-        await self._async_warn_on_dependency_conflicts()
-        access_token = await self._async_access_token()
-        await self._hass.async_add_executor_job(self._prepare_config_dir)
+        await self.async_warn_on_dependency_conflicts()
+        access_token = await self.async_access_token()
+        await self._hass.async_add_executor_job(self.prepare_config_dir)
 
         self._maybe_purge_stale_modules(ready_version)
 
@@ -406,7 +407,7 @@ class EmbeddedServerManager:
         # code silently.
         if self._running_version:
             installed = await self._hass.async_add_executor_job(
-                _installed_ha_mcp_version, version_dist(self._pip_spec)
+                installed_ha_mcp_version, version_dist(self._pip_spec)
             )
             if installed and installed != self._running_version:
                 _LOGGER.warning(
@@ -580,7 +581,7 @@ class EmbeddedServerManager:
                 ready_version,
             )
         else:
-            _purge_ha_mcp_modules()
+            purge_ha_mcp_modules()
 
     async def _async_run_tracked_install_job(
         self, func: Callable[[], object]
@@ -667,7 +668,7 @@ class EmbeddedServerManager:
                 kind="package",
             )
 
-    async def _async_ensure_package(
+    async def async_ensure_package(
         self, *, defer_mutations: bool = False
     ) -> str | None:
         """Use the externally managed package or ensure a managed install."""
@@ -731,7 +732,7 @@ class EmbeddedServerManager:
         stored_spec = self._entry.data.get(DATA_LAST_PIP_SPEC)
         target_dist = self._target_dist()
         installed_version = await self._hass.async_add_executor_job(
-            _installed_ha_mcp_version, version_dist(self._pip_spec)
+            installed_ha_mcp_version, version_dist(self._pip_spec)
         )
         target_version = (
             await self._hass.async_add_executor_job(
@@ -801,7 +802,7 @@ class EmbeddedServerManager:
                     )
 
         version: str | None = await self._hass.async_add_executor_job(
-            _installed_ha_mcp_version, version_dist(self._pip_spec)
+            installed_ha_mcp_version, version_dist(self._pip_spec)
         )
         if version is None:
             raise EmbeddedServerError(
@@ -836,7 +837,7 @@ class EmbeddedServerManager:
         marker writers used by manual and automatic installs.
         """
         importable_version: str | None = await self._hass.async_add_executor_job(
-            _installed_ha_mcp_version
+            installed_ha_mcp_version
         )
         stable_version: str | None = await self._hass.async_add_executor_job(
             _installed_dist_version, DIST_NAME_STABLE
@@ -931,7 +932,7 @@ class EmbeddedServerManager:
     async def _async_defer_package_mutations(
         self, installed_version: str | None
     ) -> None:
-        """Handle the defer-mutations branch of :meth:`_async_ensure_package`.
+        """Handle the defer-mutations branch of :meth:`async_ensure_package`.
 
         A previous bring-up's worker is still importing, so the package files
         must not be replaced under it. With an importable build on disk
@@ -1164,7 +1165,7 @@ class EmbeddedServerManager:
 
     # -- server token ------------------------------------------------------
 
-    async def _async_access_token(self) -> str:
+    async def async_access_token(self) -> str:
         """Return the access token the server runs with (#2427).
 
         Raises ``EmbeddedServerError(kind="token")`` when there is no usable
@@ -1175,13 +1176,13 @@ class EmbeddedServerManager:
         except CredentialNeeded as err:
             raise EmbeddedServerError(err.reason, kind="token") from err
 
-    def _prepare_config_dir(self) -> None:
+    def prepare_config_dir(self) -> None:
         """Create the server's persistent data directory (blocking)."""
         os.makedirs(self._config_dir, exist_ok=True)
 
     # -- dependency diagnostics --------------------------------------------
 
-    async def _async_warn_on_dependency_conflicts(self) -> None:
+    async def async_warn_on_dependency_conflicts(self) -> None:
         """Log the dependency diagnosis when the installed graph is already broken.
 
         Runs between the install step and the worker's first ``ha_mcp`` import,
@@ -1682,8 +1683,8 @@ class EmbeddedServerManager:
         """Poll a loopback TCP connect until the server accepts, or fail.
 
         Patience is progress-based: the wait only gives up when there is no
-        observable progress for ``_READY_STALL_TIMEOUT_SECONDS`` (or the
-        absolute ``_READY_TOTAL_CAP_SECONDS`` ceiling is hit). A slow cold
+        observable progress for ``READY_STALL_TIMEOUT_SECONDS`` (or the
+        absolute ``READY_TOTAL_CAP_SECONDS`` ceiling is hit). A slow cold
         import keeps the wait alive; a wedged worker is caught by the stall
         budget on a quiet instance, by the cap at the latest (the progress
         signal is process-wide). On failure stops the thread and raises
@@ -1712,22 +1713,22 @@ class EmbeddedServerManager:
             if signature != last_signature:
                 last_signature = signature
                 last_progress = now
-            if now - start >= _READY_TOTAL_CAP_SECONDS:
+            if now - start >= READY_TOTAL_CAP_SECONDS:
                 failure = (
                     f"HA-MCP in-process server did not become reachable on "
-                    f"port {self._port} within {_READY_TOTAL_CAP_SECONDS:.0f}s "
+                    f"port {self._port} within {READY_TOTAL_CAP_SECONDS:.0f}s "
                     f"(last startup phase: {self._startup_phase})."
                 )
                 break
-            if now - last_progress >= _READY_STALL_TIMEOUT_SECONDS:
+            if now - last_progress >= READY_STALL_TIMEOUT_SECONDS:
                 failure = (
                     f"HA-MCP in-process server did not become reachable on "
                     f"port {self._port}: no startup progress observed for "
-                    f"{_READY_STALL_TIMEOUT_SECONDS:.0f}s (last phase: "
+                    f"{READY_STALL_TIMEOUT_SECONDS:.0f}s (last phase: "
                     f"{self._startup_phase}; {now - start:.0f}s since start)."
                 )
                 break
-            await asyncio.sleep(_READY_POLL_INTERVAL_SECONDS)
+            await asyncio.sleep(READY_POLL_INTERVAL_SECONDS)
 
         # Gave up — tear the thread down so we never leave a half-started
         # server behind an unregistered webhook.
@@ -1745,7 +1746,7 @@ class EmbeddedServerManager:
 
     async def _async_probe_port(self) -> bool:
         """Return True if a loopback TCP connection to the server port succeeds."""
-        return await async_probe_loopback(self._port, _READY_POLL_INTERVAL_SECONDS)
+        return await async_probe_loopback(self._port, READY_POLL_INTERVAL_SECONDS)
 
 
 # Worker threads that may still be executing their ha_mcp imports. Purging
@@ -1868,7 +1869,7 @@ def _safe_invalidate_caches() -> None:
         )
 
 
-def _purge_ha_mcp_modules() -> None:
+def purge_ha_mcp_modules() -> None:
     """Drop every cached ``ha_mcp`` module so the next import loads fresh code.
 
     The in-process server runs as a thread of the HA core Python process, and
@@ -1878,14 +1879,12 @@ def _purge_ha_mcp_modules() -> None:
     Python and is only ever imported inside worker threads, and the caller's
     gate guarantees no registered worker is mid-import when this runs (a
     worker past its imports keeps its already-bound modules regardless);
-    third-party dependencies are deliberately NOT purged (they are shared
-    with the rest of Home Assistant), so a dependency-version change still
-    needs an HA core restart.
+    third-party dependencies are NOT purged (Home Assistant shares them), so
+    a dependency-version change still needs an HA core restart.
     """
     global _CACHED_IMPORT_VERSION
     _CACHED_IMPORT_VERSION = None
-    # Snapshot the keys: sys.modules can be mutated by concurrent imports on
-    # other threads mid-iteration (HA core is heavily threaded).
+    # Snapshot the keys: imports on other threads can mutate sys.modules.
     purged = [
         name
         for name in list(sys.modules)
@@ -1895,11 +1894,12 @@ def _purge_ha_mcp_modules() -> None:
         return
     for name in purged:
         sys.modules.pop(name, None)
+    release_purged_modules()
     _safe_invalidate_caches()
     _LOGGER.debug("Purged %d cached ha_mcp module(s) before worker start", len(purged))
 
 
-def _installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
+def installed_ha_mcp_version(preferred_dist: str | None = None) -> str | None:
     """Return the installed server version, or None (blocking).
 
     Invalidates the import caches first so a just-completed pip install is seen.
@@ -1942,7 +1942,7 @@ def _installed_dist_version(dist_name: str) -> str | None:
     """Return the installed version of a SPECIFIC distribution, or None (blocking).
 
     Invalidates the import caches first so a just-completed (un)install is seen.
-    Unlike :func:`_installed_ha_mcp_version` (which falls back from the
+    Unlike :func:`installed_ha_mcp_version` (which falls back from the
     preferred distribution to either server distribution) this reads only the
     given distribution name, so
     the target's version is never read from the other distribution's metadata.
@@ -2333,7 +2333,7 @@ def _spec_satisfied_by(spec: str, installed_version: str) -> bool:
     return requirement.specifier.contains(installed_version, prereleases=True)
 
 
-async def _async_paired_server_requirement(hass: HomeAssistant) -> str | None:
+async def async_paired_server_requirement(hass: HomeAssistant) -> str | None:
     """Return the server requirement this component release pins, or None.
 
     Every component release HACS delivers pins the ``ha-mcp`` (pre-release:

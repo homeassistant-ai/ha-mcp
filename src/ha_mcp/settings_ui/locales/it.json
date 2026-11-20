@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Percorso degli strumenti salvati",
     "advanced.code_mode_saved_tools_path.help": "File JSON utilizzato per mantenere i strumenti personalizzati tra i riavvii.",
     "advanced.extra_yaml_write_keys.label": "Chiavi YAML scrivibili aggiuntive",
-    "advanced.extra_yaml_write_keys.help": "Ulteriori chiavi di primo livello che ha_config_set_yaml può scrivere oltre a quelle integrate, per le integrazioni YAML-first su questa installazione (ad es. alert2). Inserisci una chiave per riga o separa le chiavi con virgole. Le chiavi che ridefiniscono il limite di sicurezza di Home Assistant non possono mai essere aggiunte e vengono ignorate. Richiede il componente personalizzato 1.2.4 o successivo.",
+    "advanced.extra_yaml_write_keys.help": "Chiavi di primo livello aggiuntive che ha_config_set_yaml può scrivere oltre a quelle integrate, per le integrazioni YAML-first su questa installazione (ad es. alert2). Inserisci una chiave per riga o separa le chiavi con virgole. Le chiavi che ridefiniscono il limite di sicurezza di Home Assistant non possono mai essere aggiunte e vengono ignorate.",
     "advanced.redact_app_option_keys.label": "Chiavi opzione app extra da oscurare",
     "advanced.redact_app_option_keys.help": "Nomi di opzioni dell'app (add-on) da oscurare come i campi password, per le app il cui schema memorizza un segreto come testo in chiaro (ad esempio backup_password). Separa i nomi con virgole o nuove righe. Un nome si applica a ogni app; scrivi app_slug:name per limitarlo a una singola app. Denominare un gruppo di opzioni copre ogni opzione al suo interno. Utilizzato solo quando l'opzione Rimuovi dati sensibili è attiva. Vuoto per impostazione predefinita.",
     "advanced.sidecar_pin_port.label": "Porta del sidecar dell'interfaccia delle impostazioni",
@@ -806,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Elenca piani e aree",
-      "description": "Elenca i piani ordinati per livello crescente, ciascuno con le aree assegnate annidate, più le aree senza piano."
+      "description": "Elenca i piani nell'ordine in cui li mantiene Home Assistant, ciascuno con le relative aree assegnate annidate, oltre alle aree senza un piano."
     },
     "ha_list_services": {
       "title": "Elenca i servizi disponibili",
@@ -901,8 +901,8 @@
       "description": "Cerca le entità (luci, sensori, interruttori, climatizzazione, ecc.) per nome, dominio o area — e anche all'interno delle configurazioni di automazioni, script, scene, helper e dashboard — in un'unica chiamata."
     },
     "ha_set_area_or_floor": {
-      "title": "Crea o aggiorna un'area o un piano",
-      "description": "Crea o aggiorna un'area o un piano di Home Assistant."
+      "title": "Crea, aggiorna o riordina aree o piani",
+      "description": "Crea, aggiorna o riordina aree o piani di Home Assistant."
     },
     "ha_set_device": {
       "title": "Imposta un dispositivo",

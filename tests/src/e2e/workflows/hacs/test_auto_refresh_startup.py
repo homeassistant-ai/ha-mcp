@@ -1,7 +1,7 @@
 """Launcher-lane regression test for the HACS startup nudge (the add-on gap).
 
 The nudge that asks HACS to refresh the paired component's release data used to
-be scheduled by ``__main__``'s ``_run_with_shutdown``, so any launcher that
+be scheduled by ``__main__``'s ``run_with_shutdown``, so any launcher that
 calls ``mcp.run()`` directly — the add-on's ``start.py`` above all — never got
 it. The fix moves the scheduling into the server's FastMCP ``lifespan``
 (``hacs_refresh_lifespan`` in ``src/ha_mcp/hacs_auto_refresh.py``), which every
@@ -33,7 +33,7 @@ the embedded server, which never opts in here, is pinned as off next to its own
 bring-up in ``tests/src/e2e/workflows/embedded/test_embedded_server.py``. ``ha-mcp-oidc`` has no lane here: it validates HA
 credentials at startup and exits without them (``_validate_standard_credentials``
 in ``__main__``), so it has no sentinel state to prove, and its run path is the
-same ``_run_with_shutdown(mcp.run_async(**_http_run_kwargs(...)))`` call the web
+same ``run_with_shutdown(mcp.run_async(**_http_run_kwargs(...)))`` call the web
 lane already drives. The HAOS add-on lane is covered directly in
 ``tests/src/e2e/haos_only/test_inaddon_startup_nudge.py``, which restarts the
 real add-on and requires a per-boot nudge line from that restart; the unit suite

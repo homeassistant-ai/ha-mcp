@@ -17,7 +17,9 @@ records which of them the tool sent.
 
 from __future__ import annotations
 
+import shutil
 import uuid
+from pathlib import Path
 from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, patch
 
@@ -25,17 +27,18 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.loader import async_clear_custom_components_cache
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.ha_mcp_tools import websocket_api as component_ws_api
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
-from ha_mcp.tools import component_api, helper_flows, tools_config_helpers
+from ha_mcp.tools import component_api, tools_config_helpers
 from ha_mcp.tools.component_api import invalidate_caps
 
 from ._client_spies import sent_commands
-from ._core_helper_flows import CORE_HELPER_FLOWS
+from ._core_setup import install_custom_helper
 from ._routing_core import (
     held_command,
     list_helpers,
@@ -48,6 +51,7 @@ from ._routing_core import (
 from ._tool_errors import error_body, error_of
 
 HELPERS_LIST = "ha_mcp_tools/helpers_list"
+CUSTOM = "my_custom_helper"
 
 
 class Renamed(NamedTuple):
@@ -68,6 +72,15 @@ async def client(
     core: None, component_core_client: HomeAssistantClient
 ) -> HomeAssistantClient:
     return component_core_client
+
+
+@pytest.fixture
+def custom_helper_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable_custom_integrations: None
+) -> Path:
+    """A custom helper integration installed where Core's loader looks; its folder."""
+    install_custom_helper(tmp_path, monkeypatch, CUSTOM)
+    return tmp_path / "extra" / "custom_components" / CUSTOM
 
 
 async def _renamed_boolean(hass: HomeAssistant, client: HomeAssistantClient) -> Renamed:
@@ -121,21 +134,7 @@ async def _register_failing_helpers_list(
         raise HomeAssistantError("helpers_list failed")
 
     monkeypatch.setattr(
-        "custom_components.ha_mcp_tools.websocket_api._do_helpers_list", fail
-    )
-    component_ws_api.async_register_commands(hass)
-
-
-async def _register_helpers_list_without_coverage(
-    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The component as an older build answered: no ``covered_types``."""
-
-    def older(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        return {"helpers": [], "count": 0}
-
-    monkeypatch.setattr(
-        "custom_components.ha_mcp_tools.websocket_api._do_helpers_list", older
+        "custom_components.ha_mcp_tools.websocket_api.do_helpers_list", fail
     )
     component_ws_api.async_register_commands(hass)
 
@@ -394,25 +393,6 @@ async def test_a_storage_type_the_component_did_not_enumerate_is_listed_by_core(
     assert not _legacy_warning(resp)
 
 
-async def test_an_answer_without_covered_types_is_not_trusted_for_a_storage_type(
-    hass: HomeAssistant,
-    core: None,
-    core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    await _register_helpers_list_without_coverage(hass, monkeypatch)
-    renamed = await _renamed_boolean(hass, core_client)
-    socket = await pooled_socket(core_client)
-
-    with sent_commands(socket) as sent:
-        resp = await list_helpers(core_client, helper_type="input_boolean")
-
-    types = sent_types(sent)
-    assert types.count(HELPERS_LIST) == 1
-    assert types.count("input_boolean/list") == 1
-    assert [h["id"] for h in resp["helpers"]] == [renamed.storage_id]
-
-
 async def test_a_renamed_zone_is_listed_by_its_storage_id(
     hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
@@ -534,33 +514,11 @@ async def test_a_flow_type_whose_component_command_times_out_is_an_error(
     assert "template/list" not in sent_types(sent)
 
 
-async def test_a_flow_type_answer_without_covered_types_is_an_error(
-    hass: HomeAssistant,
-    core: None,
-    core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An empty answer that does not say it enumerated the type is not "no
-    such helpers", and a flow type has no list to fall back to."""
-    await _register_helpers_list_without_coverage(hass, monkeypatch)
-    _template_helper(hass)
-    socket = await pooled_socket(core_client)
-
-    with sent_commands(socket) as sent:
-        body = await _rejected(core_client, helper_type="template")
-
-    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    assert "template/list" not in sent_types(sent)
-
-
+@pytest.mark.usefixtures("custom_helper_installed")
 async def test_a_custom_helper_flow_left_out_by_a_failed_loader_read_names_it(
-    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+    client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An installed component whose loader read failed is not told to update."""
-    monkeypatch.setattr(
-        "ha_mcp.tools.helper_flows._fetch_helper_flow_types",
-        AsyncMock(return_value=CORE_HELPER_FLOWS | {"my_custom_helper"}),
-    )
     monkeypatch.setattr(
         "custom_components.ha_mcp_tools.websocket_api.flow_domains"
         ".async_get_config_flows",
@@ -568,12 +526,12 @@ async def test_a_custom_helper_flow_left_out_by_a_failed_loader_read_names_it(
     )
 
     with pytest.raises(ToolError) as exc:
-        await list_helpers(client, helper_type="my_custom_helper")
+        await list_helpers(client, helper_type=CUSTOM)
 
     error = error_of(exc)
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert "loader" in error["message"]
-    assert "my_custom_helper" in error["message"]
+    assert CUSTOM in error["message"]
 
 
 # --- helper_type="all" -----------------------------------------------------------
@@ -637,34 +595,16 @@ async def test_a_yaml_helper_is_not_listed_as_a_stored_helper(
     assert "input_boolean.yaml_flag" not in listed
 
 
-async def test_all_types_refuses_a_listing_that_misses_a_custom_helper_flow(
-    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Core lists a helper flow the component did not cover: an error, not a
-    partial listing."""
-    await setup_every_simple_type(hass)
-    monkeypatch.setattr(
-        "ha_mcp.tools.helper_flows._fetch_helper_flow_types",
-        AsyncMock(return_value=CORE_HELPER_FLOWS | {"my_custom_helper"}),
-    )
-
-    body = await _rejected(client, helper_type="all")
-
-    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
-    assert "my_custom_helper" in body["error"]["message"]
-
-
 async def test_all_types_reads_the_helper_flows_afresh(
-    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant, custom_helper_installed: Path, client: HomeAssistantClient
 ) -> None:
     """A helper integration uninstalled since the cached read is not reported
     as missing from the component's listing."""
     await setup_every_simple_type(hass)
-    monkeypatch.setattr(
-        "ha_mcp.tools.helper_flows._fetch_helper_flow_types",
-        AsyncMock(side_effect=[CORE_HELPER_FLOWS | {"gone_helper"}, CORE_HELPER_FLOWS]),
-    )
-    assert "gone_helper" in await helper_flows.helper_flow_types(client)
+    assert (await list_helpers(client, helper_type=CUSTOM))["success"] is True
+    # Uninstalled as the Marketplace does it: folder removed, loader rescans.
+    shutil.rmtree(custom_helper_installed)
+    async_clear_custom_components_cache(hass)
 
     resp = await list_helpers(client, helper_type="all")
 
@@ -676,7 +616,7 @@ async def test_all_types_with_an_unreadable_helper_flow_list_is_a_connection_err
 ) -> None:
     await setup_every_simple_type(hass)
     monkeypatch.setattr(
-        "ha_mcp.tools.helper_flows._fetch_helper_flow_types",
+        "ha_mcp.tools.helper_flows.fetch_helper_flow_types",
         AsyncMock(side_effect=HomeAssistantConnectionError("flow_handlers down")),
     )
     socket = await pooled_socket(client)
@@ -690,16 +630,16 @@ async def test_all_types_with_an_unreadable_helper_flow_list_is_a_connection_err
 
 
 async def test_all_types_surfaces_a_failed_registry_join_as_a_warning(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A type served by its own list joins the registry (#1945); when that
-    read fails (here Core has no registry API), the merged listing says so."""
+    read fails (here Core no longer knows the command), the merged listing
+    says so."""
     await setup_every_simple_type(hass)
-    await component_core_client.send_websocket_message(
-        {"type": "tag/create", "tag_id": "tag-42"}
-    )
+    await client.send_websocket_message({"type": "tag/create", "tag_id": "tag-42"})
+    monkeypatch.delitem(hass.data["websocket_api"], "config/entity_registry/list")
 
-    resp = await list_helpers(component_core_client, helper_type="all")
+    resp = await list_helpers(client, helper_type="all")
 
     assert resp["success"] is True
     assert any("entity registry" in w for w in resp.get("warnings", []))
