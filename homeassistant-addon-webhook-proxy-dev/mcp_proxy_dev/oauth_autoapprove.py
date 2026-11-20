@@ -60,12 +60,12 @@ from .oauth import (
     PKCECodeStore,
     _addon_alive,
     _build_base_url,
-    _is_valid_redirect_uri,
     handle_legacy_authorize_get,
     handle_legacy_authorize_post,
     handle_legacy_token_post,
     read_form,
 )
+from .oauth_redirect_allowlist import _is_valid_redirect_uri
 
 if TYPE_CHECKING:
     from multidict import MultiDict

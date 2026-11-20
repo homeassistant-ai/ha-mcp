@@ -7,6 +7,8 @@ in ``test_oauth_redirect_allowlist_authorize.py``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from custom_components.ha_mcp_tools.const import (
@@ -23,6 +25,24 @@ from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
 
 CLAUDE = "https://claude.ai/api/mcp/auth_callback"
 LOOPBACK = "http://127.0.0.1/callback"
+
+_ROOT = Path(__file__).resolve().parents[3]
+_MODULE = "oauth_redirect_allowlist.py"
+_COMPONENT_COPY = _ROOT / "custom_components/ha_mcp_tools" / _MODULE
+_DEV_PROXY_COPY = (
+    _ROOT / "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev" / _MODULE
+)
+# Reaches the stable app through the promote workflow, so it may be absent.
+_STABLE_PROXY_COPY = _ROOT / "homeassistant-addon-webhook-proxy/mcp_proxy" / _MODULE
+
+
+def test_webhook_proxy_copies_honour_the_same_callbacks_as_the_component() -> None:
+    """A drifted proxy copy would redirect sign-ins the component refuses."""
+    expected = _COMPONENT_COPY.read_bytes()
+    copies = [_DEV_PROXY_COPY]
+    if _STABLE_PROXY_COPY.is_file():
+        copies.append(_STABLE_PROXY_COPY)
+    assert [p for p in copies if p.read_bytes() != expected] == []
 
 
 class TestIsRedirectAllowed:

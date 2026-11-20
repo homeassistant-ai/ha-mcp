@@ -104,6 +104,11 @@ def none_autoapprove_supported(variant: Variant) -> bool:
     return (variant.component_dir / "oauth_autoapprove.py").exists()
 
 
+def callback_allowlist_supported(variant: Variant) -> bool:
+    """The flavor ships the none-mode callback allowlist."""
+    return (variant.component_dir / "oauth_redirect_allowlist.py").exists()
+
+
 def unified_oauth_routes(variant: Variant) -> bool:
     """The unified scoped authorize/token dispatchers. The scoped URL alone is
     not distinguishing (the none-mode view that predates unification binds the

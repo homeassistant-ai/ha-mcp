@@ -19,11 +19,29 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib.parse import urlparse, urlsplit
 
-from .const import (
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
-    MAX_OAUTH_CALLBACK_LENGTH,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
+# Standard library only: the webhook proxy app ships a byte-identical copy.
+
+# Options key holding the list. Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a
+# saved list, even an empty one, replaces it.
+OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
+# The common OAuth clients' published callbacks. Clients whose callback is
+# unique per app or connector need their own entry: ChatGPT apps on
+# chatgpt.com/connector/oauth/<id>, and Copilot Studio's per-connector
+# global.consent.azure-apim.net/redirect/<connector> URL.
+DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
+    "https://claude.ai/api/mcp/auth_callback",
+    # Anthropic's announced future callback domain.
+    "https://claude.com/api/mcp/auth_callback",
+    # Claude Code (any port, per the loopback rule).
+    "http://localhost/callback",
+    "http://127.0.0.1/callback",
+    "https://chatgpt.com/connector_platform_oauth_redirect",
+    # Gemini Enterprise.
+    "https://vertexaisearch.cloud.google.com/oauth-redirect",
 )
+# Bounds every writer of the list applies.
+MAX_OAUTH_CALLBACKS = 50
+MAX_OAUTH_CALLBACK_LENGTH = 2048
 
 _LOGGER = logging.getLogger(__name__)
 # The malformed stored value last warned about; /authorize is anonymous, so a
