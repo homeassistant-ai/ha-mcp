@@ -1,11 +1,10 @@
-"""The stores the HACS tools talk to, on a real ``hass``.
+"""The Marketplace the store tools talk to, on a real ``hass``.
 
-Home Assistant 2026.11 ships the Marketplace: ``set_up_marketplace`` sets up
-Core's own integration from its stored repositories, with GitHub unreachable
-(Core's HTTP session answers every request with a connection error), so every
-``marketplace/*`` reply is Core's. What only GitHub could make happen, an
-install that downloads, is reached by replacing Core's install step and
-raising Core's own exceptions from it.
+``set_up_marketplace`` sets up Core's own integration from its stored
+repositories, with GitHub unreachable (Core's HTTP session answers every
+request with a connection error), so every ``marketplace/*`` reply is Core's.
+What only GitHub could make happen, an install that downloads, is reached by
+replacing Core's install step and raising Core's own exceptions from it.
 """
 
 from __future__ import annotations
@@ -36,6 +35,7 @@ MAIN_ID = "1056618941"
 MIRROR_ID = "1289599380"
 CARD_ID = "441028036"
 REPOSITORIES_KEY = "marketplace.repositories"
+CRITICAL_KEY = "marketplace.critical"
 
 # Core still starts the catalog fetch at startup (it fails offline); a stored
 # fetch time keeps a later catalog answer from taking the stored record over.
@@ -48,12 +48,15 @@ def stored(
     *,
     installed: str | None = None,
     domain: str | None = None,
+    **fields: Any,
 ) -> dict[str, Any]:
-    """A repository as the Marketplace stores it in ``marketplace.repositories``."""
+    """A repository as the Marketplace stores it in ``marketplace.repositories``;
+    ``fields`` are more of its stored keys (``new``, ``stargazers_count``, ...)."""
     record: dict[str, Any] = {
         "full_name": full_name,
         "category": category,
         "last_fetched": _FETCHED,
+        **fields,
     }
     if domain:
         record["domain"] = domain
@@ -93,6 +96,20 @@ def add_marketplace(
     entry = MockConfigEntry(domain="marketplace", data={})
     entry.add_to_hass(hass)
     return entry
+
+
+def serve_removed(aioclient_mock: AiohttpClientMocker, rows: list[Any]) -> None:
+    """The catalog's feed of removed repositories answers with ``rows``.
+
+    Call it before the Marketplace is added: ``aioclient_mock`` answers with
+    the first match, and ``add_marketplace`` refuses every other request.
+    """
+    aioclient_mock.get(re.compile(r".*/removed/data\.json$"), json=rows)
+
+
+def store_critical(hass_storage: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    """The critical repositories the Marketplace saved from the catalog."""
+    hass_storage[CRITICAL_KEY] = {"version": 1, "key": CRITICAL_KEY, "data": rows}
 
 
 def store_repositories(
@@ -143,6 +160,16 @@ async def pooled_socket(client: HomeAssistantClient) -> HomeAssistantWebSocketCl
 
 def command_types(spy: AsyncMock) -> list[str]:
     return [call.args[0] for call in spy.call_args_list]
+
+
+def store_commands(spy: AsyncMock) -> list[str]:
+    """The ``marketplace/*`` commands the spy saw, in order."""
+    return [c for c in command_types(spy) if c.startswith("marketplace/")]
+
+
+def suggestions(body: dict[str, Any]) -> list[str]:
+    """Every suggestion of a rejection body, one or several."""
+    return body["error"].get("suggestions") or [body["error"]["suggestion"]]
 
 
 def sent_with(spy: AsyncMock, command: str) -> list[dict[str, Any]]:

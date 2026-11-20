@@ -1,54 +1,58 @@
-"""The HACS tools on Home Assistant 2026.11+, where HACS is the Marketplace.
-
-Core 2026.11 removes the ``hacs/*`` WebSocket commands and serves
-``marketplace/*`` instead; the tools must pick whichever answers and keep
-the store's own data (categories, repository fields, refusals) intact.
+"""``ha_get_hacs_info`` on Core's Marketplace: what each read action sends,
+what it returns, and how the store's refusals reach the caller.
 
 The Marketplace is Core's own, set up on a real ``hass`` (``_hacs_marketplace``).
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.components.marketplace.exceptions import (
-    ReplacesBuiltInNotConfirmedError,
-)
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandTimeout
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.client.websocket_client import (
     DEFAULT_COMMAND_WAIT_TIMEOUT,
     HomeAssistantWebSocketClient,
 )
-from ha_mcp.tools.hacs_backend import StoreApi, detect_store_api, fetch_releases
-from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 from ha_mcp.tools.tools_hacs import HacsTools
 
 from ._client_spies import sent_commands
+from ._hacs_actions_core import add_connected_marketplace, serve_card
 from ._hacs_marketplace import (
     CARD_ID,
     MAIN,
     MAIN_ID,
     MIRROR_ID,
-    command_types,
-    core_install,
+    add_marketplace,
     pooled_socket,
     sent_with,
+    serve_removed,
     set_up_marketplace,
+    store_commands,
+    store_critical,
     stored,
+    suggestions,
 )
+from ._held_command import held_command
+from ._tool_errors import error_body, rejected_call_body
+from ._tools_addons_core import outwait, timers
 
-MARKETPLACE = StoreApi("marketplace")
+CARD = "piitaya/lovelace-mushroom"
 YOUTUBE_ID = "555000111"
 REPOSITORIES = {
-    CARD_ID: stored("piitaya/lovelace-mushroom", "plugin", installed="v4.0.0"),
+    CARD_ID: stored(CARD, "plugin", installed="v4.0.0"),
     MAIN_ID: stored(MAIN, "integration"),
     MIRROR_ID: stored(
         "homeassistant-ai/ha-mcp-integration",
@@ -58,6 +62,10 @@ REPOSITORIES = {
     ),
     YOUTUBE_ID: stored("someone/youtube", "integration", domain="youtube"),
 }
+INFO = "marketplace/info"
+LIST = "marketplace/repositories/list"
+REPO_INFO = "marketplace/repository/info"
+RELEASES = "marketplace/repository/releases"
 
 
 @pytest.fixture
@@ -82,114 +90,190 @@ async def marketplace(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.fixture
-async def accepted(marketplace: MockConfigEntry, tools: HacsTools) -> None:
-    """The server's user accepted the Marketplace's first-run warning."""
-    await tools.ha_manage_hacs(action="accept_warning", confirm=True)
+async def _rows(socket: HomeAssistantWebSocketClient) -> list[dict[str, Any]]:
+    """The store's own list, as Core sends it."""
+    listed = await socket.send_command(LIST)
+    rows: list[dict[str, Any]] = listed["result"]
+    return rows
 
 
-def _error_text(exc_info: pytest.ExceptionInfo[ToolError]) -> str:
-    return str(exc_info.value)
-
-
-class TestDetectStoreApi:
-    async def test_core_2026_11_is_served_by_the_marketplace(
-        self, marketplace: MockConfigEntry, socket: HomeAssistantWebSocketClient
+class TestWithoutTheMarketplace:
+    async def test_a_core_without_the_marketplace_is_a_missing_component(
+        self, tools: HacsTools
     ) -> None:
-        with sent_commands(socket) as spy:
-            api = await detect_store_api(socket)
-        assert api.is_marketplace
-        assert api.info["warning_accepted"] is False
-        spy.assert_awaited_once_with("marketplace/info")
+        """Core older than 2026.11 has no ``marketplace/*`` command; nothing
+        falls back to the HACS integration."""
+        body = await rejected_call_body(tools.ha_get_hacs_info(action="search"))
+        assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+        assert body["ha_error_code"] == "unknown_command"
+        assert any("2026.11" in s for s in suggestions(body))
 
-    async def test_unloaded_marketplace_is_not_reported_as_missing_hacs(
+    async def test_an_unloaded_marketplace_keeps_cores_answer(
         self,
         hass: HomeAssistant,
         marketplace: MockConfigEntry,
+        tools: HacsTools,
         socket: HomeAssistantWebSocketClient,
     ) -> None:
         assert await hass.config_entries.async_unload(marketplace.entry_id)
-        with sent_commands(socket) as spy, pytest.raises(ToolError) as excinfo:
-            await detect_store_api(socket)
-        assert "COMPONENT_NOT_INSTALLED" in _error_text(excinfo)
-        assert "Marketplace" in _error_text(excinfo)
-        spy.assert_awaited_once()
+        body = await rejected_call_body(tools.ha_get_hacs_info(action="search"))
+        assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+        assert body["ha_error_code"] == "not_loaded"
+        assert body["translation_key"] == "not_loaded"
+        with pytest.raises(HomeAssistantCommandError) as refused:
+            await socket.send_command(INFO)
+        assert body["error"]["message"] == str(refused.value)
 
-    async def test_neither_store_names_both_options(
-        self, socket: HomeAssistantWebSocketClient
+
+class TestSearch:
+    async def test_rows_and_store_status_are_the_stores_own(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
     ) -> None:
-        with sent_commands(socket) as spy, pytest.raises(ToolError) as excinfo:
-            await detect_store_api(socket)
-        assert "COMPONENT_NOT_INSTALLED" in _error_text(excinfo)
-        assert "2026.11" in _error_text(excinfo)
-        assert command_types(spy) == ["marketplace/info", "hacs/info"]
+        result = await tools.ha_get_hacs_info(action="search", max_results=100)
 
-
-@pytest.mark.usefixtures("accepted")
-class TestMarketplaceCommands:
-    async def test_download_installs_through_the_marketplace(
-        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
-    ) -> None:
-        with sent_commands(socket) as spy, core_install() as install:
-            result = await tools.ha_manage_hacs(
-                action="download", repository_id=CARD_ID, version="v2.0.0"
-            )
-        assert result["success"] is True
-        [sent] = sent_with(spy, "marketplace/repository/install")
-        assert sent["repository"] == CARD_ID
-        # Core read the version the tool sent.
-        install.assert_awaited_once()
-        assert install.await_args is not None
-        assert install.await_args.kwargs["ref"] == "v2.0.0"
-
-    async def test_remove_uninstalls_through_the_marketplace(
-        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
-    ) -> None:
-        with sent_commands(socket) as spy:
-            result = await tools.ha_manage_hacs(action="remove", repository_id=CARD_ID)
-        assert result["success"] is True
-        assert [
-            s["repository"] for s in sent_with(spy, "marketplace/repository/uninstall")
-        ] == [CARD_ID]
-        info = await socket.send_command(
-            "marketplace/repository/info", repository_id=CARD_ID
+        rows = await _rows(socket)
+        assert sorted(result["data"]["results"], key=lambda r: r["id"]) == sorted(
+            rows, key=lambda r: r["id"]
         )
-        assert info["result"]["installed"] is False
+        info = await socket.send_command(INFO)
+        assert result["data"]["store"] == info["result"]
 
-    async def test_github_gate_is_not_mistaken_for_a_connection_failure(
-        self, tools: HacsTools
+    async def test_rows_come_in_the_panels_order(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+        tools: HacsTools,
     ) -> None:
-        with pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(
-                action="add_repository", repository="o/r", category="integration"
+        """Installed first, then new, then the most starred, then by name."""
+        entry = await set_up_marketplace(
+            hass,
+            aioclient_mock,
+            hass_storage,
+            {
+                "1": stored("o/starred-b", "integration", stargazers_count=50),
+                "2": stored("o/starred-a", "integration", stargazers_count=50),
+                "3": stored("o/fresh", "integration", new=True),
+                "4": stored("o/kept", "plugin", installed="v1.0.0"),
+                "5": stored("o/plain", "integration", stargazers_count=3),
+            },
+        )
+        try:
+            result = await tools.ha_get_hacs_info(action="search")
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert [r["full_name"] for r in result["data"]["results"]] == [
+            "o/kept",
+            "o/fresh",
+            "o/starred-a",
+            "o/starred-b",
+            "o/plain",
+        ]
+
+    async def test_every_word_of_the_query_must_match_somewhere_in_the_row(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+        tools: HacsTools,
+    ) -> None:
+        entry = await set_up_marketplace(
+            hass,
+            aioclient_mock,
+            hass_storage,
+            {
+                "1": stored(
+                    "o/a", "plugin", description="Mushroom tiles", topics=["card"]
+                ),
+                "2": stored("o/b", "plugin", description="Mushroom tiles"),
+                "3": stored("o/c", "plugin", authors=["@MushroomFan"], topics=["Card"]),
+            },
+        )
+        try:
+            result = await tools.ha_get_hacs_info(
+                action="search", query="CARD mushroom"
             )
-        text = _error_text(excinfo)
-        assert "github_not_connected" in text
-        assert "CONNECTION_FAILED" not in text
-        assert "Connect GitHub" in text
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
 
-    async def test_category_is_checked_against_the_store_list(
-        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+        assert sorted(r["full_name"] for r in result["data"]["results"]) == [
+            "o/a",
+            "o/c",
+        ]
+
+    @pytest.mark.parametrize(
+        ("status", "expected"),
+        [
+            # Installed takes in what waits for an update or a restart.
+            (["installed"], {CARD, "homeassistant-ai/ha-mcp-integration"}),
+            ("new", {"o/fresh"}),
+        ],
+    )
+    async def test_the_status_filter_follows_the_panel(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+        status: list[str] | str,
+        expected: set[str],
     ) -> None:
-        with sent_commands(socket) as spy, pytest.raises(ToolError) as excinfo:
-            await tools.ha_get_hacs_info(action="search", category="appdaemon")
-        text = _error_text(excinfo)
-        assert "VALIDATION_INVALID_PARAMETER" in text
-        info = await socket.send_command("marketplace/info")
-        assert all(category in text for category in info["result"]["categories"])
-        assert command_types(spy) == ["marketplace/info"]
+        entry = await set_up_marketplace(
+            hass,
+            aioclient_mock,
+            hass_storage,
+            {**REPOSITORIES, "9": stored("o/fresh", "integration", new=True)},
+        )
+        try:
+            statuses = {r["full_name"]: r["status"] for r in await _rows(socket)}
+            result = await tools.ha_get_hacs_info(action="search", status=status)
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        # The mirror waits for an update: its own status is not "installed".
+        assert statuses["homeassistant-ai/ha-mcp-integration"] == "pending-upgrade"
+        assert {r["full_name"] for r in result["data"]["results"]} == expected
+
+    @pytest.mark.parametrize(
+        ("source", "everything"), [("custom", True), ("catalog", False)]
+    )
+    async def test_the_source_filter_reads_the_rows_custom_flag(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+        source: str,
+        everything: bool,
+    ) -> None:
+        """Offline, no row comes from the catalog: every stored one is custom."""
+        rows = await _rows(socket)
+        assert all(row["custom"] for row in rows)
+        result = await tools.ha_get_hacs_info(
+            action="search", source=source, max_results=100
+        )
+        assert result["data"]["total_matches"] == (len(rows) if everything else 0)
 
     @pytest.mark.parametrize(
         ("category", "native"),
         [
-            # Core lower-cases it on add; a capitalised one must not be refused.
+            # Core matches the list's categories as given; a capitalised one
+            # must still find the store's own.
             ("Integration", "integration"),
             # HA-MCP's older name for dashboard cards.
             ("lovelace", "plugin"),
         ],
     )
-    async def test_category_reaches_the_store_in_its_own_name(
+    async def test_a_category_reaches_the_store_in_its_own_name(
         self,
+        marketplace: MockConfigEntry,
         tools: HacsTools,
         socket: HomeAssistantWebSocketClient,
         category: str,
@@ -197,131 +281,99 @@ class TestMarketplaceCommands:
     ) -> None:
         with sent_commands(socket) as spy:
             result = await tools.ha_get_hacs_info(action="search", category=category)
-        [sent] = sent_with(spy, "marketplace/repositories/list")
+        [sent] = sent_with(spy, LIST)
         assert sent["categories"] == [native]
-        assert {row["category"] for row in result["data"]["results"]} <= {native}
+        assert result["data"]["results"]
+        assert {row["category"] for row in result["data"]["results"]} == {native}
+        assert "warnings" not in result
 
-    async def test_built_in_replacement_names_the_confirmation(
-        self, tools: HacsTools
-    ) -> None:
-        refusal = ReplacesBuiltInNotConfirmedError("someone/youtube", "youtube")
-        with core_install(side_effect=refusal), pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="download", repository_id=YOUTUBE_ID)
-        text = _error_text(excinfo)
-        assert "replaces_built_in" in text
-        assert "confirm_replace_built_in=True" in text
-        assert "Verify the target entity" not in text
-
-    async def test_confirmed_replacement_reaches_the_marketplace(
-        self, tools: HacsTools
-    ) -> None:
-        with core_install() as install:
-            await tools.ha_manage_hacs(
-                action="download",
-                repository_id=YOUTUBE_ID,
-                confirm_replace_built_in=True,
-            )
-        assert install.await_args is not None
-        assert install.await_args.kwargs["confirm_replace_built_in"] is True
-
-
-async def test_unaccepted_warning_tells_the_user_where_to_accept_it(
-    marketplace: MockConfigEntry, tools: HacsTools
-) -> None:
-    with pytest.raises(ToolError) as excinfo:
-        await tools.ha_manage_hacs(action="download", repository_id=CARD_ID)
-    text = _error_text(excinfo)
-    assert "warning_not_accepted" in text
-    assert "first-run warning" in text
-    # The server's own user (Supervisor for the app) is not the one who
-    # accepted in the UI and may be one nobody can log in as (#2971).
-    assert "action='accept_warning'" in text
-    assert "confirm=True" in text
-
-
-class TestAcceptWarning:
-    """Core 2026.11 keeps the first-run warning per user; the server's user
-    accepts it once the person confirms they read it (#2970, #2971)."""
-
-    async def test_confirmed_accept_reaches_the_marketplace(
+    async def test_a_category_the_store_lacks_is_named_with_its_categories(
         self,
         marketplace: MockConfigEntry,
         tools: HacsTools,
         socket: HomeAssistantWebSocketClient,
     ) -> None:
-        with sent_commands(socket) as spy:
-            result = await tools.ha_manage_hacs(action="accept_warning", confirm=True)
-        assert command_types(spy) == ["marketplace/info", "marketplace/warning/accept"]
-        assert result["success"] is True
-        assert result["warning_accepted"] is True
-        assert (await detect_store_api(socket)).info["warning_accepted"] is True
+        result = await tools.ha_get_hacs_info(action="search", category="appdaemon")
+        assert result["data"]["results"] == []
+        info = await socket.send_command(INFO)
+        [warning] = result["warnings"]
+        assert "appdaemon" in warning
+        assert all(category in warning for category in info["result"]["categories"])
 
-    @pytest.mark.parametrize("confirm", [None, False])
-    async def test_unconfirmed_accept_asks_for_the_users_word(
-        self,
-        marketplace: MockConfigEntry,
-        tools: HacsTools,
-        socket: HomeAssistantWebSocketClient,
-        confirm: bool | None,
+    async def test_a_page_says_where_the_next_one_starts(
+        self, marketplace: MockConfigEntry, tools: HacsTools
     ) -> None:
-        with sent_commands(socket) as spy, pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(action="accept_warning", confirm=confirm)
-        text = _error_text(excinfo)
-        assert "VALIDATION" in text
-        assert "confirm=True" in text
-        spy.assert_not_awaited()
-        assert (await detect_store_api(socket)).info["warning_accepted"] is False
+        first = (await tools.ha_get_hacs_info(action="search", max_results=3))["data"]
+        last = (await tools.ha_get_hacs_info(action="search", max_results=3, offset=3))[
+            "data"
+        ]
 
-    async def test_already_accepted_sends_nothing(
-        self,
-        accepted: None,
-        tools: HacsTools,
-        socket: HomeAssistantWebSocketClient,
-    ) -> None:
-        with sent_commands(socket) as spy:
-            result = await tools.ha_manage_hacs(action="accept_warning", confirm=True)
-        assert command_types(spy) == ["marketplace/info"]
-        assert result["success"] is True
-        assert result["warning_accepted"] is True
-
-    async def test_repository_parameters_do_not_apply(self, tools: HacsTools) -> None:
-        with pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(
-                action="accept_warning", confirm=True, repository_id="123"
-            )
-        assert "repository_id" in _error_text(excinfo)
-
-    async def test_confirm_does_not_apply_to_other_actions(
-        self, tools: HacsTools
-    ) -> None:
-        with pytest.raises(ToolError) as excinfo:
-            await tools.ha_manage_hacs(
-                action="download", repository_id="123", confirm=True
-            )
-        assert "confirm" in _error_text(excinfo)
-
-
-class TestNativeFieldsReachTheCaller:
-    async def test_search_rows_and_store_status_are_the_stores_own(
-        self,
-        marketplace: MockConfigEntry,
-        tools: HacsTools,
-        socket: HomeAssistantWebSocketClient,
-    ) -> None:
-        result = await tools.ha_get_hacs_info(action="search", installed_only=True)
-
-        listed = await socket.send_command("marketplace/repositories/list")
-        installed = [row for row in listed["result"] if row["installed"]]
-        assert installed
-        assert sorted(result["data"]["results"], key=lambda r: r["id"]) == sorted(
-            installed, key=lambda r: r["id"]
+        assert (first["count"], first["has_more"], first["next_offset"]) == (3, True, 3)
+        assert (last["count"], last["has_more"], last["next_offset"]) == (
+            1,
+            False,
+            None,
         )
-        store = result["data"]["store"]
-        assert store["api"] == "marketplace"
-        info = await socket.send_command("marketplace/info")
-        assert store["github_connected"] is info["result"]["github_connected"]
+        assert {r["id"] for r in first["results"]}.isdisjoint(
+            r["id"] for r in last["results"]
+        )
 
-    async def test_info_keeps_every_field_and_the_readme_note(
+
+class TestInfo:
+    async def test_a_numeric_id_is_read_without_a_lookup(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        with sent_commands(socket) as spy:
+            result = await tools.ha_get_hacs_info(action="info", repository_id=CARD_ID)
+
+        assert store_commands(spy) == [REPO_INFO]
+        assert result["data"]["full_name"] == CARD
+
+    async def test_an_owner_repo_name_is_looked_up_in_one_list(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """Core takes only the id; the name is matched case-insensitively."""
+        with sent_commands(socket) as spy:
+            result = await tools.ha_get_hacs_info(
+                action="info", repository_id=CARD.upper()
+            )
+
+        assert store_commands(spy) == [LIST, REPO_INFO]
+        assert [s["repository_id"] for s in sent_with(spy, REPO_INFO)] == [CARD_ID]
+        assert result["data"]["full_name"] == CARD
+
+    async def test_an_unknown_id_keeps_the_stores_answer_as_not_found(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        body = await rejected_call_body(
+            tools.ha_get_hacs_info(action="info", repository_id="999999")
+        )
+        with pytest.raises(HomeAssistantCommandError) as refused:
+            await socket.send_command(REPO_INFO, repository_id="999999")
+        assert body["error"]["message"] == str(refused.value)
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert body["ha_error_code"] == "repository_not_found"
+        assert body["translation_placeholders"] == {"repository": "999999"}
+
+    async def test_an_unknown_name_points_at_search(
+        self, marketplace: MockConfigEntry, tools: HacsTools
+    ) -> None:
+        body = await rejected_call_body(
+            tools.ha_get_hacs_info(action="info", repository_id="nobody/missing")
+        )
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert any("action='search'" in s for s in suggestions(body))
+
+    async def test_every_field_and_the_readme_note_reach_the_caller(
         self,
         marketplace: MockConfigEntry,
         tools: HacsTools,
@@ -329,16 +381,12 @@ class TestNativeFieldsReachTheCaller:
     ) -> None:
         result = await tools.ha_get_hacs_info(action="info", repository_id=CARD_ID)
 
-        native = await socket.send_command(
-            "marketplace/repository/info", repository_id=CARD_ID
-        )
+        native = await socket.send_command(REPO_INFO, repository_id=CARD_ID)
         data = result["data"]
-        assert set(native["result"]) <= set(data)
-        assert data["additional_info"] == native["result"]["additional_info"]
-        assert "replaces_built_in" in data
+        assert {k: data[k] for k in native["result"]} == native["result"]
         assert "readme_note" in data
 
-    async def test_a_failed_releases_fetch_leaves_the_info_and_warns(
+    async def test_a_failed_releases_read_leaves_the_info_and_warns(
         self,
         marketplace: MockConfigEntry,
         tools: HacsTools,
@@ -350,34 +398,29 @@ class TestNativeFieldsReachTheCaller:
             out = await tools.ha_get_hacs_info(
                 action="info", repository_id=CARD_ID, include_releases=True
             )
-        assert out["data"]["full_name"] == "piitaya/lovelace-mushroom"
+        assert out["data"]["full_name"] == CARD
         assert "warnings" not in out["data"]
         assert any(w.startswith("Releases unavailable: ") for w in out["warnings"])
         # GitHub is slower than a local command: the read waits longer.
-        [sent] = sent_with(spy, "marketplace/repository/releases")
+        [sent] = sent_with(spy, RELEASES)
         assert sent["_wait_timeout"] > DEFAULT_COMMAND_WAIT_TIMEOUT
 
-    async def test_a_releases_fetch_with_no_answer_warns(
-        self, marketplace: MockConfigEntry, socket: HomeAssistantWebSocketClient
+    async def test_an_unanswered_releases_read_warns(
+        self, hass: HomeAssistant, marketplace: MockConfigEntry, tools: HacsTools
     ) -> None:
-        """A releases read that gets no answer at all is a warning too; the
-        repository info, already read from Core, is not touched."""
-        reply = await socket.send_command(
-            "marketplace/repository/info", repository_id=CARD_ID
-        )
-        info = dict(reply["result"])
-        with patch.object(
-            socket,
-            "send_command",
-            AsyncMock(side_effect=HomeAssistantCommandTimeout("Command timeout")),
-        ) as no_answer:
-            out = await fetch_releases(socket, MARKETPLACE, CARD_ID, info)
-        assert "github_releases" not in out
+        before = timers(hass)
+        async with held_command(hass, RELEASES):
+            call = asyncio.create_task(
+                tools.ha_get_hacs_info(
+                    action="info", repository_id=CARD_ID, include_releases=True
+                )
+            )
+            await outwait(hass, 59, 60, before)
+            await asyncio.wait([call])
+        out = call.result()
+        assert out["data"]["full_name"] == CARD
+        assert "github_releases" not in out["data"]
         assert "Releases unavailable: Command timeout" in out["warnings"]
-        assert info == reply["result"]
-        first = no_answer.await_args_list[0]
-        assert first.args == ("marketplace/repository/releases",)
-        assert first.kwargs["repository_id"] == CARD_ID
 
     async def test_release_notes_come_from_the_update_entity(
         self,
@@ -394,26 +437,116 @@ class TestNativeFieldsReachTheCaller:
         entity_id = out["data"]["update_entity_id"]
         assert out["data"]["pending_upgrade"] is True
         assert entity_id is not None
-        notes = [c for c in spy.call_args_list if c.args[0] == "update/release_notes"]
-        assert [c.kwargs["entity_id"] for c in notes] == [entity_id]
+        notes = sent_with(spy, "update/release_notes")
+        assert [n["entity_id"] for n in notes] == [entity_id]
 
 
-async def test_marketplace_registration_is_one_list_lookup(
-    marketplace: MockConfigEntry, socket: HomeAssistantWebSocketClient
-) -> None:
-    """The Marketplace registers a repository before its add command answers,
-    so no subscription or wait is needed to find it."""
-    with (
-        sent_commands(socket) as spy,
-        patch.object(
-            socket, "subscribe_command", wraps=socket.subscribe_command
-        ) as subscribe,
-    ):
-        repo = await wait_for_repo_registration(
-            socket, MAIN.upper(), timeout=10.0, api=MARKETPLACE
+REMOVED = [
+    {"repository": "gone/card", "removal_type": "blacklist", "reason": "Malware"},
+    {"repository": "gone/tiles", "removal_type": "removal"},
+    {"repository": "gone/sensor", "removal_type": "archived", "link": "https://x"},
+]
+
+
+class TestRemovedAndCritical:
+    @pytest.fixture
+    async def catalog(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+    ) -> AsyncIterator[MockConfigEntry]:
+        """The catalog's removed feed answers; one critical removal is stored."""
+        serve_removed(aioclient_mock, REMOVED)
+        store_critical(
+            hass_storage,
+            [
+                {
+                    "repository": "bad/actor",
+                    "reason": "Steals tokens",
+                    "link": "https://example.invalid/bad",
+                    "acknowledged": False,
+                }
+            ],
         )
-    assert repo is not None
-    assert repo["id"] == MAIN_ID
-    assert repo["full_name"] == MAIN
-    subscribe.assert_not_awaited()
-    spy.assert_awaited_once_with("marketplace/repositories/list")
+        entry = add_marketplace(hass, aioclient_mock, hass_storage, REPOSITORIES)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        yield entry
+        await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_removed_rows_are_the_stores_filtered_and_paged(
+        self,
+        catalog: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        native = (await socket.send_command("marketplace/repositories/removed"))[
+            "result"
+        ]
+        assert len(native) == len(REMOVED)
+
+        everything = await tools.ha_get_hacs_info(action="removed", max_results=100)
+        matched = await tools.ha_get_hacs_info(action="removed", query="MALWARE")
+        paged = await tools.ha_get_hacs_info(action="removed", max_results=2)
+
+        assert everything["data"]["results"] == native
+        assert [r["repository"] for r in matched["data"]["results"]] == ["gone/card"]
+        assert (paged["data"]["count"], paged["data"]["next_offset"]) == (2, 2)
+
+    async def test_critical_rows_are_the_stores(
+        self,
+        catalog: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        result = await tools.ha_get_hacs_info(action="critical")
+        native = await socket.send_command("marketplace/critical/list")
+        assert result["data"]["results"] == native["result"]
+        assert result["data"]["count"] == 1
+
+
+async def test_detect_names_the_categories_a_repository_fits(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    aioclient_mock: AiohttpClientMocker,
+    hass_storage: dict[str, Any],
+    tools: HacsTools,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
+    serve_card(aioclient_mock, "owner/my-card", 777)
+    entry = add_connected_marketplace(hass, aioclient_mock, hass_storage, {})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    try:
+        await socket.send_command("marketplace/warning/accept")
+        with sent_commands(socket) as spy:
+            result = await tools.ha_get_hacs_info(
+                action="detect", repository="https://github.com/owner/my-card"
+            )
+    finally:
+        await hass.config_entries.async_unload(entry.entry_id)
+
+    assert result["data"]["categories"] == ["plugin"]
+    [sent] = sent_with(spy, "marketplace/repositories/detect")
+    assert sent["_wait_timeout"] > DEFAULT_COMMAND_WAIT_TIMEOUT
+
+
+async def test_a_lost_connection_names_the_tool_and_action(
+    marketplace: MockConfigEntry,
+    tools: HacsTools,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
+    with (
+        patch.object(
+            socket,
+            "send_command",
+            AsyncMock(side_effect=HomeAssistantConnectionError("Connection lost")),
+        ),
+        pytest.raises(ToolError) as excinfo,
+    ):
+        await tools.ha_get_hacs_info(action="search")
+    body = error_body(excinfo)
+    assert body["tool"] == "ha_get_hacs_info"
+    assert body["action"] == "search"

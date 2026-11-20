@@ -1,11 +1,12 @@
-"""Which store API answers: Core's Marketplace (2026.11+) or the HACS integration.
+"""Core's Marketplace WebSocket API, as the store tools send it.
 
-Home Assistant 2026.11 migrates HACS into the built-in ``marketplace``
-integration and removes the ``hacs/*`` WebSocket commands. The HACS tools
-talk to whichever API the instance serves, Marketplace first.
+Home Assistant 2026.11 builds the community store in as the ``marketplace``
+integration (what HACS became). Every command goes to its ``marketplace/*``
+WebSocket API; a refusal reaches the caller with Core's message, code and
+translation fields, and HA-MCP adds only suggestions on top.
 """
 
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
 from ..client.rest_client import (
@@ -15,44 +16,35 @@ from ..client.rest_client import (
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, raise_tool_error
 
-_COMMANDS = {
-    "hacs": {
-        "list": "hacs/repositories/list",
-        "info": "hacs/repository/info",
-        "install": "hacs/repository/download",
-        "remove": "hacs/repository/remove",
-        "refresh": "hacs/repository/refresh",
-        "add": "hacs/repositories/add",
-        "subscribe": "hacs/subscribe",
-        "releases": "hacs/repository/releases",
-    },
-    "marketplace": {
-        "list": "marketplace/repositories/list",
-        "info": "marketplace/repository/info",
-        "install": "marketplace/repository/install",
-        "remove": "marketplace/repository/uninstall",
-        "refresh": "marketplace/repository/refresh",
-        "add": "marketplace/repositories/add",
-        "subscribe": "marketplace/subscribe",
-        "releases": "marketplace/repository/releases",
-        # HACS has no first-run warning, so no counterpart.
-        "accept_warning": "marketplace/warning/accept",
-    },
-}
-_REPOSITORY_SIGNAL = {
-    "hacs": "hacs_dispatch_repository",
-    "marketplace": "marketplace_repository",
-}
-# HA-MCP's older name for what both stores call "plugin".
+LIST = "marketplace/repositories/list"
+
+# The commands that reach GitHub before they answer; a slow GitHub past the
+# client's 30 s default would report a false failure.
+GITHUB_COMMAND_TIMEOUT = 60.0
+
+# HA-MCP's older name for what the Marketplace calls "plugin".
 _CATEGORY_ALIASES = {"lovelace": "plugin"}
 CATEGORY_HELP = (
-    "One of the categories the store reports (search's store.categories); "
+    "One of the Marketplace's categories (search's store.categories); "
     "'lovelace' means 'plugin' (dashboard cards)."
 )
 
-# The Marketplace refuses these until the calling user acts; the message Core
-# sends is already user-facing, the suggestions add the step.
-_GATE_SUGGESTIONS = {
+_ERROR_CODES = {
+    "repository_not_found": ErrorCode.RESOURCE_NOT_FOUND,
+    "not_loaded": ErrorCode.COMPONENT_NOT_INSTALLED,
+    "unknown_command": ErrorCode.COMPONENT_NOT_INSTALLED,
+}
+
+_NOT_AVAILABLE = [
+    "The Marketplace comes with Home Assistant 2026.11 and newer: update Home "
+    "Assistant, or check Settings > Devices & services > Marketplace and the "
+    "Home Assistant log for why it is not loaded.",
+]
+
+# Core's message is already user-facing; each suggestion adds the next step.
+_SUGGESTIONS = {
+    "not_loaded": _NOT_AVAILABLE,
+    "unknown_command": _NOT_AVAILABLE,
     # Core keeps the acceptance per user, and the server's user is often one
     # nobody logs in as (Supervisor for the app), so the UI cannot reach it.
     "warning_not_accepted": [
@@ -63,16 +55,49 @@ _GATE_SUGGESTIONS = {
         "call ha_manage_hacs(action='accept_warning', confirm=True) and retry.",
     ],
     "github_not_connected": [
-        "Open Settings > Marketplace and select Connect GitHub (a device "
-        "sign-in), then retry. The agent cannot connect it on the user's behalf.",
+        "Connect a GitHub account: ha_manage_hacs(action='connect_github') "
+        "starts the sign-in, and the user finishes it in Settings > "
+        "Marketplace (a device code on GitHub). Retry afterwards.",
     ],
     "github_rate_limited": [
         "GitHub's anonymous rate limit ran out; wait and retry, or connect a "
-        "GitHub account in Marketplace to raise the limit.",
+        "GitHub account (ha_manage_hacs(action='connect_github')) to raise it.",
     ],
     "replaces_built_in": [
         "This repository replaces a built-in integration of the same domain. "
         "Ask the user to confirm, then retry with confirm_replace_built_in=True.",
+    ],
+    "repository_in_use": [
+        "Its config entries must go first: list them with "
+        "ha_get_integration(domain=...), and once the user agrees delete them "
+        "with ha_remove_helpers_integrations, then retry.",
+    ],
+    "repository_not_installed": [
+        "ha_get_hacs_info(action='search', installed_only=True) lists the "
+        "installed repositories.",
+    ],
+    "repository_installed": [
+        "Uninstall it first with ha_manage_hacs(action='remove'), then retry.",
+    ],
+    "repository_busy": [
+        "Read its state with ha_get_hacs_info(action='info') and retry once "
+        "the install has finished.",
+    ],
+    "repository_exists": [
+        "It is listed already: find its id with "
+        "ha_get_hacs_info(action='search', query='<owner/repo>').",
+    ],
+}
+
+# For a refusal no code above names: what to read before acting on it.
+_DEFAULT_SUGGESTIONS = {
+    ErrorCode.RESOURCE_NOT_FOUND: [
+        "Find the repository's id with ha_get_hacs_info(action='search')",
+    ],
+    ErrorCode.COMPONENT_NOT_INSTALLED: _NOT_AVAILABLE,
+    ErrorCode.SERVICE_CALL_FAILED: [
+        "Core's message says why the Marketplace refused; "
+        "ha_get_hacs_info(action='info') shows the repository's current state",
     ],
 }
 
@@ -94,9 +119,17 @@ DUPLICATE_RECORD_SUGGESTIONS = [
     + "a new connect URL, so MCP clients reconnect.",
     "Route 2 (keeps the entries): with Home Assistant Core stopped, set "
     + '"installed": false on the duplicate record in '
-    + ".storage/marketplace.repositories (.storage/hacs.repositories on HACS), "
-    + "start Core, then update the kept record.",
+    + ".storage/marketplace.repositories, start Core, then update the kept "
+    + "record.",
 ]
+
+type RefusalRecords = Callable[[HomeAssistantCommandError], Awaitable[list[str] | None]]
+
+
+def native_category(category: str) -> str:
+    """The Marketplace's name for ``category``; Core judges whether it has it."""
+    lowered = category.strip().lower()
+    return _CATEGORY_ALIASES.get(lowered, lowered)
 
 
 def _owned_directory_suggestions(owner: str) -> list[str]:
@@ -110,114 +143,6 @@ def _owned_directory_suggestions(owner: str) -> list[str]:
         "ask the user before deleting entries under Settings > Devices & "
         "services.",
     ]
-
-
-@dataclass(frozen=True)
-class StoreApi:
-    """The store API this Home Assistant serves and its ``info`` reply."""
-
-    prefix: str
-    info: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def is_marketplace(self) -> bool:
-        return self.prefix == "marketplace"
-
-    @property
-    def name(self) -> str:
-        return "Marketplace" if self.is_marketplace else "HACS"
-
-    @property
-    def repository_signal(self) -> str:
-        return _REPOSITORY_SIGNAL[self.prefix]
-
-    def command(self, operation: str) -> str:
-        return _COMMANDS[self.prefix][operation]
-
-    def native_category(self, category: str) -> str:
-        """The store's name for ``category``, checked against its live list."""
-        # The stores lower-case it themselves
-        native = _CATEGORY_ALIASES.get(category.lower(), category.lower())
-        offered = self.info.get("categories")
-        if offered and native not in offered:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"{self.name} has no '{category}' category.",
-                    suggestions=[f"Use one of: {', '.join(sorted(offered))}"],
-                    context={"category": category, "categories": sorted(offered)},
-                )
-            )
-        return native
-
-
-HACS_API = StoreApi("hacs")
-# The order to probe them in: Home Assistant 2026.11 replaced HACS.
-STORE_APIS = (StoreApi("marketplace"), HACS_API)
-
-
-async def _probe(
-    ws_client: Any, command: str
-) -> tuple[dict[str, Any] | None, str | None, str]:
-    """Return the store reply, or its refusal code and display message."""
-    try:
-        reply = await ws_client.send_command(command)
-    except HomeAssistantCommandError as err:
-        return None, err.code, str(err)
-    if reply.get("success") is False:
-        error = reply.get("error")
-        if isinstance(error, dict):
-            return None, error.get("code"), str(error.get("message") or error)
-        return None, reply.get("error_code"), str(error)
-    return reply.get("result") or {}, None, ""
-
-
-async def detect_store_api(ws_client: Any) -> StoreApi:
-    """Return the store API that answers, or raise COMPONENT_NOT_INSTALLED."""
-    result, code, reason = await _probe(ws_client, "marketplace/info")
-    if result is not None:
-        return StoreApi("marketplace", result)
-    if code != "unknown_command":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.COMPONENT_NOT_INSTALLED,
-                f"The Marketplace is not available ({reason}).",
-                suggestions=[
-                    "Check Settings > Devices & services > Marketplace and the "
-                    "Home Assistant log for why it failed to load",
-                ],
-            )
-        )
-
-    result, code, reason = await _probe(ws_client, "hacs/info")
-    if result is not None:
-        return StoreApi("hacs", result)
-    if code != "unknown_command":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.COMPONENT_NOT_INSTALLED,
-                f"HACS is installed but not responding: {reason}",
-                suggestions=[
-                    "Restart Home Assistant",
-                    "Check Home Assistant logs for HACS errors",
-                    "Verify HACS is up to date",
-                ],
-            )
-        )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.COMPONENT_NOT_INSTALLED,
-            "Neither the Marketplace (Home Assistant 2026.11+) nor HACS is available.",
-            suggestions=[
-                "On Home Assistant 2026.11 or newer, the Marketplace is built in",
-                (
-                    "On older versions, install HACS from https://hacs.xyz/ "
-                    "and restart Home Assistant"
-                ),
-            ],
-        )
-    )
-    return HACS_API  # unreachable: raise_tool_error always raises
 
 
 def _directory_owner(err: HomeAssistantCommandError) -> str | None:
@@ -239,17 +164,14 @@ def raise_store_error(
     *,
     installed_records: list[str] | None = None,
 ) -> NoReturn:
-    """Raise a store command failure; a Marketplace gate names the UI step.
+    """Raise a Marketplace refusal with Core's message, code and translation.
 
-    The gates are told apart by Core's error code: their messages ("Connect a
-    GitHub account ...") would otherwise read as a connection failure. An
-    ownership refusal names the owner to update, unless the owner is one of
-    ha-mcp's own records and ``installed_records`` shows two of them
-    installed: then neither can be updated and the suggestions are the way
-    out of that. A refusal naming some other integration's owner keeps the
-    owner hint whatever ha-mcp's own records look like.
+    An ownership refusal names the owner to update, unless the owner is one of
+    ha-mcp's own records and ``installed_records`` shows two of them installed:
+    then neither can be updated and the suggestions are the way out of that.
     """
-    suggestions = _GATE_SUGGESTIONS.get(err.code or "")
+    code = _ERROR_CODES.get(err.code or "", ErrorCode.SERVICE_CALL_FAILED)
+    suggestions = _SUGGESTIONS.get(err.code or "") or _DEFAULT_SUGGESTIONS[code]
     if owner := _directory_owner(err):
         owners = {r.lower() for r in installed_records or []}
         if len(owners) > 1 and owner.lower() in owners:
@@ -257,89 +179,75 @@ def raise_store_error(
             context = {**context, "installed": installed_records}
         else:
             suggestions = _owned_directory_suggestions(owner)
-    if suggestions:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                str(err),
-                suggestions=suggestions,
-                context={**context, "store_error": err.code},
-            )
+    # Core's fields under the names the shared refusal translation gives them.
+    native = err.refusal_fields()
+    native["ha_error_code"] = native.pop("error_code")
+    raise_tool_error(
+        create_error_response(
+            code, str(err), suggestions=suggestions, context={**context, **native}
         )
-    exception_to_structured_error(err, context=context, raise_error=True)
+    )
 
 
-async def accept_warning(ws_client: Any, api: StoreApi) -> dict[str, Any]:
-    """Accept the Marketplace's first-run warning for the user this server is."""
-    if not api.is_marketplace:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "HACS has no first-run warning to accept; only the Marketplace "
-                "(Home Assistant 2026.11+) asks for one.",
-                context={"action": "accept_warning", "store": api.name},
-            )
-        )
-    accepted = {"success": True, "warning_accepted": True}
-    if api.info.get("warning_accepted"):
-        return {**accepted, "message": "Already accepted for this server's user."}
-    command = api.command("accept_warning")
-    try:
-        response = await ws_client.send_command(command)
-    except HomeAssistantCommandError as err:
-        raise_store_error(err, {"command": command})
-    if response.get("success") is False:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                str(response.get("error") or "Operation failed"),
-                context={"command": command},
-            )
-        )
-    return {
-        **accepted,
-        "message": "Accepted the Marketplace's first-run warning for the user "
-        "this server connects as; installs and updates now pass its gate.",
-    }
+async def store_command(
+    ws_client: Any,
+    command: str,
+    context: dict[str, Any],
+    *,
+    timeout: float | None = None,
+    on_timeout: list[str] | None = None,
+    refusal_records: RefusalRecords | None = None,
+    **fields: Any,
+) -> Any:
+    """Send one ``marketplace/*`` command and return Core's ``result``.
 
-
-async def fetch_releases(
-    ws_client: Any, api: StoreApi, repository_id: str, info: dict[str, Any]
-) -> dict[str, Any]:
-    """The repository's GitHub releases and the notes of versions not installed.
-
-    Release notes come from HACS's own command, or on the Marketplace from the
-    repository's update entity, the way the update dialog shows them. Both
-    reach GitHub, so they get the 60 s budget the store's installs get, and a
-    failure or timeout becomes a warning: the repository info already arrived.
+    A command given its own ``timeout`` reports that budget when it runs out,
+    with ``on_timeout`` as the suggestions.
     """
-    out: dict[str, Any] = {}
-    warnings: list[str] = []
+    context = {"command": command, **context}
+    if timeout is not None:
+        fields["_wait_timeout"] = timeout
     try:
-        reply = await ws_client.send_command(
-            api.command("releases"), _wait_timeout=60.0, repository_id=repository_id
+        reply = await ws_client.send_command(command, **fields)
+    except HomeAssistantCommandError as err:
+        records = await refusal_records(err) if refusal_records else None
+        raise_store_error(err, context, installed_records=records)
+    except HomeAssistantCommandTimeout as err:
+        if timeout is None:
+            raise
+        exception_to_structured_error(
+            err,
+            context={**context, "timeout_seconds": timeout},
+            suggestions=on_timeout,
+            raise_error=True,
         )
-        out["github_releases"] = reply.get("result") or []
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as err:
-        warnings.append(f"Releases unavailable: {err}")
+    return reply.get("result")
 
-    try:
-        if not api.is_marketplace:
-            reply = await ws_client.send_command(
-                "hacs/repository/release_notes",
-                _wait_timeout=60.0,
-                repository=repository_id,
-            )
-            out["release_notes"] = reply.get("result") or []
-        elif info.get("pending_upgrade") and info.get("update_entity_id"):
-            reply = await ws_client.send_command(
-                "update/release_notes",
-                _wait_timeout=60.0,
-                entity_id=info["update_entity_id"],
-            )
-            out["release_notes"] = reply.get("result")
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as err:
-        warnings.append(f"Release notes unavailable: {err}")
-    if warnings:
-        out["warnings"] = warnings
-    return out
+
+async def resolve_repository(
+    ws_client: Any, repository_id: str, context: dict[str, Any]
+) -> tuple[str, dict[str, Any] | None]:
+    """The Marketplace's id for ``repository_id`` and, for a name, its row.
+
+    Core takes only the numeric id, so ``owner/repo`` is looked up in one
+    ``repositories/list`` (case-insensitive exact ``full_name``).
+    """
+    wanted = repository_id.strip()
+    if wanted.isdigit():
+        return wanted, None
+    rows = await store_command(ws_client, LIST, context)
+    for row in rows or []:
+        if str(row.get("full_name") or "").lower() == wanted.lower():
+            return str(row["id"]), row
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            f"Repository '{wanted}' not found in the Marketplace's list.",
+            suggestions=[
+                "Find it with ha_get_hacs_info(action='search', query=...)",
+                "A repository outside the catalog is added first: "
+                "ha_manage_hacs(action='add_repository', repository='owner/repo')",
+            ],
+            context={**context, "repository_id": repository_id},
+        )
+    )

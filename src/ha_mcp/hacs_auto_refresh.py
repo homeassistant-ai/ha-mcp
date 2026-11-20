@@ -1,18 +1,17 @@
-"""Ask HACS to surface the paired component update after a server update (opt-in).
+"""Ask the Marketplace to surface the paired component update after a server update (opt-in).
 
-The main repository is already in the HACS and Marketplace default catalog.
-An external server can update before the store's next scheduled metadata
+The main repository is already in the Marketplace's default catalog. An
+external server can update before the store's next scheduled metadata
 refresh, leaving its paired integration update undiscovered. This optional
 startup nudge asks for fresh repository information sooner, for installed
 main-repository entries and existing mirror entries alike. It is not
 required for catalog installation and never installs an update itself.
 
 On startup, when the server version changed since the last recorded nudge (the
-just-updated case) or a newer release is pending, it sends the store's "Update
-information" refresh (``marketplace/repository/refresh``, or
-``hacs/repository/refresh`` before 2026.11) over the existing admin WebSocket
-for every INSTALLED candidate repository entry. Nothing is installed: the user
-still updates from the update entity.
+just-updated case) or a newer release is pending, it sends the Marketplace's
+"Refresh information" (``marketplace/repository/refresh``) over the existing
+admin WebSocket for every INSTALLED candidate repository entry. Nothing is
+installed: the user still updates from the update entity.
 
 It is opt-in (``hacs_refresh_after_update``). An install whose nudge completed
 a pass before it became opt-in has a marker file and no explicit choice; the
@@ -50,7 +49,7 @@ from .utils.data_paths import get_data_dir
 
 logger = logging.getLogger(__name__)
 
-# The repository full_names HACS may track the ha_mcp_tools component under:
+# The repository full_names the Marketplace may track the ha_mcp_tools component under:
 # the main repository (the documented one) and the mirror that earlier installs
 # came from, which keeps receiving the same releases.
 CANDIDATE_REPO_FULL_NAMES = (
@@ -60,14 +59,14 @@ CANDIDATE_REPO_FULL_NAMES = (
 
 # Marker file (in the ha-mcp data dir) recording the state the last completed
 # nudge ran against. Written only on a completed pass, so a failed pass (HA
-# still booting, HACS not loaded yet) is retried on the next startup. One file
+# still booting, the Marketplace not loaded yet) is retried on the next startup. One file
 # PER Home Assistant target: server configs sharing a data dir but pointing at
 # different instances must neither suppress each other's nudge nor invalidate
 # each other's marker on every alternating spawn (review finding).
 MARKER_FILENAME_PREFIX = "hacs_refresh_marker"
 
-# The add-on can start before HA Core finishes booting (and before HACS is
-# loaded), so the first attempts may fail; spread retries over ~8 minutes,
+# The app can start before HA Core finishes booting (and before the Marketplace
+# is loaded), so the first attempts may fail; spread retries over ~8 minutes,
 # then give up until the next startup (the unwritten marker retries then).
 RETRY_DELAYS = (30.0, 60.0, 120.0, 300.0)
 
@@ -85,7 +84,7 @@ def _read_marker(ha_url: str) -> dict[str, Any] | None:
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as err:
-        logger.debug("Ignoring unreadable HACS refresh marker %s: %s", path, err)
+        logger.debug("Ignoring unreadable refresh marker %s: %s", path, err)
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -96,7 +95,7 @@ def _write_marker(ha_url: str, marker: dict[str, Any]) -> None:
     try:
         path.write_text(json.dumps(marker), encoding="utf-8")
     except OSError as err:
-        logger.debug("Could not write HACS refresh marker %s: %s", path, err)
+        logger.debug("Could not write refresh marker %s: %s", path, err)
 
 
 def _nudge_due(
@@ -104,7 +103,7 @@ def _nudge_due(
     info: UpdateInfo | None,
     marker: dict[str, Any] | None,
 ) -> bool:
-    """Decide whether this startup should ask HACS for a refresh.
+    """Decide whether this startup should ask the Marketplace for a refresh.
 
     Instance scoping lives in the marker PATH (one file per HA target), so a
     marker handed in here always describes the current instance.
@@ -114,7 +113,7 @@ def _nudge_due(
         return True
     if marker.get("server_version") != current_version:
         # The server was just updated, and the paired component release is
-        # exactly what HACS needs to surface.
+        # exactly what the Marketplace needs to surface.
         return True
     # A release appeared while this build sat idle — surface its component side.
     return bool(
@@ -127,48 +126,44 @@ def _nudge_due(
 async def _refresh_installed_candidates() -> dict[str, Any] | None:
     """Refresh every installed candidate repository; one attempt, no retries.
 
-    Returns the pass result (``hacs`` presence plus the full_names refreshed),
-    or None when the outcome could not be determined.
+    Returns the pass result (Marketplace presence under the marker's ``hacs``
+    key, plus the full_names refreshed), or None when the outcome could not be
+    determined.
     """
     from .client.websocket_client import get_websocket_client
-    from .tools.hacs_backend import STORE_APIS
-    from .tools.hacs_registration import send_hacs_repository_refresh
+    from .tools.hacs_backend import GITHUB_COMMAND_TIMEOUT, LIST
 
     ws_client = await get_websocket_client()
-    for api in STORE_APIS:
-        try:
-            response = await ws_client.send_command(api.command("list"))
-        except HomeAssistantCommandError as err:
-            # A store that is not installed answers as an unknown command; any
-            # other failure (the Marketplace still loading included) is real:
-            # let the retry loop see it.
-            if err.code == "unknown_command":
-                continue
-            raise
-        break
-    else:
-        return {"hacs": "absent", "refreshed": []}
+    try:
+        response = await ws_client.send_command(LIST)
+    except HomeAssistantCommandError as err:
+        # A Home Assistant without the Marketplace answers as an unknown
+        # command; any other failure (the Marketplace still loading included)
+        # is real: let the retry loop see it.
+        if err.code == "unknown_command":
+            return {"hacs": "absent", "refreshed": []}
+        raise
 
     wanted = {name.lower() for name in CANDIDATE_REPO_FULL_NAMES}
     refreshed: list[str] = []
     attempted = 0
-    for repo in response.get("result", []):
+    for repo in response.get("result") or []:
         full_name = (repo.get("full_name") or "").lower()
-        # HACS keeps a record for every ADDED repo but only creates an update
-        # entity for downloaded ones, so refreshing an uninstalled record
-        # lights up nothing.
+        # Only an installed record has an update entity to light up.
         if full_name not in wanted or not repo.get("installed"):
             continue
         attempted += 1
         try:
-            await send_hacs_repository_refresh(ws_client, str(repo["id"]), api)
+            await ws_client.send_command(
+                "marketplace/repository/refresh",
+                repository=str(repo["id"]),
+                _wait_timeout=GITHUB_COMMAND_TIMEOUT,
+            )
         except Exception as err:  # noqa: BLE001
-            # Both entries read installed only when someone downloaded one
-            # repository on top of the other — HACS guards against
-            # adding the same repository twice but not against two
-            # repositories sharing a domain. Rare, but one failing must not
-            # cost the other its refresh.
-            logger.debug("HACS refresh failed for %s: %s", full_name, err)
+            # Installs from before the Marketplace can hold both records
+            # installed (#2993); one failing must not cost the other its
+            # refresh.
+            logger.debug("Marketplace refresh failed for %s: %s", full_name, err)
             continue
         refreshed.append(full_name)
     if attempted and not refreshed:
@@ -197,14 +192,14 @@ async def _refresh_with_retries() -> dict[str, Any] | None:
             websockets.exceptions.WebSocketException,
             OSError,
         ) as err:
-            logger.debug("HACS repository refresh attempt failed: %s", err)
+            logger.debug("Marketplace repository refresh attempt failed: %s", err)
             continue
         if result is None:
             continue
         if result["hacs"] == "absent":
             # ``unknown_command`` also happens while HA is still booting,
-            # before HACS registers its WS handlers — indistinguishable from
-            # no HACS at all. Keep retrying; record absence only once the
+            # before the Marketplace registers its commands — indistinguishable
+            # from a Home Assistant without it. Keep retrying; record absence only once the
             # schedule is exhausted (review finding).
             absent_result = result
             continue
@@ -231,14 +226,14 @@ async def _opted_in(settings: Any, marker: dict[str, Any] | None) -> bool:
         logger.warning("Could not save %s=true; it stays on for this run", SETTING)
     setattr(settings, SETTING, True)
     logger.info(
-        "HACS auto-refresh is opt-in now; it stays on for this install, which "
+        "Marketplace auto-refresh is opt-in now; it stays on for this install, which "
         "already used it (turn it off under Advanced settings)"
     )
     return True
 
 
 async def maybe_refresh_hacs_after_update() -> None:
-    """Nudge HACS once per startup when the update picture changed."""
+    """Nudge the Marketplace once per startup when the update picture changed."""
     try:
         if is_update_check_disabled():
             return
@@ -252,8 +247,8 @@ async def maybe_refresh_hacs_after_update() -> None:
 
         marker = await asyncio.to_thread(_read_marker, ha_url)
         if not await _opted_in(settings, marker):
-            # Per-boot DEBUG line: the add-on lane proves scheduling with it.
-            logger.debug("HACS auto-refresh: off (%s is opt-in)", SETTING_ENV)
+            # Per-boot DEBUG line: the app lane proves scheduling with it.
+            logger.debug("Marketplace auto-refresh: off (%s is opt-in)", SETTING_ENV)
             return
 
         current = get_version()
@@ -263,30 +258,30 @@ async def maybe_refresh_hacs_after_update() -> None:
         if not _nudge_due(current, info, marker):
             # DEBUG, not INFO: the not-due return is the per-conversation
             # stdio hot path and must stay quiet at default levels. The line
-            # exists so a DEBUG-level launcher (the HAOS add-on lane) can
+            # exists so a DEBUG-level launcher (the HAOS app lane) can
             # prove scheduling even when a completed earlier pass makes every
             # later boot legitimately not due.
             logger.debug(
-                "HACS auto-refresh: pass not due (marker current for server %s)",
+                "Marketplace auto-refresh: pass not due (marker current for server %s)",
                 current,
             )
             return
 
         # The one unconditional line a due pass emits BEFORE any WebSocket
-        # work: it proves the launcher scheduled the nudge even where HACS
-        # is absent and the pass ends silently — the observable the HAOS
-        # add-on lane greps for, and the line whose absence exposed the
+        # work: it proves the launcher scheduled the nudge even where the
+        # Marketplace is absent and the pass ends silently — the observable the HAOS
+        # app lane greps for, and the line whose absence exposed the
         # launcher gap this module's lifespan wiring closed.
         logger.info(
-            "HACS auto-refresh: startup pass due (server %s); "
-            "asking HACS for repository state",
+            "Marketplace auto-refresh: startup pass due (server %s); "
+            "asking the Marketplace for repository state",
             current,
         )
 
         result = await _refresh_with_retries()
         if result is None:
             logger.debug(
-                "Could not reach HACS to refresh the component repository; "
+                "Could not reach the Marketplace to refresh the component repository; "
                 "giving up until next startup"
             )
             return
@@ -302,13 +297,13 @@ async def maybe_refresh_hacs_after_update() -> None:
         )
         if result["refreshed"]:
             logger.info(
-                "Asked HACS to refresh component repository info: %s",
+                "Asked the Marketplace to refresh component repository info: %s",
                 ", ".join(result["refreshed"]),
             )
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.debug("HACS auto-refresh nudge skipped", exc_info=True)
+        logger.debug("Marketplace auto-refresh nudge skipped", exc_info=True)
 
 
 @asynccontextmanager
