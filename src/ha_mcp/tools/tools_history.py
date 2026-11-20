@@ -5,7 +5,7 @@ This module provides tools for accessing historical data from Home Assistant's
 recorder component via a single consolidated tool:
 
 ha_get_history -- Retrieve historical data with source-selectable mode:
-  - source="history" (default): Raw state changes, ~10 day retention
+  - source="history" (default): Raw state changes, retention follows the recorder's purge_keep_days (HA default 10 days, often configured longer)
   - source="statistics": Pre-aggregated long-term statistics, permanent retention
 """
 
@@ -187,9 +187,9 @@ class HistoryTools:
             Literal["history", "statistics"],
             Field(
                 description=(
-                    'Data source: "history" for raw state changes at full resolution (~10 '
-                    'day retention), or "statistics" for pre-aggregated long-term data '
-                    "(permanent, requires state_class)."
+                    'Data source: "history" for raw state changes at full resolution (retention '
+                    "follows the recorder's purge_keep_days: HA default 10 days, often configured longer), "
+                    'or "statistics" for pre-aggregated long-term data (permanent, requires state_class).'
                 ),
                 default="history",
             ),
@@ -914,7 +914,7 @@ async def _fetch_history(
             suggestions=[
                 "Verify entity IDs exist using ha_search()",
                 "Check that entities are recorded (not excluded from recorder)",
-                "Ensure time range is within recorder retention period (~10 days)",
+                "Ensure time range is within recorder retention period (purge_keep_days; HA default 10 days, often configured longer)",
             ],
         )
 
