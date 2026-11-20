@@ -232,6 +232,12 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):
             return self._create_tools_entry()
         return self.async_show_form(step_id="tools")
 
+    async def async_step_import(self, user_input: dict[str, Any]) -> ConfigFlowResult:
+        """Create the File & YAML Tools entry while restoring a sidebar backup."""
+        if user_input != {CONF_ENTRY_TYPE: ENTRY_TYPE_TOOLS}:
+            raise ValueError("Only the File & YAML Tools entry can be imported")
+        return await self.async_step_tools({})
+
     def _create_tools_entry(self) -> ConfigFlowResult:
         """Create the services (tools) config entry."""
         return self.async_create_entry(
