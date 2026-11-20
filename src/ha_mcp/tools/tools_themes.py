@@ -20,10 +20,10 @@ from ..client.rest_client import (
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
 )
+from ..error_wording import service_call_unauthorized
 from ..errors import ErrorCode, create_error_response
 from .coercion import JSON_STRING_COERCION
 from .helpers import (
-    core_error_message,
     exception_to_structured_error,
     log_tool_usage,
     raise_core_refusal,
@@ -233,9 +233,9 @@ class ThemesTools:
                 )
             )
         if not result.get("success"):
-            # Core refuses a non-admin with a generic error code; only the
-            # text says the token lacks admin rights.
-            if core_error_message(result.get("error", "")) == "Unauthorized":
+            if service_call_unauthorized(
+                result.get("error_code"), str(result.get("error", ""))
+            ):
                 raise HomeAssistantAdminRequiredError(
                     "Service frontend.set_theme is admin-only in Home Assistant "
                     "and this token's user is not an administrator"
