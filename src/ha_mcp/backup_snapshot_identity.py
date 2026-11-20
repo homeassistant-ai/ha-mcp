@@ -74,21 +74,29 @@ def safe_entity_id(entity_id: str) -> str:
     return f"{cleaned[:prefix_length]}-{digest}"
 
 
-def matches_listing_identity(payload_id: str | None, wanted: str) -> bool:
+def matches_listing_identity(
+    payload_id: str | None, wanted: str, file_stem: str
+) -> bool:
     """Whether a snapshot whose payload names ``payload_id`` is ``wanted``.
 
-    The original id and its current or previous digest stem select an
-    entity. A bare pre-digest stem is deliberately not accepted because
-    it may belong to a differently-named entity.
+    The original id selects the complete history. A digest selector includes
+    files written under either generation of digest naming.
     """
     if payload_id is None:
         return False
-    if payload_id == wanted or safe_entity_id(payload_id) == wanted:
+    if payload_id == wanted:
         return True
+    current = safe_entity_id(payload_id)
     cleaned = _SAFE_ID_RE.sub("_", payload_id).lstrip(".") or "_"
-    return _legacy_entity_id_digest(payload_id, cleaned) == wanted
+    previous = _legacy_entity_id_digest(payload_id, cleaned)
+    # Before the cap, already-safe ids were written verbatim at any length.
+    stems = (current, previous, payload_id)
+    return wanted in stems and file_stem in stems
 
 
-def looks_like_digest_stem(identity: str) -> bool:
+def might_name_multiple_stems(identity: str) -> bool:
     """A digest selector can refer to older filenames only the payload identifies."""
-    return _DIGEST_STEM_RE.fullmatch(identity) is not None
+    return (
+        len(identity) >= _MAX_ENTITY_STEM_LENGTH
+        and _DIGEST_STEM_RE.fullmatch(identity) is not None
+    )

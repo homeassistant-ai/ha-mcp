@@ -77,7 +77,7 @@ async def test_rotation_does_not_prune_another_identity_with_the_same_stem(
 
 
 @pytest.mark.parametrize("id_length", [25, 120])
-async def test_each_digest_lists_all_filename_generations(
+async def test_each_digest_lists_both_post_digest_filename_generations(
     hass: HomeAssistant,
     manager: BackupManager,
     snapshot_clock: SnapshotClock,
@@ -95,10 +95,30 @@ async def test_each_digest_lists_all_filename_generations(
     for older_file in (legacy, bare):
         older_file.write_bytes(current.read_bytes())
 
-    for selector in (identity, legacy_stem, current_stem):
+    original_rows = manager.list_snapshots(domain="integration", entity_id=identity)
+    assert [row["name"] for row in original_rows] == [
+        current.name,
+        legacy.name,
+        bare.name,
+    ]
+    for selector in (current_stem, legacy_stem):
         rows = manager.list_snapshots(domain="integration", entity_id=selector)
-        assert [row["name"] for row in rows] == [current.name, legacy.name, bare.name]
+        assert [row["name"] for row in rows] == [current.name, legacy.name]
         assert {row["entity_id"] for row in rows} == {identity}
+
+
+async def test_bounded_digest_also_finds_the_original_filename_of_a_safe_id(
+    hass: HomeAssistant, manager: BackupManager, snapshot_clock: SnapshotClock
+) -> None:
+    identity = "a" * 120
+    snapshot_clock.set("2026-01-02T00:00:00")
+    current = await capture(hass, manager, identity)
+    legacy = current.with_name(f"integration.{identity}.20260101_000000.yaml")
+    legacy.write_bytes(current.read_bytes())
+
+    for selector in (current.name.split(".")[1], identity):
+        rows = manager.list_snapshots(domain="integration", entity_id=selector)
+        assert [row["name"] for row in rows] == [current.name, legacy.name]
 
 
 async def test_long_identities_get_separate_files_with_complete_headers(
