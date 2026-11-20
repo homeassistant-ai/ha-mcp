@@ -17,9 +17,11 @@ from homeassistant.core import HomeAssistant
 from custom_components.ha_mcp_tools import oauth_autoapprove, oauth_dcr
 from custom_components.ha_mcp_tools.const import (
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_NONE,
+)
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
 
 from ._oauth_autoapprove_core import (

@@ -11,12 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from custom_components.ha_mcp_tools.const import (
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     MAX_OAUTH_CALLBACK_LENGTH,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
-)
-from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
     effective_allowlist,
     is_redirect_allowed,
     normalize_allowlist,

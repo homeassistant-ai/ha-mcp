@@ -15,22 +15,6 @@ block was folded in from the former standalone ``ha_mcp_server`` integration.
 
 import re
 
-# The none-mode /authorize callback allowlist (#2427), read per request so a
-# change needs no reload; defined beside its logic, which the webhook proxy app
-# shares.
-from .oauth_redirect_allowlist import (
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST as DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
-)
-from .oauth_redirect_allowlist import (
-    MAX_OAUTH_CALLBACK_LENGTH as MAX_OAUTH_CALLBACK_LENGTH,
-)
-from .oauth_redirect_allowlist import (
-    MAX_OAUTH_CALLBACKS as MAX_OAUTH_CALLBACKS,
-)
-from .oauth_redirect_allowlist import (
-    OPT_OAUTH_REDIRECT_ALLOWLIST as OPT_OAUTH_REDIRECT_ALLOWLIST,
-)
-
 DOMAIN = "ha_mcp_tools"
 
 # Component version: the server version this release shares, stamped together

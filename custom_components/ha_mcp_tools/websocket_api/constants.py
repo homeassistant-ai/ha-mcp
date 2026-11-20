@@ -17,7 +17,7 @@ from .. import (
     helper_collections,
     todo_items,
 )
-from ..const import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
+from ..oauth_redirect_allowlist import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
 from . import logbook as _logbook
 from . import trace_context as _trace_context
 
