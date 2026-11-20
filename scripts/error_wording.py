@@ -137,6 +137,7 @@ class Program:
                 self.methods.setdefault(name, []).extend(found)
             self._read_imports(module)
         self.text_params: dict[Func, set[str]] = {}
+        self.exception_params: dict[Func, set[str]] = {}
         self.returns_text: set[Func] = set()
         self.changed = False
 
@@ -192,9 +193,11 @@ class Program:
         source, original = module.names[name]
         return self.is_prose(source, original, hops + 1)
 
-    def pass_text(self, func: Func, param: str) -> None:
-        if param not in self.text_params.setdefault(func, set()):
-            self.text_params[func].add(param)
+    def pass_on(self, func: Func, param: str, *, exception: bool) -> None:
+        """Record that ``param`` of ``func`` receives error text or an exception."""
+        params = self.exception_params if exception else self.text_params
+        if param not in params.setdefault(func, set()):
+            params[func].add(param)
             self.changed = True
 
 
@@ -213,6 +216,16 @@ class Flow:
         self.texts: set[str] = set(outer.texts) if outer else set()
         self.fixed: set[str] = set(outer.fixed) if outer else set()
         self.nodes = list(_body(scope))
+        # The names this scope binds itself, other than its functions.
+        self.bound = {
+            node.id
+            for node in self.nodes
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+        }
+        if not isinstance(scope, ast.Module):
+            self.bound |= {
+                arg.arg for arg in ast.walk(scope.args) if isinstance(arg, ast.arg)
+            }
         self._read_params()
         for node in self.nodes:
             if isinstance(node, ast.ExceptHandler) and node.name:
@@ -237,12 +250,14 @@ class Flow:
         if self.scope.args.vararg:
             self.fixed.add(self.scope.args.vararg.arg)
         text_params = self.program.text_params.get(self.scope, ())
+        exception_params = self.program.exception_params.get(self.scope, ())
         for param in _params(self.scope):
             note = ast.unparse(param.annotation) if param.annotation else ""
             if param.arg in text_params:
                 self.texts.add(param.arg)
             elif (
-                "Exception" in note
+                param.arg in exception_params
+                or "Exception" in note
                 or "Error" in note
                 or (param.arg in EXCEPTION_PARAMS and note in {"", "Any"})
             ):
@@ -288,6 +303,8 @@ class Flow:
             while flow:
                 if func.id in flow.module.defined[flow.scope]:
                     return flow.module.defined[flow.scope][func.id]
+                if func.id in flow.bound:  # a callback, not the function
+                    return []
                 flow = flow.outer
             return self.program.functions(self.module, func.id)
         if not isinstance(func, ast.Attribute):
@@ -335,7 +352,11 @@ class Flow:
             case ast.Call(func=ast.Attribute(attr=attr, value=receiver)) if (
                 attr in STR_METHODS
             ):
-                return self.is_text(receiver)
+                filled = [*node.args, *(k.value for k in node.keywords)]
+                return self.is_text(receiver) or (
+                    attr == "format"
+                    and any(self.is_text(a) or self.is_exception(a) for a in filled)
+                )
         return any(
             target in self.program.returns_text for target in self._targets(node.func)
         )
@@ -385,12 +406,15 @@ class Flow:
                 continue
             for target in self._targets(node.func):
                 params = _params(target)
-                for index, arg in enumerate(node.args[: len(params)]):
-                    if self.is_text(arg):
-                        self.program.pass_text(target, params[index].arg)
-                for keyword in node.keywords:
-                    if keyword.arg and self.is_text(keyword.value):
-                        self.program.pass_text(target, keyword.arg)
+                passed = [
+                    *zip((p.arg for p in params), node.args, strict=False),
+                    *((k.arg, k.value) for k in node.keywords if k.arg),
+                ]
+                for param, value in passed:
+                    if self.is_text(value):
+                        self.program.pass_on(target, param, exception=False)
+                    elif self.is_exception(value):
+                        self.program.pass_on(target, param, exception=True)
 
     def _prose_constant(self, node: ast.expr) -> bool:
         """A name bound to prose: this module's constant, or an imported one."""

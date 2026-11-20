@@ -127,6 +127,17 @@ REFUSED = {
             line = "failed: " + str(err)
             return "timed out" in line
         """,
+    "text filled into a format string": """
+        def handle(err: Exception):
+            line = "failed: {why}".format(why=err)
+            return "timed out" in line
+        """,
+    "an exception passed to a helper": """
+        def is_missing(failure):
+            return "not found" in str(failure)
+        def handle(exc: Exception):
+            return is_missing(exc)
+        """,
     "a regex function imported by name": """
         from re import search as find
         def handle(err: Exception):
@@ -192,6 +203,17 @@ ALLOWED = {
             def is_device(text: str):
                 return text.startswith("device:")
             return is_device("device:1"), text
+        """,
+    "a callback parameter named like a function": """
+        def matches(text):
+            return text.startswith("device:")
+        def handle(matches, exc: Exception):
+            return matches(str(exc))
+        """,
+    "ordinary values filled into a format string": """
+        def handle(name, count):
+            line = "{} has {}".format(name, count)
+            return "timed out" in line
         """,
     "a function of its own that shares a regex name": """
         def search(needle, text):
