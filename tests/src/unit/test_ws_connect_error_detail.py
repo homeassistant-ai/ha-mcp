@@ -31,9 +31,16 @@ from ha_mcp.client.websocket_client import (
     HomeAssistantWebSocketClient,
     websocket_manager,
 )
-from ha_mcp.tools.helpers import get_connected_ws_client
+from ha_mcp.tools.helpers import (
+    exception_to_structured_error,
+    get_connected_ws_client,
+)
 
+from ._command_faults import pooled_socket
 from ._core_client import refused_url
+from ._gateway import Gateway
+from ._gateway import gateway as gateway
+from ._gateway import gateway_client as gateway_client
 from ._ws_transport import spawned_by
 
 REJECTED_TOKEN = "super-secret-token-DO-NOT-LEAK"
@@ -114,6 +121,21 @@ async def test_a_handshake_without_auth_required_is_captured(
 
     assert client.last_connect_error is not None
     assert "Did not receive auth_required" in client.last_connect_error
+
+
+async def test_a_login_core_never_answers_is_a_timeout(
+    gateway: Gateway, gateway_client: HomeAssistantClient
+) -> None:
+    """The gateway keeps the client's ``auth`` to itself, so no answer comes;
+    the client waits out its auth timeout (5 s) and reports a timeout."""
+    gateway.holds.add("auth")
+
+    with pytest.raises(HomeAssistantConnectionError) as failed:
+        await pooled_socket(gateway_client)
+
+    assert failed.value.timed_out
+    error = exception_to_structured_error(failed.value, raise_error=False)
+    assert error["error"]["code"] == "CONNECTION_TIMEOUT"
 
 
 @_REFUSED_SOCKET_TIMER

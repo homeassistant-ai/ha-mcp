@@ -181,10 +181,9 @@ _BLOCKED_HA_INTERNAL_EVENTS: frozenset[str] = frozenset(
 def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
     """Map a sandbox exception to ``(code, message, suggestions)``.
 
-    Monty wraps inner exceptions in ``MontyRuntimeError`` with the inner
-    type name embedded in the string representation, so we inspect both
-    ``type(exc).__name__`` and ``str(exc)`` and pick the most specific
-    bucket. Three categories:
+    Monty wraps the Python exception in a ``MontyError`` and hands it back
+    from ``exception()``; its type picks the bucket, so a message that only
+    names another category stays a runtime error. Three categories:
 
     * ``SANDBOX_LIMIT_EXCEEDED`` — memory / time / recursion / invocation
       limits the sandbox runtime enforces.
@@ -198,14 +197,13 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
     errors" (which was the prior behaviour and actively misled callers
     when the real cause was a memory cap or a missing module import).
     """
-    exc_text = str(exc)
     exc_type = type(exc).__name__
-    short = exc_text[:200]
+    short = str(exc)[:200]
 
-    def _matches(*needles: str) -> bool:
-        return any(needle in exc_type or needle in exc_text for needle in needles)
+    unwrap = getattr(exc, "exception", None)
+    native = unwrap() if callable(unwrap) else exc
 
-    if _matches("MemoryError"):
+    if isinstance(native, MemoryError):
         return (
             ErrorCode.SANDBOX_LIMIT_EXCEEDED,
             f"Sandbox memory limit exceeded: {short}",
@@ -217,7 +215,7 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
                 "Operator can raise CODE_MODE_MAX_MEMORY (max 256 MB).",
             ],
         )
-    if _matches("RecursionError"):
+    if isinstance(native, RecursionError):
         return (
             ErrorCode.SANDBOX_LIMIT_EXCEEDED,
             f"Sandbox recursion limit exceeded: {short}",
@@ -227,7 +225,7 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
                 "Operator can raise CODE_MODE_MAX_RECURSION (max 10000).",
             ],
         )
-    if _matches("TimeoutError", "timed out", "wall-clock", "max_duration"):
+    if isinstance(native, TimeoutError):
         return (
             ErrorCode.SANDBOX_LIMIT_EXCEEDED,
             f"Sandbox time limit exceeded: {short}",
@@ -238,7 +236,7 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
             ],
         )
 
-    if _matches("ModuleNotFoundError", "No module named"):
+    if isinstance(native, ImportError):
         return (
             ErrorCode.SANDBOX_SYNTAX_UNSUPPORTED,
             f"Imports are not allowed in the sandbox: {short}",
@@ -248,7 +246,7 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
                 + "ws_send, call_tool, delete_saved_tool.",
             ],
         )
-    if _matches("NotImplementedError", "does not yet support", "context manager"):
+    if isinstance(native, NotImplementedError):
         return (
             ErrorCode.SANDBOX_SYNTAX_UNSUPPORTED,
             f"Sandbox does not support this Python feature: {short}",
@@ -259,7 +257,7 @@ def _classify_sandbox_error(exc: Exception) -> tuple[ErrorCode, str, list[str]]:
                 "Rewrite using basic statements and the injected helpers.",
             ],
         )
-    if _matches("SyntaxError"):
+    if isinstance(native, SyntaxError):
         return (
             ErrorCode.SANDBOX_SYNTAX_UNSUPPORTED,
             f"Code did not parse: {short}",

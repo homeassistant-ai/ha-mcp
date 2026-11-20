@@ -22,11 +22,31 @@ import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from aiohasupervisor.models.backups import (
+    Backup,
+    BackupAddon,
+    BackupComplete,
+    BackupContent,
+    BackupJob,
+    BackupList,
+    BackupLocationAttributes,
+    BackupType,
+    Folder,
+)
+from aiohasupervisor.models.jobs import Job, JobError
+from aiohasupervisor.models.mounts import (
+    CIFSMountResponse,
+    MountsInfo,
+    MountState,
+    MountType,
+    MountUsage,
+)
 from homeassistant.backup_restore import RESTORE_BACKUP_FILE
 from homeassistant.components import websocket_api
 from homeassistant.components.backup import (
@@ -68,6 +88,7 @@ from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools import backup_snapshot, backup_snapshot_restore
 
 from ._supervisor_core import SUPERVISOR, load_supervisor_api
+from ._tools_addons_core import installed_apps
 from ._ws_transport import abort_transport
 
 PASSWORD = "pw"
@@ -253,8 +274,10 @@ class Supervisor:
                 reference = backup["slug"]
             job = self._job(job_id, done=True, reference=reference)
             self.jobs[job_id] = job
+            # Supervisor sends its event UUID as 32 hex digits.
+            event_data = {**job, "uuid": uuid.UUID(job_id).hex}
             async_dispatcher_send(
-                self._hass, EVENT_SUPERVISOR_EVENT, {"event": "job", "data": job}
+                self._hass, EVENT_SUPERVISOR_EVENT, {"event": "job", "data": event_data}
             )
 
     async def _answer(
@@ -267,11 +290,10 @@ class Supervisor:
             case "get", ["addons"]:
                 if self.apps_unreadable:
                     return self._error(verb, url, 500, "Supervisor is busy")
-                apps = [{"slug": slug, "name": slug} for slug in APPS]
-                return self._ok(verb, url, {"addons": apps})
+                return self._ok(verb, url, installed_apps(*APPS))
             case "get", ["backups"]:
                 summaries = [self._summary(b) for b in self.backups.values()]
-                return self._ok(verb, url, {"backups": summaries})
+                return self._ok(verb, url, BackupList(backups=summaries).to_dict())
             case "get", ["backups", slug, "info"] if slug in self.backups:
                 return self._ok(verb, url, self.backups[slug])
             case "post", ["backups", "new", "partial"]:
@@ -281,8 +303,10 @@ class Supervisor:
             case "delete", ["backups", slug] if slug in self.backups:
                 del self.backups[slug]
                 return self._ok(verb, url, {})
-            case "get", ["jobs", job_id] if job_id in self.jobs:
-                return self._ok(verb, url, self.jobs[job_id])
+            case "get", ["jobs", job_id] if job := self.jobs.get(
+                str(uuid.UUID(job_id))
+            ):
+                return self._ok(verb, url, job)
         return self._error(verb, url, 404, f"{url.path} does not exist")
 
     def _new_backup(
@@ -292,11 +316,11 @@ class Supervisor:
         self.operations.append("backup")
         if self.refusal is not None:
             return self._error(verb, url, 400, self.refusal)
-        job_id = uuid.uuid4().hex
+        job_id = str(uuid.uuid4())
         if self.job_error is not None:
-            error = {"type": "BackupError", "message": self.job_error, "stage": None}
+            error = JobError(type="BackupError", message=self.job_error, stage=None)
             self.jobs[job_id] = self._job(job_id, done=True, errors=[error])
-            return self._ok(verb, url, {"job_id": job_id})
+            return self._ok(verb, url, BackupJob(job_id=uuid.UUID(job_id)).to_dict())
         slug = uuid.uuid4().hex[:8]
         apps = data.get("addons") or []
         locations = data.get("location") or [None]
@@ -313,7 +337,7 @@ class Supervisor:
         )
         self._passwords[slug] = data.get("password")
         self._start(job_id, backup)
-        return self._ok(verb, url, {"job_id": job_id})
+        return self._ok(verb, url, BackupJob(job_id=uuid.UUID(job_id)).to_dict())
 
     def _restore(
         self, verb: str, url: URL, slug: str, data: dict[str, Any]
@@ -324,9 +348,9 @@ class Supervisor:
             return self._error(verb, url, 400, f"Invalid password for backup {slug}")
         self.restores.append({"slug": slug, **data})
         self.operations.append("restore")
-        job_id = uuid.uuid4().hex
+        job_id = str(uuid.uuid4())
         self._start(job_id, None)
-        return self._ok(verb, url, {"job_id": job_id})
+        return self._ok(verb, url, BackupJob(job_id=uuid.UUID(job_id)).to_dict())
 
     def _start(self, job_id: str, backup: dict[str, Any] | None) -> None:
         if self.hold:
@@ -352,27 +376,30 @@ class Supervisor:
         protected: bool,
         extra: dict[str, Any],
     ) -> dict[str, Any]:
-        held = {"protected": protected, "size_bytes": 1000}
-        return {
-            "slug": slug,
-            "name": name,
-            "date": extra.get("supervisor.backup_request_date")
-            or dt_util.utcnow().isoformat(),
-            "type": "partial",
-            "location_attributes": dict.fromkeys(locations, held),
-            "compressed": True,
-            "supervisor_version": "2026.11.0",
-            "homeassistant": HA_VERSION if homeassistant else None,
-            "addons": [
-                {"slug": app, "name": app, "version": "1.0.0", "size": 1.0}
+        requested = extra.get("supervisor.backup_request_date")
+        date = datetime.fromisoformat(requested) if requested else dt_util.utcnow()
+        return BackupComplete(
+            slug=slug,
+            name=name,
+            date=date,
+            type=BackupType.PARTIAL,
+            location_attributes={
+                location: BackupLocationAttributes(protected=protected, size_bytes=1000)
+                for location in locations
+            },
+            compressed=True,
+            supervisor_version="2026.11.0",
+            homeassistant=HA_VERSION if homeassistant else None,
+            addons=[
+                BackupAddon(slug=app, name=app, version="1.0.0", size=1.0)
                 for app in apps
                 if app not in self.failed_apps
             ],
-            "repositories": [],
-            "folders": [f for f in folders if f not in self.failed_folders],
-            "homeassistant_exclude_database": not database if homeassistant else None,
-            "extra": extra,
-        }
+            repositories=[],
+            folders=[Folder(f) for f in folders if f not in self.failed_folders],
+            homeassistant_exclude_database=not database if homeassistant else None,
+            extra=extra,
+        ).to_dict()
 
     def _job(
         self,
@@ -380,7 +407,7 @@ class Supervisor:
         *,
         done: bool,
         reference: str | None = None,
-        errors: list[dict[str, Any]] | None = None,
+        errors: list[JobError] | None = None,
     ) -> dict[str, Any]:
         children = [
             self._failed_parts(
@@ -390,75 +417,84 @@ class Supervisor:
                 "backup_store_folders", "backup_folder_save", self.failed_folders
             ),
         ]
-        return {
-            "name": "backup_manager_partial_backup",
-            "reference": reference,
-            "uuid": job_id,
-            "progress": 100 if done else 0,
-            "stage": None,
-            "done": done,
-            "errors": errors or [],
-            "created": dt_util.utcnow().isoformat(),
-            "child_jobs": children if done else [],
-            "extra": None,
-        }
+        return Job(
+            name="backup_manager_partial_backup",
+            reference=reference,
+            uuid=uuid.UUID(job_id),
+            progress=100 if done else 0,
+            stage=None,
+            done=done,
+            errors=errors or [],
+            created=dt_util.utcnow(),
+            child_jobs=children if done else [],
+            extra=None,
+        ).to_dict()
 
     @staticmethod
-    def _failed_parts(name: str, part: str, references: list[str]) -> dict[str, Any]:
-        error = {"type": "BackupError", "message": "could not be saved", "stage": None}
+    def _failed_parts(name: str, part: str, references: list[str]) -> Job:
+        error = JobError(type="BackupError", message="could not be saved", stage=None)
         jobs = [
-            {
-                "name": part,
-                "reference": reference,
-                "uuid": uuid.uuid4().hex,
-                "progress": 100,
-                "stage": None,
-                "done": True,
-                "errors": [error],
-                "created": dt_util.utcnow().isoformat(),
-                "child_jobs": [],
-                "extra": None,
-            }
+            Job(
+                name=part,
+                reference=reference,
+                uuid=uuid.uuid4(),
+                progress=100,
+                stage=None,
+                done=True,
+                errors=[error],
+                created=dt_util.utcnow(),
+                child_jobs=[],
+                extra=None,
+            )
             for reference in references
         ]
-        return {
-            "name": name,
-            "reference": None,
-            "uuid": uuid.uuid4().hex,
-            "progress": 100,
-            "stage": None,
-            "done": True,
-            "errors": [],
-            "created": dt_util.utcnow().isoformat(),
-            "child_jobs": jobs,
-            "extra": None,
-        }
+        return Job(
+            name=name,
+            reference=None,
+            uuid=uuid.uuid4(),
+            progress=100,
+            stage=None,
+            done=True,
+            errors=[],
+            created=dt_util.utcnow(),
+            child_jobs=jobs,
+            extra=None,
+        )
 
     def _mount_info(self) -> dict[str, Any]:
-        mounts = [
-            {
-                "name": name,
-                "usage": "backup",
-                "type": "cifs",
-                "server": SUPERVISOR,
-                "share": name,
-                "read_only": False,
-                "state": "active",
-                "user_path": None,
-            }
-            for name in self.mounts
-        ]
-        return {"default_backup_mount": self.default_mount, "mounts": mounts}
+        return MountsInfo(
+            default_backup_mount=self.default_mount,
+            mounts=[
+                CIFSMountResponse(
+                    name=name,
+                    usage=MountUsage.BACKUP,
+                    type=MountType.CIFS,
+                    server=SUPERVISOR,
+                    share=name,
+                    read_only=False,
+                    state=MountState.ACTIVE,
+                    user_path=None,
+                )
+                for name in self.mounts
+            ],
+        ).to_dict()
 
     @staticmethod
-    def _summary(backup: dict[str, Any]) -> dict[str, Any]:
-        content = {
-            "homeassistant": backup["homeassistant"] is not None,
-            "addons": [app["slug"] for app in backup["addons"]],
-            "folders": backup["folders"],
-        }
-        fields = ("slug", "name", "date", "type", "location_attributes", "compressed")
-        return {**{key: backup[key] for key in fields}, "content": content}
+    def _summary(backup: dict[str, Any]) -> Backup:
+        detail = BackupComplete.from_dict(backup)
+        return Backup(
+            slug=detail.slug,
+            name=detail.name,
+            date=detail.date,
+            type=detail.type,
+            location_attributes=detail.location_attributes,
+            compressed=detail.compressed,
+            content=BackupContent(
+                homeassistant=detail.homeassistant is not None,
+                addons=[app.slug for app in detail.addons],
+                folders=detail.folders,
+            ),
+        )
 
     @staticmethod
     def _ok(verb: str, url: URL, data: dict[str, Any]) -> AiohttpClientMockResponse:

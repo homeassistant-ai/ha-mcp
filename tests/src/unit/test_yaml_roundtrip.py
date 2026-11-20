@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from io import StringIO
+from pathlib import Path
 
 import pytest
+from annotatedyaml import Secrets
 from annotatedyaml.loader import FastSafeLoader
+from homeassistant.config import load_yaml_config_file
 
 from custom_components.ha_mcp_tools.yaml_rt import (
     find_yaml_key_files,
@@ -407,126 +410,86 @@ class TestSeqIndentDetectionEdges:
         assert detect_seq_indent(text) == (4, 2)
 
 
-class _AnnotatedDict(dict):
-    def __init__(self, path):
-        super().__init__()
-        self.__config_file__ = path
-        self.__line__ = 1
+@pytest.mark.parametrize(
+    ("main", "files", "key", "expected"),
+    [
+        ("template: {}\n", {}, "template", ["configuration.yaml"]),
+        (
+            "custom_packages: !include_dir_named packages\n",
+            {"packages/nested/mcp.yaml": "template: {}\n"},
+            "template",
+            ["packages/nested/mcp.yaml"],
+        ),
+        (
+            "homeassistant: {name: Home}\n",
+            {},
+            "homeassistant.name",
+            ["configuration.yaml"],
+        ),
+        ("sensor: {name: x}\n", {}, "sensor..name", []),
+        ("template: {}\n", {}, "", []),
+        ("template: {sensor: []}\n", {}, "sensor", []),
+        (
+            "shell_command: !secret commands\n",
+            {"secrets.yaml": "commands: {template: {}}\n"},
+            "template",
+            [],
+        ),
+        # The including file writes the first key; the read then reports
+        # that the rest of the path is not in that file.
+        (
+            "shell_command: !include commands.yaml\n",
+            {"commands.yaml": "mcp_secret: value\n"},
+            "shell_command.mcp_secret",
+            ["configuration.yaml"],
+        ),
+        (
+            "included: !include commands.yaml\n",
+            {"commands.yaml": "shell_command: {mcp_secret: value}\n"},
+            "shell_command.mcp_secret",
+            ["commands.yaml"],
+        ),
+        (
+            "custom_packages: !include_dir_named packages\n",
+            {
+                "packages/nested/mcp.yaml": "shell_command: {mcp_secret: !secret cmd}\n",
+                "secrets.yaml": "cmd: value\n",
+            },
+            "shell_command.mcp_secret",
+            ["packages/nested/mcp.yaml"],
+        ),
+        (
+            "automation: !include_dir_merge_list automations\n",
+            {"automations/night.yaml": "- alias: Night\n  variables: {mode: dim}\n"},
+            "variables.mode",
+            ["automations/night.yaml"],
+        ),
+        (
+            "automation: !include_dir_list automations\n",
+            {"automations/night.yaml": "alias: Night\nvariables: {mode: dim}\n"},
+            "variables.mode",
+            ["automations/night.yaml"],
+        ),
+    ],
+)
+def test_discovery_uses_cores_yaml_source_locations(
+    tmp_path: Path, main: str, files: dict[str, str], key: str, expected: list[str]
+) -> None:
+    for name, content in {"configuration.yaml": main, **files}.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    config = load_yaml_config_file(
+        str(tmp_path / "configuration.yaml"), Secrets(tmp_path)
+    )
+    assert find_yaml_key_files(config, key) == [
+        str(tmp_path / name) for name in expected
+    ]
 
-    def __eq__(self, other: object) -> bool:
-        return dict.__eq__(self, other)
 
-
-class TestFindYamlKeyFiles:
-    def test_finds_top_level_key_in_config(self):
-        root = _AnnotatedDict("/config/configuration.yaml")
-        root["template"] = {}
-
-        assert find_yaml_key_files(root, "template") == ["/config/configuration.yaml"]
-
-    def test_finds_nested_package_mapping(self):
-        root = _AnnotatedDict("/config/configuration.yaml")
-        packages = _AnnotatedDict("/config/configuration.yaml")
-        nested = _AnnotatedDict("/config/custom_packages/nested/mcp.yaml")
-        nested["template"] = {}
-        packages["nested"] = nested
-        root["custom_packages"] = packages
-
-        assert find_yaml_key_files(root, "template") == [
-            "/config/custom_packages/nested/mcp.yaml"
-        ]
-
-    def test_dotted_path_uses_the_containing_mapping(self):
-        root = _AnnotatedDict("/config/configuration.yaml")
-        home = _AnnotatedDict("/config/configuration.yaml")
-        home["name"] = "Home"
-        root["homeassistant"] = home
-
-        assert find_yaml_key_files(root, "homeassistant.name") == [
-            "/config/configuration.yaml"
-        ]
-
-
-class _TaggedValue:
-    """A resolved value annotated with the file that supplied it."""
-
-    def __init__(self, path):
-        self.__config_file__ = path
-        self.__line__ = 1
-
-
-class TestFindYamlKeyEdges:
-    def test_empty_path_returns_nothing(self):
-        assert find_yaml_key_files({"template": {}}, "") == []
-
-    def test_scalar_root_returns_nothing(self):
-        assert find_yaml_key_files("not a mapping", "template") == []
-
-    def test_list_root_walks_mappings(self):
-        node = _AnnotatedDict("/config/configuration.yaml")
-        node["template"] = {}
-        assert find_yaml_key_files([node], "template") == ["/config/configuration.yaml"]
-
-    def test_empty_path_segment_is_not_collapsed(self):
-        """``sensor..name`` must not be read as ``sensor.name``."""
-        root = _AnnotatedDict("/config/configuration.yaml")
-        root["sensor"] = {"name": "x"}
-
-        assert find_yaml_key_files(root, "sensor..name") == []
-
-    def test_keys_nested_in_a_secret_mapping_are_not_discovered(self):
-        """A mapping-valued !secret is not a config file root."""
-        root = _AnnotatedDict("/config/configuration.yaml")
-        secret = _AnnotatedDict("/config/secrets.yaml")
-        secret["template"] = {}
-        root["shell_command"] = secret
-
-        assert find_yaml_key_files(root, "template") == []
-
-    def test_key_nested_below_a_top_level_mapping_is_not_a_root(self):
-        """A nested ``sensor`` under ``template`` is not a top-level sensor."""
-        root = _AnnotatedDict("/config/configuration.yaml")
-        template = _AnnotatedDict("/config/configuration.yaml")
-        template["sensor"] = []
-        root["template"] = template
-
-        assert find_yaml_key_files(root, "sensor") == []
-
-    def test_mapping_without_source_annotation_is_ignored(self):
-        assert find_yaml_key_files({"template": {}}, "template") == []
-
-    def test_path_across_an_include_is_not_attributed_to_the_parent(self):
-        """The parent file cannot supply a path that continues in an include."""
-        root = _AnnotatedDict("/config/configuration.yaml")
-        included = _AnnotatedDict("/config/commands.yaml")
-        included["mcp_secret"] = "value"
-        root["shell_command"] = included
-
-        assert find_yaml_key_files(root, "shell_command.mcp_secret") == []
-
-    def test_included_mapping_is_found_at_its_own_path(self):
-        """The included file is still discoverable by its own top-level path."""
-        root = _AnnotatedDict("/config/configuration.yaml")
-        included = _AnnotatedDict("/config/commands.yaml")
-        included["shell_command"] = {"mcp_secret": "value"}
-        root["included"] = included
-
-        assert find_yaml_key_files(root, "shell_command.mcp_secret") == [
-            "/config/commands.yaml"
-        ]
-
-    def test_key_uses_the_mapping_not_its_secret_value(self):
-        root = _AnnotatedDict("/config/configuration.yaml")
-        package = _AnnotatedDict("/config/custom_packages/nested/mcp.yaml")
-        package["shell_command"] = {"mcp_secret": _TaggedValue("/config/secrets.yaml")}
-        root["custom_packages"] = {"nested": package}
-
-        assert find_yaml_key_files(root, "shell_command.mcp_secret") == [
-            "/config/custom_packages/nested/mcp.yaml"
-        ]
-
-    def test_cycles_are_walked_once(self):
-        node = _AnnotatedDict("/config/configuration.yaml")
-        node["self"] = node
-        node["template"] = {}
-        assert find_yaml_key_files(node, "template") == ["/config/configuration.yaml"]
+def test_discovery_walks_a_list_of_loaded_mappings(tmp_path: Path) -> None:
+    path = tmp_path / "configuration.yaml"
+    path.write_text("template: {}\n", encoding="utf-8")
+    config = load_yaml_config_file(str(path), Secrets(tmp_path))
+    config["cycle"] = config
+    assert find_yaml_key_files([config], "template") == [str(path)]

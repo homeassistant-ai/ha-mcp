@@ -210,9 +210,7 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   them equal). Add its domain to `INTEGRATIONS` in
   `scripts/sync_dev_integration_pins.py`, run that script, then `uv lock`. The
   script writes the pins and their Dependabot ignore entries, and Renovate
-  reruns it on every Core bump. One whose requirements are not installed with
-  Core (`cloud`) cannot be imported here; the component reaches it through a
-  small function of its own that the test replaces.
+  reruns it on every Core bump.
 - The frontend is the installed `home-assistant-frontend` (pinned through
   `INTEGRATIONS` like any requirement): a test reads what `hass_frontend.where()`
   names and never writes a frontend build of its own.

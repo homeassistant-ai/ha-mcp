@@ -113,6 +113,7 @@ class TestSupervisorRefusals:
         route.supervisor.refuse(
             "POST",
             f"/addons/{SLUG}/options",
+            f"App {SLUG} has invalid options: "
             "Missing option 'authorized_keys' in ssh in SSH (core_ssh)",
         )
 
@@ -124,6 +125,21 @@ class TestSupervisorRefusals:
         assert route.supervisor.sent("POST", f"/addons/{SLUG}/options") == [
             {"options": {"ssh": {"sftp": True}}}
         ]
+
+    async def test_direct_options_refusal_uses_supervisors_error_key(
+        self, app_route: Route
+    ) -> None:
+        app_route.supervisor.running(options={}, schema=[])
+        app_route.supervisor.refuse(
+            "POST",
+            f"/addons/{SLUG}/options",
+            "Configuration declined",
+            error_key="app_configuration_invalid_error",
+        )
+        body = await rejected_call_body(
+            manage(app_route.client, slug=SLUG, options={"debug": True})
+        )
+        assert body["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.parametrize(
         ("status", "code", "named"),
@@ -161,6 +177,7 @@ class TestSupervisorRefusals:
 
         body = await rejected_call_body(read(route.client, slug=SLUG))
 
+        # Core's supervisor/api relays the text and drops the status.
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert body["error"]["suggestion"] == (
             "Check Home Assistant connection and Supervisor availability"
@@ -385,6 +402,18 @@ class TestBusyJobGroup:
         await rejected_call_body(manage(core_route.client, slug=SLUG, action="stop"))
 
         assert core_route.supervisor.requests == [("POST", STOP)]
+
+    async def test_a_specific_rest_refusal_prevents_a_job_retry(
+        self, app_route: Route, quick_retry: None
+    ) -> None:
+        app_route.supervisor.refuse(
+            "POST", STOP, COLLISION, error_key="app_not_running_error"
+        )
+        app_route.supervisor.answer("POST", STOP, {})
+
+        await rejected_call_body(manage(app_route.client, slug=SLUG, action="stop"))
+
+        assert app_route.supervisor.requests == [("POST", STOP)]
 
     async def test_a_real_error_after_a_collision_raises_at_once(
         self, core_route: Route, quick_retry: None

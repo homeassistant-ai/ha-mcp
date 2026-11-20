@@ -95,7 +95,12 @@ from .backup_entity_ids import (
     update_with_registry_icon,
     with_registry_icon,
 )
-from .backup_files import _fetch_file, _fetch_file_as_stored, _restore_file
+from .backup_files import (
+    _fetch_file,
+    _fetch_file_as_stored,
+    _restore_file,
+    file_read_error_code,
+)
 from .backup_helper_target import fetch_helper as _fetch_helper
 from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
 from .backup_helper_target import (
@@ -1846,7 +1851,7 @@ class BackupManager:
         info = await _read_legacy_backup(self._client, filename)
         if not info.get("success", False):
             err = str(info.get("error", ""))
-            if "does not exist" in err or "not found" in err.lower():
+            if file_read_error_code(info) == "not_found":
                 raise FileNotFoundError(filename)
             raise ValueError(f"Cannot read legacy backup {filename!r}: {err}")
         return info
@@ -2408,7 +2413,7 @@ async def _fetch_yaml(client: Any, entity_id: str) -> Any:
     result = unwrap_service_response(result)
     if not result.get("success", False):
         error = str(result.get("error", ""))
-        if "does not exist" in error or "not a file" in error:
+        if file_read_error_code(result) in {"not_found", "not_a_file"}:
             return None
         raise HomeAssistantError(f"read_file failed for {file!r}: {error}")
     # The component extracts the subtree (it has ruamel); None = key absent.
@@ -2527,14 +2532,8 @@ async def _list_legacy_backups(client: Any) -> tuple[list[dict[str, Any]], str |
 
 
 async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
-    """Read one legacy ``.bak`` via the component read_legacy_backup service.
-
-    Returns the unwrapped service response (carries ``success`` / ``content`` /
-    ``file_path`` / ``path_ambiguous`` / ``timestamp``). A service-unavailable
-    ``HomeAssistantError`` — or a ``ToolError`` from the caller-token gates —
-    is mapped to a ``success: False`` dict so the caller surfaces a not-found
-    rather than crashing.
-    """
+    """Read a legacy backup; a service that cannot be called is ``success: False``
+    with no ``error_code``, which a missing backup has."""
     from .tools.helpers import extract_structured_error_reason
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response

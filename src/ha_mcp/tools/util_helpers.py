@@ -492,43 +492,6 @@ def merge_visibility_warnings(
     return response
 
 
-# Error strings produced by the pooled WebSocket path when the transport (not
-# the command) fails: the manager's connect raise, send timeouts, and socket
-# drops. Callers that attach domain-specific suggestions match on these so an
-# HA restart is not presented as a domain problem (issue #1832 review).
-#
-# Since #1947 ``send_websocket_message`` raises on a dead transport rather than
-# collapsing it into ``{"success": False, "error": ...}``, so these signatures
-# now only have to catch transport-shaped text that reaches a caller by another
-# route (a component-side error frame, or an error string threaded through a
-# response body). They are kept as a belt-and-braces match, not as the primary
-# detection path.
-WS_CONNECTION_SIGNATURES = (
-    "failed to connect",
-    "timed out",
-    "timeout",
-    "connection closed",
-    # reset_connection: "WebSocket connection to Home Assistant closed while
-    # waiting for a response" — "connection closed" is not adjacent there.
-    "closed while waiting",
-    # listener close reason: "connection dropped without a close frame".
-    "connection dropped",
-    "disconnected",
-    "not connected",
-    "not authenticated",
-)
-
-
-def is_connection_error_message(error_msg: Any) -> bool:
-    """True when a pooled-WS failure payload is connection/transport-shaped.
-
-    Accepts any payload shape: HA error frames can carry a dict (or None)
-    in the error slot, so the value is stringified before matching.
-    """
-    lowered = str(error_msg).lower()
-    return any(sig in lowered for sig in WS_CONNECTION_SIGNATURES)
-
-
 async def list_visible_registry_ids(
     client: Any, domain: str, *, bare: bool = False
 ) -> list[str]:

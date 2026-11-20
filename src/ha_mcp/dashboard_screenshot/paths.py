@@ -11,12 +11,11 @@ from typing import Any, cast
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from ..tools.dashboard_read_errors import (
-    CONFIG_NOT_FOUND_CODE,
-    NO_STORED_CONFIG_MESSAGES,
     NO_STORED_CONFIG_NOTE,
-    UNKNOWN_CONFIG_PREFIX,
+    config_not_found,
+    no_stored_config,
 )
 from ..tools.helpers import raise_tool_error
 from .capture import _normalize_dashboard_path
@@ -297,22 +296,11 @@ async def fetch_dashboard_render_config(
             )
         )
     if isinstance(response, dict) and not response.get("success", True):
-        error = response.get("error", {})
-        if isinstance(error, dict):
-            error_code = str(error.get("code") or "").lower()
-            message = str(error.get("message", error))
-        else:
-            error_code = ""
-            message = str(error)
-        if message in NO_STORED_CONFIG_MESSAGES:
+        error_code = response.get("error_code") or get_error_code(response)
+        message = get_error_message(response) or str(response.get("error", ""))
+        if no_stored_config(response):
             return None
-        missing_dashboard = error_code == CONFIG_NOT_FOUND_CODE or message.startswith(
-            (
-                f"{UNKNOWN_CONFIG_PREFIX}:",
-                f"Command failed: {UNKNOWN_CONFIG_PREFIX}:",
-            )
-        )
-        if missing_dashboard:
+        if config_not_found(response):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,

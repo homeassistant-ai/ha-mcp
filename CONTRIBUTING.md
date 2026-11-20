@@ -35,9 +35,10 @@ uv run ruff check --fix src/ tests/ # Lint
 uv run mypy src/                   # Type check
 uv run mypy tests/src/unit/ tests/addon/  # Type check the unit and app tests
 uv run ast-grep scan               # AST lint (error handling patterns)
+uv run python scripts/error_wording.py  # No decision by an error's wording
 ```
 
-On every commit, hooks run `ruff check --fix` (lint), `ast-grep scan` (AST lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). When issue-intake files change, they also run the issue-intake tests; when settings UI, consent form or site files change, they run the JSDOM-based UI tests. On pull requests the **Fast Checks** CI job re-runs the lint, AST lint and type checks, plus `ruff format --check` on changed Python files, the `uv.lock` sync check, the HA-core constraint-alignment check, the docs-size check, the check that no test is exempted from the real-Core checks, the check that no public name is used only by the tests, the check that no test reaches a private name through a string, and HACS and Hassfest validation. Unit tests run in the separate **Unit Tests** job.
+On every commit, hooks run `ruff check --fix` (lint), `ast-grep scan` (AST lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). When issue-intake files change, they also run the issue-intake tests; when settings UI, consent form or site files change, they run the JSDOM-based UI tests. On pull requests the **Fast Checks** CI job re-runs the lint, AST lint and type checks, plus `ruff format --check` on changed Python files, the `uv.lock` sync check, the HA-core constraint-alignment check, the docs-size check, the check that no test is exempted from the real-Core checks, the check that no public name is used only by the tests, the check that no test reaches a private name through a string, the check that no production code decides by the wording of an error, and HACS and Hassfest validation. Unit tests run in the separate **Unit Tests** job.
 
 ## 🔄 Migrating from pre-commit to lefthook
 

@@ -767,6 +767,29 @@ class TestImportResolution:
 
         assert info["description"] == "from the initializer"
 
+    def test_a_sibling_module_import_leaves_the_initializer_unread(
+        self, catalog: Catalog, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``from . import sibling`` binds a module, which holds no name to
+        resolve; reading the initializer for it would walk the whole package
+        again from every module that imports this way."""
+        catalog.module("tools/__init__.py", "NAME = 'from the initializer'\n")
+        catalog.module("tools/sibling.py", "NAME = 'from a sibling'\n")
+        reads: list[Path] = []
+        read_text = Path.read_text
+
+        def counting_read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+            reads.append(path)
+            return read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+        catalog.param(
+            "Annotated[str, Field(description='text')]", "from . import sibling"
+        )
+
+        assert catalog.root / "tools" / "__init__.py" not in reads
+
     def test_parent_package_import(self, catalog: Catalog):
         catalog.module("utils/python_sandbox.py", "NAME = 'from the parent'\n")
         info = catalog.param(self._DESCRIBED, "from ..utils.python_sandbox import NAME")

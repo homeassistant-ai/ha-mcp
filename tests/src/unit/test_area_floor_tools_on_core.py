@@ -489,7 +489,10 @@ async def test_a_reorder_core_applied_succeeds_when_the_order_cannot_be_read_bac
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
 
-    with _floor_list_failing_on_read(monkeypatch, read=2):
+    with (
+        caplog.at_level("WARNING", logger="ha_mcp.tools.area_reorder"),
+        _floor_list_failing_on_read(monkeypatch, read=2),
+    ):
         result = await tools.ha_set_area_or_floor(
             kind="floor", order=[attic.floor_id, ground.floor_id]
         )

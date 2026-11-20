@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote_plus
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from ha_mcp import __version__
 from ha_mcp._vendor.fastmcp import Context
@@ -311,10 +311,10 @@ def _tool_policy_summary() -> str:
         logger.warning("Tool policy probe failed: %s (%s)", e, type(e).__name__)
         # load_policy's message can quote rule contents, so only its kind
         # reaches the report.
-        if "not valid JSON" in str(e):
-            return "unreadable (invalid JSON)"
-        if "schema validation" in str(e):
+        if isinstance(e.__cause__, ValidationError):
             return "unreadable (schema validation failed)"
+        if isinstance(e.__cause__, ValueError):  # the JSON or its encoding
+            return "unreadable (invalid JSON)"
         return f"unreadable ({type(e).__name__})"
     count = len(policy.rules)
     rules = "1 rule" if count == 1 else f"{count} rules"

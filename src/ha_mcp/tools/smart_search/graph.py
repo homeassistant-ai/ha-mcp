@@ -32,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...errors import get_error_code, get_error_message
+from ...errors import get_error_code
 from ..component_api import UNKNOWN_COMMAND_CODE
 
 logger = logging.getLogger(__name__)
@@ -202,19 +202,16 @@ def reset_unsupported_cache(client: Any) -> None:
 
 
 def _looks_unsupported(response: dict[str, Any]) -> bool:
-    """True when an error envelope means HA does not serve this command.
+    """True when Core's code says it does not serve this command.
 
-    Reads the structured code first so a reworded message upstream cannot
-    silently turn this check off, and accepts both envelope shapes the way
-    ``_deep._is_no_stored_config`` does: ``send_websocket_message`` flattens a
+    Both envelope shapes are read: ``send_websocket_message`` flattens a
     command failure (code as ``error_code``), while ``get_error_code`` handles
-    the nested ``error.code`` form. The text match stays as a last resort for
-    envelopes carrying no code at all.
+    the nested ``error.code`` form.
     """
-    if UNKNOWN_COMMAND_CODE in (response.get("error_code"), get_error_code(response)):
-        return True
-    text = (get_error_message(response) or "").lower()
-    return "unknown command" in text or "unknown_command" in text
+    return UNKNOWN_COMMAND_CODE in (
+        response.get("error_code"),
+        get_error_code(response),
+    )
 
 
 def _parse_related(payload: Any) -> GraphResult | None:

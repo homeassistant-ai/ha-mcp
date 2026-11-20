@@ -38,7 +38,6 @@ from .component_registries import (
 from .config_helpers.registry import validate_registry_ids
 from .entity_param_parsing import _parse_string_list_field
 from .helpers import (
-    core_error_message,
     exception_to_structured_error,
     log_tool_usage,
     raise_core_refusal,
@@ -924,11 +923,8 @@ class AreaTools:
                 }
 
             context = {"kind": kind, id_key: id}
-            # Core answers an unknown id with the generic ``invalid_info`` code, so
-            # its exact message is what tells it from any other refusal.
-            if core_error_message(result.get("error", "")) == (
-                f"{kind.capitalize()} ID doesn't exist"
-            ):
+            # On registry/delete, invalid_info identifies a missing ID.
+            if result.get("error_code") == "invalid_info":
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.RESOURCE_NOT_FOUND,

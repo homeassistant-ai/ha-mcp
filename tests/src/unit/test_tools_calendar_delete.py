@@ -128,7 +128,8 @@ async def test_a_delete_on_an_unknown_calendar_is_not_found(
 async def test_delete_rejects_blank_recurrence_id(
     core_client: HomeAssistantClient, bad: str
 ) -> None:
-    """A blank recurrence_id reaches HA as a real one and matches nothing."""
+    """An empty recurrence_id reaches HA as none at all and deletes the whole
+    series; a whitespace one matches nothing."""
     tools = CalendarTools(core_client)
     with _spy(core_client) as send, pytest.raises(ToolError) as exc_info:
         await tools.ha_config_remove_calendar_event(

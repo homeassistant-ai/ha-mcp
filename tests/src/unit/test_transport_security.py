@@ -17,8 +17,10 @@ import os
 import httpx
 import pytest
 
+from ha_mcp import __main__ as main_module
 from ha_mcp._vendor import fastmcp
 from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.transport_security import (
     HOST_ORIGIN_PROTECTION_ENV,
     ensure_host_origin_guard_default_off,
@@ -135,18 +137,37 @@ async def test_helper_allows_cross_origin_and_non_loopback(monkeypatch):
 # --- wiring: the deferred-mcp chokepoint calls the helper --------------------
 
 
-def test_create_server_disables_guard(monkeypatch):
-    """create_server -- the chokepoint for ha-mcp-web and the add-on -- calls
-    the guard-disable before building the server."""
-    import ha_mcp.__main__ as main_module
+async def test_create_server_disables_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    hass_access_token: str,
+) -> None:
+    """The launcher configures the guard before constructing its server."""
+    from ha_mcp.config import reset_global_settings
+    from ha_mcp.server import HomeAssistantSmartMCPServer
 
-    calls: list[int] = []
+    monkeypatch.setenv(HOST_ORIGIN_PROTECTION_ENV, "true")
+    monkeypatch.setenv("HOMEASSISTANT_URL", core_client.base_url)
+    monkeypatch.setenv("HOMEASSISTANT_TOKEN", hass_access_token)
+    reset_global_settings()
+    calls: list[str] = []
+
+    def configure():
+        calls.append("configure")
+        ensure_host_origin_guard_default_off()
+
+    initialize = HomeAssistantSmartMCPServer.__init__
+
+    def construct(server, *args, **kwargs):
+        calls.append("construct")
+        initialize(server, *args, **kwargs)
+
     monkeypatch.setattr(
-        "ha_mcp.transport_security.ensure_host_origin_guard_default_off",
-        lambda: calls.append(1),
+        "ha_mcp.transport_security.ensure_host_origin_guard_default_off", configure
     )
-    monkeypatch.setattr(
-        "ha_mcp.server.HomeAssistantSmartMCPServer", lambda *a, **kw: object()
-    )
-    main_module.create_server()
-    assert calls == [1]
+    monkeypatch.setattr(HomeAssistantSmartMCPServer, "__init__", construct)
+    server = main_module.create_server()
+    try:
+        assert calls == ["configure", "construct"]
+    finally:
+        await server.close()

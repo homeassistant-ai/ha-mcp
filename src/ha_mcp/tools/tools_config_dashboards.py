@@ -42,6 +42,7 @@ from ..dashboard_screenshot.paths import (
     match_dashboard_view,
     resolve_dashboard_view,
 )
+from ..error_wording import hyphenated_url_path
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
@@ -83,10 +84,11 @@ from .dashboard_list_checks import (
 from .dashboard_read_errors import (
     DASHBOARD_FETCH_FAILED_PREFIX,
     DASHBOARD_LIST_SUGGESTION,
-    NO_STORED_CONFIG_MESSAGES,
     NO_STORED_CONFIG_NOTE,
+    config_not_found,
     is_no_stored_config_error,
     is_unknown_dashboard,
+    no_stored_config,
     raise_registry_read_error,
     raise_unresolved_delete,
     read_failure_code,
@@ -1132,8 +1134,8 @@ async def _lazy_resolve_and_retry(
     No-op when:
     - the response is not a failure (success=True or non-dict),
     - ``url_path`` is empty,
-    - the error message does not contain ``UNKNOWN_CONFIG_PREFIX``
-      (the substring miss),
+    - Core's code is not ``config_not_found``, or its message does not
+      name the identifier as unknown,
     - the resolver finds no match,
     - or the resolver itself raises (logged at WARNING).
 
@@ -1152,7 +1154,7 @@ async def _lazy_resolve_and_retry(
 
     err = response.get("error", {})
     err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-    if not is_unknown_dashboard(err_msg):
+    if not config_not_found(response) or not is_unknown_dashboard(err_msg):
         return url_path, response
 
     try:
@@ -1857,7 +1859,7 @@ class DashboardConfigTools:
             error_msg = response.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
-            if str(error_msg) in NO_STORED_CONFIG_MESSAGES:
+            if no_stored_config(response):
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_FAILED,
@@ -1871,7 +1873,7 @@ class DashboardConfigTools:
                 )
             raise_tool_error(
                 create_error_response(
-                    read_failure_code(str(error_msg)),
+                    read_failure_code(response),
                     f"Failed to get dashboard: {error_msg}",
                     suggestions=[
                         "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
@@ -2212,20 +2214,18 @@ class DashboardConfigTools:
         # except block).
         resolved_url_path[0] = url_path
 
-        # Check if request failed (after potential retry). On this legacy read
-        # (no component, or force_reload) Core's message is the only signal
-        # that the dashboard has no config.
+        # A legacy read distinguishes the two causes of config_not_found.
         error_msg: str | None = None
         if isinstance(response, dict) and not response.get("success", True):
             error = response.get("error", {})
             error_msg = str(
                 error.get("message", error) if isinstance(error, dict) else error
             )
-        stored_config = error_msg not in NO_STORED_CONFIG_MESSAGES
+        stored_config = not (isinstance(response, dict) and no_stored_config(response))
         if error_msg is not None and stored_config:
             raise_tool_error(
                 create_error_response(
-                    read_failure_code(error_msg),
+                    read_failure_code(response),
                     error_msg,
                     suggestions=[
                         "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
@@ -3114,10 +3114,8 @@ class DashboardConfigTools:
             error_msg = create_result.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
-            hyphenated = url_path.replace("_", "-")
-            suggestions = None
-            if "needs to contain a hyphen" in str(error_msg) and hyphenated != url_path:
-                suggestions = [f"Try '{hyphenated}' instead"]
+            hyphenated = hyphenated_url_path(str(error_msg), url_path)
+            suggestions = [f"Try '{hyphenated}' instead"] if hyphenated else None
             raise_tool_error(
                 create_error_response(
                     ws_failure_code(create_result),

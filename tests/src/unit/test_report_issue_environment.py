@@ -15,11 +15,10 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry, mock_component
 from pytest_homeassistant.test_util.aiohttp import (
     AiohttpClientMocker,
     AiohttpClientMockResponse,
@@ -40,8 +39,10 @@ from ha_mcp.utils.data_paths import get_data_dir
 
 from ._client_spies import sent_commands
 from ._core_setup import set_up_tools_entry
+from ._haos_build_core import root_info
 from ._report_issue import report_issue, report_line
-from ._server_entry import add_server_entry
+from ._server_entry import add_server_entry, replace_server
+from ._server_entry import set_up as set_up_entry
 from ._supervisor_core import load_supervisor_api, supervisor_requests
 
 
@@ -154,6 +155,18 @@ async def test_report_works_when_the_policy_package_cannot_load(
     assert report_line(report, "Tool Policy") == "unreadable (ModuleNotFoundError)"
 
 
+async def test_a_policy_that_fails_its_schema_is_reported_as_that(
+    core_client: HomeAssistantClient,
+) -> None:
+    (get_data_dir() / "tool_policy.json").write_text('{"rules": 5}', encoding="utf-8")
+
+    report = await report_issue(core_client)
+
+    assert report_line(report, "Tool Policy") == (
+        "unreadable (schema validation failed)"
+    )
+
+
 def test_toggles_carry_the_beta_flags_and_count_the_tool_lists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -178,7 +191,7 @@ def test_toggles_carry_the_beta_flags_and_count_the_tool_lists(
 
 
 async def _tools_absent_server_added(hass: HomeAssistant) -> None:
-    add_server_entry(hass).mock_state(hass, ConfigEntryState.LOADED)
+    assert await set_up_entry(hass, add_server_entry(hass))
 
 
 async def _tools_set_up_server_not_added(hass: HomeAssistant) -> None:
@@ -191,9 +204,8 @@ async def _old_tools_renamed_entry(hass: HomeAssistant) -> None:
     await set_up_tools_entry(hass)
     # A component before 0.5.0 registers its services but not the bootstrap.
     hass.services.async_remove(DOMAIN, CALLER_TOKEN_BOOTSTRAP_SERVICE)
-    renamed = MockConfigEntry(domain=DOMAIN, title="My Renamed Entry")
-    renamed.add_to_hass(hass)
-    renamed.mock_state(hass, ConfigEntryState.LOADED)
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    hass.config_entries.async_update_entry(entry, title="My Renamed Entry")
 
 
 @pytest.mark.parametrize(
@@ -224,6 +236,7 @@ async def _old_tools_renamed_entry(hass: HomeAssistant) -> None:
 async def test_both_component_entries_are_named_next_to_each_other(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
     set_up: Callable[[HomeAssistant], Awaitable[None]],
     tools_line: str,
     server_line: str,
@@ -232,6 +245,7 @@ async def test_both_component_entries_are_named_next_to_each_other(
     or an add-on install that also added the server entry, must each be
     readable from the report next to Installation Method."""
     assert await async_setup_component(hass, "config", {})
+    replace_server(monkeypatch)
     await set_up(hass)
 
     report = await report_issue(core_client)
@@ -259,12 +273,15 @@ async def test_failed_entry_probes_read_unknown(
 
 
 async def test_component_version_and_entry_line_share_one_info_read(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A second ``info`` read could answer for a component updated in
     between, and the version and webhook mode would then disagree."""
     assert await async_setup_component(hass, "config", {})
-    add_server_entry(hass).mock_state(hass, ConfigEntryState.LOADED)
+    replace_server(monkeypatch)
+    assert await set_up_entry(hass, add_server_entry(hass))
     await get_component_caps(component_core_client)
     socket = await get_websocket_client(
         url=component_core_client.base_url,
@@ -291,7 +308,7 @@ def supervised(
     container carries ``SUPERVISOR_TOKEN``."""
     monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
     load_supervisor_api(hass, aioclient_mock, monkeypatch, {})
-    hass.config.components.add("hassio")
+    mock_component(hass, "hassio")
     return aioclient_mock
 
 
@@ -305,10 +322,7 @@ async def test_supervised_install_reports_the_supervisor_release(
         "http://127.0.0.1/info",
         json={
             "result": "ok",
-            "data": {
-                "supervisor": "2026.09.2",
-                "operating_system": "Home Assistant OS 18.3",
-            },
+            "data": root_info("running"),
         },
     )
 
@@ -316,7 +330,7 @@ async def test_supervised_install_reports_the_supervisor_release(
 
     assert ("get", "/info") in supervisor_requests(supervised)
     assert (
-        "- **Supervisor:** 2026.09.2 (host OS: Home Assistant OS 18.3)\n"
+        "- **Supervisor:** 2026.06.1 (host OS: Home Assistant OS 17.0)\n"
         in (report["issue_body"])
     )
     assert report_line(report, "Installation Method") == "embedded"
@@ -333,7 +347,9 @@ async def test_slow_supervisor_does_not_hold_up_the_report(
 
     async def answers_late(method: str, url: URL, data: Any) -> Any:
         await answer.wait()
-        return AiohttpClientMockResponse(method, url, json={"result": "ok", "data": {}})
+        return AiohttpClientMockResponse(
+            method, url, json={"result": "ok", "data": root_info("running")}
+        )
 
     supervised.get("http://127.0.0.1/info", side_effect=answers_late)
     monkeypatch.setattr(tools_bug_report, "SUPERVISOR_PROBE_TIMEOUT", 0.05)

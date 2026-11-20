@@ -17,6 +17,7 @@ from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from aiohasupervisor.models.backups import BackupList
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
@@ -92,10 +93,11 @@ async def backup_core(
         aioclient_mock,
         monkeypatch,
         {
-            ("get", path): {"backups": []}
-            for path in ("/backups", "/v2/backups", "/backups_report")
+            ("get", path): BackupList(backups=[]).to_dict()
+            for path in ("/backups", "/v2/backups")
         },
     )
+    aioclient_mock.get("http://127.0.0.1/backups_report", status=404)
     return aioclient_mock
 
 
@@ -275,12 +277,13 @@ class TestWsCommandMode:
         monkeypatch.setattr(settings, "enable_snapshot_actions", False)
         monkeypatch.setattr(settings, "backup_read_only", True)
 
-        result = await ServiceTools(core_client, None).ha_call_service(
-            ws_command="supervisor/api",
-            data={"endpoint": "/backups_report", "method": "get"},
-        )
-
-        assert result["success"] is True
+        # Supervisor has no such endpoint. Its own refusal proves this similarly
+        # named path made it through the backup gate.
+        with pytest.raises(ToolError):
+            await ServiceTools(core_client, None).ha_call_service(
+                ws_command="supervisor/api",
+                data={"endpoint": "/backups_report", "method": "get"},
+            )
         assert supervisor_requests(backup_core) == [("get", "/backups_report")]
 
 

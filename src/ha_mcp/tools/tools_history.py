@@ -644,7 +644,7 @@ def _parse_time_range(
 async def _read_in_ha_timezone(
     client: Any, start_dt: datetime, end_dt: datetime
 ) -> tuple[datetime, datetime]:
-    """Read a time without an offset in Home Assistant's time zone, as Core does."""
+    """Read offset-less times in Home Assistant's zone, as Core does, or refuse."""
     if None not in (start_dt.tzinfo, end_dt.tzinfo):
         return start_dt, end_dt
     try:

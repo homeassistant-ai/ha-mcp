@@ -10,6 +10,8 @@ Supervisor that ``aioclient_mock`` answers (``_supervisor_core``).
 from pathlib import Path
 
 import pytest
+from aiohasupervisor.models.homeassistant import HomeAssistantStats
+from aiohasupervisor.models.resolution import ResolutionInfo, UnhealthyReason
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import mock_component
@@ -104,8 +106,23 @@ async def test_supervisor_reads_resolution_and_both_container_stats(
         aioclient_mock,
         monkeypatch,
         {
-            ("get", "/resolution/info"): {"unhealthy": ["docker"]},
-            ("get", "/core/stats"): {"cpu_percent": 3.5},
+            ("get", "/resolution/info"): ResolutionInfo(
+                unsupported=[],
+                unhealthy=[UnhealthyReason.DOCKER],
+                issues=[],
+                checks=[],
+                suggestions=[],
+            ).to_dict(),
+            ("get", "/core/stats"): HomeAssistantStats(
+                cpu_percent=3.5,
+                memory_usage=0,
+                memory_limit=1024,
+                memory_percent=0,
+                network_rx=0,
+                network_tx=0,
+                blk_read=0,
+                blk_write=0,
+            ).to_dict(),
         },
     )
     aioclient_mock.get(f"http://{SUPERVISOR}/supervisor/stats", status=500)
@@ -113,6 +130,6 @@ async def test_supervisor_reads_resolution_and_both_container_stats(
     result = await SystemTools(core_client).ha_get_system_health(include="supervisor")
 
     section = result["supervisor"]
-    assert section["resolution"] == {"unhealthy": ["docker"]}
-    assert section["core_stats"] == {"cpu_percent": 3.5}
+    assert section["resolution"]["unhealthy"] == ["docker"]
+    assert section["core_stats"]["cpu_percent"] == 3.5
     assert "Not available" in section["supervisor_stats"]["error"]

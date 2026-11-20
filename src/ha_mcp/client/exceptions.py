@@ -2,6 +2,11 @@
 
 from typing import Any
 
+import httpx
+
+from .._vendor.websockets.exceptions import InvalidProxyStatus, InvalidStatus
+from ..error_wording import config_resource_not_found
+
 
 class HomeAssistantError(Exception):
     """Base exception for Home Assistant API errors."""
@@ -9,6 +14,21 @@ class HomeAssistantError(Exception):
 
 class HomeAssistantConnectionError(HomeAssistantError):
     """Connection error to Home Assistant."""
+
+    @property
+    def timed_out(self) -> bool:
+        """Whether the transport reported a timeout while awaiting Home Assistant."""
+        cause = self.__cause__
+        if isinstance(cause, HomeAssistantConnectionError):
+            return cause.timed_out
+        return isinstance(
+            cause, (TimeoutError, httpx.TimeoutException, HomeAssistantCommandTimeout)
+        )
+
+
+class HomeAssistantNotReached(HomeAssistantConnectionError):
+    """An answer that shows the request did not reach Home Assistant: a
+    redirect, which the client does not follow."""
 
 
 class HomeAssistantCommandNotSent(HomeAssistantConnectionError):
@@ -73,19 +93,26 @@ class HomeAssistantAPIError(HomeAssistantError):
         """Whether Core's config API says the id does not exist: 404 on a read,
         400 "Resource not found" on a delete."""
         return self.status_code == 404 or (
-            self.status_code == 400
-            and (self.response_data or {}).get("message") == "Resource not found"
+            self.status_code == 400 and config_resource_not_found(self.response_data)
         )
+
+
+def http_failure_status(error: BaseException) -> int | None:
+    """HTTP status of a refused request or WebSocket upgrade, including its cause."""
+    if isinstance(error, HomeAssistantAPIError):
+        return error.status_code
+    if isinstance(error, (httpx.HTTPStatusError, InvalidStatus, InvalidProxyStatus)):
+        return error.response.status_code
+    if isinstance(error, HomeAssistantConnectionError) and error.__cause__ is not None:
+        return http_failure_status(error.__cause__)
+    return None
 
 
 class HomeAssistantCommandError(HomeAssistantError):
     """WebSocket command returned success=False.
 
     Raised by ``WebSocketClient.send_command`` when Home Assistant responds
-    with ``{type: "result", success: False}``. Used as a type marker in
-    ``_classify_exception``'s match dispatch; classification then falls
-    through to ``_classify_by_message`` for pattern matching on the
-    error message.
+    with ``{type: "result", success: False}``.
 
     ``code`` carries HA's structured WebSocket error code (the ``code`` field
     of the response ``error`` object — e.g. ``"unknown_command"``,
@@ -94,22 +121,88 @@ class HomeAssistantCommandError(HomeAssistantError):
     defaults to ``None`` for exceptions raised without a code (older raise
     sites, string error payloads, or direct construction in tests), which
     keeps the single-positional-argument constructor backward-compatible.
+
+    The ``translation_*`` fields are Core's, when it sent them.
+    ``empty_error_message`` marks a refusal whose message was blank, which is
+    what a lost Supervisor acknowledgement looks like over Core's bridge.
     """
 
-    def __init__(self, message: str, code: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        code: str | None = None,
+        *,
+        translation_key: str | None = None,
+        translation_domain: str | None = None,
+        translation_placeholders: dict[str, Any] | None = None,
+        empty_error_message: bool = False,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.translation_key = translation_key
+        self.translation_domain = translation_domain
+        self.translation_placeholders = translation_placeholders
+        self.empty_error_message = empty_error_message
+
+    @classmethod
+    def from_reply(
+        cls, reply: dict[str, Any], message: str | None = None
+    ) -> HomeAssistantCommandError:
+        """The refusal a pooled reply carries, the inverse of ``refusal_fields``."""
+        return cls(
+            str(reply.get("error")) if message is None else message,
+            reply.get("error_code"),
+            translation_key=reply.get("translation_key"),
+            translation_domain=reply.get("translation_domain"),
+            translation_placeholders=reply.get("translation_placeholders"),
+            empty_error_message=bool(reply.get("empty_error_message")),
+        )
+
+    def refusal_fields(self) -> dict[str, Any]:
+        """Fields accompanying the human-readable error on a pooled response."""
+        fields: dict[str, Any] = {"error_code": self.code}
+        if self.empty_error_message:
+            fields["empty_error_message"] = True
+        if self.translation_key is not None:
+            fields["translation_key"] = self.translation_key
+        if self.translation_domain is not None:
+            fields["translation_domain"] = self.translation_domain
+        if self.translation_placeholders is not None:
+            fields["translation_placeholders"] = self.translation_placeholders
+        return fields
+
+    @classmethod
+    def from_ws_error(cls, error: Any, prefix: str) -> HomeAssistantCommandError:
+        """Preserve the native fields in a WebSocket refusal."""
+        if not isinstance(error, dict):
+            return cls(f"{prefix}: {error}")
+        message = error.get("message", error)
+        key, domain, placeholders = (
+            error.get(field)
+            for field in (
+                "translation_key",
+                "translation_domain",
+                "translation_placeholders",
+            )
+        )
+        return cls(
+            f"{prefix}: {message}",
+            error.get("code"),
+            translation_key=key if isinstance(key, str) else None,
+            translation_domain=domain if isinstance(domain, str) else None,
+            translation_placeholders=(
+                placeholders if isinstance(placeholders, dict) else None
+            ),
+            empty_error_message=isinstance(message, str) and not message.strip(),
+        )
 
 
 class HomeAssistantCommandTimeout(HomeAssistantError):
     """WebSocket ``send_command`` timed out waiting for HA's response.
 
-    Sibling of ``HomeAssistantCommandError`` (not a subclass) so existing
-    ``except HomeAssistantCommandError`` sites — including the match
-    dispatch in ``helpers._classify_exception`` — keep their original
-    semantics. Callers that specifically want to handle the WS
-    round-trip timeout (e.g. short-lived waiter cleanup that should
-    swallow a timeout instead of masking the real wait result) catch
-    this type directly. Replaces a bare ``Exception("Command timeout")``
+    A missing response is distinct from a command refusal. Callers that
+    specifically want to handle the WS round-trip timeout (e.g. short-lived
+    waiter cleanup that should swallow a timeout instead of masking the real
+    wait result) catch this type directly. Replaces a bare ``Exception("Command timeout")``
     string-match pattern (#1382 Patch76 review).
     """

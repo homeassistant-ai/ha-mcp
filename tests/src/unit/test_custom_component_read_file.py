@@ -147,19 +147,32 @@ class TestReadFile:
         datetime.fromisoformat(result["modified"])
 
     @pytest.mark.parametrize(
-        ("path", "error"),
+        ("path", "error_code", "error"),
         [
-            ("www/missing.txt", "File does not exist: www/missing.txt"),
-            ("www/sub", "Path is not a file: www/sub"),
-            ("home-assistant.log", "File does not exist: home-assistant.log"),
+            ("www/missing.txt", "not_found", "File does not exist: www/missing.txt"),
+            ("www/sub", "not_a_file", "Path is not a file: www/sub"),
+            (
+                "home-assistant.log",
+                "not_found",
+                "File does not exist: home-assistant.log",
+            ),
         ],
     )
     async def test_a_path_that_is_not_a_file_is_reported(
-        self, hass: HomeAssistant, files: FileService, path: str, error: str
+        self,
+        hass: HomeAssistant,
+        files: FileService,
+        path: str,
+        error_code: str,
+        error: str,
     ) -> None:
         await put(hass, {"www/sub/inner.txt": "x"})
 
-        assert await _read(files, path) == {"success": False, "error": error}
+        assert await _read(files, path) == {
+            "success": False,
+            "error_code": error_code,
+            "error": error,
+        }
 
     async def test_a_folder_named_like_a_log_is_not_a_file(
         self, hass: HomeAssistant, files: FileService
@@ -170,6 +183,7 @@ class TestReadFile:
 
         assert result == {
             "success": False,
+            "error_code": "not_a_file",
             "error": "Path is not a file: home-assistant.log",
         }
 
@@ -181,6 +195,7 @@ class TestReadFile:
         result = await _read(files, "www/logo.png")
 
         assert result["success"] is False
+        assert result["error_code"] == "binary_file"
         assert "Cannot read binary file" in result["error"]
 
 

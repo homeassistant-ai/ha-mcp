@@ -28,6 +28,7 @@ from ha_mcp.tools.tools_dev import FEATURE_FLAG, DevTools
 from ha_mcp.utils.data_paths import get_data_dir
 
 from ._real_server import build_server
+from ._tools_addons_core import app_info
 
 # Where the web settings UI saves the settings it overrides.
 OVERRIDE_FILE = "feature_flags.json"
@@ -117,7 +118,9 @@ class Supervisor:
         self.refusal: str | None = None
 
     async def info(self, request: web.Request) -> web.Response:
-        return web.json_response({"result": "ok", "data": {"options": self.options}})
+        return web.json_response(
+            {"result": "ok", "data": app_info(options=self.options)}
+        )
 
     async def save(self, request: web.Request) -> web.Response:
         if self.refusal is not None:

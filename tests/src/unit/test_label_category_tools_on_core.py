@@ -7,6 +7,8 @@ Core.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
@@ -15,7 +17,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.component_registries import WS_REGISTRIES
 from ha_mcp.tools.tools_categories import CategoryTools
 from ha_mcp.tools.tools_labels import LabelTools
@@ -46,6 +48,23 @@ def component_labels(component_core_client: HomeAssistantClient) -> LabelTools:
 @pytest.fixture
 def categories(core_client: HomeAssistantClient) -> CategoryTools:
     return CategoryTools(core_client)
+
+
+async def test_update_keeps_the_core_refusal_if_the_registry_cannot_be_read(
+    categories: CategoryTools,
+) -> None:
+    with patch(
+        "ha_mcp.tools.tools_categories.category_list_reply",
+        side_effect=HomeAssistantConnectionError("registry connection lost"),
+    ):
+        error = await rejected_call_body(
+            categories.ha_config_set_category(
+                scope="automation", category_id="missing", icon="mdi:lamp"
+            )
+        )
+
+    assert error["ha_error_code"] == "invalid_info"
+    assert "Category ID doesn't exist" in error["error"]["message"]
 
 
 async def test_label_update_without_a_name_keeps_the_name(
@@ -457,8 +476,7 @@ async def test_category_create_without_a_name_reports_cores_refusal(
 
 
 async def test_label_remove_of_an_unknown_id_is_not_found(labels: LabelTools) -> None:
-    """Core answers an unknown id with the generic ``invalid_info`` code, so its
-    exact text is what makes the refusal a not-found."""
+    """Core identifies the missing label with invalid_info on delete."""
     error = await rejected_call_body(labels.ha_config_remove_label(label_id="missing"))
 
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"

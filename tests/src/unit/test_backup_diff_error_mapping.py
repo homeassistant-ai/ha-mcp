@@ -78,9 +78,7 @@ async def _diff_raising(
             ErrorCode.ENTITY_UNAVAILABLE,
             id="todo_list_not_loaded_to_entity_unavailable",
         ),
-        # A neutral message ("boom" matches no keyword bucket in
-        # _classify_by_message) so the generic funnel lands on INTERNAL_ERROR
-        # deterministically rather than a message-classified code.
+        # An exception type the generic funnel has no code for.
         pytest.param(
             RuntimeError("boom"),
             ErrorCode.INTERNAL_ERROR,

@@ -7,6 +7,7 @@ flows are the integration's own, opened and aborted by Core's flow manager.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from pathlib import Path
@@ -36,6 +37,7 @@ from pytest_homeassistant.common import (
 )
 
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.diagnostics_helpers import fetch_integration_diagnostics
 from ha_mcp.tools.integration_schema import fetch_options_schema
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
@@ -53,6 +55,8 @@ class Dumped(NamedTuple):
     entry: MockConfigEntry
     entry_dump: dict[str, Any]
     device_dump: dict[str, Any]
+    # The entry dump waits for each of these before it answers.
+    held_by: list[asyncio.Event]
 
 
 @pytest.fixture
@@ -71,8 +75,11 @@ async def dumped(hass: HomeAssistant, tools: IntegrationTools) -> Dumped:
     ``diagnostics``; its entry and device dumps return what the test puts in."""
     entry_dump: dict[str, Any] = {}
     device_dump: dict[str, Any] = {}
+    held_by: list[asyncio.Event] = []
 
     async def dump_entry(core: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
+        for released in held_by:
+            await released.wait()
         return entry_dump
 
     async def dump_device(
@@ -93,7 +100,7 @@ async def dumped(hass: HomeAssistant, tools: IntegrationTools) -> Dumped:
     assert await async_setup_component(hass, "diagnostics", {})
     entry = MockConfigEntry(domain=DUMPED)
     entry.add_to_hass(hass)
-    return Dumped(entry, entry_dump, device_dump)
+    return Dumped(entry, entry_dump, device_dump, held_by)
 
 
 # --- diagnostics -------------------------------------------------------------------
@@ -111,6 +118,21 @@ async def test_include_diagnostics_attaches_the_entrys_dump(
     assert result["diagnostics"]["config_entry_id"] == dumped.entry.entry_id
     assert result["diagnostics"]["data"]["data"] == {"bridge": {"ip": "10.0.0.5"}}
     assert "warnings" not in result
+
+
+async def test_a_dump_slower_than_the_timeout_is_reported_as_timed_out(
+    core_client: HomeAssistantClient, dumped: Dumped
+) -> None:
+    released = asyncio.Event()
+    dumped.held_by.append(released)
+    try:
+        result = await fetch_integration_diagnostics(
+            core_client, dumped.entry.entry_id, timeout_seconds=0.2
+        )
+    finally:
+        released.set()
+
+    assert "timed out after 0.2s" in result["error"]
 
 
 async def test_device_id_returns_that_devices_dump(
