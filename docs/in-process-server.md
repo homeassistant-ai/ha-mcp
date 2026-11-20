@@ -197,15 +197,15 @@ Notes:
   server over loopback inside Home Assistant.
 - Home Assistant conversation agents cap tool iterations per turn (around
   ten), so a very complex build may need a follow-up prompt to continue.
-- On Home Assistant 2026.10+, each tool carries its title and its read-only /
-  destructive / idempotent / open-world hints, so agents and approval
-  prompts can tell a lookup from a change.
+- Each tool carries its title and its read-only / destructive / idempotent /
+  open-world hints, so agents and approval prompts can tell a lookup from a
+  change.
 - Home Assistant 2026.11 adds its own administrator-only **Home Assistant**
   API, whose tools (logs, history, templates, search, integrations, system
   health) overlap some of this toolset. Selecting both on one agent works:
   Core prefixes only tool names that clash, with the API's ID.
-- With Home Assistant 2026.10+'s own Model Context Protocol server turned
-  on, **Settings → System → AI** also lists this API's own URL
+- With Home Assistant's own Model Context Protocol server turned on,
+  **Settings → System → AI** also lists this API's own URL
   (`/api/mcp/<api id>`). External MCP clients signed in as an administrator
   can use it, whichever APIs the server entry itself selects.
 

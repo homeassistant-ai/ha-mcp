@@ -6,11 +6,14 @@ keep their HACS names and drive Core's ``marketplace/*`` WebSocket API. The
 test environment's seeded store entry is the Marketplace's.
 
 What reaches GitHub (an install, a refresh, a version or beta change) can be
-refused by a rate-limited or unconnected GitHub on a shared runner; those
-steps skip on that refusal's code, never on its wording.
+refused by a rate-limited GitHub on a shared runner, and by an unconnected one
+when the session has no ``GITHUB_TOKEN`` to inject into the seeded entry; those
+steps skip on that refusal's code, never on its wording. Any other failure
+fails.
 """
 
 import logging
+import os
 
 import pytest
 
@@ -21,14 +24,20 @@ from ...utilities.assertions import (
     parse_mcp_result,
     tool_error_to_result,
 )
+from ...utilities.cleanup import CleanupSteps
 
 logger = logging.getLogger(__name__)
 
 # The Marketplace's own name for what HA-MCP also accepts as "lovelace".
 _NATIVE_CATEGORY = {"lovelace": "plugin"}
 
-# Core's codes for a GitHub the runner cannot use.
-_GITHUB_UNAVAILABLE = {"github_rate_limited", "github_not_connected"}
+# The seed's critical row, already acknowledged.
+_SEED_CRITICAL = "test/test"
+
+
+def _session_has_github_token() -> bool:
+    """The session injects this token into the seeded store entry before boot."""
+    return bool(os.environ.get("GITHUB_TOKEN", "").strip())
 
 
 def extract_store_data(raw_result) -> dict:
@@ -51,24 +60,19 @@ async def store_call(mcp_client, tool_name: str, params: dict) -> dict:
         return tool_error_to_result(exc)
 
 
-def skip_without_marketplace(data: dict) -> None:
-    """Skip when this Home Assistant has no loaded Marketplace."""
-    error = data.get("error")
-    if isinstance(error, dict) and error.get("code") == "COMPONENT_NOT_INSTALLED":
-        pytest.skip(f"The Marketplace is not available: {error.get('message')}")
-
-
 def skip_on_github(data: dict) -> None:
     """Skip a GitHub-bound step that GitHub refused for the runner's account."""
-    if data.get("ha_error_code") in _GITHUB_UNAVAILABLE:
-        pytest.skip(f"GitHub is not usable here: {data['ha_error_code']}")
+    code = data.get("ha_error_code")
+    if code == "github_rate_limited" or (
+        code == "github_not_connected" and not _session_has_github_token()
+    ):
+        pytest.skip(f"GitHub is not usable here: {code}")
 
 
 async def search(mcp_client, **params) -> dict:
     data = await store_call(
         mcp_client, "ha_get_hacs_info", {"action": "search", **params}
     )
-    skip_without_marketplace(data)
     assert data.get("success"), f"Marketplace search failed: {data.get('error')}"
     return data
 
@@ -79,6 +83,10 @@ async def accept_warning(mcp_client) -> None:
         await mcp.call_tool_success(
             "ha_manage_hacs", {"action": "accept_warning", "confirm": True}
         )
+
+
+def critical_rows(data: dict) -> dict[str, dict]:
+    return {row["repository"]: row for row in data["data"]["results"]}
 
 
 @pytest.mark.hacs
@@ -99,12 +107,14 @@ class TestSearch:
 
         assert data["category_filter"] == category
         native = _NATIVE_CATEGORY.get(category, category)
+        assert data["results"], data
         assert all(repo["category"] == native for repo in data["results"])
 
     async def test_a_query_returns_the_stores_rows_in_pages(self, mcp_client):
         data = await search(mcp_client, query="mushroom card", max_results=5)
 
         assert data["query"] == "mushroom card"
+        assert data["results"], data
         assert data["count"] == len(data["results"]) <= 5
         assert data["has_more"] == (data["total_matches"] > data["count"])
         # The rows are the store's own: HA-MCP adds no relevance score.
@@ -117,6 +127,15 @@ class TestSearch:
         assert data["results"] == []
         assert data["has_more"] is False
 
+    @pytest.mark.skipif(
+        not _session_has_github_token(), reason="GITHUB_TOKEN is not set"
+    )
+    async def test_the_sessions_github_token_connects_the_marketplace(self, mcp_client):
+        """Without it every GitHub-bound test here would skip as not connected."""
+        data = await search(mcp_client, max_results=1)
+
+        assert data["store"]["github_connected"] is True, data["store"]
+
 
 @pytest.mark.hacs
 class TestReads:
@@ -126,7 +145,6 @@ class TestReads:
                 "ha_get_hacs_info",
                 {"action": "info", "repository_id": "nonexistent/repo12345"},
             )
-        skip_without_marketplace(data)
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND", data
 
     async def test_an_unknown_id_keeps_cores_code(self, mcp_client):
@@ -134,14 +152,12 @@ class TestReads:
             data = await mcp.call_tool_failure(
                 "ha_get_hacs_info", {"action": "info", "repository_id": "999999999"}
             )
-        skip_without_marketplace(data)
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND", data
         assert data["ha_error_code"] == "repository_not_found", data
 
     async def test_info_of_a_listed_repository(self, mcp_client):
         found = await search(mcp_client, max_results=1)
-        if not found["results"]:
-            pytest.skip("The Marketplace lists no repository")
+        assert found["results"], found
         repo = found["results"][0]
 
         info = await store_call(
@@ -154,18 +170,45 @@ class TestReads:
         assert "readme_note" in info
 
     async def test_removed_and_critical_lists(self, mcp_client):
-        removed = await store_call(
-            mcp_client, "ha_get_hacs_info", {"action": "removed", "max_results": 5}
-        )
-        skip_without_marketplace(removed)
-        critical = await store_call(
-            mcp_client, "ha_get_hacs_info", {"action": "critical"}
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            removed = await mcp.call_tool_success(
+                "ha_get_hacs_info", {"action": "removed", "max_results": 5}
+            )
+            critical = await mcp.call_tool_success(
+                "ha_get_hacs_info", {"action": "critical"}
+            )
 
-        assert removed.get("success"), removed
-        assert removed["count"] <= 5
-        assert critical.get("success"), critical
-        assert critical["count"] == len(critical["results"])
+        assert removed["data"]["count"] <= 5
+        assert critical["data"]["count"] == len(critical["data"]["results"])
+        assert critical_rows(critical)[_SEED_CRITICAL]["acknowledged"] is True
+
+    async def test_the_download_source_form_names_cores_sources(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_get_hacs_info", {"action": "download_source"}
+            )
+
+        fields = data["data"]["options_schema"]["fields"]
+        profile = next(f for f in fields if f["name"] == "profile")
+        assert "default" in profile["options"], profile
+        assert profile["current"] in profile["options"], profile
+
+
+@pytest.mark.hacs
+class TestEntryFlows:
+    """Each flow is opened and ended unchanged: its next step would contact
+    GitHub or switch the download source."""
+
+    @pytest.mark.parametrize("action", ["connect_github", "set_download_source"])
+    async def test_a_flow_opens_and_ends_on_abort(self, mcp_client, action):
+        async with MCPAssertions(mcp_client) as mcp:
+            opened = await mcp.call_tool_success("ha_manage_hacs", {"action": action})
+            ended = await mcp.call_tool_success(
+                "ha_manage_hacs",
+                {"action": action, "flow_id": opened["data"]["flow_id"], "abort": True},
+            )
+
+        assert ended["data"]["aborted"] is True, ended
 
 
 @pytest.mark.hacs
@@ -181,8 +224,7 @@ class TestWrites:
         # Core has no command to take an acceptance back.
         if found["store"]["warning_accepted"]:
             pytest.skip("The server's user already accepted the Marketplace warning")
-        if not found["results"]:
-            pytest.skip("The Marketplace lists no repository")
+        assert found["results"], found
         async with MCPAssertions(mcp_client) as mcp:
             refused = await mcp.call_tool_failure(
                 "ha_manage_hacs",
@@ -212,7 +254,6 @@ class TestWrites:
                 "ha_manage_hacs",
                 {"action": action, "repository_id": "nonexistent/fake-repo-12345"},
             )
-        skip_without_marketplace(data)
         assert data["error"]["code"] == "RESOURCE_NOT_FOUND", data
 
     async def test_an_unreadable_repository_is_cores_refusal(self, mcp_client):
@@ -229,6 +270,30 @@ class TestWrites:
         skip_on_github(data)
         assert data["translation_key"] == "invalid_repository", data
 
+    async def test_detecting_home_assistant_itself_is_cores_refusal(self, mcp_client):
+        await accept_warning(mcp_client)
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_get_hacs_info",
+                {"action": "detect", "repository": "home-assistant/core"},
+            )
+        skip_on_github(data)
+        assert data["ha_error_code"] == "core_repository", data
+
+    async def test_acknowledging_a_critical_repository_keeps_it_acknowledged(
+        self, mcp_client
+    ):
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_success(
+                "ha_manage_hacs",
+                {"action": "acknowledge_critical", "repository": _SEED_CRITICAL},
+            )
+            critical = await mcp.call_tool_success(
+                "ha_get_hacs_info", {"action": "critical"}
+            )
+
+        assert critical_rows(critical)[_SEED_CRITICAL]["acknowledged"] is True
+
     async def test_download_then_remove_roundtrip(self, mcp_client):
         """After the remove the repository no longer reports installed."""
         found = await search(mcp_client, category="theme", max_results=5)
@@ -244,8 +309,7 @@ class TestWrites:
             {"action": "download", "repository_id": repo_id},
         )
         skip_on_github(download)
-        if not download.get("success"):
-            pytest.skip(f"Download unavailable here: {download.get('error')}")
+        assert download.get("success"), download
         async with MCPAssertions(mcp_client) as mcp:
             await mcp.call_tool_success(
                 "ha_manage_hacs", {"action": "remove", "repository_id": repo_id}
@@ -257,8 +321,7 @@ class TestWrites:
 
     async def test_beta_versions_are_shown_and_hidden(self, mcp_client):
         found = await search(mcp_client, max_results=1)
-        if not found["results"]:
-            pytest.skip("The Marketplace lists no repository")
+        assert found["results"], found
         repo_id = str(found["results"][0]["id"])
         await accept_warning(mcp_client)
 
@@ -276,11 +339,15 @@ class TestWrites:
                 )
             assert info["data"]["beta"] is True
         finally:
-            await store_call(
-                mcp_client,
-                "ha_manage_hacs",
-                {"action": "set_beta", "repository_id": repo_id, "show_beta": False},
-            )
+            with CleanupSteps() as cleanup, cleanup.step():
+                await MCPAssertions(mcp_client).call_tool_success(
+                    "ha_manage_hacs",
+                    {
+                        "action": "set_beta",
+                        "repository_id": repo_id,
+                        "show_beta": False,
+                    },
+                )
 
     async def test_clear_new_clears_the_flag(self, mcp_client):
         found = await search(mcp_client, status=["new"], max_results=1)
@@ -298,8 +365,7 @@ class TestWrites:
 @pytest.mark.hacs
 async def test_update_information_refreshes_a_repository(mcp_client):
     found = await search(mcp_client, max_results=1)
-    if not found["results"]:
-        pytest.skip("The Marketplace lists no repository")
+    assert found["results"], found
     repo_id = str(found["results"][0]["id"])
 
     data = await store_call(

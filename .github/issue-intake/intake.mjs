@@ -16,7 +16,7 @@ export const marker = "<!-- ha-mcp-intake:v1 ";
 export const triageCommand = /^\/triage (pause|resume|refresh)\s*$/;
 export const questions = {
   install_method:
-    "How is ha-mcp installed (HACS integration, app/add-on, Docker, uvx/pip, or another method)?",
+    "How is ha-mcp installed (Marketplace integration, app/add-on, Docker, uvx/pip, or another method)?",
   ha_mcp_version: "Which ha-mcp version are you using?",
   ha_version: "Which Home Assistant version are you using?",
   client: "Which AI client and client version are you using?",

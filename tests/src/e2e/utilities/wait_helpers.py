@@ -40,7 +40,7 @@ async def wait_for_entity_state(
     mcp_client,
     entity_id: str,
     expected_state: str,
-    timeout: int = 10,
+    timeout: float = 10,
     poll_interval: float = 0.5,
 ) -> bool:
     """
@@ -137,7 +137,7 @@ async def wait_for_entity_state(
 async def wait_for_logbook_entry(
     mcp_client,
     search_text: str,
-    timeout: int = 30,
+    timeout: float = 30,
     poll_interval: float = 2.0,
     hours_back: int = 1,
 ) -> bool:
@@ -194,7 +194,7 @@ async def wait_for_logbook_entry(
 
 async def wait_for_condition(
     condition_func: Callable[[], Any],
-    timeout: int = 10,
+    timeout: float = 10,
     poll_interval: float = 0.5,
     condition_name: str = "condition",
 ) -> bool:
@@ -239,7 +239,7 @@ async def _rest_poll_for_state_change(
     initial_state: str | None,
     rest_budget: float,
     poll_interval: float,
-    timeout: int,
+    timeout: float,
 ) -> str | None:
     """REST-poll ``sample`` until it reports a changed state or the budget elapses."""
     rest_start = time.monotonic()
@@ -264,7 +264,7 @@ async def _rest_poll_for_state_change(
 
 
 async def wait_for_state_change(
-    mcp_client, entity_id: str, timeout: int = 10, poll_interval: float = 0.5
+    mcp_client, entity_id: str, timeout: float = 10, poll_interval: float = 0.5
 ) -> str | None:
     """
     Wait for entity state to change from current state.
@@ -352,7 +352,7 @@ async def wait_for_tool_result(
     tool_name: str,
     arguments: dict[str, Any],
     predicate: Callable[[dict[str, Any]], bool],
-    timeout: int = 15,
+    timeout: float = 15,
     poll_interval: float = 0.5,
     description: str = "tool result",
 ) -> dict[str, Any]:
@@ -424,7 +424,7 @@ async def wait_for_tool_result(
 
 
 async def wait_for_entity_registration(
-    mcp_client, entity_id: str, timeout: int = 20
+    mcp_client, entity_id: str, timeout: float = 20
 ) -> bool:
     """
     Wait for entity to be registered and queryable via API.
@@ -498,7 +498,7 @@ async def wait_for_entity_registration(
             f"WS waiter unavailable for {entity_id} registration after "
             f"{e.elapsed:.2f}s ({cause_repr}); using REST polling"
         )
-        rest_budget = max(0, int(timeout - e.elapsed))
+        rest_budget = max(0.0, timeout - e.elapsed)
 
     # Fall back to the existing condition-based REST poll. Reset attempt
     # counter so the legacy log lines start from 1 again. ``rest_budget``

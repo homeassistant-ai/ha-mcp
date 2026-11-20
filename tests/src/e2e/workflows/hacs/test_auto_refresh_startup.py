@@ -109,8 +109,8 @@ STORE_READY_TIMEOUT = sum(RETRY_DELAYS) + DEFAULT_COMMAND_WAIT_TIMEOUT
 POSITIVE_LANE_TIMEOUT = STORE_READY_TIMEOUT + NUDGE_MARKER_TIMEOUT + 60.0
 
 
-# A store entry whose setup failed stays that way: its retry is far away, so it
-# never answers the list this lane needs.
+# Core does not retry a Marketplace setup that failed, so such an entry never
+# answers the list this lane needs.
 _SETUP_FAILED_STATE = "setup_error"
 # ``not_loaded`` is also where an entry sits before its setup has started, and
 # the Marketplace can start late after the fresh-config restart, so that state
@@ -174,11 +174,10 @@ async def _wait_for_marketplace(container_info: dict) -> None:
                     not_loaded_since is not None
                     and loop.time() - not_loaded_since >= _NOT_LOADED_GRACE
                 ):
-                    # Container weather, not the nudge: the other store suites
-                    # skip on the same condition (test_list_integrations).
-                    pytest.skip(
-                        f"the Marketplace entry is {state} in this container, "
-                        "so it never answers the list the startup nudge needs"
+                    pytest.fail(
+                        f"The seeded Marketplace entry is {state} in this "
+                        "container, so it never answers the list the startup "
+                        "nudge needs."
                     )
             if loop.time() >= deadline:
                 pytest.fail(
