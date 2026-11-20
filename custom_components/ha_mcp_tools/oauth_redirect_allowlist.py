@@ -19,7 +19,8 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib.parse import urlparse, urlsplit
 
-# Standard library only: the webhook proxy app ships a byte-identical copy.
+# Standard library only and no relative imports: the webhook proxy app ships a
+# byte-identical copy that its app process loads outside Home Assistant.
 
 # Options key holding the list. Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a
 # saved list, even an empty one, replaces it.
@@ -107,12 +108,14 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
 
 
 def _is_listable(redirect_uri: str) -> bool:
-    """The spec floor plus no userinfo: what the none-mode callback list accepts.
+    """The spec floor, no userinfo and the length bound: what the list accepts.
 
     A callback carrying credentials is never legitimate, and an exact match
     must not be able to let one through. Kept out of the shared floor so the
     legacy, ha_auth and DCR modes keep accepting what they always did.
     """
+    if len(redirect_uri) > MAX_OAUTH_CALLBACK_LENGTH:
+        return False
     if not _is_valid_redirect_uri(redirect_uri):
         return False
     parsed = urlparse(redirect_uri)
@@ -170,8 +173,7 @@ def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
     """Return ``(entries, invalid)``: trimmed, de-duplicated, in input order.
 
     An entry is invalid when no authorization request could use it: it fails
-    the same check as ``/authorize`` (:func:`_is_listable`), or it is longer
-    than ``MAX_OAUTH_CALLBACK_LENGTH``.
+    the same check as ``/authorize`` (:func:`_is_listable`).
     """
     entries: list[str] = []
     invalid: list[str] = []
@@ -179,8 +181,7 @@ def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
         text = str(value).strip()
         if not text or text in entries or text in invalid:
             continue
-        valid = len(text) <= MAX_OAUTH_CALLBACK_LENGTH and _is_listable(text)
-        (entries if valid else invalid).append(text)
+        (entries if _is_listable(text) else invalid).append(text)
     return entries, invalid
 
 

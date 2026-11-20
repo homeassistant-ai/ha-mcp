@@ -30,17 +30,12 @@ _COMPONENT_COPY = _ROOT / "custom_components/ha_mcp_tools" / _MODULE
 _DEV_PROXY_COPY = (
     _ROOT / "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev" / _MODULE
 )
-# Reaches the stable app through the promote workflow, so it may be absent.
-_STABLE_PROXY_COPY = _ROOT / "homeassistant-addon-webhook-proxy/mcp_proxy" / _MODULE
 
 
-def test_webhook_proxy_copies_honour_the_same_callbacks_as_the_component() -> None:
-    """A drifted proxy copy would redirect sign-ins the component refuses."""
-    expected = _COMPONENT_COPY.read_bytes()
-    copies = [_DEV_PROXY_COPY]
-    if _STABLE_PROXY_COPY.is_file():
-        copies.append(_STABLE_PROXY_COPY)
-    assert [p for p in copies if p.read_bytes() != expected] == []
+def test_the_webhook_proxy_copy_honours_the_same_callbacks_as_the_component() -> None:
+    """A drifted proxy copy would redirect sign-ins the component refuses. The
+    stable copy is held to the dev tree by the promote drift guards."""
+    assert _DEV_PROXY_COPY.read_bytes() == _COMPONENT_COPY.read_bytes()
 
 
 class TestIsRedirectAllowed:
@@ -108,6 +103,13 @@ class TestIsRedirectAllowed:
     def test_a_malformed_callback_is_refused_even_when_listed(self) -> None:
         listed = f"{CLAUDE}#frag"
         assert not is_redirect_allowed(listed, [listed])
+
+    def test_a_callback_too_long_for_any_list_is_refused_even_when_listed(
+        self,
+    ) -> None:
+        # No writer can store it, so /authorize must not call it listable.
+        long = f"{CLAUDE}?" + "a" * MAX_OAUTH_CALLBACK_LENGTH
+        assert not is_redirect_allowed(long, [long])
 
 
 class TestEffectiveAllowlist:

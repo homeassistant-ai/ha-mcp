@@ -17,8 +17,8 @@ therefore keep calling proxy-owned endpoints across mode switches. In none mode
 the exchange remains invisible and its access token remains cosmetic:
 
 * ``GET  {OAUTH_BASE}/authorize`` issues a PKCE-bound one-time code and
-  immediately 302-redirects back to a listed callback with
-  ``?code=…&state=…``; an unlisted callback gets a 400 page instead.
+  immediately 302-redirects back to an allowed callback with
+  ``?code=…&state=…``; any other callback gets a 400 page instead.
 * ``POST {OAUTH_BASE}/token`` exchanges that code (public client, PKCE S256, no
   ``client_secret``) for an opaque access token. The token is *cosmetic* — none
   mode ignores bearers entirely — but is a real random string so a spec-strict
@@ -30,9 +30,10 @@ the exchange remains invisible and its access token remains cosmetic:
 In none mode the secret webhook URL remains the only credential and the OAuth
 token grants nothing, but authorize is anonymous: redirecting to any callback
 would make the Home Assistant origin an open redirector. It therefore redirects
-only to a callback on the app's allowlist (:mod:`oauth_redirect_allowlist`) and
-answers any other with a page explaining how to add a legitimate one, or why one
-carrying credentials or a ``#`` can never be added.
+only to a callback on the app's allowlist (:mod:`oauth_redirect_allowlist`), or,
+with "Allow any OAuth callback URL" on, to any callback that list could hold. It
+answers any other with a page explaining how to list a legitimate one, or why
+one carrying credentials or a ``#``, or too long, can never be listed.
 """
 
 from __future__ import annotations
@@ -69,6 +70,7 @@ from .oauth import (
     read_form,
 )
 from .oauth_redirect_allowlist import (
+    MAX_OAUTH_CALLBACK_LENGTH,
     _is_listable,
     _is_valid_redirect_uri,
     effective_allowlist,
@@ -100,7 +102,8 @@ def _log_refused_callback(redirect_uri: str, listable: bool) -> None:
     reason = (
         "it is not on the app's Allowed OAuth callback URLs option"
         if listable
-        else "a callback carrying a username, a password or a '#' can never be allowed"
+        else "a callback carrying a username, a password or a '#', or longer than "
+        f"{MAX_OAUTH_CALLBACK_LENGTH} characters, can never be allowed"
     )
     # repr: the callback is attacker-supplied, and an encoded newline or
     # terminal sequence in it must not forge log lines.
@@ -226,9 +229,11 @@ _UNLISTED_CALLBACK_PAGE = """<!DOCTYPE html>
 address is not on the Webhook Proxy app (add-on)'s list of allowed callback
 URLs.</p>
 <p>If you trust the client you are connecting, a Home Assistant administrator
-can add this exact address to the app's <b>Allowed OAuth callback URLs</b>
+can enter this exact address in the app's <b>Allowed OAuth callback URLs</b>
 option (<b>Settings &rarr; Apps &rarr; the Webhook Proxy app &rarr;
-Configuration</b>), restart the app, then start connecting again.</p>
+Configuration</b>). That option replaces the built-in list, so also enter every
+built-in callback still in use (the app's <b>Documentation</b> tab lists them).
+Then restart the app and connect again.</p>
 </body></html>
 """
 
@@ -239,7 +244,8 @@ _UNLISTABLE_CALLBACK_PAGE = """<!DOCTYPE html>
 <body style="font-family:sans-serif;max-width:40em;margin:2em auto;padding:0 1em">
 <h1>Sign-in callback not allowed</h1>
 <p>This sign-in was not sent back to <code>{callback}</code> because a callback
-address may not contain a username, a password or a <code>#</code>.</p>
+address may not contain a username, a password or a <code>#</code>, nor be
+longer than {limit} characters.</p>
 <p>Such an address cannot be allowed in the Webhook Proxy app (add-on)'s
 options. The client you are connecting must use a plain <code>https</code>
 callback, or <code>http</code> on a loopback address such as
@@ -258,7 +264,7 @@ def _unlisted_callback_response(redirect_uri: str, listable: bool) -> web.Respon
         status=400,
         text=(
             _UNLISTED_CALLBACK_PAGE if listable else _UNLISTABLE_CALLBACK_PAGE
-        ).format(callback=html.escape(redirect_uri)),
+        ).format(callback=html.escape(redirect_uri), limit=MAX_OAUTH_CALLBACK_LENGTH),
         content_type="text/html",
         headers={
             "Cache-Control": "no-store",
@@ -280,8 +286,9 @@ class AutoApproveProvider:
     external URL. Constructed per setup and stored in
     ``hass.data[DOMAIN][AUTOAPPROVE_PROVIDER_KEY]``; the views resolve it from
     ``hass.data`` per request, so a reload minting a fresh provider is
-    transparent. The callback policy is read once from the proxy config file:
-    the app rewrites it and reloads the entry when its options change.
+    transparent. The callback policy is read once from the proxy config file,
+    which the app rewrites before reloading the entry on every start, so an
+    option change applies when the app restarts.
     """
 
     def __init__(
@@ -302,7 +309,7 @@ class AutoApproveProvider:
         """True when ``redirect_uri`` may receive a none-mode code.
 
         With allow-any on, any callback the list itself could hold is
-        accepted: still https, or http on a loopback host, with no userinfo.
+        accepted: https, or http on a loopback host, with no userinfo, not too long.
         """
         if self._allow_any:
             return _is_listable(redirect_uri)
@@ -350,7 +357,8 @@ class AutoApproveAuthorizeView(HomeAssistantView):
     """Unified scoped authorization dispatcher for all three proxy modes.
 
     Validates ``response_type=code``, PKCE S256, and the redirect_uri against
-    the callback allowlist, then issues a PKCE-bound one-time code and
+    the allowlist (or, with allow-any on, the shape any listed callback must
+    have), then issues a PKCE-bound one-time code and
     redirects straight back to the client. No login page and no consent screen
     render, so claude.ai's OAuth flow completes invisibly (issue #1969).
 
@@ -401,7 +409,7 @@ class AutoApproveAuthorizeView(HomeAssistantView):
     def _autoapprove_authorize(
         self, provider: AutoApproveProvider, request: web.Request
     ) -> web.Response:
-        """Issue a code invisibly for a valid request to a listed callback."""
+        """Issue a code invisibly for a valid request to an allowed callback."""
         params = request.query
         redirect_uri = params.get("redirect_uri", "")
         state = params.get("state", "")

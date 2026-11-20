@@ -10,13 +10,14 @@ from __future__ import annotations
 import html
 import logging
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 from aiohttp import ClientResponse
 from aiohttp.test_utils import TestClient
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.typing import ClientSessionGenerator
 
@@ -26,6 +27,7 @@ from ._auth_modes import (
     fetch_json,
     pkce_pair,
     proxy_config,
+    reload_proxy,
     submodule,
 )
 from ._proxy import start_proxy
@@ -33,6 +35,7 @@ from ._variants import Variant, callback_allowlist_supported
 
 OTHER_CALLBACK = "https://other.example/cb"
 REFUSED_LINE = "Allowed OAuth callback URLs option"
+LIST_ADVICE = "enter this exact address"
 
 
 @pytest.fixture
@@ -224,6 +227,8 @@ async def test_unlisted_callback_gets_an_explanation_page_not_a_redirect(
     csp = response.headers["Content-Security-Policy"]
     assert "default-src 'none'" in csp
     assert "script-src" not in csp
+    # Entering only this address would drop claude.ai and the other defaults.
+    assert "replaces the built-in list" in page
     assert "code" in _redirect_query(await _authorize(proxy_client, variant, challenge))
 
 
@@ -336,9 +341,94 @@ async def test_a_refusal_blames_the_list_only_for_a_callback_the_list_could_hold
     page = await response.text()
     logged = [r.getMessage() for r in caplog.records if callback in r.getMessage()]
     assert response.status == 400
-    assert ("add this exact address" in page) is listable
+    assert (LIST_ADVICE in page) is listable
     assert len(logged) == 1
     assert (REFUSED_LINE in logged[0]) is listable
+
+
+async def test_a_callback_too_long_for_any_list_is_refused_for_its_length(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    component: ModuleType,
+    variant: Variant,
+    fs_root: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The app's option refuses a callback over the length bound, so allow-any
+    must refuse it too, and the page and log must give its length as the
+    reason rather than send the administrator to that option."""
+    _require_allowlist(variant)
+    limit = submodule(component, "oauth_redirect_allowlist").MAX_OAUTH_CALLBACK_LENGTH
+    callback = f"{OTHER_CALLBACK}?" + "a" * limit
+    client = await _client_with(
+        hass, hass_client_no_auth, variant, fs_root, oauth_allow_any_callback=True
+    )
+    _verifier, challenge = pkce_pair()
+
+    with caplog.at_level(logging.WARNING):
+        response = await _authorize(client, variant, challenge, redirect_uri=callback)
+
+    page = await response.text()
+    logged = [m for m in caplog.messages if callback[:200] in m]
+    too_long = f"{limit} characters"
+    assert response.status == 400
+    assert "Location" not in response.headers
+    assert LIST_ADVICE not in page
+    assert too_long in page
+    assert len(logged) == 1
+    assert too_long in logged[0]
+
+
+async def test_dynamic_registration_cannot_add_a_callback(
+    proxy_client: TestClient, variant: Variant
+) -> None:
+    """A client registering its own callback must not get past the list."""
+    _require_allowlist(variant)
+    registration = await proxy_client.post(
+        f"{variant.oauth_base}/register", json={"redirect_uris": [OTHER_CALLBACK]}
+    )
+    assert registration.status == 201
+    _verifier, challenge = pkce_pair()
+
+    response = await _authorize(
+        proxy_client,
+        variant,
+        challenge,
+        client_id=(await registration.json())["client_id"],
+        redirect_uri=OTHER_CALLBACK,
+    )
+
+    assert response.status == 400
+    assert "Location" not in response.headers
+
+
+async def test_a_changed_list_applies_after_the_reload_the_app_does_on_start(
+    hass: HomeAssistant,
+    hass_client_no_auth: ClientSessionGenerator,
+    component: ModuleType,
+    variant: Variant,
+    fs_root: Path,
+) -> None:
+    """The app rewrites its config file and reloads the entry on every start:
+    the new list must replace the old one, not add to it or be ignored."""
+    _require_allowlist(variant)
+    entry = await start_proxy(
+        hass, variant, fs_root, proxy_config(oauth_redirect_allowlist=[CLAUDE_REDIRECT])
+    )
+    assert await reload_proxy(
+        hass,
+        fs_root,
+        variant,
+        entry,
+        proxy_config(oauth_redirect_allowlist=[OTHER_CALLBACK]),
+    )
+    client = await hass_client_no_auth()
+
+    new = await _status_for(client, variant, OTHER_CALLBACK)
+    old = await _status_for(client, variant, CLAUDE_REDIRECT)
+
+    assert new[0] == 302
+    assert old == (400, None)
 
 
 async def test_allow_any_callback_accepts_an_unlisted_callback(
@@ -406,24 +496,19 @@ async def test_a_refused_callback_is_logged_without_forging_lines(
 
 async def test_a_burst_of_refusals_writes_one_line_then_a_count(
     proxy_client: TestClient,
-    component: ModuleType,
     variant: Variant,
     caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Authorize is anonymous, so refusals must not flood the log: a burst
     writes one line, and the next line counts what it held back."""
     _require_allowlist(variant)
-    # The clock the refusal log's rate limit reads, moved only by the test.
-    now = [1_000.0]
-    clock = SimpleNamespace(monotonic=lambda: now[0])
-    monkeypatch.setattr(submodule(component, "oauth_autoapprove"), "time", clock)
 
     with caplog.at_level(logging.WARNING):
         for n in range(5):
             await _status_for(proxy_client, variant, f"{OTHER_CALLBACK}{n}")
         assert len(_refusal_lines(caplog)) == 1
-        now[0] += 3600
+        freezer.tick(3600)
         await _status_for(proxy_client, variant, f"{OTHER_CALLBACK}-last")
 
     lines = _refusal_lines(caplog)

@@ -40,7 +40,7 @@ anonymous: redirecting to any ``redirect_uri`` would make the Home Assistant
 origin an open redirector. It therefore redirects only to a callback on the
 administrator's allowlist (:mod:`oauth_redirect_allowlist`, #2427) and answers
 anything else with a page explaining how to add a legitimate callback, or why
-one carrying credentials or a ``#`` can never be added.
+one carrying credentials or a ``#``, or too long, can never be added.
 """
 
 from __future__ import annotations
@@ -72,6 +72,7 @@ from .oauth_legacy import (
     read_form,
 )
 from .oauth_redirect_allowlist import (
+    MAX_OAUTH_CALLBACK_LENGTH,
     _is_listable,
     _is_valid_redirect_uri,
     is_redirect_allowed,
@@ -106,7 +107,8 @@ def _log_refused_callback(redirect_uri: str, listable: bool) -> None:
     reason = (
         "it is not on the OAuth callback list (Configure or the HA-MCP panel)"
         if listable
-        else "a callback carrying a username, a password or a '#' can never be allowed"
+        else "a callback carrying a username, a password or a '#', or longer than "
+        f"{MAX_OAUTH_CALLBACK_LENGTH} characters, can never be allowed"
     )
     # repr: the callback is attacker-supplied, and an encoded newline or
     # terminal sequence in it must not forge log lines.
@@ -192,7 +194,8 @@ _UNLISTABLE_CALLBACK_PAGE = """<!DOCTYPE html>
 <body style="font-family:sans-serif;max-width:40em;margin:2em auto;padding:0 1em">
 <h1>Sign-in callback not allowed</h1>
 <p>HA-MCP did not send this sign-in back to <code>{callback}</code> because a
-callback address may not contain a username, a password or a <code>#</code>.</p>
+callback address may not contain a username, a password or a <code>#</code>, nor
+be longer than {limit} characters.</p>
 <p>Such an address cannot be allowed in Home Assistant's settings. The client
 you are connecting must use a plain <code>https</code> callback, or
 <code>http</code> on a loopback address such as <code>127.0.0.1</code>.</p>
@@ -210,7 +213,7 @@ def _unlisted_callback_response(redirect_uri: str, listable: bool) -> web.Respon
         status=400,
         text=(
             _UNLISTED_CALLBACK_PAGE if listable else _UNLISTABLE_CALLBACK_PAGE
-        ).format(callback=html.escape(redirect_uri)),
+        ).format(callback=html.escape(redirect_uri), limit=MAX_OAUTH_CALLBACK_LENGTH),
         content_type="text/html",
         headers={
             "Cache-Control": "no-store",
@@ -244,7 +247,7 @@ class AutoApproveProvider:
         """True when ``redirect_uri`` is on the live callback allowlist.
 
         With the list turned off, any callback the list itself could hold is
-        accepted: still https, or http on a loopback host, with no userinfo.
+        accepted: https, or http on a loopback host, with no userinfo, not too long.
         """
         if self._allow_any():
             return _is_listable(redirect_uri)
