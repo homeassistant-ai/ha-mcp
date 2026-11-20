@@ -5,10 +5,10 @@ Windows are measured from the moment Core closed the recorder run it wrote.
 
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from itertools import pairwise
@@ -18,8 +18,12 @@ import pytest
 
 from tests.src.recorder_seed import session_recorder_seed
 
+from ._shards import in_shard
+
 # Generating starts Core and writes ten days of data: about 20 seconds.
 pytestmark = pytest.mark.slow
+
+GENERATOR = "tests/src/unit/recorder_seed_generator.py::test_write_recorder_seed"
 
 DAY = 24 * 3600
 HOUR = 3600
@@ -162,41 +166,73 @@ def test_energy_totals_end_where_the_live_sensors_resume(
         assert float(last) == restored[entity_id]
 
 
+def _session(script: str, tmp_path: Path, **env: str) -> subprocess.Popen[str]:
+    """A pytest session's process of its own, whose temp directory is ``tmp_path``."""
+    return subprocess.Popen(
+        [sys.executable, "-c", script],
+        cwd=REPOSITORY,
+        env=os.environ | {"TMPDIR": str(tmp_path)} | env,
+        stdout=subprocess.PIPE,
+        text=True,
+        # Its own process group, which also holds the generator it starts.
+        start_new_session=True,
+    )
+
+
+def _printed(sessions: list[subprocess.Popen[str]]) -> list[str]:
+    try:
+        printed = [session.communicate(timeout=300)[0].strip() for session in sessions]
+    finally:
+        for session in sessions:
+            if session.poll() is None:
+                os.killpg(session.pid, signal.SIGKILL)
+                session.communicate()
+    assert [session.returncode for session in sessions] == [0] * len(sessions)
+    return printed
+
+
 def test_a_failed_generation_is_reported_again_without_generating_again(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """Each xdist worker repeating a failed generation multiplies a minutes-long failure."""
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    monkeypatch.setenv("PYTEST_XDIST_TESTRUNUID", "failing-run")
-    monkeypatch.setenv("PYTHONHASHSEED", "not-a-seed")
-    with pytest.raises(RuntimeError, match="PYTHONHASHSEED"):
+    script = """
+import os
+from tests.src.recorder_seed import session_recorder_seed
+
+os.environ["PYTHONHASHSEED"] = "not-a-seed"
+for attempt in range(2):
+    try:
         session_recorder_seed()
+    except RuntimeError as error:
+        print("PYTHONHASHSEED" in str(error))
     # A second generation would now succeed, and take as long as the first.
-    monkeypatch.delenv("PYTHONHASHSEED")
-    with pytest.raises(RuntimeError, match="PYTHONHASHSEED"):
-        session_recorder_seed()
+    os.environ.pop("PYTHONHASHSEED", None)
+"""
+    assert _printed([_session(script, tmp_path)]) == ["True\nTrue"]
 
 
-def test_two_workers_of_one_session_share_one_generated_file(tmp_path: Path) -> None:
-    """A worker that generates again replaces the file another worker is copying."""
-    worker = (
+def test_two_workers_of_a_sharded_ci_session_share_one_generated_file(
+    tmp_path: Path,
+) -> None:
+    """A worker that generates again replaces the file another worker is copying.
+
+    The generator is one test of the unit tree, so the workers' own shard must
+    not reach it: this one would deselect it.
+    """
+    script = (
         "import os; from tests.src.recorder_seed import session_recorder_seed; "
         "print(os.stat(session_recorder_seed()).st_ino)"
     )
-    env = os.environ | {
-        "PYTEST_XDIST_TESTRUNUID": "shared-run",
-        "TMPDIR": str(tmp_path),
-    }
-    workers = [
-        subprocess.Popen(
-            [sys.executable, "-c", worker],
-            cwd=REPOSITORY,
-            env=env,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-        for _ in range(2)
-    ]
-    inodes = [process.communicate(timeout=300)[0].strip() for process in workers]
-    assert [process.returncode for process in workers] == [0, 0]
-    assert inodes[0] == inodes[1] != ""
+    shard = next(shard for shard in ("1/2", "2/2") if not in_shard(GENERATOR, shard))
+    first, second = _printed(
+        [
+            _session(
+                script,
+                tmp_path,
+                PYTEST_XDIST_TESTRUNUID="shared-run",
+                UNIT_TEST_SHARD=shard,
+            )
+            for _ in range(2)
+        ]
+    )
+    assert first == second != ""

@@ -646,7 +646,8 @@ class TestGetHistoryNegativeInputs:
         )
         assert len(oldest["states"]) == 1, oldest
         recorded = datetime.fromisoformat(oldest["states"][0]["last_updated"])
-        assert datetime.now(UTC) - recorded > timedelta(hours=24), oldest
+        window_end = datetime.fromisoformat(oldest["period"]["end"])
+        assert window_end - recorded > timedelta(hours=24), oldest
 
     async def test_multi_entity_offset_rejected(self, mcp_client: Any) -> None:
         """offset > 0 with multiple entity_ids is rejected before any network call."""

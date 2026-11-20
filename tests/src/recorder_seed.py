@@ -16,17 +16,19 @@ _PREFIX = "ha-mcp-recorder-seed-"
 _TIMEOUT = 600
 _STALE_AFTER = 24 * 3600
 _TAIL_LINES = 100
+# Read once: a test that points tempfile elsewhere must not move the session's seed.
+_ROOT = Path(tempfile.gettempdir())
 _own_directory: list[Path] = []
 
 
 def _session_directory() -> Path:
     """The xdist run's shared directory, or one this process created for itself."""
     if run := os.environ.get("PYTEST_XDIST_TESTRUNUID"):
-        directory = Path(tempfile.gettempdir()) / f"{_PREFIX}{run}"
+        directory = _ROOT / f"{_PREFIX}{run}"
         directory.mkdir(exist_ok=True)
         return directory
     if not _own_directory:
-        _own_directory.append(Path(tempfile.mkdtemp(prefix=_PREFIX)))
+        _own_directory.append(Path(tempfile.mkdtemp(prefix=_PREFIX, dir=_ROOT)))
     return _own_directory[0]
 
 
@@ -77,8 +79,12 @@ def _remove_stale(current: Path) -> None:
 def _generate(seed: Path) -> None:
     partial = seed.with_name(f"{seed.name}.partial")
     partial.unlink(missing_ok=True)
-    # The child is a session of its own, not part of the caller's.
-    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")}
+    # The child is a session of its own, not part of the caller's or of its CI shard.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("PYTEST_") and k != "UNIT_TEST_SHARD"
+    }
     env["RECORDER_SEED_OUT"] = str(partial)
     command = [
         sys.executable,

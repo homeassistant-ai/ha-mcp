@@ -49,7 +49,9 @@ ELSEWHERE = {
 
 def _tracked_directories() -> set[str]:
     files = subprocess.run(
-        ["git", "ls-files", "-z", "--", "tests"],
+        # CI's container runs as another uid than the checkout's owner, which
+        # git refuses as dubious ownership.
+        ["git", "-c", f"safe.directory={REPOSITORY}", "ls-files", "-z", "--", "tests"],
         cwd=REPOSITORY,
         capture_output=True,
         text=True,
