@@ -173,6 +173,18 @@ class TestCapturedEntities:
         assert _capture(BLOCK_LIST, capture_entities=[captured]) == Verdict.ALLOW
         assert _capture(LIGHTS_ONLY, capture_entities=[captured]) == Verdict.ALLOW
 
+    def test_a_wildcard_for_config_on_the_entity_keys_is_judged_as_usual(self):
+        rule = Rule(
+            tool_name="ha_config_set_scene",
+            when=[Predicate(path="args.*.entities.*~", op="regex", value=SENSITIVE)],
+        )
+        policy = Policy(rules=[rule])
+        assert _capture(policy, capture_entities=["light.hall"]) == Verdict.ALLOW
+        assert (
+            _capture(policy, capture_entities=["lock.front"])
+            == Verdict.REQUIRE_APPROVAL
+        )
+
     @pytest.mark.parametrize(
         ("entities", "capture"),
         [
@@ -196,9 +208,10 @@ class TestCapturedEntities:
         ],
     )
     def test_a_rule_on_a_whole_object_holds_the_capture(self, path, effect, expected):
-        """A require-approval rule naming the call as written still gates it; an
-        allow-list rule approves the captured lock only when it lists it, as
-        the whole argument object does through ``capture_entities``."""
+        """A require-approval rule naming the call as written still gates it.
+        Under an allow list only the whole argument object, which lists
+        ``capture_entities`` itself, approves the capture; a rule on ``config``
+        or ``config.entities`` reaches what the capture writes and never does."""
         entities = {"light.living": "on"}
         config = {"name": "Movie", "entities": entities}
         args = {
@@ -216,23 +229,78 @@ class TestCapturedEntities:
         )
         assert verdict == expected
 
-    def test_an_allow_list_value_rule_does_not_approve_a_state_the_capture_replaces(
-        self,
-    ):
-        """The tool stores the live state over the caller's value, so an approval
-        of that value covers nothing the scene will hold."""
+    @pytest.mark.parametrize(
+        ("path", "value"),
+        [
+            ("args.config.entities.*.state", "unlocked"),
+            ("args.*.entities.*", "unlocked"),
+            ("args.config.metadata.*~", "lock.front"),
+            ("args.config.*~", "metadata"),
+        ],
+    )
+    def test_a_rule_on_what_the_capture_writes_gates_it(self, path, value):
+        """The captured state, the ``entity_only`` mark and the ``metadata`` key
+        holding it are written inside the tool, after the gate, so a rule that
+        reads them gates the call."""
         rule = Rule(
             tool_name="ha_config_set_scene",
-            when=[Predicate(path="args.config.entities.*", op="eq", value="locked")],
+            when=[Predicate(path=path, op="eq", value=value)],
         )
-        policy = Policy(rules=[rule], rule_effect="allow")
-        verdict = _capture(
-            policy, {"lock.front": "locked"}, capture_entities=["lock.front"]
-        )
+        verdict = _capture(Policy(rules=[rule]), capture_entities=["lock.front"])
         assert verdict == Verdict.REQUIRE_APPROVAL
 
-    def test_another_tools_capture_argument_is_not_read_as_scene_entities(self):
-        rule = Rule(tool_name="*", when=SCENE_KEYS.when)
+    @pytest.mark.parametrize("path", ["args.config.entities.*", "args.config.metadata"])
+    def test_an_allow_list_rule_on_what_the_capture_writes_does_not_approve_it(
+        self, path
+    ):
+        """``{}`` stands for neither the live state the tool stores nor the
+        metadata it adds for the lock."""
+        rule = Rule(
+            tool_name="ha_config_set_scene",
+            when=[Predicate(path=path, op="eq", value={})],
+        )
+        args = {
+            "scene_id": "movie",
+            "config": {"name": "Movie", "entities": {}, "metadata": {}},
+            "capture_entities": ["lock.front"],
+        }
+        policy = Policy(rules=[rule], rule_effect="allow")
+        assert evaluate("ha_config_set_scene", args, policy) == Verdict.REQUIRE_APPROVAL
+
+    def test_an_allow_list_rule_on_the_config_keys_does_not_approve_it(self):
+        """The tool adds ``metadata`` to ``config`` after the gate."""
+        rule = Rule(
+            tool_name="ha_config_set_scene",
+            when=[
+                Predicate(path="args.config.*~", op="in", value=["name", "entities"])
+            ],
+        )
+        policy = Policy(rules=[rule], rule_effect="allow")
+        assert (
+            _capture(policy, capture_entities=["lock.front"])
+            == Verdict.REQUIRE_APPROVAL
+        )
+
+    def test_a_key_condition_does_not_exempt_a_value_condition_beside_it(self):
+        rule = Rule(
+            tool_name="ha_config_set_scene",
+            when=[
+                Predicate(path="args.config.entities.*~", op="regex", value="^lock\\."),
+                Predicate(path="args.config.entities.*.state", op="eq", value="on"),
+            ],
+        )
+        verdict = _capture(Policy(rules=[rule]), {}, capture_entities=["lock.front"])
+        assert verdict == Verdict.REQUIRE_APPROVAL
+
+    @pytest.mark.parametrize(
+        "when",
+        [
+            SCENE_KEYS.when,
+            [Predicate(path="args.config.entities.*", op="eq", value="on")],
+        ],
+    )
+    def test_another_tools_capture_argument_is_not_read_as_scene_entities(self, when):
+        rule = Rule(tool_name="*", when=when)
         args = {"config": {"entities": {}}, "capture_entities": ["lock.front"]}
         verdict = evaluate("ha_config_set_script", args, Policy(rules=[rule]))
         assert verdict == Verdict.ALLOW
@@ -244,8 +312,9 @@ class TestCapturedEntities:
 
 class TestCapturedDevices:
     """A device's entities are read inside the tool, after the gate, so a rule
-    that inspects ``config.entities`` cannot see them: it gates the call under
-    a require-approval list and cannot approve it under an allow list."""
+    that inspects ``config.entities`` or ``config.metadata`` cannot see them: it
+    gates the call under a require-approval list and cannot approve it under an
+    allow list."""
 
     @pytest.mark.parametrize(
         ("tool", "path"),
@@ -253,6 +322,7 @@ class TestCapturedDevices:
             ("ha_config_set_scene", "args.config.entities.*~"),
             ("ha_config_set_scene", "args.*.entities.*~"),
             ("ha_config_set_scene", "config.*"),
+            ("ha_config_set_scene", "args.config.metadata.*~"),
             ("*", "args.config.entities.*~"),
         ],
     )

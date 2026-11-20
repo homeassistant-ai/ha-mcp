@@ -1117,7 +1117,8 @@ automation:
 The event data carries `token`, `tool_name`, `args`, `created_at` and
 `expires_at`, plus `matched_rule` whenever a rule matched the call. A policy
 can also gate a call no rule matched — through one of the fail-safes for raw
-WebSocket commands and for selector-based bulk calls — and then there is no
+WebSocket commands, for selector-based bulk calls and for scene writes with
+`capture_entities` or `capture_devices` — and then there is no
 rule to name and the key is absent.
 
 Two things to know about `args`: each value is capped, so a long one is

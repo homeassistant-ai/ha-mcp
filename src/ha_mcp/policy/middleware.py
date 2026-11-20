@@ -195,7 +195,9 @@ class PolicyMiddleware(Middleware):
         """Wait on one approval, returning a continuation only while it is pending."""
         rule = find_matching_rule(name, args, policy)
         # A capture_devices scene call is single-use like a selector call: its
-        # device entities are read inside the tool, after this gate.
+        # device entities are read inside the tool, after this gate. A
+        # capture_entities call names its entities, and the states it captures
+        # are as unseen by the first approval as by a remembered one.
         dynamic_targets = has_dynamic_selector_targets(
             name, args
         ) or has_unresolved_scene_members(name, args)
