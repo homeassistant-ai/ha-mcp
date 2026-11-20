@@ -6,7 +6,7 @@ import hashlib
 import re
 
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
-_DIGEST_SUFFIX_RE = re.compile(r"-[0-9a-f]{8}$")
+_DIGEST_STEM_RE = re.compile(r"[A-Za-z0-9._-]+-[0-9a-f]{8}")
 
 
 def entity_id_aliases(entity_id: str) -> list[str]:
@@ -89,8 +89,6 @@ def matches_listing_identity(payload_id: str | None, wanted: str) -> bool:
     return _legacy_entity_id_digest(payload_id, cleaned) == wanted
 
 
-def might_be_legacy_digest(identity: str) -> bool:
-    """A pre-cap digest can select files with a different, bounded stem."""
-    return len(identity) > _MAX_ENTITY_STEM_LENGTH and bool(
-        _DIGEST_SUFFIX_RE.search(identity)
-    )
+def looks_like_digest_stem(identity: str) -> bool:
+    """A digest selector can refer to older filenames only the payload identifies."""
+    return _DIGEST_STEM_RE.fullmatch(identity) is not None

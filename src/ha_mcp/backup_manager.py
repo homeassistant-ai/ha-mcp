@@ -121,8 +121,8 @@ from .backup_snapshot_identity import (
     entity_id_aliases as _entity_id_aliases,
 )
 from .backup_snapshot_identity import (
+    looks_like_digest_stem,
     matches_listing_identity,
-    might_be_legacy_digest,
 )
 from .backup_snapshot_identity import (
     safe_entity_id as _safe_entity_id,
@@ -1299,7 +1299,7 @@ class BackupManager:
         # counts as this entity's.
         safe_filter = (
             set(_entity_id_aliases(entity_id))
-            if entity_id and not might_be_legacy_digest(entity_id)
+            if entity_id and not looks_like_digest_stem(entity_id)
             else None
         )
         out: list[dict[str, Any]] = []
