@@ -37,23 +37,28 @@ async def tools_entry(hass: HomeAssistant) -> None:
     await make_file_service(hass, allowed="pyscript")
 
 
-async def _get(client: HomeAssistantClient) -> dict[str, Any]:
-    async with settings_http(app_server(client=client)) as http:
+async def _get(
+    client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, Any]:
+    async with settings_http(app_server(monkeypatch, client)) as http:
         response = await http.get(PATHS)
     assert response.status_code == 200
     body: dict[str, Any] = response.json()
     return body
 
 
-async def _save(client: HomeAssistantClient, **kwargs: Any) -> httpx.Response:
-    async with settings_http(app_server(client=client)) as http:
+async def _save(
+    client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch, **kwargs: Any
+) -> httpx.Response:
+    async with settings_http(app_server(monkeypatch, client)) as http:
         return await http.post(PATHS, **kwargs)
 
 
 async def test_with_file_tools_off_the_editor_says_so_without_asking(
     core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    body = await _get(core_client)
+    body = await _get(core_client, monkeypatch)
 
     assert body["available"] is False
     assert "disabled" in body["reason"].lower()
@@ -61,8 +66,9 @@ async def test_with_file_tools_off_the_editor_says_so_without_asking(
 
 async def test_with_file_tools_off_a_save_is_refused(
     core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    response = await _save(core_client, json={"paths": ["pyscript"]})
+    response = await _save(core_client, monkeypatch, json={"paths": ["pyscript"]})
 
     assert response.status_code == 409
 
@@ -70,19 +76,21 @@ async def test_with_file_tools_off_a_save_is_refused(
 @pytest.mark.usefixtures("file_tools_on", "tools_entry")
 class TestEntrySetUp:
     async def test_the_editor_shows_the_directories_and_the_deny_floor(
-        self, core_client: HomeAssistantClient
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        body = await _get(core_client)
+        body = await _get(core_client, monkeypatch)
 
         assert body["available"] is True
         assert body["paths"] == ["pyscript"]
         assert ".storage" in body["deny_floor"]
 
     async def test_a_save_reports_what_the_entry_refused(
-        self, core_client: HomeAssistantClient
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The entry drops the deny-floor directory and applies the rest live."""
-        response = await _save(core_client, json={"paths": ["pyscript", ".storage"]})
+        response = await _save(
+            core_client, monkeypatch, json={"paths": ["pyscript", ".storage"]}
+        )
 
         body = response.json()
         assert body["success"] is True
@@ -91,16 +99,16 @@ class TestEntrySetUp:
         assert body["restart_required"] is False
 
     async def test_paths_that_are_not_a_list_are_a_400(
-        self, core_client: HomeAssistantClient
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        response = await _save(core_client, json={"paths": "not-a-list"})
+        response = await _save(core_client, monkeypatch, json={"paths": "not-a-list"})
 
         assert response.status_code == 400
 
     async def test_a_body_that_is_not_json_is_a_400(
-        self, core_client: HomeAssistantClient
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        response = await _save(core_client, content=b"not json")
+        response = await _save(core_client, monkeypatch, content=b"not json")
 
         assert response.status_code == 400
 
@@ -137,19 +145,19 @@ class TestEntryNotSetUp:
     "could not reach" prefix on a raw JSON error."""
 
     async def test_the_editor_says_what_to_set_up(
-        self, core_client: HomeAssistantClient
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        body = await _get(core_client)
+        body = await _get(core_client, monkeypatch)
 
         assert body["available"] is False
         assert UNREACHABLE not in body["reason"]
         assert not body["reason"].startswith("{")
 
     async def test_a_save_says_what_to_set_up(
-        self, core_client: HomeAssistantClient
+        self, core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A user fixing the directories while the entry is missing saves."""
-        response = await _save(core_client, json={"paths": ["pyscript"]})
+        response = await _save(core_client, monkeypatch, json={"paths": ["pyscript"]})
 
         assert response.status_code < 500
         message = response.json()["error"]["message"]
@@ -160,18 +168,24 @@ class TestEntryNotSetUp:
 @pytest.mark.usefixtures("file_tools_on")
 class TestHomeAssistantUnreachable:
     async def test_the_editor_says_it_could_not_reach_the_component(
-        self, unreachable_client: HomeAssistantClient
+        self,
+        unreachable_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """An unavailable editor, never a 500."""
-        body = await _get(unreachable_client)
+        body = await _get(unreachable_client, monkeypatch)
 
         assert body["available"] is False
         assert body["reason"].startswith(UNREACHABLE)
 
     async def test_a_save_is_a_502(
-        self, unreachable_client: HomeAssistantClient
+        self,
+        unreachable_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        response = await _save(unreachable_client, json={"paths": ["pyscript"]})
+        response = await _save(
+            unreachable_client, monkeypatch, json={"paths": ["pyscript"]}
+        )
 
         assert response.status_code == 502
         assert response.json()["error"]["message"].startswith(UNREACHABLE)

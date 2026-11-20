@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import io
+import json
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -156,29 +159,53 @@ def test_stage_package_refuses_path_traversal(tmp_path):
         vendor.stage_package(spec, wheel, b"MIT", _PINS, tmp_path / "mcp")
 
 
-def test_promote_restores_every_tree_when_a_swap_fails(tmp_path, monkeypatch):
-    live_a, live_b = tmp_path / "a", tmp_path / "b"
-    for live in (live_a, live_b):
-        live.mkdir()
-        (live / "old").write_text("old")
-        staged = live.with_name(live.name + ".incoming")
-        staged.mkdir()
-        (staged / "new").write_text("new")
+@pytest.mark.parametrize("failed_package", [spec.package for spec in vendor.PACKAGES])
+def test_promote_restores_every_tree_when_a_swap_fails(
+    tmp_path, monkeypatch, failed_package
+):
+    _sync(tmp_path, monkeypatch, _project("authlib>=1.0"), {}, revision="original")
+    vendor_dir = tmp_path / "_vendor"
+    before = {
+        spec.package: vendor.manifest_lines(vendor_dir / spec.package)
+        for spec in vendor.PACKAGES
+    }
     real_rename = Path.rename
+    promoted: list[str] = []
+    packages = [spec.package for spec in vendor.PACKAGES]
 
     def failing_rename(self, target):
-        if self == tmp_path / "b.incoming":
+        if self == vendor_dir / f"{failed_package}.incoming":
+            assert promoted == packages[: packages.index(failed_package)]
+            # Prove the fault happens after earlier replacements reached their
+            # final paths, while every unswapped replacement is still staged.
+            for package in packages:
+                tree = vendor_dir / (
+                    package if package in promoted else f"{package}.incoming"
+                )
+                assert (tree / "revision.txt").read_text() == f"{package}:replacement"
+                assert vendor.manifest_lines(tree) != before[package]
             raise OSError("simulated")
-        return real_rename(self, target)
+        result = real_rename(self, target)
+        if self.name.endswith(".incoming"):
+            promoted.append(self.name.removesuffix(".incoming"))
+        return result
 
     monkeypatch.setattr(Path, "rename", failing_rename)
-    with pytest.raises(OSError):
-        vendor._promote(
-            {live_a: tmp_path / "a.incoming", live_b: tmp_path / "b.incoming"}
+    with pytest.raises(OSError, match="simulated"):
+        _sync(
+            tmp_path, monkeypatch, _project("authlib>=1.0"), {}, revision="replacement"
         )
-    monkeypatch.undo()
-    assert (live_a / "old").is_file() and not (live_a / "new").exists()
-    assert (live_b / "old").is_file()
+    assert promoted == packages[: packages.index(failed_package)]
+    assert {
+        spec.package: vendor.manifest_lines(vendor_dir / spec.package)
+        for spec in vendor.PACKAGES
+    } == before
+    for package in packages:
+        assert (
+            vendor_dir / package / "revision.txt"
+        ).read_text() == f"{package}:original"
+    assert not list(vendor_dir.glob("*.incoming"))
+    assert not list(vendor_dir.glob("*.previous"))
 
 
 def test_rewrite_handles_a_backslash_continued_from_import():
@@ -247,13 +274,16 @@ class _Release:
     def __init__(self, entries):
         self.entries = entries
 
-    def download(self, url):
-        if url.startswith("https://pypi.org/pypi/"):
-            return __import__("json").dumps({"urls": self.entries}).encode()
-        return b"wheel-bytes"
+    def open(self, url, *, timeout):
+        payload = (
+            json.dumps({"urls": self.entries}).encode()
+            if url.startswith("https://pypi.org/pypi/")
+            else b"wheel-bytes"
+        )
+        return io.BytesIO(payload)
 
 
-def test_download_wheel_refuses_a_digest_mismatch(monkeypatch):
+def test_download_wheel_refuses_a_digest_mismatch(tmp_path, monkeypatch):
     release = _Release(
         [
             {
@@ -264,12 +294,15 @@ def test_download_wheel_refuses_a_digest_mismatch(monkeypatch):
             }
         ]
     )
-    monkeypatch.setattr(vendor, "_download", release.download)
+    monkeypatch.setattr(vendor.urllib.request, "urlopen", release.open)
+    vendor_dir, project = _vendor_paths(tmp_path, _project("authlib>=1"))
     with pytest.raises(SystemExit, match="sha256 mismatch"):
-        vendor._download_wheel("mcp", "8.8.8")
+        vendor.main(vendor_dir, project)
 
 
-def test_download_wheel_refuses_a_release_without_a_pure_python_wheel(monkeypatch):
+def test_download_wheel_refuses_a_release_without_a_pure_python_wheel(
+    tmp_path, monkeypatch
+):
     release = _Release(
         [
             {
@@ -279,17 +312,14 @@ def test_download_wheel_refuses_a_release_without_a_pure_python_wheel(monkeypatc
             }
         ]
     )
-    monkeypatch.setattr(vendor, "_download", release.download)
+    monkeypatch.setattr(vendor.urllib.request, "urlopen", release.open)
+    vendor_dir, project = _vendor_paths(tmp_path, _project("authlib>=1"))
     with pytest.raises(SystemExit, match="no pure-Python wheel"):
-        vendor._download_wheel("mcp", "8.8.8")
+        vendor.main(vendor_dir, project)
 
 
 def test_main_leaves_live_trees_untouched_when_a_download_fails(tmp_path, monkeypatch):
-    vendor_dir = tmp_path / "_vendor"
-    vendor_dir.mkdir()
-    (vendor_dir / "requirements.txt").write_text(
-        "fastmcp-slim==9.9.9\nmcp==8.8.8\nmcp-types==8.8.8\n", encoding="utf-8"
-    )
+    vendor_dir, project = _vendor_paths(tmp_path, _project("authlib>=1"))
     for spec in vendor.PACKAGES:
         (vendor_dir / spec.package).mkdir()
         (vendor_dir / spec.package / "live.py").write_text("", encoding="utf-8")
@@ -301,15 +331,215 @@ def test_main_leaves_live_trees_untouched_when_a_download_fails(tmp_path, monkey
             "fastmcp-9.9.9.dist-info/licenses/LICENSE": "Apache",
         }
     )
-
-    def download_wheel(distribution, version):
-        if distribution == "mcp":
-            raise SystemExit("network down")
-        return good
-
-    monkeypatch.setattr(vendor, "_download_wheel", download_wheel)
-    with pytest.raises(SystemExit, match="network down"):
-        vendor.main(vendor_dir)
+    _serve_wheels(
+        monkeypatch,
+        {"fastmcp-slim": good, "fastmcp": good, "mcp": OSError("network down")},
+    )
+    with pytest.raises(OSError, match="network down"):
+        vendor.main(vendor_dir, project)
     assert not list(vendor_dir.glob("*.incoming"))
     for spec in vendor.PACKAGES:
         assert (vendor_dir / spec.package / "live.py").is_file()
+
+
+_PYPROJECT = """[project]
+name = "fixture"
+classifiers = ["Programming Language :: Python :: 3.14"]
+dependencies = [
+    # Runtime requirements of the vendored packages.
+{entries}
+]
+
+[dependency-groups]
+dev = [
+{dev}
+]
+"""
+
+
+def _project(*entries: str, dev: tuple[str, ...] | None = None) -> str:
+    def lines(items: tuple[str, ...]) -> str:
+        return "\n".join(f'    "{item}",' for item in items)
+
+    return _PYPROJECT.format(
+        entries=lines(entries), dev=lines(entries if dev is None else dev)
+    )
+
+
+def _vendor_paths(tmp_path, pyproject_text):
+    vendor_dir = tmp_path / "_vendor"
+    vendor_dir.mkdir(exist_ok=True)
+    (vendor_dir / "requirements.txt").write_text(
+        "fastmcp-slim==9.9.9\nmcp==8.8.8\nmcp-types==8.8.8\n", encoding="utf-8"
+    )
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(pyproject_text, encoding="utf-8")
+    return vendor_dir, pyproject
+
+
+def _serve_wheels(monkeypatch, wheels):
+    """Replace PyPI's HTTP transport, leaving download and digest checks live."""
+
+    def open_release(url, *, timeout):
+        distribution = (
+            url.split("/")[-3] if url.endswith("/json") else url.split("/")[-1]
+        )
+        payload = wheels[distribution]
+        if isinstance(payload, BaseException):
+            raise payload
+        if url.endswith("/json"):
+            payload = json.dumps(
+                {
+                    "urls": [
+                        {
+                            "packagetype": "bdist_wheel",
+                            "filename": f"{distribution}-py3-none-any.whl",
+                            "url": f"https://files.example/{distribution}",
+                            "digests": {"sha256": hashlib.sha256(payload).hexdigest()},
+                        }
+                    ]
+                }
+            ).encode()
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(vendor.urllib.request, "urlopen", open_release)
+
+
+def _sync(
+    tmp_path, monkeypatch, pyproject_text, requires_by_distribution, *, revision=None
+):
+    """Run the sync with each distribution's wheel declaring the given needs."""
+    vendor_dir, pyproject = _vendor_paths(tmp_path, pyproject_text)
+    wheels = {}
+    for distribution in (*_PINS, "fastmcp"):
+        needs = requires_by_distribution.get(distribution, [])
+        members = {
+            "fastmcp/__init__.py": _FASTMCP_INIT,
+            "mcp/__init__.py": "",
+            "mcp_types/__init__.py": "",
+            "pkg-9.9.9.dist-info/METADATA": "".join(
+                f"Requires-Dist: {need}\n" for need in needs
+            ),
+            "pkg-9.9.9.dist-info/licenses/LICENSE": "MIT",
+        }
+        if revision is not None:
+            members.update(
+                {
+                    f"{spec.package}/revision.txt": f"{spec.package}:{revision}"
+                    for spec in vendor.PACKAGES
+                }
+            )
+        wheels[distribution] = _wheel(members)
+
+    _serve_wheels(monkeypatch, wheels)
+    vendor.main(vendor_dir, pyproject)
+    return pyproject.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("declared", "needed", "expected"),
+    [
+        ("authlib>=1.6.11", "authlib>=1.9.5; extra == 'server'", "authlib>=1.9.5"),
+        (
+            "py-key-value-aio[memory]>=0.4.4,<0.5.0; sys_platform != 'emscripten'",
+            "py-key-value-aio>=0.4.6",
+            "py-key-value-aio[memory]>=0.4.6,<0.5.0; sys_platform != 'emscripten'",
+        ),
+        ("authlib >= 1.6.11, != 1.7.0", "authlib>=1.9.5", "authlib >=1.9.5, != 1.7.0"),
+        ("pyjwt[crypto]>=2.12", "pyjwt>=2.10.1", "pyjwt[crypto]>=2.12"),
+        ("cryptography>=48.0.0,<51", "cryptography>=51.0", "cryptography>=48.0.0,<51"),
+        ("pydantic-monty==0.0.18", "pydantic-monty>=0.0.19", "pydantic-monty==0.0.18"),
+        ("anyio>=4.10", "anyio>=5.0; python_version < '3.14'", "anyio>=4.10"),
+        (
+            "authlib>=1.6.11",
+            "authlib>=1.9.5; python_full_version >= '3.14.2'",
+            "authlib>=1.9.5",
+        ),
+    ],
+    ids=[
+        "raised",
+        "keeps-extras-ceiling-marker",
+        "keeps-exclusion-and-spacing",
+        "never-lowered",
+        "past-ceiling",
+        "exact-pin",
+        "unsupported-python",
+        "later-patch-release",
+    ],
+)
+def test_vendor_sync_raises_the_floors_a_bump_needs_so_installs_upgrade(
+    tmp_path, monkeypatch, declared, needed, expected
+):
+    """A bump that needs a newer dependency raises ha-mcp's published floor.
+
+    Home Assistant keeps whatever version already satisfies the floor ha-mcp
+    publishes, so a floor left behind keeps an older release installed.
+    Floors it cannot raise safely are left for a person to change.
+    """
+    text = _sync(tmp_path, monkeypatch, _project(declared), {"fastmcp-slim": [needed]})
+
+    project = tomllib.loads(text)
+    assert project["project"]["dependencies"] == [expected]
+    assert project["dependency-groups"]["dev"] == [declared]
+
+
+def test_vendor_sync_changes_only_the_floors_it_raises_and_reports_the_rest(
+    tmp_path, monkeypatch, capsys
+):
+    """The highest need across the vendored packages wins, and nothing else moves.
+
+    A floor the sync declines is named in its output, so the failing coverage
+    test is not the first place a person learns which entry needs them.
+    """
+    declared = (
+        "authlib>=1.6.11",
+        "authlib-extras>=1.0",
+        "pydantic[email]>=2.13.4,<3",
+        "cryptography>=48.0.0,<51",
+    )
+    text = _sync(
+        tmp_path,
+        monkeypatch,
+        _project(*declared),
+        {
+            "fastmcp-slim": ["authlib>=1.9.5", "pydantic>=2.12", "authlib-extras>=0.5"],
+            "mcp": ["authlib>=1.8.0", "pydantic>=2.14.1", "cryptography>=51.0"],
+        },
+    )
+
+    assert text == _project(
+        "authlib>=1.9.5",
+        "authlib-extras>=1.0",
+        "pydantic[email]>=2.14.1,<3",
+        "cryptography>=48.0.0,<51",
+        dev=declared,
+    )
+    assert "cryptography>=48.0.0,<51" in capsys.readouterr().out
+
+
+def test_the_checked_in_pyproject_already_meets_the_vendored_needs():
+    """The sync parses the real pyproject and finds nothing to change.
+
+    A pyproject the sync cannot read would otherwise surface only as an
+    artifact error on the next vendored bump.
+    """
+    pyproject = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    vendor_dir = _REPO_ROOT / "src" / "ha_mcp" / "_vendor"
+    requirements = [
+        line
+        for spec in vendor.PACKAGES
+        for line in (vendor_dir / spec.package / vendor.REQUIRES_NAME)
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert vendor.raise_dependency_floors(pyproject, requirements) == (pyproject, [])
+
+
+def test_vendor_sync_refuses_a_dependencies_array_outside_project():
+    """Another table's ``dependencies`` array is never taken for ha-mcp's own."""
+    pyproject = (
+        '[project]\nname = "x"\n\n[tool.other]\ndependencies = [\n    "a>=1",\n]\n'
+    )
+    with pytest.raises(SystemExit, match=r"no \[project\] dependencies"):
+        vendor.raise_dependency_floors(pyproject, ["a>=2"])

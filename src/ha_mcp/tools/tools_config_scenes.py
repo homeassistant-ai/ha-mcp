@@ -161,7 +161,7 @@ class ConfigSceneTools:
 
     # Short retry retained for config reads and removals; post-write polling
     # has its own deadline in entity_registration.
-    _RESOLVE_RETRY_DELAY = 0.2
+    RESOLVE_RETRY_DELAY = 0.2
 
     @staticmethod
     def _first_scene_entity_id(matches: list[dict[str, Any]]) -> str | None:
@@ -220,7 +220,7 @@ class ConfigSceneTools:
         entity_id = self._first_scene_entity_id(matches)
         if entity_id is not None:
             return entity_id
-        await asyncio.sleep(self._RESOLVE_RETRY_DELAY)
+        await asyncio.sleep(self.RESOLVE_RETRY_DELAY)
         recheck = await fetch_entity_lookup_via_component(
             self._client, scene_id, domain="scene"
         )
@@ -275,7 +275,7 @@ class ConfigSceneTools:
                 # upserted scene the registry index lags the storage write —
                 # one short retry catches the common case before falling
                 # back to the naive entity_id.
-                await asyncio.sleep(self._RESOLVE_RETRY_DELAY)
+                await asyncio.sleep(self.RESOLVE_RETRY_DELAY)
                 retried = True
         # Issue #1168 R5 blocker 13 (refined per R6 blocker 19): only log on
         # the genuine exhausted-retry exit (both list calls succeeded, neither
@@ -1055,13 +1055,13 @@ class ConfigSceneTools:
             "python_expression": python_transform,
             "message": f"Scene {resolved_id} updated via Python transform",
         }
+        merge_validation_meta(response, references)
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
             canonical_files=_SCENE_SKILL_FILES,
             referenced_files=None,
         )
-        merge_validation_meta(response, references)
         return response
 
     @staticmethod

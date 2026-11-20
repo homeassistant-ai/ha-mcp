@@ -110,5 +110,5 @@ jobs:
           RENOVATE_REPOSITORIES: ${{ github.repository }}
           # Only these isolated generators, the integration pin sync and the lock
           # refresh may run; they cannot invoke a shell.
-          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$", "^python3 -I scripts/vendor_fastmcp\\.py$", "^uv run --no-project --with packaging python -I scripts/sync_dev_integration_pins\\.py$", "^uv lock$", "^uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment\\.py --sync-lock$"]'
+          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$", "^uv run --no-project --with packaging python -I scripts/vendor_fastmcp\\.py$", "^uv run --no-project --with packaging python -I scripts/sync_dev_integration_pins\\.py$", "^uv lock$", "^uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment\\.py --sync-lock$"]'
           RENOVATE_ALLOW_SHELL_EXECUTOR_FOR_POST_UPGRADE_COMMANDS: "false"

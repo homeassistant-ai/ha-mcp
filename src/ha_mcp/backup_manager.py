@@ -11,7 +11,7 @@ exists), else ``<data dir>/backups`` where the data dir is what
 ``utils.data_paths.get_data_dir`` resolves (``HA_MCP_CONFIG_DIR``,
 ``~/.ha-mcp``, or the tmpdir fallback). Installs that still hold snapshots
 under the pre-#2372 default ``${XDG_DATA_HOME:-~/.local/share}/ha_mcp/backups``
-keep using that directory; see ``_resolve_default_dir``.
+keep using that directory; see ``resolve_default_dir``.
 
 File format
 -----------
@@ -43,7 +43,6 @@ One handler per backed-up domain. Storage helper types each register one keyed
 from __future__ import annotations
 
 import asyncio
-import functools
 import hashlib
 import logging
 import os
@@ -59,7 +58,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cached_property, partial
 from pathlib import Path
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 import yaml  # type: ignore[import-untyped]
 
@@ -83,6 +82,7 @@ from .backup_diff import (
     _build_text_diff_response,
     _compute_json_patch,
     _summarize_patch_counts,
+    json_equal,
 )
 from .backup_entities import (
     current_entity_id,
@@ -95,7 +95,12 @@ from .backup_entity_ids import (
     update_with_registry_icon,
     with_registry_icon,
 )
-from .backup_files import _fetch_file, _fetch_file_as_stored, _restore_file
+from .backup_files import (
+    _fetch_file,
+    _fetch_file_as_stored,
+    _restore_file,
+    file_read_error_code,
+)
 from .backup_helper_target import fetch_helper as _fetch_helper
 from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
 from .backup_helper_target import (
@@ -123,10 +128,14 @@ from .client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
+from .config import get_global_settings
 from .errors import ErrorCode, get_error_code
 from .storage_helper_types import SIMPLE_HELPER_TYPES
 from .utils.data_paths import get_data_dir
 from .utils.registry_update_lock import registry_update_lock
+
+if TYPE_CHECKING:
+    from .server import HomeAssistantSmartMCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -529,7 +538,7 @@ def _holds_files(path: Path) -> bool:
         return False
 
 
-def _resolve_default_dir() -> Path:
+def resolve_default_dir() -> Path:
     """Pick a sane default backup directory for the current deployment mode.
 
     Add-on (Supervisor sets ``SUPERVISOR_TOKEN`` and ``/data`` exists):
@@ -649,7 +658,7 @@ class BackupManager:
         configured = (getattr(self._settings, "auto_backup_dir", "") or "").strip()
         # A disabled write still needs coordination, but must not create storage.
         # Status checks and captures initialize storage in the backup I/O executor.
-        return Path(configured).expanduser() if configured else _resolve_default_dir()
+        return Path(configured).expanduser() if configured else resolve_default_dir()
 
     @property
     def backup_dir(self) -> Path:
@@ -1595,13 +1604,11 @@ class BackupManager:
             # Commit to the absent-target branch: if an entry reappeared since
             # preflight, recreation refuses instead of editing it without safety.
             restore = (
-                functools.partial(_restore_config_subentry, recreate_only=True)
+                partial(_restore_config_subentry, recreate_only=True)
                 if domain == "helper_config_subentry" and safety_path is None
                 else handler.restore
                 if needs_safety
-                else functools.partial(
-                    _recreate_flow_helper, helper_type=_flow_type(domain)
-                )
+                else partial(_recreate_flow_helper, helper_type=_flow_type(domain))
             )
             result = await restore(self._client, entity_id, config)
         except BackupRestoreError as err:
@@ -1844,7 +1851,7 @@ class BackupManager:
         info = await _read_legacy_backup(self._client, filename)
         if not info.get("success", False):
             err = str(info.get("error", ""))
-            if "does not exist" in err or "not found" in err.lower():
+            if file_read_error_code(info) == "not_found":
                 raise FileNotFoundError(filename)
             raise ValueError(f"Cannot read legacy backup {filename!r}: {err}")
         return info
@@ -1993,6 +2000,15 @@ def get_backup_manager(client: Any, settings: Any) -> BackupManager:
             # just isn't cached.
             pass
     return mgr
+
+
+def backup_manager_for_server(
+    server: HomeAssistantSmartMCPServer | None,
+) -> BackupManager | None:
+    """Resolve the edit-backup manager shared by settings routes."""
+    settings = get_global_settings()
+    client = getattr(server, "client", None)
+    return get_backup_manager(client, settings) if client is not None else None
 
 
 # --------------------------- domain handlers --------------------------------
@@ -2223,9 +2239,8 @@ async def _restore_dashboard_resource(client: Any, entity_id: str, config: Any) 
 #
 # Registry ``/update`` and ``/create`` commands refuse the ``created_at`` and
 # ``modified_at`` their lists return, which snapshots keep. The registry item
-# restores and diffs use this list when the component gives no answer
-# (docs/agents/native-core-contracts.md, the ``registry_fields`` paragraphs);
-# the other restores apply it without asking.
+# restores and diffs use this list when the component gives no answer; the
+# other restores apply it without asking.
 _REGISTRY_READONLY_KEYS = frozenset({"created_at", "modified_at"})
 
 
@@ -2398,7 +2413,7 @@ async def _fetch_yaml(client: Any, entity_id: str) -> Any:
     result = unwrap_service_response(result)
     if not result.get("success", False):
         error = str(result.get("error", ""))
-        if "does not exist" in error or "not a file" in error:
+        if file_read_error_code(result) in {"not_found", "not_a_file"}:
             return None
         raise HomeAssistantError(f"read_file failed for {file!r}: {error}")
     # The component extracts the subtree (it has ruamel); None = key absent.
@@ -2517,14 +2532,8 @@ async def _list_legacy_backups(client: Any) -> tuple[list[dict[str, Any]], str |
 
 
 async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
-    """Read one legacy ``.bak`` via the component read_legacy_backup service.
-
-    Returns the unwrapped service response (carries ``success`` / ``content`` /
-    ``file_path`` / ``path_ambiguous`` / ``timestamp``). A service-unavailable
-    ``HomeAssistantError`` — or a ``ToolError`` from the caller-token gates —
-    is mapped to a ``success: False`` dict so the caller surfaces a not-found
-    rather than crashing.
-    """
+    """Read a legacy backup; a service that cannot be called is ``success: False``
+    with no ``error_code``, which a missing backup has."""
     from .tools.helpers import extract_structured_error_reason
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
@@ -2591,16 +2600,6 @@ async def _restore_blueprint(client: Any, path: str, config: Any, domain: str) -
         error = response.get("error") if isinstance(response, dict) else response
         raise HomeAssistantError(f"blueprint/save restore failed for {path!r}: {error}")
     return response.get("result") or {}
-
-
-def _make_blueprint_handler(domain: str) -> DomainHandler:
-    async def fetch(client: Any, entity_id: str) -> Any:
-        return await _fetch_blueprint(client, entity_id, domain)
-
-    async def restore(client: Any, entity_id: str, config: Any) -> Any:
-        return await _restore_blueprint(client, entity_id, config, domain)
-
-    return DomainHandler(domain=f"blueprint_{domain}", fetch=fetch, restore=restore)
 
 
 def _flow_type(domain: str) -> str:
@@ -2775,13 +2774,6 @@ def _flow_snapshot_for_restore(
         raise BackupRestoreError(str(err), reason="invalid_snapshot") from err
 
 
-def _snapshot_configs_match(expected: Any, current: Any) -> bool:
-    """Reuse the preview's type-sensitive comparison (False is not 0)."""
-    patch: list[dict[str, Any]] = []
-    _compute_json_patch(expected, current, 1, patch)
-    return not patch
-
-
 async def _verify_readback(
     read: Callable[[], Awaitable[Any]], expected: Any, keys: tuple[str, ...]
 ) -> Literal["matched", "mismatched", "unavailable"]:
@@ -2793,7 +2785,7 @@ async def _verify_readback(
         _log_flow_helper_failure("readback", err)
         return "unavailable"
     actual = {key: restored[key] for key in keys} if restored is not None else None
-    if _snapshot_configs_match(expected, actual):
+    if json_equal(expected, actual):
         return "matched"
     logger.warning("Flow helper restore step=readback reason=mismatch")
     return "mismatched"
@@ -3356,23 +3348,11 @@ async def _recreate_config_subentry(
 
 
 def _make_flow_helper_handler(helper_type: str) -> DomainHandler:
-    async def fetch(client: Any, entity_id: str) -> Any:
-        return await _fetch_flow_helper(client, entity_id, helper_type)
-
-    async def restore(client: Any, entity_id: str, config: Any) -> Any:
-        return await _restore_flow_helper(client, entity_id, config, helper_type)
-
-    return DomainHandler(domain=f"helper_{helper_type}", fetch=fetch, restore=restore)
-
-
-def _make_helper_handler(helper_type: str) -> DomainHandler:
-    async def fetch(client: Any, entity_id: str) -> Any:
-        return await _fetch_helper(client, entity_id, helper_type)
-
-    async def restore(client: Any, entity_id: str, config: Any) -> Any:
-        return await _restore_helper(client, entity_id, config, helper_type)
-
-    return DomainHandler(domain=f"helper_{helper_type}", fetch=fetch, restore=restore)
+    return DomainHandler(
+        f"helper_{helper_type}",
+        partial(_fetch_flow_helper, helper_type=helper_type),
+        partial(_restore_flow_helper, helper_type=helper_type),
+    )
 
 
 # --------------------------- registry assembly ------------------------------
@@ -3399,7 +3379,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(
         DomainHandler("calendar_event", _fetch_calendar_event, _restore_calendar_event)
     )
-    restore_zone_item = functools.partial(_restore_helper, helper_type="zone")
+    restore_zone_item = partial(_restore_helper, helper_type="zone")
     mgr.register(DomainHandler("zone", fetch_zone, restore_zone_item))
     mgr.register(
         DomainHandler("area_or_floor", _fetch_area_or_floor, _restore_area_or_floor)
@@ -3417,9 +3397,21 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     # Blueprint files (#2329): the pre-write snapshot for
     # ha_manage_blueprints(action="delete" / "save").
     for blueprint_domain in ("automation", "script"):
-        mgr.register(_make_blueprint_handler(blueprint_domain))
+        mgr.register(
+            DomainHandler(
+                f"blueprint_{blueprint_domain}",
+                partial(_fetch_blueprint, domain=blueprint_domain),
+                partial(_restore_blueprint, domain=blueprint_domain),
+            )
+        )
     for helper_type in _KNOWN_HELPER_TYPES:
-        mgr.register(_make_helper_handler(helper_type))
+        mgr.register(
+            DomainHandler(
+                f"helper_{helper_type}",
+                partial(_fetch_helper, helper_type=helper_type),
+                partial(_restore_helper, helper_type=helper_type),
+            )
+        )
     mgr.register(
         DomainHandler(
             "helper_config_subentry", _fetch_config_subentry, _restore_config_subentry

@@ -7,7 +7,6 @@ import pytest
 
 from ha_mcp.log_filters import (
     SessionDisconnectLogFilter,
-    _is_only_disconnect_teardown_errors,
 )
 
 
@@ -58,7 +57,7 @@ class TestSessionDisconnectLogFilter:
         """Create a fresh filter instance for each test."""
         self.log_filter = SessionDisconnectLogFilter()
 
-    def _make_record(
+    def make_record(
         self,
         name: str,
         msg: str,
@@ -80,7 +79,7 @@ class TestSessionDisconnectLogFilter:
         """Exactly what mcp/server/streamable_http_manager.py's
         _handle_stateless_request logs when the client already disconnected."""
         err = anyio.ClosedResourceError()
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http_manager",
             "Stateless session crashed",
             err,
@@ -97,7 +96,7 @@ class TestSessionDisconnectLogFilter:
         """The stateful runner's equivalent log line -- same race, same fix,
         even though every HTTP entry point currently forces stateless_http."""
         err = anyio.ClosedResourceError()
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http_manager",
             "Session abc123 crashed",
             err,
@@ -111,7 +110,7 @@ class TestSessionDisconnectLogFilter:
         depends on which end of the memory stream closed first, but both
         are the same benign situation."""
         err = anyio.BrokenResourceError()
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http_manager",
             "Stateless session crashed",
             err,
@@ -128,7 +127,7 @@ class TestSessionDisconnectLogFilter:
         caught = await _run_in_task_group(_raise_closed_resource_error)
         assert isinstance(caught, BaseExceptionGroup)
 
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http_manager",
             "Stateless session crashed",
             caught,
@@ -144,7 +143,7 @@ class TestSessionDisconnectLogFilter:
         caught = await _run_in_task_group(_raise_broken_resource_error)
         assert isinstance(caught, BaseExceptionGroup)
 
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http_manager",
             "Stateless session crashed",
             caught,
@@ -162,7 +161,7 @@ class TestSessionDisconnectLogFilter:
         )
         assert isinstance(caught, BaseExceptionGroup)
 
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http_manager",
             "Stateless session crashed",
             caught,
@@ -176,7 +175,7 @@ class TestSessionDisconnectLogFilter:
         """An actual server bug on this logger must keep its traceback and
         ERROR level -- only the known-benign disconnect race is demoted."""
         err = RuntimeError("server bug")
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http_manager",
             "Stateless session crashed",
             err,
@@ -189,7 +188,7 @@ class TestSessionDisconnectLogFilter:
     def test_leaves_other_loggers_unchanged(self):
         """Only the SDK's session-manager logger is ever touched."""
         err = anyio.ClosedResourceError()
-        record = self._make_record(
+        record = self.make_record(
             "some.other.logger",
             "Stateless session crashed",
             err,
@@ -200,7 +199,7 @@ class TestSessionDisconnectLogFilter:
 
     def test_passes_record_without_exc_info(self):
         """A record with no attached exception is never touched."""
-        record = self._make_record(
+        record = self.make_record(
             "mcp.server.streamable_http_manager",
             "Stateless session crashed",
             None,
@@ -209,74 +208,54 @@ class TestSessionDisconnectLogFilter:
         assert record.levelno == logging.ERROR
 
 
-class TestIsOnlyDisconnectTeardownErrors:
-    """Direct coverage of the recursive classifier the filter relies on."""
-
-    def test_bare_closed_resource_error(self):
-        """A bare ClosedResourceError matches on its own."""
-        assert _is_only_disconnect_teardown_errors(anyio.ClosedResourceError()) is True
-
-    def test_bare_broken_resource_error(self):
-        """A bare BrokenResourceError matches too -- the other half of the
-        disconnect-race pair (sibling Exception subclasses, neither a
-        subclass of the other, so this needs its own explicit check)."""
-        assert _is_only_disconnect_teardown_errors(anyio.BrokenResourceError()) is True
-
-    def test_bare_other_exception(self):
-        """An unrelated bare exception never matches."""
-        assert _is_only_disconnect_teardown_errors(RuntimeError("x")) is False
-
-    def test_group_of_one_closed_resource_error(self):
-        """A single-item group wrapping just the known-benign exception matches."""
-        group = ExceptionGroup("eg", [anyio.ClosedResourceError()])
-        assert _is_only_disconnect_teardown_errors(group) is True
-
-    def test_group_of_one_broken_resource_error(self):
-        """Same, for the BrokenResourceError half of the pair."""
-        group = ExceptionGroup("eg", [anyio.BrokenResourceError()])
-        assert _is_only_disconnect_teardown_errors(group) is True
-
-    def test_group_mixing_both_benign_types(self):
-        """A group with both ClosedResourceError and BrokenResourceError
-        leaves is still all-benign -- e.g. concurrent responses racing the
-        same teardown from opposite ends."""
-        group = ExceptionGroup(
-            "eg", [anyio.ClosedResourceError(), anyio.BrokenResourceError()]
-        )
-        assert _is_only_disconnect_teardown_errors(group) is True
-
-    def test_nested_group_of_closed_resource_errors(self):
-        """Nested groups are unwrapped recursively, matching all-benign leaves."""
-        inner = ExceptionGroup("inner", [anyio.ClosedResourceError()])
-        outer = ExceptionGroup("outer", [inner, anyio.ClosedResourceError()])
-        assert _is_only_disconnect_teardown_errors(outer) is True
-
-    def test_nested_group_with_broken_resource_error_leaf(self):
-        """Nested groups recurse correctly for the BrokenResourceError half too."""
-        inner = ExceptionGroup("inner", [anyio.BrokenResourceError()])
-        outer = ExceptionGroup("outer", [inner, anyio.ClosedResourceError()])
-        assert _is_only_disconnect_teardown_errors(outer) is True
-
-    def test_mixed_group_is_rejected(self):
-        """A group with even one non-benign leaf must not match."""
-        group = ExceptionGroup("eg", [anyio.ClosedResourceError(), RuntimeError("x")])
-        assert _is_only_disconnect_teardown_errors(group) is False
-
-    def test_empty_group_is_rejected(self):
-        """Defensive: an ExceptionGroup always carries at least one exception
-        in practice, but `all([])` is vacuously True -- guard against ever
-        demoting on a group with nothing in it. ExceptionGroup itself refuses
-        to construct empty, so this pins that guarantee rather than exercising
-        the classifier's own guard directly."""
-        with pytest.raises(ValueError):
-            ExceptionGroup("empty", [])
+@pytest.mark.parametrize(
+    ("error", "expected_level"),
+    [
+        pytest.param(
+            ExceptionGroup(
+                "outer",
+                [
+                    ExceptionGroup("inner", [anyio.ClosedResourceError()]),
+                    anyio.BrokenResourceError(),
+                ],
+            ),
+            logging.WARNING,
+            id="every-leaf-a-disconnect",
+        ),
+        pytest.param(
+            ExceptionGroup(
+                "outer",
+                [
+                    ExceptionGroup("inner", [anyio.BrokenResourceError()]),
+                    RuntimeError("bug"),
+                ],
+            ),
+            logging.ERROR,
+            id="one-leaf-a-bug",
+        ),
+    ],
+)
+def test_nested_disconnect_groups_demote_only_when_every_leaf_is_benign(
+    error: ExceptionGroup, expected_level: int
+):
+    record = logging.LogRecord(
+        name="mcp.server.streamable_http_manager",
+        level=logging.ERROR,
+        pathname="",
+        lineno=0,
+        msg="Stateless session crashed",
+        args=(),
+        exc_info=(type(error), error, None),
+    )
+    assert SessionDisconnectLogFilter().filter(record)
+    assert record.levelno == expected_level
 
 
 class TestSessionDisconnectLogFilterWiring:
-    """End-to-end: _setup_logging wires the filter onto real logger output."""
+    """End-to-end: setup_logging wires the filter onto real logger output."""
 
     def test_setup_logging_wires_filter_and_demotes_output(self, monkeypatch):  # noqa: PLR0915
-        """Integration: ``_setup_logging`` attaches the filter to the SDK's
+        """Integration: ``setup_logging`` attaches the filter to the SDK's
         session-manager logger, so a real ``ClosedResourceError``-caused
         'Stateless session crashed' entry loses its traceback and ERROR level
         in actual output, while an unrelated exception on the same logger
@@ -292,7 +271,7 @@ class TestSessionDisconnectLogFilterWiring:
         from ha_mcp import __main__ as ha_main
 
         sdk_logger = logging.getLogger("mcp.server.streamable_http_manager")
-        # _setup_logging also attaches filters to sibling loggers; save/restore
+        # setup_logging also attaches filters to sibling loggers; save/restore
         # them too or they leak into other tests.
         stateless_logger = logging.getLogger("mcp.server.streamable_http")
         fastmcp_logger = logging.getLogger("fastmcp.server.server")
@@ -303,11 +282,11 @@ class TestSessionDisconnectLogFilterWiring:
         saved_level = sdk_logger.level
         monkeypatch.setattr(ha_main.logging, "basicConfig", lambda *a, **k: None)
         try:
-            ha_main._setup_logging("INFO", force=True)
+            ha_main.setup_logging("INFO", force=True)
             assert any(
                 isinstance(f, SessionDisconnectLogFilter) for f in sdk_logger.filters
             ), (
-                "_setup_logging must attach SessionDisconnectLogFilter to the SDK's session-manager logger"
+                "setup_logging must attach SessionDisconnectLogFilter to the SDK's session-manager logger"
             )
 
             disconnect_buf = io.StringIO()

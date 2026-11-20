@@ -94,6 +94,14 @@ def test_matcher_accepts_the_two_structural_shapes():
     assert all(is_structural_scene_fragment(t) for t in accepted)
 
 
+def test_only_the_yaml_gap_explains_a_partial_result():
+    """The attribute-only note describes scenes that were still scored, so a
+    partial result it alone accompanies has no stated reason."""
+    assert scene_fragments.is_yaml_scene_gap(YAML_STRUCTURAL)
+    assert not scene_fragments.is_yaml_scene_gap(ATTRIBUTE_ONLY)
+    assert not scene_fragments.is_yaml_scene_gap(SPOOFING_FAILED_FETCH)
+
+
 async def test_matcher_accepts_the_yaml_scene_fragment_ha_search_reports(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:

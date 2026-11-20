@@ -6,7 +6,6 @@ import importlib.util
 import sys
 import tomllib
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -229,34 +228,35 @@ def test_truncation_closes_a_fence_with_the_delimiter_it_was_opened_with(
     assert len(capped) <= LIMIT
 
 
-def _after(*lines: str) -> Any:
-    """The block state after feeding `lines` through a fresh tracker."""
-    blocks = extract._OpenBlocks()
-    for line in lines:
-        blocks = blocks.feed(line)
-    return blocks
+def _closing_suffix(*lines: str) -> str:
+    """Read the repair added to a truncated release body, through the capper."""
+    prefix = "".join(lines)
+    body = prefix + "x" * 1_000 + "\n"
+    capped = extract.cap_to_limit(body, REPO, "8.0.0", 500)
+    kept = capped.split("\n\n---\n\n")[0]
+    return kept.removeprefix(prefix.rstrip())
 
 
 def test_a_shorter_or_foreign_fence_line_does_not_close_an_open_fence() -> None:
-    assert _after("````python\n").closers == "\n````"
+    assert _closing_suffix("````python\n") == "\n````"
 
     # too short to close it, then the wrong character
-    assert _after("````python\n", "```\n", "~~~\n").closers == "\n````", (
+    assert _closing_suffix("````python\n", "```\n", "~~~\n") == "\n````", (
         "an open fence was closed by a line that can't close it"
     )
 
     # same character, longer — closes it
-    assert _after("````python\n", "`````\n").closers == ""
+    assert _closing_suffix("````python\n", "`````\n") == ""
 
 
 def test_an_info_string_line_does_not_close_an_open_fence() -> None:
     """A closing fence carries no info string, so ```python is content, not a closer."""
-    assert _after("```python\n", "```python\n").closers == "\n```", (
+    assert _closing_suffix("```python\n", "```python\n") == "\n```", (
         "an info-string line was treated as a closer"
     )
 
     # delimiter plus whitespace only — a real closer
-    assert _after("```python\n", "```python\n", "```   \n").closers == ""
+    assert _closing_suffix("```python\n", "```python\n", "```   \n") == ""
 
 
 def test_a_backtick_info_string_containing_a_backtick_is_not_a_fence() -> None:
@@ -265,17 +265,17 @@ def test_a_backtick_info_string_containing_a_backtick_is_not_a_fence() -> None:
     Opening a fence on such a line means the closer emitted later reads as a
     *new* opening fence, putting the truncation notice inside code to EOF.
     """
-    assert _after("```py`x\n").closers == "", "opened a fence GFM would not open"
-    assert _after("```py\n").closers == "\n```"
+    assert _closing_suffix("```py`x\n") == "", "opened a fence GFM would not open"
+    assert _closing_suffix("```py\n") == "\n```"
     # The restriction is specific to backticks; tilde info strings may hold them.
-    assert _after("~~~py`x\n").closers == "\n~~~"
+    assert _closing_suffix("~~~py`x\n") == "\n~~~"
 
 
 def test_a_closer_reproduces_the_indentation_its_fence_opened_at() -> None:
     """An unindented closer exits the list container instead of closing the fence."""
-    assert _after("  ~~~\n").closers == "\n  ~~~"
-    assert _after("   ```py\n").closers == "\n   ```"
-    assert _after("```py\n").closers == "\n```"
+    assert _closing_suffix("  ~~~\n") == "\n  ~~~"
+    assert _closing_suffix("   ```py\n") == "\n   ```"
+    assert _closing_suffix("```py\n") == "\n```"
 
 
 def test_four_space_indentation_is_indented_code_not_a_fence() -> None:
@@ -284,32 +284,23 @@ def test_four_space_indentation_is_indented_code_not_a_fence() -> None:
     Treating an indented code sample as a fence opens one that never closes,
     which also silences `<details>` tracking for everything behind it.
     """
-    assert _after("   ```python\n").closers == "\n   ```", (
+    assert _closing_suffix("   ```python\n") == "\n   ```", (
         "three spaces is still a fence, and its closer keeps that indentation"
     )
-    assert _after("    ```python\n").closers == "", "four spaces is indented code"
-    assert _after("\t```python\n").closers == "", "a tab indents past the fence limit"
+    assert _closing_suffix("    ```python\n") == "", "four spaces is indented code"
+    assert _closing_suffix("\t```python\n") == "", "a tab indents past the fence limit"
 
     # An indented look-alike must not close a fence that is genuinely open.
-    assert _after("```python\n", "    ```\n").closers == "\n```"
+    assert _closing_suffix("```python\n", "    ```\n") == "\n```"
 
 
 def test_details_tags_on_one_line_are_counted_in_source_order() -> None:
     """Netting a line's tags hides an opener that follows a closer."""
-    assert _after("</details><details>\n").closers == "\n</details>", (
+    assert _closing_suffix("</details><details>\n") == "\n</details>", (
         "a close-then-open line nets to zero but really leaves one open"
     )
-    assert _after("<details></details>\n").closers == ""
-    assert _after("<details>\n", "</details><details>\n").closers == "\n</details>"
-
-
-def test_feed_leaves_the_instance_it_was_called_on_untouched() -> None:
-    """`cap_to_limit` peeks at the next state before deciding to take a line."""
-    outside = extract._OpenBlocks()
-    inside = outside.feed("```python\n")
-
-    assert outside.closers == "", "feed mutated the state it was asked about"
-    assert inside.closers == "\n```"
+    assert _closing_suffix("<details></details>\n") == ""
+    assert _closing_suffix("<details>\n", "</details><details>\n") == "\n</details>"
 
 
 def test_truncation_closes_a_fence_whose_content_looks_like_a_fence() -> None:
@@ -337,10 +328,9 @@ def test_a_limit_too_small_for_the_first_line_fails_loudly() -> None:
 def test_a_limit_too_small_for_the_notice_fails_loudly() -> None:
     """Silently emitting a notice-free body would look like complete notes."""
     body = "".join(f"- change number {i}\n" for i in range(12_000))
-    notice_len = len(extract._truncation_notice(REPO, "8.0.0", 50))
 
     with pytest.raises(ValueError, match="truncation notice"):
-        extract.cap_to_limit(body, REPO, "8.0.0", notice_len)
+        extract.cap_to_limit(body, REPO, "8.0.0", 10)
 
 
 def test_main_exits_nonzero_on_an_unusable_limit(tmp_path: Path) -> None:

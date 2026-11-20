@@ -27,9 +27,11 @@ before adding a gate:
 | `haos_stdio_only` | HAOS stdio mode only (`HAOS_TEST_MODE=stdio`), where the installed `ha-mcp` command is exercised through a real subprocess transport |
 | `haos_embedded_only` | HAOS embedded mode only (`HAOS_TEST_MODE=embedded`), where the in-process server shares Home Assistant's process and event loop — for tests whose subject is that shared loop (#2357). Skips every other lane at collection, so no VM boots just to skip |
 | `not_on_embedded` / `not_on_haos_embedded` | everywhere except that lane, for tests the lane's own session backend already covers |
-| `requires_tools_entry` | every lane EXCEPT the no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`), where the File & YAML Tools entry is absent (#2292) |
-| `no_tools_only` | the no-tools lanes only — the mirror of `requires_tools_entry` |
-| `requires_component_surface` | every lane that starts with an active component config entry (`src/e2e/utilities/topology.py::component_surface_available`) — skips the two no-tools lanes without an active server entry (plain container, HAOS inaddon, where it is absent or disabled) |
+| `requires_tools_entry` | every lane EXCEPT whole-run no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`), where the File & YAML Tools entry is absent (#2292); on combined lanes, after installation |
+| `no_tools_only` | whole-run no-tools lanes, and the first phase of combined lanes — the mirror of `requires_tools_entry` |
+| `requires_component_surface` | needs an active component entry (`src/e2e/utilities/topology.py::component_surface_available`); on combined lanes, before installation where an embedded server entry already provides it and after installation elsewhere; skips on whole-run lanes without it |
+| `component_topology` | tests whose assertions exercise different component and fallback behavior; both states on combined lanes without an embedded server entry (container external, HAOS app), once on embedded lanes, whose server already provides the shared surface |
+| `installs_component_surface` | tests that enable a shared component entry themselves; run only after the absent phase in combined lanes, and after every other test on a worker in whole-run no-tools sessions |
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,
@@ -46,14 +48,14 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
 
 **Two different things share the `ha_mcp_tools` name — don't conflate them:**
 
-- **The File & YAML Tools entry** (the privileged filesystem and YAML
-  services) is set up on every lane by `_install_custom_component` EXCEPT the
-  no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, see below), where that config entry
-  is absent and the privileged services never register. A test that
-  relies on tools-entry behaviour must carry `requires_tools_entry`;
-  everywhere else a test may still rely on
-  component-gated behaviour with no marker — e.g. a config entry's
-  `unique_id`, which Home Assistant's own API never exposes on any endpoint.
+- **The File & YAML Tools entry** provides the privileged filesystem and YAML
+  services. It is absent while `E2E_NO_TOOLS_ENTRY=1`; combined lanes add it
+  after their initial coverage, while ordinary lanes seed it before boot. A test that
+  relies on tools-entry behaviour must carry `requires_tools_entry`.
+  A shared-component requirement uses `requires_component_surface`; a test
+  with assertions for both component and fallback behavior uses
+  `component_topology`. For example, a config entry's `unique_id` is available
+  through the component but not through Home Assistant's native API.
   Consequence for `ha_search`: a query-driven call is served by the component's
   in-process scan, not the legacy REST path, so a test written for legacy-only
   behaviour passes *vacuously*. This holds when `search_types` names
@@ -71,20 +73,57 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
   the embedded backend only, seeded separately. That one IS lane-specific.
 
 In production the component is optional (it ships via HACS), so server code
-reading component-only data must degrade honestly for installs without it
-rather than assume the e2e's always-present case.
+reading component-only data must degrade honestly for installs without it.
+
+## Combined PR lanes (`E2E_COMBINE_TOPOLOGIES=1`)
+
+The x64 container external and embedded jobs and the HAOS app and embedded
+jobs reuse each worker's HA instance across two ordered phases. They boot
+without File & YAML Tools and run the general suite first. Then they add the
+tools entry through its config flow, restart Core, recreate the test clients,
+and run only the tests that need the newly available capabilities:
+
+- `requires_tools_entry` runs after installation.
+- `installs_component_surface` also runs afterwards, so tests that enable the
+  embedded server cannot change later absent-component expectations.
+- `requires_component_surface` runs before installation on embedded backends,
+  whose server entry already provides that surface, and afterwards on the
+  container external and HAOS app lanes.
+- `component_topology` runs both before and after installation on the
+  container external and HAOS app lanes; embedded backends run it once, since
+  their shared surface never disappears.
+- Other tests run once, before installation, including `no_tools_only`.
+
+The external container initially has no component files. The transition copies
+the checked-out component and restarts Core before opening its setup flow.
+HAOS already has the component files in its image. The app is restarted after
+Core so its cached absence verdict does not carry into the installed phase.
+
+Use `--dist loadscope` (or `-n0`). The topology scheduler keeps module/class
+scopes together within each phase and preserves absent-before-present order
+on every worker. A crashed worker stops a combined session instead of being
+replaced, because xdist would hand its absent scopes to workers that have
+already installed. The skip ceiling uses the lane's component-present key,
+less the `no_tools_only` tests the absent phase runs instead of skipping. Do not add an unrelated test to `component_topology` just to
+make it run twice. Its assertions must cover a component-dependent branch.
+
+Pull requests do not run a whole-run no-tools lane. For one, dispatch
+`e2e-tests.yml` (its no-component and server-entry-only jobs also run on every
+`master` push) or `haos-e2e-tests.yml` with `topology: without-tools`. HAOS
+stdio is manual-only in `haos-e2e-stdio.yml`. ARM64, update-path and HAOS
+external run as before.
 
 ## No-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, #2292)
 
-The rest of the suite always has the "HA-MCP File & YAML Tools" config entry.
-`E2E_NO_TOOLS_ENTRY=1` runs a lane without that entry. The lanes that keep the
-component match the state most real users are in: integration installed,
-second entry never added.
+`E2E_NO_TOOLS_ENTRY=1` runs without the "HA-MCP File & YAML Tools" entry,
+either throughout a whole-run lane or during a combined lane's first phase.
+The embedded shapes match the state most real users are in: integration
+installed, second entry never added.
 It is orthogonal to the backend selectors, so each backend has its own shape:
 
 | Lane | Topology |
 |---|---|
-| container (`E2E_BACKEND` unset) | **no component at all** — `_install_custom_component` is skipped for `ha_mcp_tools`, so neither files nor entry exist. A user who never installed the integration |
+| container (`E2E_BACKEND` unset) | **no component at all** — `_install_custom_component` is skipped for `ha_mcp_tools`, so neither files nor entry exist (a combined lane copies them in at installation). A user who never installed the integration |
 | container `embedded` | **server entry only** — component files are copied with `seed_entry=False` (no tools entry) and the in-process server entry is seeded as usual |
 | HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot, and the baked server entry stays disabled until a test enables it (`haos_only/test_embedded_server_haos.py` does, on every HAOS lane but `embedded`) |
 | HAOS `embedded` | **server entry only** — same pre-boot removal, and the staged (disabled) server entry is deliberately kept |
@@ -171,11 +210,18 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   them equal). Add its domain to `INTEGRATIONS` in
   `scripts/sync_dev_integration_pins.py`, run that script, then `uv lock`. The
   script writes the pins and their Dependabot ignore entries, and Renovate
-  reruns it on every Core bump. One whose requirements are not installed with
-  Core (`cloud`) cannot be imported here; the component reaches it through a
-  small function of its own that the test replaces.
+  reruns it on every Core bump.
+- The frontend is the installed `home-assistant-frontend` (pinned through
+  `INTEGRATIONS` like any requirement): a test reads what `hass_frontend.where()`
+  names and never writes a frontend build of its own.
+- A unit test has no Supervisor: `src/unit/_tools_addons_core.py` serves its
+  REST API over real HTTP behind Core's `hassio` integration. What it answers
+  is built from Supervisor's own client models (`aiohasupervisor.models`, as
+  `app_info()` does) with only the fields the test is about changed, never a
+  dict typed into the test. A body the models cannot express is one Supervisor
+  never sends.
 
-Ten ast-grep rules refuse these in the source: a hand-made `hass`, also as
+Twelve ast-grep rules refuse these in the source: a hand-made `hass`, also as
 `mock_hass`, `hass_mock`, `self.hass` or a test file's own `hass` fixture, or a
 placeholder put into `hass.data`
 (`rules/no-hand-made-hass.yml`), a fake Core object class
@@ -186,10 +232,10 @@ HTTP transport, or a hand-written client class
 (`rules/no-hand-made-core-replies.yml`), an import from another test module or
 from the old fake-client helpers, or the `mock_client` fixture, each of which
 hands a file someone else's fake client (`rules/no-shared-fake-clients.yml`),
-and a comment that switches one of these checks off for a line or a file
-(`rules/no-stand-in-suppressions.yml`: `ast-grep-ignore`, `noqa: SLF001`, a
-bare `noqa`, `mypy: ignore-errors`, a bare `type: ignore` or one for
-`assignment`, `attr-defined` or `misc`). The seventh
+and a switch that turns one of these checks off for a line, a function or a
+file (`rules/no-stand-in-suppressions.yml`: `ast-grep-ignore`, `noqa: SLF001`,
+a bare `noqa`, any `# mypy:` setting comment, `no_type_check`, a bare
+`type: ignore` or one for `assignment`, `attr-defined` or `misc`). The seventh
 (`rules/no-untyped-core-fixtures.yml`) refuses a Core fixture that a test or
 fixture takes with no annotation or typed `Any`; see the mypy check below.
 The eighth (`rules/no-test-websocket-replies.yml`) refuses a WebSocket command
@@ -214,21 +260,24 @@ function (`wraps=real_fn`) and a failure (`side_effect=SomeError`) stay; a
 which would hide a replacement from the rule. The test sets
 up the real component or integration, uses Core's Supervisor test support, or
 serves PyPI's JSON from a local server. It has no list.
+The eleventh (`rules/no-typed-core-objects.yml`) refuses a dict, as a literal
+or `dict(...)`, shaped like a Core state, entity or device registry row, or config entry, and the twelfth
+(`rules/no-typed-core-frames.yml`) one shaped like a frame Core sends over its
+WebSocket (a result, the login handshake, an event, a pong): set Core up and read it
+back, or let Core send it. A dict an assert compares (what our code or Core is
+expected to return), a user's automation, script or scene config, and a
+registry file Core loads at startup (`hass_storage[key] = ...`, the only way
+Core holds a row it refuses at runtime) are not refused. Neither has a list.
 `tests/core_stand_in_guard.py` checks `sys.modules` after every test body and
 fails a test whose stand-in module is still there, which covers `monkeypatch`
 swaps and computed names; it cannot see a swap the test has already undone,
 which is why the third rule exists.
 
-Test files written before a check are listed with it, in the rule's `ignores`.
-Only the reply rule still has a list; the hand-made `hass`, fake Core object,
-shared-client, suppression and fixture-annotation rules and the `sys.modules`
-guard have none, so every test complies with them. Converting a
-file removes it from every list it is on: the ast-grep `ignores`, `SLF001` and
-the mypy list below. A file taken off one list and left on another fails the
-ratchet below. `src/unit/test_core_reply_rules.py` keeps the two lists exact (a
-listed file that no longer violates fails it, as does a violating file that is
-not listed); a rule without a list fails any violating file in the
-`ast-grep scan` Fast Checks runs.
+Every grandfather list is empty: the ast-grep rules, `sys.modules` guard,
+`SLF001` configurations and mypy check apply to every test. Violations fail
+Fast Checks. `src/unit/test_core_reply_rules.py` also keeps the empty
+private-access lists exact, so adding an unnecessary exemption fails too. The
+lists and the ratchet below stay so that no file can be put back on one.
 
 A new test is never listed. Fast Checks compares every list with the pull
 request's base (`scripts/stand_in_lists_ratchet.py`) and fails when a file that
@@ -239,37 +288,49 @@ older files. The script also fails a rule that is removed (unless the script
 names it as retired and its list is empty), renamed or made to scan fewer
 files.
 
-A listed file is exempt for what it already holds, not for what is added to
-it. For each file on an ast-grep rule's list or a `SLF001` list that the pull
-request changes, the same script counts what the check refuses at the base
-and in the pull request, and fails when the count rises. A test added to a listed file goes in
-a new file on real Core, or the file is converted.
+A file on a list would be exempt for what it already holds, and an edit to it
+could add a faked test, so a listed file a pull request changes is converted:
+the same script fails when it is still on any list.
 
-Two more checks run on these trees, each with a list under the same rules:
+Production code has no public name that only the tests use
+(`scripts/test_only_public_names.py`, in Fast Checks): a helper made public for
+a test lets it skip the entry point a user reaches. Call the tool, the command
+or the script's `main`, and make the name private or delete it. The script
+names the few that reset module state between tests.
+
+Private access and typing checks also cover both complete trees:
 
 - Ruff's `SLF001` (`src/unit/ruff.toml`, `addon/ruff.toml`) refuses private
   member access. Setting a private attribute on a Core object forces a state
   Core never produces, and calling a private function skips the entry point a
-  user reaches: go through the public command or tool.
-  `test_core_reply_rules.py` keeps these lists exact too. Importing the name
+  user reaches: go through the public command or tool. Importing the name
   (`from module import _name`, or any name from a private module such as
   `ha_mcp._internal`) skips the entry point the same way and SLF001 does not
-  see it, so the same test fails a file that is on none of these lists and
-  still imports one. The vendored packages' import path (`ha_mcp._vendor`) and
+  see it, so `src/unit/test_core_reply_rules.py` also refuses those imports.
+  The vendored packages' import path (`ha_mcp._vendor`) and
   the test trees' own helper modules are exempt; a private name inside a
-  vendored package is not. A file still on a
-  list loses its private imports when it is converted.
+  vendored package is not.
+- `scripts/private_test_access.py` refuses a private name passed as a string:
+  to `getattr`/`setattr`/`hasattr`/`delattr`, a `patch` or `monkeypatch`
+  target, `import_module`, or a `vars(x)`/`x.__dict__` key. It follows
+  constants, concatenation, f-strings, loops, `parametrize` values and the
+  arguments a local helper receives; a name only known at runtime is left to
+  review. It has no list.
 - mypy checks both trees against Core's real types
-  (`uv run python scripts/mypy_tests_exact.py`). A `None` or a placeholder
+  (`uv run mypy tests/src/unit/ tests/addon/`). A `None` or a placeholder
   assigned where Core declares a type is an error wherever mypy knows the
   object's type: an object the test builds, or a fixture the test annotates.
   An unannotated fixture parameter is `Any` and mypy checks nothing done to
   it, so a test annotates the Core fixtures it takes with their real types
   (`hass: HomeAssistant`, `core_client: HomeAssistantClient`); this is the one
-  exception to tests needing no type hints. The files written before the check are
-  the `ignore_errors` modules under `tests.` in `pyproject.toml`; the script
-  runs mypy without that list and fails on an error in an unlisted module and
-  on a listed module that has none left.
+  exception to tests needing no type hints. No module is exempt:
+  `pyproject.toml` has no `ignore_errors` list for `tests.`, and the ratchet
+  fails a pull request that adds one or checks the tests less in any other
+  way: a looser setting, an excluded test path, Core's or our own imports
+  skipped, a `mypy.ini` (mypy reads it instead of `pyproject.toml`), or Fast
+  Checks no longer running the command above. `no-stand-in-suppressions`
+  refuses the switches inside a file: any `# mypy:` setting comment and
+  `no_type_check`.
 
 The plugin enforces, for every test:
 

@@ -18,8 +18,6 @@ also caught.
 """
 
 import json
-import time
-from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -148,45 +146,6 @@ async def test_discovery_endpoints_serve_identical_metadata(oauth_app):
         )
 
 
-@pytest.mark.asyncio
-async def test_authorization_redirect_iss_matches_served_issuer(oauth_app):
-    """RFC 9207 §2: the ``iss`` on an authorization response equals the issuer
-    the metadata document advertises, byte for byte.
-
-    Cross-checks both ends against each other — the document is read back over
-    HTTP and the redirect comes from the same provider instance that served it —
-    so a change to either side that drifts them apart fails here. The two are
-    easy to drift because pydantic's ``AnyHttpUrl`` normalisation restores a
-    trailing slash that ``base_url`` alone does not carry.
-    """
-    provider = oauth_app.state.ha_mcp_oauth_provider
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=oauth_app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/.well-known/oauth-authorization-server")
-    assert resp.status_code == 200
-    served_issuer = resp.json()["issuer"]
-
-    txn_id = "iss-parity-txn"
-    provider.pending_authorizations[txn_id] = {
-        "client_id": "test-client",
-        "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
-        "state": "st-1",
-        "scopes": ["homeassistant"],
-        "code_challenge": "X" * 43,
-        "created_at": time.time(),
-    }
-    request = MagicMock()
-    request.form = AsyncMock(return_value={"txn_id": txn_id, "ha_token": "llat"})
-    redirect = await provider._consent_post(request)
-
-    params = parse_qs(urlparse(redirect.headers["location"]).query)
-    assert params["iss"] == [served_issuer]
-    # Non-vacuous: pin the normalised form, so a hand-built `iss` that dropped
-    # the trailing slash would fail even if both sides were changed together.
-    assert served_issuer == f"{BASE_URL}/"
-
-
 def _mcp_rpc(client, token: str | None, method: str, params: dict | None = None):
     headers = {"Accept": "application/json, text/event-stream"}
     if token is not None:
@@ -280,7 +239,9 @@ def test_connector_login_over_http_reaches_an_authenticated_tool_call(oauth_app)
         assert consent.status_code == 303, consent.text
         callback = parse_qs(urlparse(consent.headers["location"]).query)
         assert callback["state"] == ["st-1"]
-        assert callback["iss"] == [f"{BASE_URL}/"]
+        metadata = client.get("/.well-known/oauth-authorization-server").json()
+        assert callback["iss"] == [metadata["issuer"]]
+        assert metadata["issuer"] == f"{BASE_URL}/"
 
         issued = client.post(
             "/token",
@@ -382,32 +343,3 @@ async def test_metadata_endpoint_rejects_non_get(oauth_app, discovery_path):
         f"POST {discovery_path} returned {resp.status_code}, expected 405 "
         "(discovery routes should allow only GET/OPTIONS)"
     )
-
-
-def test_as_documents_pin_the_claude_cimd_selection_contract():
-    """Claude picks CIMD only when BOTH flags are present (Anthropic connector
-    docs, 2026-08); every bearer-capable AS document must keep them, and every
-    advertised endpoint must live under OAUTH_BASE (never core's /auth/*, never
-    the root alias) so a client cache formed in any mode survives any switch."""
-    from custom_components.ha_mcp_tools import mcp_webhook
-    from custom_components.ha_mcp_tools.const import OAUTH_BASE
-
-    base = "https://ha.example"
-    ha_auth_doc = mcp_webhook._authorization_server_document(base)
-    none_doc = mcp_webhook._none_mode_authorization_server_document(base)
-    legacy_doc = mcp_webhook._legacy_authorization_server_document(base)
-
-    for doc in (ha_auth_doc, none_doc):
-        assert doc["client_id_metadata_document_supported"] is True
-        assert "none" in doc["token_endpoint_auth_methods_supported"]
-        assert doc["registration_endpoint"] == f"{base}{OAUTH_BASE}/register"
-
-    for doc in (ha_auth_doc, none_doc, legacy_doc):
-        assert doc["authorization_endpoint"] == f"{base}{OAUTH_BASE}/authorize"
-        assert doc["token_endpoint"] == f"{base}{OAUTH_BASE}/token"
-        assert doc["code_challenge_methods_supported"] == ["S256"]
-        assert doc["issuer"] == f"{base}{OAUTH_BASE}"
-
-    # Legacy remains a pasted-credential AS: no DCR, confidential methods.
-    assert "registration_endpoint" not in legacy_doc
-    assert "client_secret_basic" in legacy_doc["token_endpoint_auth_methods_supported"]

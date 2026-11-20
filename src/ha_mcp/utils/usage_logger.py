@@ -493,9 +493,11 @@ class UsageLogger:
 
     def _log_writer_worker(self) -> None:
         """Background thread worker for writing logs to disk."""
-        while not self._stop_event.is_set():
+        while True:
             try:
-                # Wait for log entry with timeout to check stop event
+                # Read before the queue: once the stop flag is seen, every entry
+                # queued before shutdown() is in the queue.
+                stopping = self._stop_event.is_set()
                 if not self._log_queue.empty():
                     log_entry = self._log_queue.get(timeout=1.0)
                     try:
@@ -504,6 +506,8 @@ class UsageLogger:
                         # Lets a caller wait until the entry is written, not
                         # only taken off the queue.
                         self._log_queue.task_done()
+                elif stopping:
+                    return
                 else:
                     # Wait briefly to avoid busy waiting; shutdown() wakes it at once.
                     self._stop_event.wait(0.1)
@@ -611,7 +615,7 @@ class UsageLogger:
             return list(reversed(buffer_list[-count:]))
 
     def shutdown(self) -> None:
-        """Gracefully shutdown logger."""
+        """Stop the writer once it has drained the queue, waiting up to 2 s."""
         self._stop_event.set()
         if self._logger_thread and self._logger_thread.is_alive():
             self._logger_thread.join(timeout=2.0)

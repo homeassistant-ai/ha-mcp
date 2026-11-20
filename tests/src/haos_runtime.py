@@ -1303,7 +1303,7 @@ def stage_embedded_server_feature_flags_in_qcow2(
     boots and before the entry is enabled) with no post-boot service-availability
     or ordering dependency, which is why it's preferred over calling the baked
     ``ha_mcp_tools`` write_file service after boot. The integration's
-    ``_prepare_config_dir`` does ``os.makedirs(..., exist_ok=True)``, so a
+    ``prepare_config_dir`` does ``os.makedirs(..., exist_ok=True)``, so a
     pre-created dir + file is picked up rather than clobbered (proven on the
     container embedded lane, which pre-seeds the identical files).
 
@@ -1482,9 +1482,8 @@ def get_home_assistant_http_config(
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if not isinstance(result, dict):
-        raise RuntimeError(f"http/config returned a non-object result: {result!r}")
-    return result
+    config: dict[str, Any] = result
+    return config
 
 
 def configure_home_assistant_http(
@@ -1508,11 +1507,8 @@ def configure_home_assistant_http(
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if not isinstance(result, dict) or not isinstance(result.get("restart"), bool):
-        raise RuntimeError(
-            f"http/config/configure returned an invalid result: {result!r}"
-        )
-    return result["restart"]
+    restart: bool = result["restart"]
+    return restart
 
 
 def promote_home_assistant_http_config(
@@ -1523,17 +1519,13 @@ def promote_home_assistant_http_config(
     verify_ssl: bool = True,
 ) -> None:
     """Promote Core's live pending HTTP config to the stable slot."""
-    result = _home_assistant_ws_command(
+    _home_assistant_ws_command(
         base_url,
         token,
         {"type": "http/config/promote"},
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if result is not None:
-        raise RuntimeError(
-            f"http/config/promote returned an unexpected result: {result!r}"
-        )
 
 
 def enable_config_entry(
@@ -2015,7 +2007,7 @@ def _is_transient_link_error(err: BaseException) -> bool:
     return isinstance(err, (*_addon_link_transient_leaves(), asyncio.CancelledError))
 
 
-def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
+def probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
     """Make one MCP call that needs Home Assistant; raise if it does not work.
 
     ``budget`` bounds this single attempt. Without it the attempt inherits
@@ -2101,7 +2093,7 @@ def wait_for_addon_ha_link_ready(
             break
         attempts += 1
         try:
-            _probe_addon_ha_link(addon_mcp_url, min(remaining, _ADDON_HA_LINK_PROBE_S))
+            probe_addon_ha_link(addon_mcp_url, min(remaining, _ADDON_HA_LINK_PROBE_S))
         except transient as e:
             if not _is_transient_link_error(e):
                 raise
@@ -2520,7 +2512,7 @@ def _wait_supervisor_update_done(
     head. ``/store/reload`` and ``/addons/{slug}/update`` are both
     SUPERVISOR_UPDATED-guarded and error ("supervisor needs to be updated
     first" / "No update available", #1594) if they fire while need_update is
-    still True. Mirror ``build_image._wait_supervisor_ready``: wait until
+    still True. Mirror ``build_image.wait_supervisor_ready``: wait until
     update_available is false (and a version_latest is present, so a pre-fetch
     latest=None does not read as a false clear).
 

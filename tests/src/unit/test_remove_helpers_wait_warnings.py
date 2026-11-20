@@ -28,7 +28,7 @@ class TestRemovalCheckAfterSuccessfulDelete:
     @pytest.fixture(autouse=True)
     def _immediate_registry_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "ha_mcp.tools.tools_integrations._REGISTRY_RETRY_BASE_DELAY", 0
+            "ha_mcp.tools.tools_integrations.REGISTRY_RETRY_BASE_DELAY", 0
         )
 
     @pytest.fixture

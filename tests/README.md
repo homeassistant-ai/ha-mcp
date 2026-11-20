@@ -31,7 +31,14 @@ uv run pytest tests/src/e2e/ -n2 --dist loadscope -v -m "not slow"
 # Specific categories
 uv run pytest tests/src/e2e/basic/ -v               # Basic connectivity
 uv run pytest tests/src/e2e/workflows/automation/ -v # Automation tests
+
+# Combined topology: general coverage without tools, then relevant tests after
+# installing the component/tools entry in each worker's existing HA instance.
+E2E_COMBINE_TOPOLOGIES=1 uv run pytest tests/src/e2e/ -n2 --dist loadscope -v
 ```
+
+See [combined PR lanes](AGENTS.md#combined-pr-lanes-e2e_combine_topologies1)
+for phase selection and the manual-only no-tools and stdio runs.
 
 ### Manual Branch Testing
 

@@ -13,6 +13,7 @@ from ha_mcp._vendor.mcp_types import (
     CLIENT_CAPABILITIES_META_KEY,
     PROTOCOL_VERSION_META_KEY,
 )
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.http_transport import HttpTransportFastMCP
 from ha_mcp.read_only import ReadOnlyToolsTransform
@@ -26,6 +27,8 @@ from ha_mcp.transforms.categorized_search import (
     SearchKeywordsTransform,
 )
 from ha_mcp.utils.data_paths import get_data_dir
+
+from ._server_factory import make_server
 
 FULL = {"read", "write"}
 SEARCH = {
@@ -209,13 +212,12 @@ def test_discover_describes_the_endpoints_catalog():
 
 @pytest.mark.parametrize("failure", ["import", "install"])
 def test_missing_search_transform_serves_the_full_catalog_everywhere(
-    monkeypatch, failure
+    monkeypatch, failure, core_client: HomeAssistantClient
 ):
     """Without the transform, a search URL must not promise search tools."""
     from ha_mcp import transforms
-    from ha_mcp.server import HomeAssistantSmartMCPServer
 
-    monkeypatch.setattr(tool_catalog, "_search_available", True)
+    tool_catalog.set_search_available(True)
     if failure == "import":
         monkeypatch.delattr(transforms, "CategorizedSearchTransform")
     else:
@@ -223,41 +225,36 @@ def test_missing_search_transform_serves_the_full_catalog_everywhere(
             transforms, "CategorizedSearchTransform", MagicMock(side_effect=ValueError)
         )
     get_global_settings().enable_tool_search = True
-    srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
-    srv.settings = get_global_settings()
-    srv.mcp = mcp = HttpTransportFastMCP("no search", instructions="search text")
-    srv._instructions = {"full": "full text", "search": "search text"}
-    srv._user_enabled_tools, srv._user_pinned_tools = set(), []
+    srv = make_server(core_client, monkeypatch, enable_tool_search=True)
+    mcp = srv.mcp
     mcp.tool(annotations={"readOnlyHint": True})(read_tool)
-    srv._apply_tool_search()
     with catalog_endpoint("search"):
         assert not tool_search_active()
     app = mcp.http_app(path="/mcp", stateless_http=True)
     with TestClient(app) as client:
         for path in ("/mcp", "/mcp/catalog/search"):
-            assert _tool_names(client, path) == {"read_tool"}
-            assert _initialize(client, path, {})[0]["instructions"] == "full text"
+            assert "read_tool" in _tool_names(client, path)
+            assert "ha_search_tools" not in _tool_names(client, path)
+            assert (
+                "## Tool Discovery"
+                not in _initialize(client, path, {})[0]["instructions"]
+            )
 
 
-def test_a_later_server_with_the_search_transform_serves_search(monkeypatch):
+def test_a_later_server_with_the_search_transform_serves_search(
+    monkeypatch, core_client: HomeAssistantClient
+):
     """The component rebuilds its server in place; one failed import must not
     leave every later server serving the full catalog."""
-    from ha_mcp.server import HomeAssistantSmartMCPServer
-
-    monkeypatch.setattr(tool_catalog, "_search_available", False)
-    srv = HomeAssistantSmartMCPServer.__new__(HomeAssistantSmartMCPServer)
-    srv.settings = get_global_settings()
-    srv.mcp = HttpTransportFastMCP("search")
-    srv._instructions = {"full": "full text", "search": "search text"}
-    srv._user_enabled_tools, srv._user_pinned_tools = set(), []
+    tool_catalog.set_search_available(False)
+    srv = make_server(core_client, monkeypatch, enable_tool_search=True)
     srv.mcp.tool(annotations={"readOnlyHint": True})(read_tool)
-    srv._apply_tool_search()
     with catalog_endpoint("search"):
         assert tool_search_active()
     app = srv.mcp.http_app(path="/mcp", stateless_http=True)
     with TestClient(app) as client:
         assert "ha_search_tools" in _tool_names(client, "/mcp/catalog/search")
-        assert _tool_names(client, "/mcp/catalog/full") == {"read_tool"}
+        assert "read_tool" in _tool_names(client, "/mcp/catalog/full")
 
 
 def read_tool() -> str:

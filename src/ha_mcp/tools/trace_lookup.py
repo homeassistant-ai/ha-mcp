@@ -8,7 +8,6 @@ from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .component_api import component_supports, get_component_caps, invalidate_caps
 from .helpers import raise_tool_error
-from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -146,28 +145,7 @@ def _normalize_other_matches(value: Any) -> tuple[dict[str, str], ...]:
 
 
 def _raise_trace_ws_failure(error_msg: Any, context: dict[str, Any]) -> NoReturn:
-    """Raise the structured error for a failed trace WS command.
-
-    Since #1947 a dead transport raises out of ``send_websocket_message``
-    rather than arriving here, so this path sees the failures Home Assistant
-    answered with. Connection-shaped wording can still reach it (an error frame
-    or a message threaded through a response body), so it stays classified as
-    CONNECTION_FAILED rather than a generic SERVICE_CALL_FAILED. A genuine
-    trace-command failure (unknown item, no such run) keeps its
-    SERVICE_CALL_FAILED shape unchanged.
-    """
-    if is_connection_error_message(error_msg):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                str(error_msg),
-                context=context,
-                suggestions=[
-                    "Home Assistant may be restarting or unreachable — retry shortly",
-                    "Check the connection to Home Assistant",
-                ],
-            )
-        )
+    """The server refused a trace command. A lost transport raises separately."""
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,

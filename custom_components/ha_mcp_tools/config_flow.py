@@ -158,9 +158,9 @@ def _installed_server_version(spec: str) -> str | None:
     Read as bring-up reads it: the distribution ``spec`` installs first, so
     metadata another server distribution left behind cannot mask it (#2787).
     """
-    from .embedded_server import _installed_ha_mcp_version
+    from .embedded_server import installed_ha_mcp_version
 
-    return _installed_ha_mcp_version(version_dist(spec))
+    return installed_ha_mcp_version(version_dist(spec))
 
 
 def _bind_host_selector() -> SelectSelector:

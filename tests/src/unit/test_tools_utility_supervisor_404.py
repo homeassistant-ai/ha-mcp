@@ -7,12 +7,7 @@ Supervisor answered behind it; without it, the install is not managed by
 Supervisor; and when Core cannot say which (the supervision probe failed),
 the tool must not claim the instance is unmanaged.
 
-Supervisor is not part of a unit-test Core, and Core's ``hassio`` cannot be
-imported without its requirements. Every 404 is still a real HTTP answer: in
-the app, from a stand-in Supervisor that serves no routes; off-host, from
-Core's router, with ``hassio`` loaded as a mock integration for the supervised
-case (its proxy relays Supervisor's 404 unchanged, so the client sees the same
-reply).
+The supervised test registers Core's hassio HTTP proxy and records the upstream request.
 """
 
 from __future__ import annotations
@@ -36,6 +31,8 @@ from ha_mcp.tools.tools_logs import register_logs_tools
 from ._gateway import Gateway
 from ._gateway import gateway as gateway
 from ._gateway import gateway_client as gateway_client
+from ._supervisor_logs_core import Supervisor
+from ._supervisor_logs_core import core_proxy as core_proxy
 
 NOT_EXPOSED = "not expose it on this HA OS version"
 UNMANAGED = "this instance is not managed by Supervisor"
@@ -90,14 +87,16 @@ async def test_app_404_names_the_os_version_without_probing_core(
 
 
 async def test_supervised_404_names_the_os_version(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, core_proxy: Supervisor, core_client: HomeAssistantClient
 ) -> None:
     await _load_hassio(hass)
+    core_proxy.reply(status=404)
 
     suggestions = await _core_service_404_suggestions(core_client)
 
     assert any(NOT_EXPOSED in s for s in suggestions)
     assert not any(UNMANAGED in s for s in suggestions)
+    assert any(request.path.startswith("/core/logs") for request in core_proxy.requests)
 
 
 async def test_unsupervised_404_names_the_install_type(

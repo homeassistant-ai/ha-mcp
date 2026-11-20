@@ -61,24 +61,14 @@ def compute_per_key_hashes(prefs: dict[str, Any]) -> dict[str, str]:
     return {key: compute_config_hash({key: value}) for key, value in prefs.items()}
 
 
-def _is_no_prefs_error(error_msg: str) -> bool:
-    """Return True if an error string from send_websocket_message indicates
-    ``ERR_NOT_FOUND "No prefs"`` from HA Core's energy/get_prefs handler.
-
-    HA Core wraps the error as ``f"Command failed: {message}"``; the
-    underlying sentinel we key on is the literal ``"No prefs"`` message
-    emitted by ``ws_get_prefs`` when ``manager.data is None``.
-    """
-    return error_msg.endswith("No prefs")
-
-
 async def get_energy_prefs(client: Any) -> dict[str, Any]:
     """Read preferences, mapping Core's never-configured response to empty prefs."""
     try:
         result = await client.send_websocket_message({"type": "energy/get_prefs"})
         note = None
         if not result.get("success"):
-            if not _is_no_prefs_error(str(result.get("error", ""))):
+            # energy/get_prefs answers not_found only while nothing was ever saved.
+            if result.get("error_code") != "not_found":
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,

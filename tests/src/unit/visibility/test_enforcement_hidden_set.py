@@ -61,7 +61,7 @@ def mw(core_client: HomeAssistantClient) -> _ChainedEnforcement:
 @pytest.fixture
 def no_cache_lifetime(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every call finds the cached hidden set already expired."""
-    monkeypatch.setattr(enforcement, "_CACHE_TTL_SECONDS", 0.0)
+    monkeypatch.setattr(enforcement, "CACHE_TTL_SECONDS", 0.0)
 
 
 async def _overview(mw: _ChainedEnforcement) -> None:

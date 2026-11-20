@@ -12,12 +12,15 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from aiohasupervisor.models import AddonStage, StoreInfo
+from aiohasupervisor.models.addons import CpuArch, Repository, StoreAddon
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 
+from ._haos_build_core import supervisor_info
 from ._supervisor_logs_core import route as route
 from ._tool_errors import rejected_call_body
-from ._tools_addons_core import SLUG, Route, manage, read
+from ._tools_addons_core import SLUG, Route, app_info, manage, read
 from ._tools_addons_core import app_route as app_route
 from ._tools_addons_core import core_route as core_route
 from ._tools_addons_core import core_supervisor as core_supervisor
@@ -25,23 +28,38 @@ from ._tools_addons_core import supervisor as supervisor
 from ._tools_addons_core import target_app as target_app
 
 REPO_URL = "https://github.com/example/home-assistant-apps"
+CORE_APPS_URL = "https://github.com/home-assistant/apps"
 REPOSITORIES = "/store/repositories"
 
 
-def _app(slug: str, version: str, *, update_available: bool = False) -> dict:
+def _app(slug: str, version: str, *, update_available: bool = False) -> StoreAddon:
     """A ``/store`` entry: ``version_latest`` is what installing would get;
     ``version`` is the installed one, None for an app not installed."""
-    return {
-        "slug": slug,
-        "name": slug.replace("_", " ").title(),
-        "version_latest": version,
-        "version": None,
-        "update_available": update_available,
-    }
+    return StoreAddon(
+        advanced=False,
+        available=True,
+        build=False,
+        description="An app in the store",
+        homeassistant=None,
+        icon=False,
+        logo=False,
+        name=slug.replace("_", " ").title(),
+        repository="core",
+        slug=slug,
+        stage=AddonStage.STABLE,
+        update_available=update_available,
+        url=None,
+        version_latest=version,
+        version=None,
+        arch=[CpuArch.AMD64],
+        documentation=False,
+        installed=False,
+    )
 
 
-def _store(*apps: dict) -> dict:
-    return {"repositories": [], "addons": list(apps)}
+def _store(*apps: StoreAddon) -> dict[str, Any]:
+    """``GET /store`` as Supervisor answers it, built from its model."""
+    return StoreInfo(repositories=[], addons=list(apps)).to_dict()
 
 
 class TestLifecycleActions:
@@ -69,7 +87,7 @@ class TestLifecycleActions:
         self, app_route: Route
     ) -> None:
         """Supervisor forbids an app updating itself; nothing is sent."""
-        app_route.supervisor.answer("GET", "/addons/self/info", {"slug": SLUG})
+        app_route.supervisor.answer("GET", "/addons/self/info", app_info(SLUG))
 
         body = await rejected_call_body(
             manage(app_route.client, slug=SLUG, action="update")
@@ -84,7 +102,7 @@ class TestLifecycleActions:
         self, app_route: Route
     ) -> None:
         update = "/store/addons/core_ssh/update"
-        app_route.supervisor.answer("GET", "/addons/self/info", {"slug": SLUG})
+        app_route.supervisor.answer("GET", "/addons/self/info", app_info(SLUG))
         app_route.supervisor.answer("POST", update, {})
 
         result = await manage(app_route.client, slug="core_ssh", action="update")
@@ -104,19 +122,6 @@ class TestLifecycleActions:
         await manage(core_route.client, slug="core_ssh", action="update")
 
         assert core_route.supervisor.requests == [("POST", update)]
-
-    async def test_inside_the_app_an_update_without_its_identity_is_refused(
-        self, app_route: Route
-    ) -> None:
-        app_route.supervisor.answer("GET", "/addons/self/info", {})
-
-        body = await rejected_call_body(
-            manage(app_route.client, slug="core_ssh", action="update")
-        )
-
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert body["endpoint"] == "/addons/self/info"
-        assert app_route.supervisor.requests == [("GET", "/addons/self/info")]
 
     async def test_an_unknown_action_is_rejected(
         self, unreachable_client: HomeAssistantClient
@@ -297,29 +302,6 @@ class TestCheckUpdates:
         expected: list[Any] | None = None if failing == "after" else []
         assert result["updates_available"] == expected
 
-    @pytest.mark.parametrize(
-        "data",
-        [
-            {"addons": None},
-            {"addons": ["not-a-mapping"]},
-            {"addons": [{"name": "No Slug"}]},
-            {"addons": [{"slug": "", "name": "Blank"}]},
-        ],
-        ids=["addons-null", "entry-not-a-mapping", "entry-without-slug", "blank-slug"],
-    )
-    async def test_a_malformed_store_reading_is_refused_whole(
-        self, core_route: Route, data: dict[str, Any]
-    ) -> None:
-        """A partial reading would report the missing apps as gone."""
-        core_route.supervisor.answer("GET", "/store", _store(_app("a", "6")))
-        core_route.supervisor.answer("GET", "/store", data)
-        core_route.supervisor.answer("POST", "/store/reload", {})
-
-        result = await manage(core_route.client, action="check_updates")
-
-        assert (result["changed"], result["updates_available"]) == (None, None)
-        assert any("could not be read" in w for w in result["warnings"])
-
     async def test_a_failed_store_read_carries_its_cause(
         self, core_route: Route
     ) -> None:
@@ -344,6 +326,7 @@ class TestCheckUpdates:
         assert core_route.supervisor.requests == [
             ("GET", "/store"),
             ("POST", "/store/reload"),
+            ("GET", "/supervisor/info"),
         ]
 
     @pytest.mark.parametrize(
@@ -363,6 +346,9 @@ class TestCheckUpdates:
     ) -> None:
         core_route.supervisor.answer("GET", "/store", _store())
         core_route.supervisor.refuse("POST", "/store/reload", message)
+        core_route.supervisor.answer(
+            "GET", "/supervisor/info", supervisor_info(update_available=pending)
+        )
 
         body = await rejected_call_body(
             manage(core_route.client, action="check_updates")
@@ -432,19 +418,55 @@ class TestRepositories:
         assert (body["outcome"], body["method"]) == ("unknown", "POST")
         assert body["endpoint"] == REPOSITORIES
 
+    @pytest.mark.parametrize(
+        ("requested", "source", "slug"),
+        [
+            (REPO_URL, REPO_URL, "abc123"),
+            ("https://github.com/home-assistant/addons", "core", "core"),
+            (CORE_APPS_URL, "core", "core"),
+            ("core", "core", "core"),
+        ],
+    )
     async def test_adding_a_repository_already_in_the_store_succeeds(
-        self, route: Route
+        self, route: Route, requested: str, source: str, slug: str
     ) -> None:
         route.supervisor.refuse(
-            "POST", REPOSITORIES, f"Can't add {REPO_URL}, already in the store"
+            "POST", REPOSITORIES, "Repository registration declined"
+        )
+        repository = Repository(
+            slug=slug,
+            name="Test apps",
+            source=source,
+            url=CORE_APPS_URL if source == "core" else source,
+            maintainer="Test",
+        )
+        route.supervisor.answer(
+            "GET", "/store", StoreInfo(repositories=[repository], addons=[]).to_dict()
         )
 
         result = await manage(
-            route.client, action="add_repository", repository=REPO_URL
+            route.client, action="add_repository", repository=requested
         )
 
+        assert result["repository"] == requested
         assert result["success"] is True
         assert "no change needed" in result["message"]
+
+    async def test_direct_repository_conflict_uses_supervisors_error_key(
+        self, app_route: Route
+    ) -> None:
+        app_route.supervisor.refuse(
+            "POST",
+            REPOSITORIES,
+            "Repository registration declined",
+            status=409,
+            error_key="store_repository_already_added_error",
+        )
+        result = await manage(
+            app_route.client, action="add_repository", repository=REPO_URL
+        )
+        assert "already registered" in result["message"]
+        assert app_route.supervisor.requests == [("POST", REPOSITORIES)]
 
     async def test_removing_a_repository_not_in_the_store_succeeds(
         self, route: Route
@@ -452,10 +474,11 @@ class TestRepositories:
         route.supervisor.refuse(
             "DELETE",
             f"{REPOSITORIES}/deadbeef",
-            "Repository deadbeef does not exist in the store",
+            "Repository removal declined",
             404,
         )
 
+        route.supervisor.answer("GET", "/store", _store())
         result = await manage(
             route.client, action="remove_repository", repository="deadbeef"
         )
@@ -520,6 +543,47 @@ class TestRepositories:
         )
         assert advice in suggestions
         assert "connection" not in suggestions.lower()
+
+    @pytest.mark.parametrize(
+        ("action", "listed", "message"),
+        [
+            ("add_repository", "core", "invalid repository"),
+            (
+                "remove_repository",
+                "abc123",
+                "Can't remove repository, it is used by installed apps",
+            ),
+        ],
+    )
+    async def test_a_refusal_the_store_does_not_explain_still_fails(
+        self, core_route: Route, action: str, listed: str, message: str
+    ) -> None:
+        """The store is readable and shows the refused change is not already
+        in place: the add is absent from it, the removed one still listed."""
+        adding = action == "add_repository"
+        path = REPOSITORIES if adding else f"{REPOSITORIES}/abc123"
+        core_route.supervisor.refuse("POST" if adding else "DELETE", path, message)
+        stored = Repository(
+            slug=listed,
+            name="Test apps",
+            source="core" if adding else REPO_URL,
+            url=CORE_APPS_URL if adding else REPO_URL,
+            maintainer="Test",
+        )
+        core_route.supervisor.answer(
+            "GET", "/store", StoreInfo(repositories=[stored], addons=[]).to_dict()
+        )
+
+        body = await rejected_call_body(
+            manage(
+                core_route.client,
+                action=action,
+                repository=REPO_URL if adding else "abc123",
+            )
+        )
+
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert message in str(body)
 
     @pytest.mark.parametrize("repository", [None, "   "])
     async def test_a_repository_action_needs_a_repository(

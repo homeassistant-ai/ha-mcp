@@ -33,9 +33,11 @@ from custom_components.ha_mcp_tools.websocket_api.constants import WS_REGISTRY_F
 from ha_mcp.backup_diff import DiffResponse
 from ha_mcp.backup_manager import BackupManager
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.settings_ui import build_settings_handlers
 
-from ._backup_restore_helpers import backup_tool, use_backup_manager
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import manage_backup
+from ._backup_core import snapshot_manager as snapshot_manager
+from ._backup_restore_helpers import settings_handlers
 from ._command_faults import received, taking
 from ._registry_item_snapshots import _snapshot
 
@@ -227,15 +229,18 @@ async def test_a_diff_of_an_unchanged_device_asks_the_component_nothing(
 
 async def test_the_backup_tool_puts_the_diff_warning_beside_the_diff(
     hass: HomeAssistant,
-    backup_manager: BackupManager,
-    monkeypatch: pytest.MonkeyPatch,
+    snapshot_manager: BackupManager,
+    core_client: HomeAssistantClient,
 ) -> None:
     """A tool's warnings are a top-level list, never part of its data."""
     device = _device(hass)
-    snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
-    tool = backup_tool(monkeypatch, backup_manager)
+    snapshot = await _snapshot_reversing(
+        snapshot_manager, "device", device.id, "labels"
+    )
 
-    result = await tool(scope="edits", action="diff", backup_name=snapshot)
+    result = await manage_backup(
+        core_client, scope="edits", action="diff", backup_name=snapshot
+    )
 
     (warning,) = result["warnings"]
     assert "labels" in warning
@@ -244,14 +249,16 @@ async def test_the_backup_tool_puts_the_diff_warning_beside_the_diff(
 
 async def test_the_settings_diff_carries_the_diff_warning(
     hass: HomeAssistant,
-    backup_manager: BackupManager,
+    snapshot_manager: BackupManager,
+    core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The settings page shows the same comparison, so it gets the warning too."""
     device = _device(hass)
-    snapshot = await _snapshot_reversing(backup_manager, "device", device.id, "labels")
-    use_backup_manager(monkeypatch, backup_manager)
-    handler = build_settings_handlers(None)["diff_backup"]
+    snapshot = await _snapshot_reversing(
+        snapshot_manager, "device", device.id, "labels"
+    )
+    handler = settings_handlers(monkeypatch, core_client)["diff_backup"]
 
     response = await handler(
         Request({"type": "http", "path_params": {"name": snapshot}})

@@ -111,9 +111,9 @@ def shorten(monkeypatch: pytest.MonkeyPatch, **seconds: float) -> None:
     """Shrink the manager's waits (``stop_join``, ``ready_stall`` ...) for a test."""
     names = {
         "stop_join": "_STOP_JOIN_TIMEOUT_SECONDS",
-        "ready_stall": "_READY_STALL_TIMEOUT_SECONDS",
-        "ready_cap": "_READY_TOTAL_CAP_SECONDS",
-        "ready_poll": "_READY_POLL_INTERVAL_SECONDS",
+        "ready_stall": "READY_STALL_TIMEOUT_SECONDS",
+        "ready_cap": "READY_TOTAL_CAP_SECONDS",
+        "ready_poll": "READY_POLL_INTERVAL_SECONDS",
         "pending_install": "_PENDING_INSTALL_WAIT_SECONDS",
     }
     for key, value in seconds.items():

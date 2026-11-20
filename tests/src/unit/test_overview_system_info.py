@@ -10,7 +10,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components import persistent_notification
@@ -31,6 +31,10 @@ from ha_mcp.config import reset_global_settings
 from ha_mcp.tool_catalog import CatalogMode, catalog_endpoint
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import SearchTools, register_search_tools
+
+from ._real_server import build_server
+from ._update_check_sources import PyPI
+from ._update_check_sources import pypi as pypi
 
 SIDECAR_URL = "http://127.0.0.1:8099/private_abc/settings"
 
@@ -439,25 +443,29 @@ async def test_no_settings_fields_without_sidecar_or_http_mount(
 
 @pytest.mark.parametrize("rejected_secret", ["", "/private_{token}"])
 async def test_rejected_registration_clears_stale_http_hint(
-    tools: SearchTools, monkeypatch: pytest.MonkeyPatch, rejected_secret: str
+    tools: SearchTools,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    rejected_secret: str,
 ) -> None:
     """A rejected later registration must not advertise an older server."""
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     _no_sidecar(monkeypatch)
-    monkeypatch.setattr(settings_ui, "_http_settings_prefix", None)
-    monkeypatch.setattr(settings_ui, "_http_settings_mounted", False)
-    server = MagicMock()
+    server = build_server(monkeypatch, core_client)
+    settings_ui.reset_http_settings_state()
+    try:
+        settings_ui.register_settings_routes(FastMCP("old"), server, secret_path="/old")
+        assert settings_ui.get_http_settings_prefix() == "/old"
+        settings_ui.register_settings_routes(
+            FastMCP("new"), server, secret_path=rejected_secret
+        )
 
-    settings_ui.register_settings_routes(FastMCP("old"), server, secret_path="/old")
-    assert settings_ui.get_http_settings_prefix() == "/old"
-    settings_ui.register_settings_routes(
-        FastMCP("new"), server, secret_path=rejected_secret
-    )
+        result = await tools.ha_get_overview()
 
-    result = await tools.ha_get_overview()
-
-    assert "settings_url_hint" not in result
+        assert "settings_url_hint" not in result
+    finally:
+        settings_ui.reset_http_settings_state()
 
 
 async def test_settings_url_hint_normalizes_trailing_slash(
@@ -514,23 +522,23 @@ async def test_read_only_keys_present_and_survive_fields_projection(
 
 
 async def test_ha_mcp_update_present_and_survives_projection(
-    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
 ) -> None:
-    notice: update_check.UpdateField = {
-        "current": "7.8.0",
-        "latest": "7.9.0",
-        "update_available": True,
-    }
-
-    async def update_field() -> update_check.UpdateField:
-        return notice
-
-    monkeypatch.setattr(update_check, "get_update_field", update_field)
+    monkeypatch.delenv(update_check.DISABLE_ENV, raising=False)
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0")
+    pypi.publish("ha-mcp", "7.9.0")
 
     result = await tools.ha_get_overview(fields=["system_info"])
 
     assert "system_info" in result
-    assert result["ha_mcp_update"] == notice
+    notice = result["ha_mcp_update"]
+    assert (notice["current"], notice["latest"], notice["update_available"]) == (
+        "7.8.0",
+        "7.9.0",
+        True,
+    )
+    assert pypi.asked == ["ha-mcp"]
 
 
 async def test_ha_mcp_update_absent_when_check_opted_out(tools: SearchTools) -> None:

@@ -16,7 +16,6 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -25,6 +24,7 @@ from starlette.routing import Route
 
 import ha_mcp
 from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import (
     BACKUP_OVERRIDE_FIELDS,
     FEATURE_FLAG_FIELDS,
@@ -36,6 +36,7 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.settings_ui import SETTINGS_ROUTES, build_settings_handlers
 from ha_mcp.utils.data_paths import get_data_dir
 
+from ._real_server import build_server
 from ._tools_addons_core import APP_TOKEN, Supervisor
 
 # Supervisor's own add-on, as the handlers name it.
@@ -63,11 +64,13 @@ def settings_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[
     for _field, env_name, _type in (*FEATURE_FLAG_FIELDS, *BACKUP_OVERRIDE_FIELDS):
         monkeypatch.delenv(env_name, raising=False)
     # Process-wide records of the last registration, put back after the test.
-    monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", None)
-    monkeypatch.setattr("ha_mcp.settings_ui._http_settings_mounted", False)
+    from ha_mcp.settings_ui import reset_http_settings_state
+
+    reset_http_settings_state()
     get_data_dir.cache_clear()
     reset_global_settings()
     yield tmp_path
+    reset_http_settings_state()
     get_data_dir.cache_clear()
     reset_global_settings()
 
@@ -87,15 +90,12 @@ def in_app(monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor) -> None:
     reset_global_settings()
 
 
-def app_server(**attributes: Any) -> MagicMock:
-    """The ha-mcp server as the settings handlers read it: the current
-    settings, a FastMCP with no tools, and ``attributes``."""
-    server = MagicMock(spec=HomeAssistantSmartMCPServer)
-    server.settings = get_global_settings()
-    server.mcp = FastMCP("settings-test")
-    for name, value in attributes.items():
-        setattr(server, name, value)
-    return server
+def app_server(
+    monkeypatch: pytest.MonkeyPatch, client: HomeAssistantClient
+) -> HomeAssistantSmartMCPServer:
+    """The real ha-mcp server the settings handlers read, on ``client``, built
+    from the current environment (see ``_real_server.build_server``)."""
+    return build_server(monkeypatch, client)
 
 
 def _client(app: Any, peer: str) -> httpx.AsyncClient:

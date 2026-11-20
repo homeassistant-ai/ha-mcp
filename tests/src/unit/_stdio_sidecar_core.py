@@ -22,7 +22,6 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -32,7 +31,6 @@ from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
 from ha_mcp import stdio_settings_sidecar as sidecar
-from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.config import reset_global_settings
 from ha_mcp.utils.data_paths import get_data_dir
 
@@ -298,27 +296,28 @@ def served(
     return seen[0]
 
 
-def run_stdio_main(monkeypatch: pytest.MonkeyPatch, mcp: FastMCP) -> None:
-    """Run the stdio entry point ``main`` up to where it would serve on stdin.
+def run_stdio_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the stdio entry point ``main`` on the real server, up to where it
+    would serve on stdin.
 
-    ``mcp`` is the in-process server's FastMCP, so the tool-metadata dump lists
-    its tools. The stdin loop is not run, logging is left as pytest set it up,
-    and the process is not force-exited.
+    The stdin loop is not run, logging is left as pytest set it up, and the
+    process is not force-exited.
     """
     monkeypatch.setattr(sys, "argv", ["ha-mcp"])
     monkeypatch.setenv("HOMEASSISTANT_URL", "http://homeassistant.invalid:8123")
     monkeypatch.setenv("HOMEASSISTANT_TOKEN", "test-token")
-    monkeypatch.setattr("ha_mcp.__main__._get_server", lambda: SimpleNamespace(mcp=mcp))
-    monkeypatch.setattr("ha_mcp.__main__._check_stdin_available", lambda: True)
-    monkeypatch.setattr("ha_mcp.__main__._setup_logging", lambda *a, **kw: None)
+    monkeypatch.setattr("ha_mcp.__main__.check_stdin_available", lambda: True)
+    monkeypatch.setattr("ha_mcp.__main__.setup_logging", lambda *a, **kw: None)
     monkeypatch.setattr(
-        "ha_mcp.__main__._run_entrypoint", lambda coro, label: coro.close()
+        "ha_mcp.__main__.run_entrypoint", lambda coro, label: coro.close()
     )
     exits: list[int] = []
-    monkeypatch.setattr("ha_mcp.__main__._force_exit", exits.append)
-    monkeypatch.setattr("ha_mcp.__main__._force_exit_on_shutdown", False)
+    monkeypatch.setattr("ha_mcp.__main__.force_exit", exits.append)
+    from ha_mcp.__main__ import main, reset_main_runtime
+    from ha_mcp.config import reset_global_settings
 
-    from ha_mcp.__main__ import main
+    reset_main_runtime()
+    reset_global_settings()
 
     main()
     assert exits == [0]

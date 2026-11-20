@@ -21,6 +21,7 @@ from .auto_backup import with_auto_backup
 from .blueprint_sources import resolve_blueprint_source
 from .blueprint_substitute import substitute_blueprint
 from .blueprint_write import (
+    error_code,
     error_text,
     import_blueprint,
     normalize_blueprint_path,
@@ -70,7 +71,7 @@ _VALID_DOMAINS = ("automation", "script")
 # for -- it enriches a refused delete, or adds ``used_by`` to a get -- so
 # inheriting send_command's 30s default would make either hang far longer
 # than the operation itself. Same reasoning and same leash as
-# ``smart_search/_graph.py``'s ``_GRAPH_TIMEOUT_S``. Popped by the client;
+# ``smart_search/graph.py``'s ``_GRAPH_TIMEOUT_S``. Popped by the client;
 # never reaches Home Assistant.
 _RELATED_TIMEOUT_S = 5.0
 
@@ -548,7 +549,9 @@ class BlueprintTools:
         consumers the caller has to clear first.
         """
         message = error_text(response, "Failed to delete blueprint")
-        if "blueprint in use" not in message.lower():
+        # ws_delete_blueprint answers a file failure itself (unknown_error);
+        # BlueprintInUse is the one HomeAssistantError the removal raises.
+        if error_code(response) != "home_assistant_error":
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,

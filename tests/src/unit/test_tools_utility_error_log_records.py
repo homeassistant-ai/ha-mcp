@@ -19,7 +19,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.error_log_journald import token_skip
+from ha_mcp.client.error_log_journald import parse_cursor_token
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.log_common import MAX_LIMIT, SUPERVISOR_SEARCH_WINDOW_LINES
 
@@ -429,7 +429,7 @@ class TestRecordLimitAndPaging:
         assert first["has_more"] is True
         token = first["next_offset"]
         assert isinstance(token, str), "a journald summary must hand out a token"
-        assert token_skip(token) == 0
+        assert parse_cursor_token(token)[1] == 0
 
         second = await _read(in_app_client, structured=True, offset=token)
 
@@ -464,7 +464,7 @@ class TestRecordLimitAndPaging:
                 break
             offset = page["next_offset"]
             assert isinstance(offset, str), "journald paging must hand out a token"
-            if token_skip(offset):
+            if parse_cursor_token(offset)[1]:
                 partial_pages += 1
         else:
             raise AssertionError("journald walk did not reach the end of history")

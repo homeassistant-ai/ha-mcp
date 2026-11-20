@@ -21,7 +21,6 @@ from ha_mcp.redaction import (
     is_sentinel,
     known_secret_values,
     placeholder_option_keys,
-    redact_addon_options,
     register_known_secret_values,
     scrub_obj,
     scrub_text,
@@ -30,6 +29,7 @@ from ha_mcp.redaction import (
 )
 
 from ._redaction_registry import clean_registry as clean_registry
+from ._redaction_registry import redacted_options
 
 # The issue's motivating shape: a GitHub PAT marked format=password next to
 # ordinary fields, plus a nested group with its own password leaf.
@@ -85,28 +85,28 @@ LIST_SCHEMA = [{"name": "deployment_key", "type": "string", "multiple": True}]
 
 
 def test_a_password_option_is_shown_as_set_not_its_value() -> None:
-    out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
+    out = redacted_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
     assert out["github_pat"] == REDACTED_SET
 
 
 def test_an_empty_password_option_is_shown_as_empty() -> None:
-    out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
+    out = redacted_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
     assert out["empty_password"] == REDACTED_EMPTY
 
 
 def test_ordinary_and_unlisted_options_are_shown_as_they_are() -> None:
-    out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
+    out = redacted_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
     assert out["log_level"] == "info"
     assert out["unlisted_key"] == "not in schema"
 
 
 def test_a_password_inside_an_option_group_is_hidden() -> None:
-    out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
+    out = redacted_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
     assert out["ssh"] == {"username": "root", "password": REDACTED_SET}
 
 
 def test_a_password_in_each_item_of_a_multiple_group_is_hidden() -> None:
-    out = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
+    out = redacted_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
     assert out["accounts"] == [
         {"user": "a", "token": REDACTED_SET},
         {"user": "b", "token": REDACTED_EMPTY},
@@ -126,20 +126,20 @@ def test_a_private_key_the_schema_does_not_mark_is_still_hidden(
         {"name": "description", "type": "string"},
     ]
 
-    out = redact_addon_options(options, schema, "app")
+    out = redacted_options(options, schema, "app")
 
     assert out["deployment_key"] == REDACTED_SET
     assert out["description"] == "ordinary public configuration"
 
 
 def test_a_private_key_stored_as_a_list_of_lines_is_hidden_line_by_line() -> None:
-    out = redact_addon_options({"deployment_key": RSA_KEY_LINES}, LIST_SCHEMA, "app")
+    out = redacted_options({"deployment_key": RSA_KEY_LINES}, LIST_SCHEMA, "app")
     assert out["deployment_key"] == [REDACTED_SET] * 3
 
 
 def test_redacting_leaves_the_apps_own_options_unchanged() -> None:
     before = json.dumps(ADDON_OPTIONS, sort_keys=True)
-    redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
+    redacted_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
     assert json.dumps(ADDON_OPTIONS, sort_keys=True) == before
 
 
@@ -148,13 +148,13 @@ def test_a_multiple_password_option_keeps_its_list_shape() -> None:
         {"name": "tokens", "type": "string", "format": "password", "multiple": True}
     ]
     options = {"tokens": ["tok_one_11", "", "tok_two_22"]}
-    out = redact_addon_options(options, schema, "app")
+    out = redacted_options(options, schema, "app")
     assert out["tokens"] == [REDACTED_SET, REDACTED_EMPTY, REDACTED_SET]
 
 
 def test_redacting_a_redacted_read_again_changes_nothing() -> None:
-    once = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
-    twice = redact_addon_options(once, ADDON_SCHEMA, "app")
+    once = redacted_options(ADDON_OPTIONS, ADDON_SCHEMA, "app")
+    twice = redacted_options(once, ADDON_SCHEMA, "app")
     assert twice == once
 
 

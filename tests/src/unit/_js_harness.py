@@ -472,7 +472,7 @@ def _strip_astro_frontmatter(source: str, *, source_label: str = "<source>") -> 
 def extract_script_body(source: str, *, source_label: str = "<source>") -> str:
     """Return the first non-external inline ``<script>`` body in ``source``.
 
-    Handles both the bare ``<script>`` form used by ``_SETTINGS_HTML``
+    Handles both the bare ``<script>`` form used by the settings page
     and attributed forms like Astro's ``<script define:vars={...}>``.
     The body is everything between the opening tag's ``>`` and the next
     ``</script>``. External scripts (``<script src=...></script>``) are
@@ -515,7 +515,7 @@ def extract_style_body(source: str, *, source_label: str = "<source>") -> str:
 
     The CSS analogue of :func:`extract_script_body`: the body is everything
     between the bare ``<style>`` opening tag's ``>`` and the next
-    ``</style>``. ``_SETTINGS_HTML`` carries a single inline ``<style>``
+    ``</style>``. The settings page carries a single inline ``<style>``
     block (no ``<link rel="stylesheet">`` external form to skip), so this
     deliberately stays simpler than the script extractor.
 
@@ -596,6 +596,8 @@ def discover_script_surfaces() -> list[ScriptSurface]:
             raise RuntimeError(
                 f"discover_script_surfaces: cannot import {module_name}: {exc}",
             ) from exc
+        assert module.__file__ is not None, module_name
+        source_path = Path(module.__file__)
         html = render()
         # Extract the main script body (data-purpose scripts are skipped
         # by extract_script_body, as documented in that function).
@@ -603,7 +605,7 @@ def discover_script_surfaces() -> list[ScriptSurface]:
         surfaces.append(
             ScriptSurface(
                 surface_id=surface_id,
-                source_path=Path(module.__file__),
+                source_path=source_path,
                 script=body,
                 language="js",
             ),
@@ -620,7 +622,7 @@ def discover_script_surfaces() -> list[ScriptSurface]:
             surfaces.append(
                 ScriptSurface(
                     surface_id=f"{surface_id}_data-purpose-{purpose}",
-                    source_path=Path(module.__file__),
+                    source_path=source_path,
                     script=script_body,
                     language="js",
                 ),
@@ -678,9 +680,9 @@ def discover_script_surfaces() -> list[ScriptSurface]:
 # function invoked with placeholder args). Add a new entry to register
 # a new Python-rendered UI for parse coverage.
 def _render_settings_html() -> str:
-    from ha_mcp.settings_ui import _SETTINGS_HTML
+    from ha_mcp.settings_ui import render_settings_html
 
-    return _SETTINGS_HTML
+    return render_settings_html()
 
 
 def _render_consent_html() -> str:

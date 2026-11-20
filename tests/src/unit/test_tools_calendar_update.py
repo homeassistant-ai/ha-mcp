@@ -3,7 +3,7 @@
 Home Assistant registers only ``create_event`` and ``get_events`` as REST
 calendar services: updating an event lives on the WebSocket command
 ``calendar/event/update``, which the tool sends through the shared pooled
-client like the create-with-rrule and delete paths.
+client like the create and delete paths.
 
 The tool runs on the server's own client against a real ``hass`` with two
 calendars: ``calendar.test`` is Core's Local Calendar, which supports updates;
@@ -168,31 +168,57 @@ async def test_an_update_with_a_rule_turns_the_event_into_a_series(
     assert [e["summary"] for e in events] == ["Renamed"] * 3
 
 
-async def test_a_calendar_without_updates_gets_the_update_hint(
+async def test_a_calendar_without_updates_says_so(
     ws: MockHAClientWebSocket, core_client: HomeAssistantClient
 ) -> None:
-    """Core refuses an update on Remote Calendar; the hint names the update."""
+    """Core refuses an update on Remote Calendar and names the update."""
     error = await _refused(core_client, entity_id="calendar.read_only", uid="evt-123")
 
-    assert error["suggestions"][0] == "This calendar does not support event update"
-    assert all("event creation" not in s for s in error["suggestions"])
+    assert "Calendar does not support event update" in error["message"]
+    assert "integration does not offer" in error["suggestion"]
 
 
-async def test_an_update_core_cannot_find_gets_a_not_found_hint_naming_the_uid(
+async def test_an_update_of_an_unknown_calendar_points_at_the_calendar_search(
     ws: MockHAClientWebSocket, core_client: HomeAssistantClient
 ) -> None:
-    """Core answers "Entity not found" for an unknown calendar."""
-    error = await _refused(core_client, entity_id="calendar.missing", uid="missing-uid")
+    """Core's not_found names the calendar entity, never the event."""
+    error = await _refused(core_client, entity_id="calendar.missing", uid="evt-123")
 
-    suggestions = error["suggestions"]
-    assert any("missing-uid" in s and "not found" in s.lower() for s in suggestions)
-    assert any("ha_config_get_calendar_events" in s and "UID" in s for s in suggestions)
+    assert error["code"] == "RESOURCE_NOT_FOUND"
+    assert "ha_search" in error["suggestion"]
+
+
+async def test_a_user_who_may_not_change_the_calendar_is_told_so(
+    ws: MockHAClientWebSocket,
+    core_client: HomeAssistantClient,
+    read_only_client: HomeAssistantClient,
+) -> None:
+    """Core refuses a read-only user's write as unauthorized, which no
+    parameter change can fix."""
+    event = await _one_off(ws, core_client)
+
+    error = await _refused(read_only_client, uid=event["uid"])
+
+    assert "may not change this calendar" in error["suggestion"]
+
+
+async def test_an_update_of_an_unknown_uid_points_at_the_event_list(
+    ws: MockHAClientWebSocket, core_client: HomeAssistantClient
+) -> None:
+    """Local Calendar answers an unknown uid with a generic failure, so the
+    hint is where to read the uids."""
+    await _one_off(ws, core_client)
+
+    error = await _refused(core_client, uid="missing-uid")
+
+    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert "ha_config_get_calendar_events" in error["suggestion"]
 
 
 async def test_an_update_with_no_answer_gets_connectivity_guidance_only(
     hass: HomeAssistant, ws: MockHAClientWebSocket, core_client: HomeAssistantClient
 ) -> None:
-    """A dropped connection is not a calendar problem: no UID hints."""
+    """A dropped connection is not a calendar problem: no uid hints."""
     event = await _one_off(ws, core_client)
     socket = await pooled_socket(core_client)
 
@@ -200,7 +226,7 @@ async def test_an_update_with_no_answer_gets_connectivity_guidance_only(
         error = await _refused(core_client, uid=event["uid"])
 
     assert error["code"] in ("CONNECTION_FAILED", "CONNECTION_TIMEOUT")
-    assert all("UID" not in s for s in error["suggestions"])
+    assert all("ha_config_get_calendar_events" not in s for s in error["suggestions"])
 
 
 @pytest.mark.parametrize("recurrence", ["recurrence_id", "recurrence_range"])
@@ -219,7 +245,8 @@ async def test_recurrence_targeting_without_uid_creates_nothing(
 async def test_a_blank_uid_is_refused_by_name(
     core_client: HomeAssistantClient,
 ) -> None:
-    """A blank uid would reach HA as a misleading "event not found"."""
+    """A blank uid would reach HA, which answers it with no more than a
+    failed update."""
     body = await rejected_call_body(_update(core_client, uid="   "))
 
     assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

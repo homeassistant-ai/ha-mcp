@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-if __package__:
+if TYPE_CHECKING or __package__:
     from .python_base import copy_addon_tree
 else:
     from python_base import copy_addon_tree

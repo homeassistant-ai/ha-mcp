@@ -42,7 +42,6 @@ WS_HELPER_SCHEMAS = "ha_mcp_tools/helper_schemas"
 WS_HELPER_ITEM = "ha_mcp_tools/helper_item"
 WS_HELPER_WRITE = "ha_mcp_tools/helper_write"
 WS_HELPERS_NAMED = "ha_mcp_tools/helpers_named"
-COMMANDS = (WS_HELPER_SCHEMAS, WS_HELPER_ITEM, WS_HELPER_WRITE, WS_HELPERS_NAMED)
 # Advertised by websocket_api's info; the server routes ha_config_set_helper's
 # simple-helper writes through the first three and falls back to Core's WS
 # commands. ``helpers_named`` serves its duplicate-name refusal on its own.

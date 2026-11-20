@@ -325,6 +325,8 @@ def attach_skill_content(
 ) -> None:
     """In-place attach skill_content to a response, warn on degraded vendor.
 
+    Call it last: a field added afterwards lands behind ``skill_content``.
+
     Resolves ``canonical_files`` and/or ``referenced_files`` via
     :func:`build_skill_content` and attaches the result under
     ``response["skill_content"]`` when non-empty.

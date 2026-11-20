@@ -50,7 +50,7 @@ async def shutdown_server_resources_bounded(server: Any) -> None:
 async def shutdown_server_resources(server: Any) -> None:
     """Release the served stack's Home Assistant connections on its own loop.
 
-    Mirrors the CLI runner's ``_cleanup_resources`` (``ha_mcp.__main__``)
+    Mirrors the CLI runner's ``cleanup_resources`` (``ha_mcp.__main__``)
     without importing it: stop the WebSocket listener service, disconnect the
     pooled WebSocket clients, and close the server's HTTP client. Every step
     guards independently — a failing step must not keep the next one from

@@ -6,10 +6,12 @@ own ``mcp`` pin can never conflict with ours. These packages import themselves
 by absolute name, so every such import is rewritten to the vendored path.
 
 Pins live in ``src/ha_mcp/_vendor/requirements.txt``; Renovate runs this script
-on a bump and ``tests/src/unit/test_vendored_fastmcp.py`` rejects drift.
+on a bump and ``tests/src/unit/test_vendored_fastmcp.py`` rejects drift. The
+sync also raises the ``pyproject.toml`` floors the new versions need, so run
+``uv lock`` afterwards (Renovate does).
 
 Usage:
-    python scripts/vendor_fastmcp.py
+    uv run --no-project --with packaging python scripts/vendor_fastmcp.py
 """
 
 from __future__ import annotations
@@ -21,14 +23,21 @@ import json
 import re
 import shutil
 import sys
+import tomllib
 import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
+from packaging.version import Version
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _VENDOR_DIR = _REPO_ROOT / "src" / "ha_mcp" / "_vendor"
 _PIN_FILE = _VENDOR_DIR / "requirements.txt"
+_PYPROJECT = _REPO_ROOT / "pyproject.toml"
 _PYPI_JSON_URL = "https://pypi.org/pypi/{name}/{version}/json"
 
 VENDOR_PREFIX = "ha_mcp._vendor"
@@ -276,6 +285,156 @@ def runtime_requirements(wheel_payload: bytes, extras: tuple[str, ...]) -> list[
     return sorted(dict.fromkeys(requirements))
 
 
+_DEPENDENCIES_ARRAY_RE = re.compile(
+    r"^dependencies = \[$(?P<body>.*?)^\]$", re.MULTILINE | re.DOTALL
+)
+_PYTHON_CLASSIFIER = "Programming Language :: Python :: "
+# sys_platform -> (platform_system, os_name) for the desktop/server platforms.
+_PLATFORMS = {
+    "linux": ("Linux", "posix"),
+    "darwin": ("Darwin", "posix"),
+    "win32": ("Windows", "nt"),
+}
+
+
+# Every patch release a marker could name (``python_full_version``); no Python
+# line has come close to this many.
+_PATCH_RELEASES = range(100)
+
+
+def supported_pythons(pyproject: str) -> list[str]:
+    """The ``X.Y`` Python lines the project's classifiers declare."""
+    classifiers = tomllib.loads(pyproject)["project"].get("classifiers", [])
+    return [
+        c.removeprefix(_PYTHON_CLASSIFIER)
+        for c in classifiers
+        if c.startswith(_PYTHON_CLASSIFIER) and c.count(".") == 1
+    ]
+
+
+def marker_environments(python: str, sys_platform: str) -> list[dict[str, str]]:
+    """Marker environments for every patch release of ``python`` on a platform."""
+    system, os_name = _PLATFORMS[sys_platform]
+    return [
+        {
+            "python_version": python,
+            "python_full_version": f"{python}.{patch}",
+            "sys_platform": sys_platform,
+            "platform_system": system,
+            "os_name": os_name,
+        }
+        for patch in _PATCH_RELEASES
+    ]
+
+
+def _supported_environments(pyproject: str) -> list[dict[str, str]]:
+    return [
+        environment
+        for python in supported_pythons(pyproject)
+        for sys_platform in _PLATFORMS
+        for environment in marker_environments(python, sys_platform)
+    ]
+
+
+def _needed_floors(
+    requirements: list[str], environments: list[dict[str, str]]
+) -> dict[str, Version]:
+    """Highest ``>=`` floor per package among requirements ha-mcp can meet.
+
+    A requirement whose marker matches no supported environment never applies,
+    so it raises nothing.
+    """
+    floors: dict[str, Version] = {}
+    for line in requirements:
+        requirement = Requirement(line)
+        if requirement.marker is not None and not any(
+            requirement.marker.evaluate(environment) for environment in environments
+        ):
+            continue
+        name = canonicalize_name(requirement.name)
+        for specifier in requirement.specifier:
+            if specifier.operator == ">=":
+                version = Version(specifier.version)
+                if name not in floors or version > floors[name]:
+                    floors[name] = version
+    return floors
+
+
+def requirement_floor(requirement: Requirement) -> Version | None:
+    """The lowest version ``requirement`` admits, by its highest lower bound."""
+    versions = [
+        Version(s.version)
+        for s in requirement.specifier
+        if s.operator in {">=", ">", "==", "~="}
+    ]
+    return max(versions, default=None)
+
+
+def _raise_floor(entry: str, floors: dict[str, Version]) -> tuple[str, str | None]:
+    """``entry`` with its ``>=`` floor raised to the vendored packages' need.
+
+    Returns the entry and a note on what happened, or None when the entry
+    already meets the need. Only a single ``>=`` floor is raised, and only
+    when the entry's other specifiers still admit the need; any other entry
+    is reported and left for test_vendored_fastmcp.py to fail on.
+    """
+    requirement = Requirement(entry)
+    target = floors.get(canonicalize_name(requirement.name))
+    declared = requirement_floor(requirement)
+    if target is None or (declared is not None and declared >= target):
+        return entry, None
+    lows = [s for s in requirement.specifier if s.operator == ">="]
+    others = [s for s in requirement.specifier if s.operator != ">="]
+    raised_specifiers = SpecifierSet(
+        ",".join([*(str(s) for s in others), f">={target}"])
+    )
+    if len(lows) != 1 or not raised_specifiers.contains(target, prereleases=True):
+        return entry, f"left {entry!r} alone: the vendored packages need >={target}"
+    specs, separator, marker = entry.partition(";")
+    specs = re.sub(
+        rf">=\s*{re.escape(lows[0].version)}(?![\w.+!-])",
+        f">={target}",
+        specs,
+        count=1,
+    )
+    raised = specs + separator + marker
+    return raised, f"raised {entry!r} to {raised!r}"
+
+
+def raise_dependency_floors(
+    pyproject: str, requirements: list[str]
+) -> tuple[str, list[str]]:
+    """Raise the ``[project].dependencies`` floors the vendored packages outgrew.
+
+    ha-mcp declares the vendored packages' requirements itself, and an install
+    into Home Assistant keeps any version that meets the published floor, so a
+    floor left behind keeps the older release installed. Returns the new text
+    and one note per entry raised or left alone.
+    """
+    header = re.search(r"^\[project\][ \t]*$", pyproject, re.MULTILINE)
+    match = None
+    if header is not None:
+        following = re.compile(r"^\[", re.MULTILINE).search(pyproject, header.end())
+        section_end = following.start() if following else len(pyproject)
+        match = _DEPENDENCIES_ARRAY_RE.search(pyproject, header.end(), section_end)
+    if match is None:
+        raise SystemExit("no [project] dependencies array in pyproject.toml")
+    floors = _needed_floors(requirements, _supported_environments(pyproject))
+    notes: list[str] = []
+
+    def rewrite(entry: re.Match[str]) -> str:
+        raised, note = _raise_floor(entry.group(2), floors)
+        if note is not None:
+            notes.append(note)
+        return entry.group(1) + raised + entry.group(3)
+
+    body = re.sub(
+        r'^(\s*")([^"]+)(")', rewrite, match.group("body"), flags=re.MULTILINE
+    )
+    text = pyproject[: match.start("body")] + body + pyproject[match.end("body") :]
+    return text, notes
+
+
 def _download(url: str) -> bytes:
     with urllib.request.urlopen(url, timeout=60) as response:
         payload: bytes = response.read()
@@ -391,7 +550,7 @@ def _promote(staged: dict[Path, Path]) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def main(vendor_dir: Path = _VENDOR_DIR) -> int:
+def main(vendor_dir: Path = _VENDOR_DIR, pyproject: Path = _PYPROJECT) -> int:
     pins = read_pins(vendor_dir / "requirements.txt")
     staged: dict[Path, Path] = {}
     counts: dict[str, int] = {}
@@ -413,11 +572,21 @@ def main(vendor_dir: Path = _VENDOR_DIR) -> int:
             counts[spec.package] = stage_package(
                 spec, wheel, license_text, pins, staging
             )
+        requirements: list[str] = []
+        for tree in staged.values():
+            text = (tree / REQUIRES_NAME).read_text(encoding="utf-8")
+            requirements.extend(line for line in text.splitlines() if line.strip())
+        current = pyproject.read_text(encoding="utf-8")
+        raised, notes = raise_dependency_floors(current, requirements)
     except BaseException:
         for staging in staged.values():
             shutil.rmtree(staging, ignore_errors=True)
         raise
     _promote(staged)
+    if raised != current:
+        pyproject.write_text(raised, encoding="utf-8", newline="\n")
+    for note in notes:
+        print(note)
     for spec in PACKAGES:
         print(
             f"vendored {spec.distribution}=={pins[spec.distribution]}: "

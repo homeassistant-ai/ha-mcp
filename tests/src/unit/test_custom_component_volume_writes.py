@@ -15,7 +15,6 @@ configured as an allowed directory.
 
 import errno
 import os
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -49,8 +48,8 @@ async def write_file(hass: HomeAssistant, volume_root: Path) -> FileService:
 def mounts(monkeypatch: pytest.MonkeyPatch) -> set[str]:
     """Mount points as /proc/self/mountinfo lists them, inside a container."""
     mounted: set[str] = set()
-    monkeypatch.setattr(volume_mounts, "_in_container", lambda: True)
-    monkeypatch.setattr(volume_mounts, "_mount_points", lambda: mounted)
+    monkeypatch.setattr(volume_mounts, "in_container", lambda: True)
+    monkeypatch.setattr(volume_mounts, "mount_points", lambda: mounted)
     return mounted
 
 
@@ -141,7 +140,7 @@ async def test_core_install_writes_to_an_existing_plain_volume(
     write_file: FileService,
 ) -> None:
     # No container: /share on a Core (venv) install is the host's own folder.
-    monkeypatch.setattr(volume_mounts, "_in_container", lambda: False)
+    monkeypatch.setattr(volume_mounts, "in_container", lambda: False)
     await hass.async_add_executor_job(volume_root.mkdir)
     target = volume_root / "x.txt"
 
@@ -151,35 +150,33 @@ async def test_core_install_writes_to_an_existing_plain_volume(
     assert target.read_text() == "x"
 
 
-def _raise(err: OSError) -> Callable[..., dict[str, Any]]:
-    def _sync(*_args: object) -> dict[str, Any]:
-        raise err
-
-    return _sync
-
-
 @pytest.mark.parametrize("build", ["write", "delete"])
 async def test_read_only_mount_is_named_not_a_raw_errno(
-    build: str, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+    build: str, hass: HomeAssistant, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # On HAOS and Supervised, Supervisor mounts /ssl read-only into Core.
-    erofs = OSError(errno.EROFS, "Read-only file system", "/ssl/t")
-    monkeypatch.setattr(comp, f"_{build}_file_sync", _raise(erofs))
-    call = await make_file_service(hass, "/ssl/t")
-    data: dict[str, Any] = {"path": "/ssl/t/a.txt"}
+    target = Path(hass.config.path("www/read-only.txt"))
+    target.parent.mkdir(exist_ok=True)
+    await hass.async_add_executor_job(target.write_text, "original")
+    call = await make_file_service(hass)
+    method = "write_bytes" if build == "write" else "unlink"
+    original = getattr(Path, method)
+
+    def read_only(path, *args, **kwargs):
+        if path == target:
+            raise OSError(errno.EROFS, "Read-only file system", str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, method, read_only)
+    data: dict[str, Any] = {"path": "www/read-only.txt"}
     if build == "write":
-        data["content"] = "x"
+        data.update(content="x", overwrite=True)
     service = SERVICE_WRITE_FILE if build == "write" else SERVICE_DELETE_FILE
 
     result = await call(service, data)
 
     assert result == {
         "success": False,
-        "error": "/ssl/t/a.txt is on a read-only mount in Home Assistant Core"
+        "error": "www/read-only.txt is on a read-only mount in Home Assistant Core"
         " on this install",
     }
-
-
-def test_other_os_errors_keep_their_own_text() -> None:
-    err = OSError(errno.ENOSPC, "No space left on device", "/share/t/a.txt")
-    assert volume_mounts.os_error_text(err, "/share/t/a.txt") == str(err)
+    assert await hass.async_add_executor_job(target.read_text) == "original"

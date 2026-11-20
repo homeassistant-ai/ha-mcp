@@ -1,8 +1,6 @@
 """``core_client``: the server's Home Assistant client on a real ``hass``.
 
-Kept out of ``conftest.py``, which predates the private-access check and is
-listed for it, so every rule in ``tests/AGENTS.md`` applies to these fixtures.
-``conftest.py`` loads this module as a pytest plugin.
+``conftest.py`` loads these real-Core client fixtures as a pytest plugin.
 """
 
 from __future__ import annotations

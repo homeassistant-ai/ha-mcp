@@ -53,6 +53,9 @@ from ._dashboard_screenshot_theme_guard_core import (
     set_up_frontend,
 )
 from ._tool_errors import error_body
+from ._tools_addons_core import Supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
 from ._websocket_client_core import held_auth, short_cleanup
 from ._ws_transport import until
 
@@ -413,13 +416,15 @@ class TestCaptureBracket:
 
     async def test_a_capture_reports_the_flip_and_writes_nothing(
         self,
+        supervisor: Supervisor,
+        aiohttp_client: Any,
         hass: HomeAssistant,
         engine: Account,
         seen: dict[str, list[Any]],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        serve_puppet(monkeypatch, engine.credential)
-        serve_engine(monkeypatch, hass, flips=engine)
+        serve_puppet(monkeypatch, supervisor, engine.credential)
+        await serve_engine(aiohttp_client, monkeypatch, hass, flips=engine)
         await save_theme(hass, engine, DARK)
         warnings: list[str] = []
 
@@ -435,10 +440,15 @@ class TestCaptureBracket:
         assert "ha_manage_theme" in warnings[0]
 
     async def test_an_engine_that_keeps_the_theme_adds_no_warning(
-        self, hass: HomeAssistant, engine: Account, monkeypatch: pytest.MonkeyPatch
+        self,
+        supervisor: Supervisor,
+        aiohttp_client: Any,
+        hass: HomeAssistant,
+        engine: Account,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        serve_puppet(monkeypatch, engine.credential)
-        serve_engine(monkeypatch, hass, flips=None)
+        serve_puppet(monkeypatch, supervisor, engine.credential)
+        await serve_engine(aiohttp_client, monkeypatch, hass, flips=None)
         await save_theme(hass, engine, DARK)
         warnings: list[str] = []
 
@@ -449,6 +459,7 @@ class TestCaptureBracket:
 
     async def test_a_sidecar_engine_is_watched_with_ha_mcps_own_credential(
         self,
+        aiohttp_client: Any,
         hass: HomeAssistant,
         own: Account,
         core_client: HomeAssistantClient,
@@ -457,7 +468,7 @@ class TestCaptureBracket:
     ) -> None:
         """Docker / standalone: the engine runs with ha-mcp's own user."""
         set_settings(monkeypatch, dashboard_screenshot_engine_url="http://engine:10000")
-        serve_engine(monkeypatch, hass, flips=own)
+        await serve_engine(aiohttp_client, monkeypatch, hass, flips=own)
         await save_theme(hass, own, DARK)
         warnings: list[str] = []
 
@@ -471,13 +482,15 @@ class TestCaptureBracket:
 
     async def test_a_failed_render_still_reports_the_flip(
         self,
+        supervisor: Supervisor,
+        aiohttp_client: Any,
         hass: HomeAssistant,
         engine: Account,
         seen: dict[str, list[Any]],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        serve_puppet(monkeypatch, engine.credential)
-        serve_engine(monkeypatch, hass, flips=engine, status=500)
+        serve_puppet(monkeypatch, supervisor, engine.credential)
+        await serve_engine(aiohttp_client, monkeypatch, hass, flips=engine, status=500)
         await save_theme(hass, engine, DARK)
 
         with pytest.raises(ToolError) as exc_info:
@@ -493,6 +506,7 @@ class TestRestoreThroughTheTool:
 
     async def test_the_restore_the_warning_names_puts_the_theme_back(
         self,
+        supervisor: Supervisor,
         hass: HomeAssistant,
         engine: Account,
         core_client: HomeAssistantClient,
@@ -500,7 +514,7 @@ class TestRestoreThroughTheTool:
     ) -> None:
         """Both quoted values are JSON the tool accepts, and the call it names
         restores the theme the render replaced."""
-        serve_puppet(monkeypatch, engine.credential)
+        serve_puppet(monkeypatch, supervisor, engine.credential)
         guard = ThemeGuard.for_capture(engine.credential, None)
         report = await render_report(hass, guard, engine)
         assert "Profile > General" not in report
@@ -516,13 +530,14 @@ class TestRestoreThroughTheTool:
 
     async def test_force_reaches_the_write(
         self,
+        supervisor: Supervisor,
         hass: HomeAssistant,
         engine: Account,
         core_client: HomeAssistantClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """expected_current mismatches: only force passed down lands the write."""
-        serve_puppet(monkeypatch, engine.credential)
+        serve_puppet(monkeypatch, supervisor, engine.credential)
         await save_theme(hass, engine, DARK)
 
         result = await ThemesTools(core_client).ha_manage_theme(
@@ -537,12 +552,13 @@ class TestRestoreThroughTheTool:
 
     async def test_without_force_a_mismatch_is_refused(
         self,
+        supervisor: Supervisor,
         hass: HomeAssistant,
         engine: Account,
         core_client: HomeAssistantClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        serve_puppet(monkeypatch, engine.credential)
+        serve_puppet(monkeypatch, supervisor, engine.credential)
         await save_theme(hass, engine, DARK)
 
         with pytest.raises(ToolError):
@@ -575,12 +591,13 @@ class TestRestoreThroughTheTool:
 
     async def test_puppets_credential_reads_the_engine_account(
         self,
+        supervisor: Supervisor,
         hass: HomeAssistant,
         engine: Account,
         core_client: HomeAssistantClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        serve_puppet(monkeypatch, engine.credential)
+        serve_puppet(monkeypatch, supervisor, engine.credential)
         await save_theme(hass, engine, DARK)
 
         result = await ThemesTools(core_client).ha_manage_theme(

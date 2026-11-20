@@ -2,8 +2,7 @@
 
 The tool runs on the server's own client against a real ``hass``: config
 entries, registry entries, storage and YAML helpers and every reply are Core's.
-Only this repository's removal waiter is replaced where a test needs it to say
-an entity is still there.
+A lingering state is restored in Core as the removal wait begins.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from functools import partial
 from typing import Any
 from unittest.mock import AsyncMock, PropertyMock, patch
 
@@ -35,13 +35,14 @@ from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._command_faults import dropped_on, pooled_socket
 from ._held_command import held_command
+from ._receipt_faults import at_entity_wait
 from ._tool_errors import rejected_call_body
 
 
 @pytest.fixture(autouse=True)
 def _immediate_registry_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     """Core answers at once; the retry backoff only adds time."""
-    monkeypatch.setattr("ha_mcp.tools.tools_integrations._REGISTRY_RETRY_BASE_DELAY", 0)
+    monkeypatch.setattr("ha_mcp.tools.tools_integrations.REGISTRY_RETRY_BASE_DELAY", 0)
 
 
 @pytest.fixture
@@ -383,8 +384,13 @@ async def test_a_helper_still_present_after_the_wait_is_a_warning(
 ) -> None:
     _, entity_id = await _button(hass, core_client)
 
-    with patch.object(
-        ws_waiters, "wait_for_entity_removed", AsyncMock(return_value=False)
+    with (
+        at_entity_wait(hass, lambda: hass.states.async_set(entity_id, "unknown")),
+        patch.object(
+            ws_waiters,
+            "wait_for_entity_removed",
+            partial(ws_waiters.wait_for_entity_removed, timeout=0.05),
+        ),
     ):
         result = await _remove(tools, entity_id, helper_type="input_button", wait=True)
 
@@ -474,10 +480,14 @@ async def test_sub_entities_still_present_after_the_wait_are_named_in_a_warning(
     """utility_meter: one sub-entity is gone, the other outlives the wait."""
     _, (peak, offpeak) = _meter_entry(hass, entity_registry, "peak", "offpeak")
 
-    with patch(
-        "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
-        AsyncMock(side_effect=lambda _client, entity_id: entity_id == peak),
-    ) as waited:
+    with (
+        at_entity_wait(hass, lambda: hass.states.async_set(offpeak, "1")),
+        patch(
+            "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
+            new_callable=AsyncMock,
+            wraps=partial(ws_waiters.wait_for_entity_removed, timeout=0.05),
+        ) as waited,
+    ):
         result = await _remove(tools, peak, helper_type="utility_meter", wait=True)
 
     assert result["success"] is True

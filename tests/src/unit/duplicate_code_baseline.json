@@ -15,11 +15,6 @@
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::AutoApproveTokenView._ha_auth_token",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_autoapprove.py::AutoApproveTokenView._ha_auth_token"
   ],
-  "0de4d0fa03a6": [
-    "tests/src/unit/test_usage_logger.py::TestLogToolUsageDecorator.reset_global_logger",
-    "tests/src/unit/test_usage_logger.py::TestParameterRedaction.reset_global_logger",
-    "tests/src/unit/test_usage_logger.py::TestUsageLoggerGlobalFunctions.reset_global_logger"
-  ],
   "11e11ce8f9fb": [
     "tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py::_set_options",
     "tests/src/e2e/haos_only/test_webhook_proxy_addon.py::_set_options"
@@ -72,10 +67,6 @@
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_resolve_public_addresses",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::_resolve_public_addresses"
   ],
-  "366a0fb56767": [
-    "tests/src/unit/test_build_skill_content.py::TestDegradedPaths.test_nothing_requested",
-    "tests/src/unit/test_build_skill_content.py::TestIncludeSkillOff.test_canonical_suppressed_when_off"
-  ],
   "3678766f4bda": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::stable_translation_origin",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py::stable_translation_origin"
@@ -83,11 +74,6 @@
   "38b3dc026d22": [
     "custom_components/ha_mcp_tools/oauth_legacy.py::PKCECodeStore.consume_code",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::PKCECodeStore.consume_code"
-  ],
-  "3d3400bfc911": [
-    "tests/src/unit/test_categorized_search.py::TestArgumentsAsString._get_proxy_fn",
-    "tests/src/unit/test_categorized_search.py::TestCategorizedCallDispatch._get_proxy_fn",
-    "tests/src/unit/test_categorized_search.py::TestDoubleUnwrap._get_proxy_fn"
   ],
   "3de4cb4258ba": [
     "tests/src/e2e/workflows/embedded/test_embedded_dependency_conflict.py::_docker_available",
@@ -193,6 +179,10 @@
   "8878c3561656": [
     "tests/src/unit/test_log_filters_install.py::TestInstallSdkLogFiltersIdempotent.teardown_method",
     "tests/src/unit/test_log_filters_install.py::TestInstallSdkLogFiltersReplacesStaleGeneration.teardown_method"
+  ],
+  "88f781cc9eb7": [
+    "tests/src/unit/test_build_skill_content.py::TestDegradedPaths.test_nothing_requested",
+    "tests/src/unit/test_build_skill_content.py::TestIncludeSkillOff.test_canonical_suppressed_when_off"
   ],
   "89b0fce0a9fd": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::_parse_cimd",
@@ -339,11 +329,6 @@
   "f001bc10d799": [
     "custom_components/ha_mcp_tools/oauth_redirect_allowlist.py::_is_loopback_host",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_is_loopback_host"
-  ],
-  "fb4c92e7dc7f": [
-    "tests/src/unit/test_ws_connect_auth_classification.py::manager",
-    "tests/src/unit/test_ws_pool_loop_change_1994.py::manager",
-    "tests/src/unit/test_ws_pool_stale_client_2127.py::manager"
   ],
   "fbca60b1fbf8": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::EnvelopeState",

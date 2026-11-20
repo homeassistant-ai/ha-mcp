@@ -37,16 +37,16 @@ logger = logging.getLogger(__name__)
 # Upper bound for one backup wait. Home Assistant's frontend waits on
 # backup/subscribe_events without a timeout; a tool call needs a finite bound,
 # and a multi-GB full backup on slow hardware takes many minutes (#1433, #1681).
-_BACKUP_MAX_WAIT_S = 1800
+BACKUP_MAX_WAIT_S = 1800
 # Longest gap between MCP progress heartbeats while a backup runs (#1861: a
 # client that saw no progress for 300s concluded the connection was dead).
-_BACKUP_PROGRESS_INTERVAL_S = 10
+BACKUP_PROGRESS_INTERVAL_S = 10
 # backup/delete fans out to every configured agent (including cloud/remote
 # ones — S3, Google Drive, WebDAV, etc.) via asyncio.gather server-side, and
 # the WS response doesn't arrive until all of them finish. The client's
 # default 30s wait (HomeAssistantWebSocketClient.send_command's
 # _wait_timeout) can be too tight for a slow or rate-limited remote agent —
-# same class of false timeout that _BACKUP_MAX_WAIT_S covers for creation.
+# same class of false timeout that BACKUP_MAX_WAIT_S covers for creation.
 _BACKUP_DELETE_WAIT_S = 60.0
 _CHECK_LIST_SUGGESTION = (
     "Check the snapshot list before retrying: the backup may exist or still run"
@@ -355,17 +355,17 @@ async def _wait_for_backup(
     """
     loop = asyncio.get_running_loop()
     may_still_run = {"backup_job_id": job_id, "likely_in_progress": True}
-    while (waited := loop.time() - started) < _BACKUP_MAX_WAIT_S:
+    while (waited := loop.time() - started) < BACKUP_MAX_WAIT_S:
         await safe_progress(
             ctx,
             progress=round(waited),
-            total=_BACKUP_MAX_WAIT_S,
+            total=BACKUP_MAX_WAIT_S,
             message="waiting for backup to complete",
         )
         try:
             message = await asyncio.wait_for(
                 queue.get(),
-                timeout=min(_BACKUP_PROGRESS_INTERVAL_S, _BACKUP_MAX_WAIT_S - waited),
+                timeout=min(BACKUP_PROGRESS_INTERVAL_S, BACKUP_MAX_WAIT_S - waited),
             )
         except TimeoutError:
             continue
@@ -387,7 +387,7 @@ async def _wait_for_backup(
     raise_tool_error(
         create_error_response(
             ErrorCode.TIMEOUT_OPERATION,
-            f"Backup did not finish within {_BACKUP_MAX_WAIT_S} seconds",
+            f"Backup did not finish within {BACKUP_MAX_WAIT_S} seconds",
             context=may_still_run,
             suggestions=[_CHECK_LIST_SUGGESTION],
         )

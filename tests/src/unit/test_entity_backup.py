@@ -59,6 +59,13 @@ from ._entity_backup_core import lookup_command as lookup_command
 Edit = Callable[[er.EntityRegistry, Desk], Any]
 
 
+def _earlier_state_snapshot(hass: HomeAssistant, entity_id: str) -> dict[str, Any]:
+    """What an earlier version saved for an entity: its state as Core reports it."""
+    hass.states.async_set(entity_id, "on")
+    state = json.loads(json_dumps(hass.states.get(entity_id)))
+    return {key: state[key] for key in ("entity_id", "state", "attributes")}
+
+
 def _edit(**fields: Any) -> Edit:
     return lambda registry, desk: registry.async_update_entity(desk.entity_id, **fields)
 
@@ -439,20 +446,18 @@ async def test_a_removed_entity_points_to_restarting_home_assistant(
     assert write_count(seen) == 0
 
 
-@pytest.mark.parametrize(
-    "legacy",
-    [{"entity_id": "light.desk", "state": "on", "attributes": {}}, "on"],
-    ids=["state_dict", "state_string"],
-)
+@pytest.mark.parametrize("as_dict", [True, False], ids=["state_dict", "state_string"])
 async def test_a_state_snapshot_from_an_earlier_version_is_refused(
     hass: HomeAssistant,
     entity_client: HomeAssistantClient,
     entity_handler: bm.DomainHandler,
     desk: Desk,
-    legacy: Any,
+    as_dict: bool,
 ) -> None:
     """It holds no registry settings; re-posting its state would only
     overwrite what Home Assistant shows for the entity."""
+    snapshot = _earlier_state_snapshot(hass, desk.entity_id)
+    legacy: Any = snapshot if as_dict else snapshot["state"]
     with written(hass) as seen, pytest.raises(bm.InvalidBackupSnapshotError):
         await entity_handler.restore(entity_client, desk.entity_id, legacy)
 
@@ -485,9 +490,11 @@ class TestStateSnapshotFile:
     nothing to restore and neither may report a change."""
 
     @pytest.fixture
-    def legacy(self, backup_settings: config.Settings, desk: Desk) -> str:
+    def legacy(
+        self, hass: HomeAssistant, backup_settings: config.Settings, desk: Desk
+    ) -> str:
         name = "entity.light.desk.20260101_000000.yaml"
-        held = {"entity_id": "light.desk", "state": "on", "attributes": {}}
+        held = _earlier_state_snapshot(hass, desk.entity_id)
         place_snapshot(
             backup_dir(backup_settings),
             name,

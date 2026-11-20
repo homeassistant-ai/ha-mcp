@@ -1,9 +1,10 @@
 """Approval continuations wait for the existing UI decision, never authorize it."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, tzinfo
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock
 
 import pytest
@@ -30,8 +31,20 @@ def context(
     elicitation: bool = True,
     answer: str | None = None,
     responses: dict[str, Any] | None = None,
+    request_name: str | None = None,
+    progress: Callable[..., Awaitable[None]] | None = None,
 ) -> SimpleNamespace:
+    """A middleware context for one call of ``name``.
+
+    ``request_name`` is the tool the client's own request called, when
+    the gated call is nested inside another tool's run. ``progress`` receives
+    the heartbeats a waiting call sends its client."""
     args = arguments if arguments is not None else {"domain": "light"}
+    request_params = (
+        {"name": name, "arguments": args}
+        if request_name is None
+        else {"name": request_name}
+    )
     caps = ClientCapabilities(
         elicitation=ElicitationCapability() if elicitation else None
     )
@@ -42,34 +55,41 @@ def context(
         fastmcp_context=SimpleNamespace(
             request_context=SimpleNamespace(
                 protocol_version=version,
-                _srctx=SimpleNamespace(params={"name": name, "arguments": args}),
+                _srctx=SimpleNamespace(params=request_params),
                 session=SimpleNamespace(client_capabilities=caps),
             ),
             request_state=state,
             input_responses=responses,
-            report_progress=AsyncMock(),
+            report_progress=progress or AsyncMock(),
         ),
     )
 
 
 @pytest.fixture
 def gate(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    """Control time and waits while retaining real queue and policy decisions."""
+    """Control time and waits while retaining real queue and policy decisions.
+
+    A round that waits before asking lasts a hundredth of a second; the
+    ``blocking`` middleware gives a client it cannot ask a one-second window.
+    """
     from ha_mcp.policy import approval_queue, mrtr
 
+    monkeypatch.setattr(mrtr, "ROUND_WAIT_SECONDS", 0.01)
     clock = [2_000_000_000.0]
 
     class ClockDateTime(datetime):
         @classmethod
-        def now(cls, tz: tzinfo | None = None) -> datetime:
-            return datetime.fromtimestamp(clock[0], tz or UTC)
+        def now(cls, tz: tzinfo | None = None) -> Self:
+            return cls.fromtimestamp(clock[0], tz or UTC)
 
     monkeypatch.setattr(approval_queue, "datetime", ClockDateTime)
     monkeypatch.setattr(mrtr, "time", lambda: clock[0])
     queue = ApprovalQueue()
     policy = Policy(rules=[Rule(tool_name="*")])
     middleware = PolicyMiddleware(policy_provider=lambda: policy, queue=queue)
-    monkeypatch.setattr(middleware, "_wait_for_decision", AsyncMock())
+    blocking = PolicyMiddleware(
+        policy_provider=lambda: policy, queue=queue, wait_seconds=1
+    )
     executed = []
 
     async def execute(ctx: SimpleNamespace) -> str:
@@ -80,6 +100,7 @@ def gate(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         queue=queue,
         policy=policy,
         middleware=middleware,
+        blocking=blocking,
         clock=clock,
         execute=execute,
         executed=executed,
@@ -195,27 +216,28 @@ async def test_abandoned_dynamic_continuation_expires_at_original_wait_deadline(
 
 @pytest.mark.anyio
 async def test_concurrent_resumes_cannot_reuse_remembered_approval(
-    gate: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    gate: SimpleNamespace,
 ) -> None:
     gate.policy.rules[0].remember_minutes = 5
     first = await gate.middleware.on_call_tool(context(), gate.execute)
     pending = gate.queue.list_pending()[0]
-    arrived = 0
-    both_waiting = asyncio.Event()
+    waiting = 0
 
-    async def wait_for_both(*args: object) -> None:
-        nonlocal arrived
-        arrived += 1
-        if arrived == 2:
+    async def approve_once_both_wait(**_progress: object) -> None:
+        # The user approves in the tab while both resumed calls wait for it.
+        nonlocal waiting
+        waiting += 1
+        if waiting == 2:
             gate.queue.approve(pending.token)
-            both_waiting.set()
-        await both_waiting.wait()
 
-    monkeypatch.setattr(gate.middleware, "_wait_for_decision", wait_for_both)
     results = await asyncio.gather(
         *(
             gate.middleware.on_call_tool(
-                context(first.input_required.request_state, answer="accept"),
+                context(
+                    first.input_required.request_state,
+                    answer="accept",
+                    progress=approve_once_both_wait,
+                ),
                 gate.execute,
             )
             for _ in range(2)
@@ -230,12 +252,9 @@ async def test_concurrent_resumes_cannot_reuse_remembered_approval(
 @pytest.mark.anyio
 async def test_nested_script_tool_uses_blocking_fallback(gate: SimpleNamespace) -> None:
     """Continuing an outer script could replay earlier effects in that script."""
-    ctx = context()
-    ctx.fastmcp_context.request_context._srctx.params = {
-        "name": "ha_manage_custom_tool"
-    }
+    ctx = context(request_name="ha_manage_custom_tool")
     with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
-        await gate.middleware.on_call_tool(ctx, gate.execute)
+        await gate.blocking.on_call_tool(ctx, gate.execute)
     assert gate.executed == []
 
 
@@ -244,11 +263,12 @@ async def test_continuation_resumes_only_after_ui_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A pending round cannot run the tool; the same approved row runs it once."""
+    from ha_mcp.policy import mrtr
+
     queue = ApprovalQueue()
     policy = Policy(rules=[Rule(tool_name="ha_call_service")])
     middleware = PolicyMiddleware(policy_provider=lambda: policy, queue=queue)
-    # Avoid real waiting; the production decision/claim path remains intact.
-    monkeypatch.setattr(middleware, "_wait_for_decision", AsyncMock())
+    monkeypatch.setattr(mrtr, "ROUND_WAIT_SECONDS", 0.01)
     dispatched = []
 
     async def execute(ctx: SimpleNamespace) -> str:
@@ -285,12 +305,17 @@ async def test_legacy_client_keeps_approval_error_and_recall(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Legacy clients never receive an unrepresentable input_required result."""
+    from ha_mcp.policy import mrtr
+
+    # Short enough that a client that can be asked is asked well inside the
+    # one-second window.
+    monkeypatch.setattr(mrtr, "ROUND_WAIT_SECONDS", 0.01)
     queue = ApprovalQueue()
     middleware = PolicyMiddleware(
         policy_provider=lambda: Policy(rules=[Rule(tool_name="ha_call_service")]),
         queue=queue,
+        wait_seconds=1,
     )
-    monkeypatch.setattr(middleware, "_wait_for_decision", AsyncMock())
     execute = AsyncMock(return_value="saved")
     with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
         await middleware.on_call_tool(context(version="2025-11-25"), execute)
@@ -306,12 +331,12 @@ async def test_modern_client_without_elicitation_gets_blocking_approval_error(
     gate: SimpleNamespace,
 ) -> None:
     """A state-only continuation gives such a client nothing to show its user,
-    so it waits the whole window and gets the approval-required error."""
-    gate.policy.wait_seconds = 60
+    so it waits the whole window, telling it so, and gets the
+    approval-required error."""
+    ctx = context(elicitation=False)
     with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
-        await gate.middleware.on_call_tool(context(elicitation=False), gate.execute)
-    gate.middleware._wait_for_decision.assert_awaited_once()
-    assert gate.middleware._wait_for_decision.await_args.args[2] == 60
+        await gate.blocking.on_call_tool(ctx, gate.execute)
+    ctx.fastmcp_context.report_progress.assert_awaited()
     assert gate.executed == []
 
 
@@ -320,14 +345,54 @@ async def test_confirmed_retry_waits_out_the_window_without_asking_again(
     gate: SimpleNamespace,
 ) -> None:
     first = await gate.middleware.on_call_tool(context(), gate.execute)
-    gate.clock[0] += 10
+    # Half a second of the 60 s window is left.
+    gate.clock[0] += 59.5
+    ctx = context(first.input_required.request_state, answer="accept")
     with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
-        await gate.middleware.on_call_tool(
-            context(first.input_required.request_state, answer="accept"),
-            gate.execute,
-        )
-    assert gate.middleware._wait_for_decision.await_args.args[2] == 50
+        await gate.middleware.on_call_tool(ctx, gate.execute)
+    ctx.fastmcp_context.report_progress.assert_awaited()
     assert gate.executed == []
+
+
+def approve_later(queue: ApprovalQueue) -> Callable[..., Awaitable[None]]:
+    """A progress callback: the user approves in the tab a tenth of a second
+    after the call starts waiting, ten rounds' worth past ``ROUND_WAIT_SECONDS``."""
+
+    async def progress(**_progress: object) -> None:
+        token = queue.list_pending()[0].token
+        asyncio.get_running_loop().call_later(0.1, queue.approve, token)
+
+    return progress
+
+
+@pytest.mark.anyio
+async def test_confirmed_retry_runs_when_approved_inside_the_rest_of_the_window(
+    gate: SimpleNamespace,
+) -> None:
+    """The retry waits for the rest of the window, not one round."""
+    first = await gate.middleware.on_call_tool(context(), gate.execute)
+    # Five seconds of the 60 s window are left.
+    gate.clock[0] += 55
+    ctx = context(
+        first.input_required.request_state,
+        answer="accept",
+        progress=approve_later(gate.queue),
+    )
+    assert await gate.middleware.on_call_tool(ctx, gate.execute) == "saved"
+    assert gate.executed == ["ha_call_service"]
+
+
+@pytest.mark.anyio
+async def test_client_without_elicitation_runs_when_approved_inside_the_window(
+    gate: SimpleNamespace,
+) -> None:
+    """Such a client waits the whole window, so a late approval still runs it."""
+    blocking = PolicyMiddleware(
+        policy_provider=lambda: gate.policy, queue=gate.queue, wait_seconds=5
+    )
+    ctx = context(elicitation=False, progress=approve_later(gate.queue))
+    assert await blocking.on_call_tool(ctx, gate.execute) == "saved"
+    assert gate.executed == ["ha_call_service"]
 
 
 @pytest.mark.anyio
@@ -375,13 +440,11 @@ async def test_cancelled_ask_returns_approval_error_and_keeps_the_row(
     gate: SimpleNamespace,
 ) -> None:
     first = await gate.middleware.on_call_tool(context(), gate.execute)
-    gate.middleware._wait_for_decision.reset_mock()
+    ctx = context(first.input_required.request_state, answer="cancel")
     with pytest.raises(ToolError, match="USER_APPROVAL_REQUIRED"):
-        await gate.middleware.on_call_tool(
-            context(first.input_required.request_state, answer="cancel"),
-            gate.execute,
-        )
-    gate.middleware._wait_for_decision.assert_not_awaited()
+        await gate.middleware.on_call_tool(ctx, gate.execute)
+    # Answered at once: the call never sat waiting for the tab.
+    ctx.fastmcp_context.report_progress.assert_not_awaited()
     assert len(gate.queue.list_pending()) == 1
     gate.queue.approve(gate.queue.list_pending()[0].token)
     assert await gate.middleware.on_call_tool(context(), gate.execute) == "saved"

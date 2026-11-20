@@ -79,7 +79,7 @@ async def entries(hass: HomeAssistant) -> tuple[str, str]:
 def embedded(monkeypatch: pytest.MonkeyPatch) -> None:
     """The tool runs in the component's in-process server, with no flush wait."""
     monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+    monkeypatch.setattr(tools_dev, "SELF_ACTION_FLUSH_DELAY_S", 0)
 
 
 def _stored_overrides(entry: MockConfigEntry) -> dict[str, Any]:

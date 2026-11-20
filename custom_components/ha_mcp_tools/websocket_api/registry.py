@@ -543,7 +543,7 @@ def _device_dict_repr(entry: Any) -> dict[str, Any] | None:
 
     Returned UNMODIFIED so the WS transport encodes it with the same JSON
     serializer ``config/device_registry/list`` uses (byte-parity — see
-    :func:`_do_device_get`). Guarded against core drift: a missing/raising
+    :func:`do_device_get`). Guarded against core drift: a missing/raising
     ``dict_repr`` yields ``None`` rather than propagating.
     """
     try:

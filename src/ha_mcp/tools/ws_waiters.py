@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 #      is already in the desired shape, we return immediately and never
 #      touch the event loop.
 #   3. Await events for our entity_id, then re-sample. A
-#      ``_POLLING_BACKSTOP_INTERVAL`` REST sample also runs every few seconds
+#      ``POLLING_BACKSTOP_INTERVAL`` REST sample also runs every few seconds
 #      independently of events, so a silent-broken subscription degrades to
 #      a slow-polling REST loop rather than a 10s hang.
 #   4. Drop the subscription and event handler in `finally`.
@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 # subscription itself fails to set up — the helpers' contract (return bool or
 # state dict, never raise on the happy path) is identical to before.
 
-_POLLING_BACKSTOP_INTERVAL = 2.0
+POLLING_BACKSTOP_INTERVAL = 2.0
 """Seconds between independent REST samples while a WS subscription is open.
 
 Bounded slow-poll backstop so a silent-broken WS subscription still
@@ -248,7 +248,7 @@ async def _ws_run_wait_loop(
     """Event-driven wait loop: nudge on event, backstop polling, REST fallback on disconnect."""
     while time.monotonic() - start < timeout:
         remaining = timeout - (time.monotonic() - start)
-        wait_budget = min(remaining, _POLLING_BACKSTOP_INTERVAL)
+        wait_budget = min(remaining, POLLING_BACKSTOP_INTERVAL)
         try:
             await asyncio.wait_for(nudge.wait(), timeout=wait_budget)
             nudge.clear()

@@ -31,7 +31,7 @@ from ha_mcp.client.websocket_client import (
     websocket_manager,
 )
 from ha_mcp.tools import event_call
-from ha_mcp.tools.component_api import component_probe_auth_failed
+from ha_mcp.tools.component_api import component_probe_auth_kind
 from ha_mcp.tools.tools_service import ServiceTools
 
 from ._client_spies import sent_messages
@@ -365,7 +365,7 @@ async def test_a_rejected_token_is_named_and_nothing_else_is_sent(
         error = error_of(exc_info)
         assert error["code"] != "AUTH_INSUFFICIENT_PERMISSIONS"
         assert "Check the Home Assistant token" in error["suggestions"]
-        assert component_probe_auth_failed(client)
+        assert component_probe_auth_kind(client) == "token"
         sent.assert_not_awaited()
         lookups.assert_not_awaited()
     finally:

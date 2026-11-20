@@ -27,6 +27,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    ws_failure_code,
 )
 from .radio import matter as matter_handler
 from .radio import thread as thread_handler
@@ -34,7 +35,6 @@ from .radio import zigbee as zigbee_handler
 from .radio import zwave as zwave_handler
 from .radio.base import confirm_required, require
 from .tool_hints import write_hints
-from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -65,20 +65,17 @@ class RadioTools:
             device_id = (result.get("result") or {}).get("device_id")
             if device_id:
                 return str(device_id)
-        else:
-            error = str(result.get("error", ""))
-            if is_connection_error_message(error):
-                # A transport drop is not evidence the entity is missing.
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.CONNECTION_FAILED,
-                        f"Could not resolve entity '{entity_id}': {error}",
-                        context={"entity_id": entity_id},
-                        suggestions=[
-                            "Home Assistant may be restarting or unreachable — retry shortly",
-                        ],
-                    )
+        elif result.get("error_code") != "not_found":
+            raise_tool_error(
+                create_error_response(
+                    ws_failure_code(result),
+                    str(result.get("error", "Entity registry lookup failed")),
+                    context={
+                        "entity_id": entity_id,
+                        "ha_error_code": result.get("error_code"),
+                    },
                 )
+            )
         raise_tool_error(
             create_error_response(
                 ErrorCode.ENTITY_NOT_FOUND,

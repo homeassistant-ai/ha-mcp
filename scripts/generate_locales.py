@@ -53,7 +53,7 @@ from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
 
-from ha_mcp.settings_ui._i18n import _validate_string_map
+from ha_mcp.settings_ui.i18n import _validate_string_map
 from ha_mcp.settings_ui.locale_policy import is_best_effort_locale
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -135,11 +135,6 @@ def schema(addon_dir: Path) -> dict[str, str]:
     """One flavor's ``config.yaml`` ``schema:``, in schema order."""
     config = yaml.safe_load((addon_dir / "config.yaml").read_text(encoding="utf-8"))
     return {key: str(value) for key, value in config["schema"].items()}
-
-
-def schema_keys(addon_dir: Path) -> list[str]:
-    """The option keys of one flavor's ``config.yaml``, in schema order."""
-    return list(schema(addon_dir))
 
 
 def range_sentence(

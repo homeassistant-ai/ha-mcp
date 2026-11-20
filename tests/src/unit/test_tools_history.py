@@ -10,7 +10,6 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 from homeassistant.components.recorder import Recorder
@@ -20,9 +19,9 @@ from homeassistant.setup import async_setup_component
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.config import reset_global_settings
-from ha_mcp.tools import response_helpers
 from ha_mcp.tools.tools_history import HistoryTools
 
+from ._ha_timezone import unresolvable_zone
 from ._recorded_history import import_statistic, record_states, statistics
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -498,6 +497,88 @@ async def test_month_statistics_scan_starts_at_local_midnight(
     assert response["scan_end_time"] == "2026-06-01T04:00:00+00:00"
 
 
+async def test_a_time_without_an_offset_is_refused_in_a_zone_the_server_cannot_resolve(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reading it in UTC instead would move it by the zone's offset."""
+    await unresolvable_zone(hass, monkeypatch)
+
+    response = await _refusal(
+        core_client,
+        entity_ids="sensor.test",
+        start_time="2026-01-01T00:00:00",
+        end_time="2026-01-01T06:00:00",
+    )
+
+    assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert _recorder_queries(sent) == []
+
+
+async def test_a_reversed_range_without_offsets_is_named_when_ha_timezone_is_unreachable(
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two times without an offset compare without Home Assistant's time zone,
+    so the caller's own mistake is named, not the failed lookup."""
+    _no_answer(core_client, monkeypatch)
+
+    response = await _refusal(
+        core_client,
+        entity_ids="sensor.test",
+        start_time="2026-01-02T00:00:00",
+        end_time="2026-01-01T00:00:00",
+    )
+
+    assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+async def test_a_reversed_range_without_offsets_is_read_in_ha_timezone(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """With the zone at hand, the range is checked as Core reads it."""
+    await hass.config.async_set_time_zone("America/Los_Angeles")
+    response = await _refusal(
+        core_client,
+        entity_ids="sensor.test",
+        start_time="2026-01-02T00:00:00",
+        end_time="2026-01-01T00:00:00",
+    )
+
+    assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert response["start_time"] == "2026-01-02T00:00:00-08:00"
+
+
+@pytest.mark.parametrize(
+    "start_time",
+    ["2026-01-01T00:00:00", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z"],
+    ids=["both_without_offset", "end_without_offset", "end_without_offset_before"],
+)
+async def test_a_time_without_an_offset_is_refused_when_ha_timezone_is_unreachable(
+    core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    start_time: str,
+) -> None:
+    """Core reads such a time in Home Assistant's time zone; reading it in UTC
+    instead would query with that bound moved by the zone's offset. Beside a
+    time with an offset the tool does not order them without the zone, even
+    days apart: it refuses."""
+    _no_answer(core_client, monkeypatch)
+
+    response = await _refusal(
+        core_client,
+        entity_ids="sensor.test",
+        start_time=start_time,
+        end_time="2026-01-01T06:00:00",
+    )
+
+    assert response["error"]["code"] == "CONNECTION_FAILED"
+    assert _recorder_queries(sent) == []
+
+
 @pytest.mark.usefixtures("guardrails")
 async def test_calendar_statistics_are_refused_when_ha_timezone_is_unreachable(
     core_client: HomeAssistantClient,
@@ -526,14 +607,7 @@ async def test_ha_timezone_the_server_cannot_resolve_is_not_a_connection_failure
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The server has no tzdata entry for the zone Home Assistant reports."""
-    await hass.config.async_set_time_zone("America/New_York")
-
-    def zone(key: str) -> ZoneInfo:
-        if key == "America/New_York":
-            raise ZoneInfoNotFoundError(key)
-        return ZoneInfo(key)
-
-    monkeypatch.setattr(response_helpers, "ZoneInfo", zone)
+    await unresolvable_zone(hass, monkeypatch)
 
     response = await _refusal(
         core_client,

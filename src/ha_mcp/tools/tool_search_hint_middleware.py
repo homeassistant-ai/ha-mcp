@@ -32,6 +32,7 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
     MiddlewareContext,
 )
 
+from ..error_wording import unknown_tool
 from ..errors import ErrorCode, create_error_response
 from ..policy.middleware import PROXY_META_TOOLS
 from ..tool_catalog import tool_search_active
@@ -59,7 +60,7 @@ class ToolSearchHintMiddleware(Middleware):
             #    fails closed and re-raises the original error.
             #  - require the full catalog (on a search connection the names
             #    resolve, so a miss is a different, real problem to not mask).
-            top_level_miss = str(exc) == f"Unknown tool: {name!r}"
+            top_level_miss = unknown_tool(exc, name)
             if top_level_miss and name in PROXY_META_TOOLS and not tool_search_active():
                 logger.info(
                     "Stale tool-search call for %r on a full-catalog connection "

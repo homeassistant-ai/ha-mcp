@@ -4,6 +4,8 @@ import ssl
 
 import httpx
 
+from .exceptions import HomeAssistantNotReached
+
 
 def is_ssl_error(exc: BaseException) -> bool:
     """True if ``exc`` (or anything in its cause chain) is an SSL error.
@@ -19,11 +21,13 @@ def is_ssl_error(exc: BaseException) -> bool:
     return False
 
 
-def redirect_message(base_url: str, response: httpx.Response) -> str:
-    """Explain a 3xx reply: redirects are not followed, so Home Assistant was
-    not reached (a write must not be replayed, nor the token sent elsewhere)."""
+def redirect_refusal(
+    base_url: str, response: httpx.Response
+) -> HomeAssistantNotReached:
+    """The error for a 3xx reply: redirects are not followed, so Home Assistant
+    was not reached (a write must not be replayed, nor the token sent elsewhere)."""
     location = response.headers.get("location") or "(no location)"
-    return (
+    return HomeAssistantNotReached(
         f"Home Assistant was not reached at {base_url}: HTTP "
         f"{response.status_code} redirect to {location}. Set HOMEASSISTANT_URL "
         "to the address Home Assistant answers on."

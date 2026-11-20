@@ -13,8 +13,9 @@ from __future__ import annotations
 import logging
 from typing import Any, NamedTuple, NoReturn
 
+from ..error_wording import blueprint_missing_input, blueprint_not_loaded
 from ..errors import ErrorCode, create_error_response
-from .blueprint_write import error_text
+from .blueprint_write import error_code, error_text
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -38,13 +39,13 @@ def raise_substitute_failure(
 ) -> NoReturn:
     """Map a failed ``blueprint/substitute`` onto a structured error.
 
-    Core answers every substitute failure with the same generic
-    ``unknown_error`` code, so the message text is the only discriminator:
-    ``MissingInput`` and ``FailedToLoad`` carry their own prefixes.
+    Core answers a blueprint it cannot render with ``unknown_error`` whatever
+    the cause, so under that code the wording tells the causes apart
+    (``error_wording``); any other code is reported as it came.
     """
     message = error_text(response, "Failed to render the blueprint")
-    lowered = message.lower()
-    if "missing input" in lowered:
+    lowered = message.lower() if error_code(response) == "unknown_error" else ""
+    if blueprint_missing_input(lowered):
         code = ErrorCode.VALIDATION_FAILED
         suggestions = [
             (
@@ -53,7 +54,7 @@ def raise_substitute_failure(
             ),
             "Pass every required input in the input dict",
         ]
-    elif "failed to load" in lowered or "not found" in lowered:
+    elif blueprint_not_loaded(lowered):
         code = ErrorCode.RESOURCE_NOT_FOUND
         suggestions = [
             (

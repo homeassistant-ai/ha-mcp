@@ -10,6 +10,7 @@ known, the bound on Supervisor's text, and the retry of a busy job group.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -26,6 +27,7 @@ from ._tools_addons_core import (
     TEXT_LIMIT,
     TRUNCATED,
     Route,
+    Supervisor,
     SupervisorWait,
     manage,
     read,
@@ -42,6 +44,23 @@ INFO = f"/addons/{SLUG}/info"
 RESTART = f"/addons/{SLUG}/restart"
 STOP = f"/addons/{SLUG}/stop"
 COLLISION = f"Another job is running for job group addon_{SLUG}"
+
+
+class _JumpingClock:
+    """The tools' ``time``: an hour passes once Supervisor has seen a request."""
+
+    def __init__(self, supervisor: Supervisor) -> None:
+        self.supervisor = supervisor
+
+    def monotonic(self) -> float:
+        return time.monotonic() + (3600.0 if self.supervisor.requests else 0.0)
+
+
+@pytest.fixture
+def retry_window_elapses(core_route: Route, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A busy job group is given up on after its first refusal, not a minute
+    later. Only the tools' clock moves, so Core's own timeouts are untouched."""
+    monkeypatch.setattr(tools_addons, "time", _JumpingClock(core_route.supervisor))
 
 
 def _bounded(text: str) -> None:
@@ -81,11 +100,20 @@ class TestSupervisorRefusals:
         """#993: "authorized_keys" in Supervisor's message is not an auth error."""
         route.supervisor.running(
             options={"ssh": {"sftp": False}},
-            schema=[{"name": "ssh", "type": "dict"}],
+            schema=[
+                {
+                    "name": "ssh",
+                    "type": "schema",
+                    "optional": False,
+                    "multiple": False,
+                    "schema": [{"name": "sftp", "type": "boolean", "optional": False}],
+                }
+            ],
         )
         route.supervisor.refuse(
             "POST",
             f"/addons/{SLUG}/options",
+            f"App {SLUG} has invalid options: "
             "Missing option 'authorized_keys' in ssh in SSH (core_ssh)",
         )
 
@@ -97,6 +125,21 @@ class TestSupervisorRefusals:
         assert route.supervisor.sent("POST", f"/addons/{SLUG}/options") == [
             {"options": {"ssh": {"sftp": True}}}
         ]
+
+    async def test_direct_options_refusal_uses_supervisors_error_key(
+        self, app_route: Route
+    ) -> None:
+        app_route.supervisor.running(options={}, schema=[])
+        app_route.supervisor.refuse(
+            "POST",
+            f"/addons/{SLUG}/options",
+            "Configuration declined",
+            error_key="app_configuration_invalid_error",
+        )
+        body = await rejected_call_body(
+            manage(app_route.client, slug=SLUG, options={"debug": True})
+        )
+        assert body["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.parametrize(
         ("status", "code", "named"),
@@ -134,6 +177,7 @@ class TestSupervisorRefusals:
 
         body = await rejected_call_body(read(route.client, slug=SLUG))
 
+        # Core's supervisor/api relays the text and drops the status.
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert body["error"]["suggestion"] == (
             "Check Home Assistant connection and Supervisor availability"
@@ -359,6 +403,18 @@ class TestBusyJobGroup:
 
         assert core_route.supervisor.requests == [("POST", STOP)]
 
+    async def test_a_specific_rest_refusal_prevents_a_job_retry(
+        self, app_route: Route, quick_retry: None
+    ) -> None:
+        app_route.supervisor.refuse(
+            "POST", STOP, COLLISION, error_key="app_not_running_error"
+        )
+        app_route.supervisor.answer("POST", STOP, {})
+
+        await rejected_call_body(manage(app_route.client, slug=SLUG, action="stop"))
+
+        assert app_route.supervisor.requests == [("POST", STOP)]
+
     async def test_a_real_error_after_a_collision_raises_at_once(
         self, core_route: Route, quick_retry: None
     ) -> None:
@@ -388,9 +444,8 @@ class TestBusyJobGroup:
             assert message["_wait_timeout"] > message["timeout"]
 
     async def test_a_group_that_never_clears_names_the_stuck_job(
-        self, core_route: Route, monkeypatch: pytest.MonkeyPatch
+        self, core_route: Route, retry_window_elapses: None
     ) -> None:
-        monkeypatch.setattr(tools_addons, "_JOB_COLLISION_RETRY_WINDOW", 0.0)
         core_route.supervisor.refuse("POST", STOP, COLLISION)
 
         body = await rejected_call_body(
@@ -403,9 +458,8 @@ class TestBusyJobGroup:
         assert not any("connection" in s.lower() for s in error["suggestions"])
 
     async def test_the_giving_up_message_is_bounded(
-        self, core_route: Route, monkeypatch: pytest.MonkeyPatch
+        self, core_route: Route, retry_window_elapses: None
     ) -> None:
-        monkeypatch.setattr(tools_addons, "_JOB_COLLISION_RETRY_WINDOW", 0.0)
         core_route.supervisor.refuse("POST", STOP, COLLISION + "v" * TEXT_LIMIT)
 
         body = await rejected_call_body(

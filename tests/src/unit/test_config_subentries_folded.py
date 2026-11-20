@@ -8,6 +8,7 @@ Every subentry flow below is Core's, run through the server's own client
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
@@ -32,6 +33,7 @@ from pytest_homeassistant.common import (
     mock_platform,
 )
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
@@ -453,7 +455,6 @@ async def test_an_open_subentry_flow_is_ended_with_abort(
     hass: HomeAssistant,
     parent: MockConfigEntry,
     client: HomeAssistantClient,
-    opened_flows: dict[str, tuple[str, str | None]],
 ) -> None:
     shown = await _set_subentry(client, parent, "model")
     assert open_flow_ids(hass) == [shown["flow_id"]]
@@ -464,7 +465,14 @@ async def test_an_open_subentry_flow_is_ended_with_abort(
 
     assert aborted["aborted"] is True
     assert open_flow_ids(hass) == []
-    assert shown["flow_id"] not in opened_flows
+    # The ended flow is not answered as open again.
+    with pytest.raises(ToolError) as caught:
+        await _set_subentry(
+            client, parent, "model", flow_id=shown["flow_id"], config={"name": "x"}
+        )
+    error = json.loads(str(caught.value))["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "was not opened" in error["message"]
 
 
 # --- ha_remove_helpers_integrations ------------------------------------------------

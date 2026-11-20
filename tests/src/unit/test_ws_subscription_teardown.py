@@ -3,22 +3,27 @@
 import asyncio
 
 import pytest
+from homeassistant.core import HomeAssistant
 
-from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+from ha_mcp.client.rest_client import HomeAssistantClient
+
+from ._ws_transport import abort_transport, connected_ws, until
 
 
-@pytest.mark.asyncio
-async def test_events_queued_before_the_close_stay_readable() -> None:
-    client = HomeAssistantWebSocketClient(
-        url="http://homeassistant.local:8123", token="test-token"
-    )
-    queue = client._state.register_subscription_queue(7)
-    event = {"type": "event", "event": {"manager_state": "restore_backup"}}
-    queue.put_nowait(event)
+async def test_events_queued_before_the_close_stay_readable(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    async with connected_ws(core_client) as ws:
+        _, queue = await ws.subscribe_command(
+            "subscribe_events", event_type="teardown_probe"
+        )
+        hass.bus.async_fire("teardown_probe", {"manager_state": "restore_backup"})
+        await until(lambda: queue.qsize() == 1)
 
-    client._state.reset_connection()
+        abort_transport(ws)
+        await until(lambda: not ws.is_connected)
 
-    assert queue.get_nowait() == event
-    with pytest.raises(asyncio.QueueShutDown):
-        queue.get_nowait()
-    assert client._state.get_subscription_queue(7) is None
+        event = queue.get_nowait()
+        assert event["event"]["data"] == {"manager_state": "restore_backup"}
+        with pytest.raises(asyncio.QueueShutDown):
+            queue.get_nowait()

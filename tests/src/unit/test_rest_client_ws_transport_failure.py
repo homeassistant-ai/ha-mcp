@@ -127,7 +127,8 @@ async def test_a_403_answer_is_returned_and_not_sent_again(
     assert len(calls) == 1
     assert result["success"] is False
     assert "403 Forbidden" in result["error"]
-    assert result["suggestions"]
+    assert result["error_code"] == "home_assistant_error"
+    assert "suggestions" not in result
 
 
 async def test_a_render_sends_its_timeout_and_releases_its_subscription(

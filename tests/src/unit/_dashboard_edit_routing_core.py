@@ -58,8 +58,7 @@ def use_backend(
     # The component keeps its card index, and the task that builds it, for the
     # whole process: one left unfinished by an earlier test belongs to that
     # test's event loop, and a save here would wait on it until it timed out.
-    for name in ("_definitions", "_build_task", "_build_failed_at"):
-        monkeypatch.setattr(card_definitions, name, None)
+    card_definitions.reset_card_definitions_state()
     component_commands.async_register_commands(hass)
     if backend == "unknown_command":
         monkeypatch.delitem(hass.data[websocket_api.DOMAIN], EDIT)

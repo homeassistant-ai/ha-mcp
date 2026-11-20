@@ -40,11 +40,6 @@ CUSTOM = "my_custom_helper"
 
 
 @pytest.fixture
-def _core_helper_flows() -> None:
-    """The component's loader read is Core's own."""
-
-
-@pytest.fixture
 async def tools(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> IntegrationTools:

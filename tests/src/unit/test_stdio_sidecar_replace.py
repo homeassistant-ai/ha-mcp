@@ -41,7 +41,7 @@ def _messages(caplog: pytest.LogCaptureFixture) -> list[str]:
 @pytest.fixture
 def no_exit_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     """Give up on a still-running old sidecar at once, with the usual warning."""
-    monkeypatch.setattr(sidecar, "_OLD_SIDECAR_EXIT_WAIT", 0.0)
+    monkeypatch.setattr(sidecar, "OLD_SIDECAR_EXIT_WAIT", 0.0)
 
 
 def _waited(caplog: pytest.LogCaptureFixture) -> bool:
@@ -311,7 +311,7 @@ def test_unanswered_retire_warns_it_may_still_be_running(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A slow but live sidecar is not "no responsive sidecar"."""
-    monkeypatch.setattr(sidecar, "_SHUTDOWN_HTTP_TIMEOUT", 0.05)
+    monkeypatch.setattr(sidecar, "SHUTDOWN_HTTP_TIMEOUT", 0.05)
     old_sidecar.on_post = old_sidecar.released.wait
     (data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
 

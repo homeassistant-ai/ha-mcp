@@ -245,8 +245,9 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `renovate-validation.yml` | Relevant pull request or manual | Validate configuration with the scanner’s pinned Renovate engine, without credentials. |
 | `renovate-auto-merge.yml` | Renovate enables auto-merge or updates its PR | Approve the verified current head with the separate maintainer account; GitHub enforces merge requirements. |
 | `mirror-python-base.yml` | Push touching a Dockerfile or the workflow, weekly, or manual | Copy the Dockerfiles' pinned `python` base digests unchanged to `ghcr.io/homeassistant-ai/ha-mcp-python-base`, which CI image builds and the HAOS bake pull first. |
-| `e2e-tests.yml` | Push to `master` touching code, or manual | Full container-backend E2E validation on the pinned stable Core image. |
-| `haos-e2e-tests.yml` | Pull request or manual | Six HAOS lanes against a baked qcow2; required status checks. |
+| `e2e-tests.yml` | Push to `master` touching code, or manual | Full container-backend E2E validation on the pinned stable Core image, including the whole-run no-component and server-entry-only lanes that pull requests cover in a combined lane. |
+| `haos-e2e-tests.yml` | Pull request or manual | External, embedded and app HAOS lanes against a baked qcow2; embedded and app cover both tool-entry states. A dispatch picks one `lane` and can keep the tools entry absent (`topology: without-tools`). |
+| `haos-e2e-stdio.yml` | Manual | The HAOS lane over the installed `ha-mcp` command's stdio transport. |
 | `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
 | `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
 | `publish-dev.yml` | Push to `master`, or manual; this repository only | Development `<next>.devN` release, published as `ha-mcp-dev`; its GitHub pre-release tags a commit with the component stamped to pin that build, for HACS, and the mirror sync pins the same build via its `dev-version` artifact. |
@@ -315,11 +316,25 @@ Passing the same file as action-global `configurationFile` as well duplicates
 custom managers and dependency-dashboard entries.
 
 The private websockets and FastMCP pins each have a narrowly scoped
-post-upgrade task. Renovate installs Python 3.14, runs
-`python3 -I scripts/vendor_websockets.py` or `python3 -I scripts/vendor_fastmcp.py`,
-and includes only that generator's `src/ha_mcp/_vendor/<package>/**` trees as
-generated artifacts alongside the pin. The scanner allows only those exact
-commands, with shell execution disabled. These dependencies retain the ordinary
+post-upgrade task. For websockets, Renovate installs Python 3.14, runs
+`python3 -I scripts/vendor_websockets.py` and includes only
+`src/ha_mcp/_vendor/websockets/**` as generated artifacts alongside the pin.
+For FastMCP, it installs Python 3.14.2 or later and uv (`uv lock` resolves the
+dev group's `homeassistant`, which needs at least 3.14.2), runs
+`uv run --no-project --with packaging python -I scripts/vendor_fastmcp.py`,
+then `uv lock`, and includes the FastMCP / MCP SDK trees plus `pyproject.toml`
+and `uv.lock`. The generator raises each `[project.dependencies]` floor the new
+versions need on a supported Python and platform: Home Assistant keeps any
+installed version that meets the published floor, so a floor left behind would
+keep the older release installed. It prints every floor it raises and every
+entry it leaves alone. An entry without a single `>=` floor, or whose other
+specifiers exclude the need (a ceiling, an exact pin), and a new requirement
+still fail `test_vendored_fastmcp.py` for a person to resolve. Fast Checks runs
+the Core constraint check against current Core and the `hacs.json` minimum, so
+a raised floor that excludes a version Core pins exactly fails there; for a
+package Core constrains loosely, the embedded no-stomp E2E guard is the
+backstop. The scanner allows only those exact commands, with shell execution
+disabled. These dependencies retain the ordinary
 schedule and release-age policy. Source, license, manifest, drift, and API
 checks still gate the update; a failed generator is an artifact error, not an
 accepted pin-only update. The credential-free vendoring fixture exercises the

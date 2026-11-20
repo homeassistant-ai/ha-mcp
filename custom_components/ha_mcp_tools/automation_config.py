@@ -46,7 +46,7 @@ def _unavailable(error: str) -> dict[str, Any]:
     return {"status": "unavailable", "error": error}
 
 
-def _core() -> SimpleNamespace:
+def core_parts() -> SimpleNamespace:
     """Core's automation parts this bridge uses.
 
     A part a Core build lacks is None; the action that needs it answers
@@ -229,7 +229,7 @@ async def async_automation_config(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
     _require(msg)
-    core = _core()
+    core = core_parts()
     try:
         return await _HANDLERS[msg["action"]](hass, core, msg)
     except Exception as err:

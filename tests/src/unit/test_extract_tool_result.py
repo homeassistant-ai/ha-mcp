@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -21,6 +21,9 @@ from ha_mcp._vendor.fastmcp.tools import Tool, ToolResult
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import reset_global_settings
 from ha_mcp.tools.tools_code import register_code_tools
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 
 @pytest.fixture
@@ -55,11 +58,6 @@ def _list_of_dicts() -> list[dict[str, Any]]:
     return [{"id": 1}, {"id": 2}]
 
 
-def _data_rows() -> list[dict[str, str]]:
-    # Rows without ``text``/``type`` keys are data, not content blocks.
-    return [{"entity_id": "light.foo", "state": "on"}]
-
-
 def _dict() -> dict[str, Any]:
     return {"key": "value", "n": 1}
 
@@ -73,9 +71,6 @@ def _plain_text() -> str:
     ("probe", "expected"),
     [
         pytest.param(_list_of_dicts, [{"id": 1}, {"id": 2}], id="list-of-dicts"),
-        pytest.param(
-            _data_rows, [{"entity_id": "light.foo", "state": "on"}], id="data-rows"
-        ),
         pytest.param(_dict, {"key": "value", "n": 1}, id="json-object"),
         pytest.param(_plain_text, "plain text", id="non-json-text"),
     ],
@@ -84,6 +79,23 @@ async def test_sandbox_code_gets_the_tool_result_as_basic_python_values(
     core_client: HomeAssistantClient, probe: Callable[[], Any], expected: Any
 ) -> None:
     assert await _sandbox_sees(core_client, probe) == expected
+
+
+@pytest.mark.usefixtures("code_mode")
+async def test_sandbox_code_gets_state_rows_without_content_block_keys_as_data(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Rows without ``text``/``type`` keys are data, not content blocks."""
+    hass.states.async_set("light.foo", "on", {"brightness": 10})
+    await hass.async_block_till_done()
+
+    async def _states() -> list[dict[str, Any]]:
+        return await core_client.get_states()
+
+    seen = await _sandbox_sees(core_client, _states)
+
+    assert seen == await core_client.get_states()
+    assert any(row["entity_id"] == "light.foo" for row in seen)
 
 
 @pytest.mark.usefixtures("code_mode")

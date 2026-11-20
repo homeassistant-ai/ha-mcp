@@ -337,6 +337,15 @@ def test_only_a_stand_in_for_hass_is_refused(
         pytest.param("trace._state = None  # noqa: SLF001\n", True, id="noqa-slf001"),
         pytest.param("# ruff: noqa\n", True, id="file-wide-noqa"),
         pytest.param("# mypy: ignore-errors\n", True, id="mypy-ignore-errors"),
+        pytest.param(
+            "# mypy: check-untyped-defs=False\n", True, id="mypy-file-setting"
+        ),
+        pytest.param("# checked by mypy: yes\n", False, id="comment-naming-mypy"),
+        pytest.param(
+            "@typing.no_type_check\ndef test_it():\n    pass\n",
+            True,
+            id="no-type-check",
+        ),
         pytest.param("entry.options = None  # type: ignore\n", True, id="bare-ignore"),
         pytest.param(
             "entry.options = None  # type: ignore[assignment]\n",

@@ -13,7 +13,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from homeassistant.components.automation import config as automation_core_config
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
@@ -106,8 +105,9 @@ class TestFallbacks:
         """A component that cannot reach part of Core silently lost every
         bridge answer; the log names the part it lacked."""
         # A Core build with neither automation validator.
-        for name in ("_async_validate_config_item", "async_validate_config_item"):
-            monkeypatch.setattr(automation_core_config, name, None)
+        parts = automation_config.core_parts()
+        parts.validate = parts.validate_or_raise = None
+        monkeypatch.setattr(automation_config, "core_parts", lambda: parts)
         reason = "This Home Assistant has no automation validator"
         with caplog.at_level(logging.WARNING, logger=component_automation.__name__):
             got = await component_automation.automation_validate(

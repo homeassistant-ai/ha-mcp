@@ -187,7 +187,7 @@ _BlueprintLoader.add_multi_constructor("!", _drop_blueprint_tag)
 # =============================================================================
 # ha_mcp_tools/device_get + ha_mcp_tools/device_list
 # =============================================================================
-def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+def do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
     """Return one device registry entry by id, optionally with its entities.
 
     ``{device: <DeviceEntry.dict_repr> | None}`` — a request-local snapshot over
@@ -239,7 +239,7 @@ def _do_device_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, An
 
     The in-process equivalent of ``config/device_registry/list``: each element is
     core's ``DeviceEntry.dict_repr`` returned VERBATIM (same byte-parity rationale
-    as :func:`_do_device_get`), so the server's existing device transforms consume
+    as :func:`do_device_get`), so the server's existing device transforms consume
     it unchanged. An entry whose ``dict_repr`` is unavailable is skipped rather
     than emitted as a partial record.
     """

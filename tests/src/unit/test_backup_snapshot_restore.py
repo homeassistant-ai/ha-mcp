@@ -607,7 +607,7 @@ class TestTheAnswer:
         supervisor = await backup_install.supervisor()
         target = supervisor.add_backup("old", password=None)
         supervisor.hold = True
-        monkeypatch.setattr(backup_snapshot_restore, "_BACKUP_MAX_WAIT_S", 0.1)
+        monkeypatch.setattr(backup_snapshot_restore, "BACKUP_MAX_WAIT_S", 0.1)
 
         result = await restore_backup(core_client, target)
 
@@ -649,7 +649,7 @@ class TestTheAnswer:
         await backup_install.core()
         await backup_install.configure(password=PASSWORD)
         target = await _core_backup(backup_install)
-        monkeypatch.setattr(backup_snapshot_restore, "_BACKUP_MAX_WAIT_S", 0.1)
+        monkeypatch.setattr(backup_snapshot_restore, "BACKUP_MAX_WAIT_S", 0.1)
 
         async with held_command(hass, "backup/restore"):
             with pytest.raises(ToolError, match="timeout"):
@@ -727,7 +727,7 @@ class TestHeartbeats:
         supervisor = await backup_install.supervisor()
         target = supervisor.add_backup("old", password=None)
         supervisor.hold = True
-        monkeypatch.setattr(backup_snapshot_restore, "_BACKUP_PROGRESS_INTERVAL_S", 0)
+        monkeypatch.setattr(backup_snapshot_restore, "BACKUP_PROGRESS_INTERVAL_S", 0)
 
         def finish_after_three(reports: int) -> None:
             if reports == 3:
@@ -758,7 +758,7 @@ class TestHeartbeats:
         target = supervisor.add_backup("old")
         supervisor.hold = True
         for module in (backup_snapshot, backup_snapshot_restore):
-            monkeypatch.setattr(module, "_BACKUP_MAX_WAIT_S", 1000)
+            monkeypatch.setattr(module, "BACKUP_MAX_WAIT_S", 1000)
         refresh_token = hass.auth.async_validate_access_token(core_client.token)
         assert refresh_token is not None
 

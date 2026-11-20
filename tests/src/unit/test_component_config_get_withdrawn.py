@@ -1,26 +1,18 @@
-"""The withdrawn ``ha_mcp_tools/config_get`` command stays gone."""
+"""The withdrawn config_get command stays absent from the real command surface."""
 
-from __future__ import annotations
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-from ._component_ws_api import wsapi
+from ._component_core import ws_call, ws_result
 
 
-class TestConfigGetWithdrawn:
-    """``config_get`` was withdrawn before release: it served an entity's
-    ``raw_config``, whose freshness lags the config file between a write and the
-    next completed reload, so a get racing a reload returned a stale body. The
-    command, its schema, its capability, and its domain gate are all gone — the
-    get tools serve automation/script reads from the legacy REST path (which
-    reads the fresh config file). These pin that nothing component-side still
-    exposes it (issue #1813 tracks a possible file-reading redesign)."""
-
-    def test_capability_not_advertised(self):
-        assert "config_get" not in wsapi.CAPABILITIES
-
-    def test_no_command_constant_schema_or_domain_gate(self):
-        assert not hasattr(wsapi, "WS_CONFIG_GET")
-        assert not hasattr(wsapi, "_config_get_schema")
-        assert not hasattr(wsapi, "CONFIG_GET_DOMAINS")
-
-    def test_no_handler_function(self):
-        assert not hasattr(wsapi, "_do_config_get")
+async def test_config_get_is_neither_advertised_nor_registered(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    info = await ws_result(component_ws, "ha_mcp_tools/info")
+    assert "config_get" not in info["capabilities"]
+    reply = await ws_call(
+        component_ws, "ha_mcp_tools/config_get", entity_id="automation.old"
+    )
+    assert reply["success"] is False
+    assert reply["error"]["code"] == "unknown_command"

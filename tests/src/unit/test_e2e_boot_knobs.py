@@ -8,42 +8,34 @@ cache across runs, ``HA_E2E_READY_TIMEOUT`` raises the readiness budget.
 
 Both are opt-in, so the property that matters as much as "the knob works" is
 that an unset knob changes nothing: a lane with no environment set must build
-the same container it always did. The assertions below therefore go through
-``_build_ha_testcontainer`` and check the assembled mounts and entrypoint
-rather than the helpers' own return values. No Docker daemon is involved:
-``DockerContainer`` builds its client on construction, so the client is
-replaced and the container only records configuration.
+the same container it always did. The tests below therefore run the session
+fixture (``_e2e_session``) and check what it asked Docker for: the mounts and
+the entrypoint of the container it created. The fixture's readiness gates ask
+the unit tests' Home Assistant; only Docker is replaced.
 
 ``HA_E2E_BASE_HOST`` is the third knob and a different kind of setting: it
 selects only the host in the testcontainer's ``base_url``, so a containerized
 pytest process can reach the sibling container through the Docker host address
-instead of its own ``localhost``. Its resolution is asserted directly, without
-a container, and the fixture wiring is covered in
-``test_e2e_session_fixture_cleanup.py``.
+instead of its own ``localhost``. Its parsing is asserted directly; the fixture
+using it is covered in ``test_e2e_session_fixture_cleanup.py``.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
-import testcontainers.core.container
-from testcontainers.core.container import DockerContainer
+from homeassistant.core import HomeAssistant
 
-from tests.src.e2e import _conftest_knobs, _conftest_testcontainer
+from ha_mcp.client.rest_client import HomeAssistantClient
+from tests.src.e2e import _conftest_knobs
 
-_WHEEL = "ha_mcp-9.9.9-py3-none-any.whl"
-
-
-@pytest.fixture(autouse=True)
-def _no_docker_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(testcontainers.core.container, "DockerClient", MagicMock())
+from ._core_client import refused_url
+from ._e2e_session import Session, plain_container_session, running_home_assistant
 
 
 @pytest.fixture(autouse=True)
@@ -54,36 +46,47 @@ def _unset_boot_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(_conftest_knobs.BASE_HOST_ENV_VAR, raising=False)
 
 
-def _config_dir(tmp_path: Path, requirements: list[str]) -> Path:
-    """A staged config dir with one component manifest, as the fixture stages it."""
-    config = tmp_path / "config"
-    component = config / "custom_components" / "ha_mcp_tools"
-    component.mkdir(parents=True)
-    (component / "manifest.json").write_text(json.dumps({"requirements": requirements}))
-    return config
+@pytest.fixture
+def session(
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> Session:
+    return plain_container_session(
+        monkeypatch,
+        request,
+        tmp_path,
+        home_assistant_url=core_client.base_url,
+        token=core_client.token,
+    )
 
 
-def _entrypoint_script(container: DockerContainer) -> str:
-    return container._kwargs["entrypoint"][-1]
+async def _boot(hass: HomeAssistant, session: Session) -> Path:
+    """Run the session fixture through its setup and teardown; the staged config."""
+    generator = session.fixture()
+    async with running_home_assistant(hass):
+        info = await hass.async_add_executor_job(next, generator)
+    generator.close()
+    await hass.async_add_executor_job(session.request.finalize)
+    return Path(info["config_path"])
 
 
 def _preinstalls(script: str) -> list[str]:
     """Every ``pip install`` in the entrypoint, from the install to the next segment.
 
     One per manifest-requirement attempt (PyPI-first plus the wheels-index
-    fallback) and two for the embedded wheel (constraints file present or
-    absent), so the list is what the flag check has to cover — a count would
+    fallback), so the list is what the flag check has to cover — a count would
     restate the current command layout instead.
     """
     return script.split("pip install ")[1:]
 
 
-def _mount_targets(container: DockerContainer) -> dict[str, str]:
-    return {str(host): mapping["bind"] for host, mapping in container.volumes.items()}
-
-
-def _stub_container_tools(tmp_path: Path, pip_status: int) -> tuple[Path, Path]:
-    """Stand-ins for the container's ``pip``/``chown``/``stat`` and their call log."""
+def run_entrypoint(
+    script: str, tmp_path: Path, pip_status: int
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run the entrypoint against stand-ins for the container's ``pip``,
+    ``chown`` and ``stat``; its result and the tools' invocations."""
     stub_bin = tmp_path / "bin"
     stub_bin.mkdir()
     calls = tmp_path / "calls.log"
@@ -97,17 +100,26 @@ def _stub_container_tools(tmp_path: Path, pip_status: int) -> tuple[Path, Path]:
         stub = stub_bin / name
         stub.write_text(body, encoding="utf-8")
         stub.chmod(0o755)
-    return stub_bin, calls
-
-
-def _run_entrypoint(script: str, stub_bin: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    result = subprocess.run(
         ["sh", "-c", script],
         check=False,
         env={**os.environ, "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}"},
         capture_output=True,
         text=True,
     )
+    return result, calls.read_text(encoding="utf-8").splitlines()
+
+
+def _boot_into(script: str, tmp_path: Path) -> tuple[str, Path]:
+    """The entrypoint with Home Assistant's ``/init`` replaced by a stand-in
+    that leaves a mark and exits 7; the script and the mark."""
+    booted = tmp_path / "booted"
+    init_stub = tmp_path / "init"
+    init_stub.write_text(
+        f"#!/bin/sh\ntouch {shlex.quote(str(booted))}\nexit 7\n", encoding="utf-8"
+    )
+    init_stub.chmod(0o755)
+    return script.replace("exec /init", f"exec {shlex.quote(str(init_stub))}"), booted
 
 
 # ---------------------------------------------------------------------------
@@ -140,28 +152,21 @@ def test_an_unusable_timeout_is_rejected_rather_than_ignored(
         _conftest_knobs.resolve_ready_timeout(480)
 
 
-def test_both_container_lanes_keep_their_historical_budgets() -> None:
-    """The embedded lane pays for the wheel preinstall; the plain container does not.
-
-    The 60s value is the plain container lane's long-standing gate — a change
-    here would either halve the embedded lane's budget or hand the container
-    lane a budget it never needed.
-    """
-    embedded = _conftest_testcontainer._container_api_ready_timeout(True)
-    plain = _conftest_testcontainer._container_api_ready_timeout(False)
-
-    assert embedded == _conftest_testcontainer._EMBEDDED_API_READY_TIMEOUT
-    assert plain == 60
-    assert embedded > plain
-
-
-def test_timeout_knob_overrides_both_container_lanes(
+def test_the_timeout_knob_is_the_budget_the_api_gate_waits(
     monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    socket_enabled: None,
 ) -> None:
-    """The knob names the readiness gate, so it must not silently skip a lane."""
-    monkeypatch.setenv(_conftest_knobs.READY_TIMEOUT_ENV_VAR, "1200")
-    assert _conftest_testcontainer._container_api_ready_timeout(True) == 1200
-    assert _conftest_testcontainer._container_api_ready_timeout(False) == 1200
+    """The knob names the readiness gate, so the gate must wait exactly that."""
+    session = plain_container_session(
+        monkeypatch, request, tmp_path, home_assistant_url=refused_url()
+    )
+    monkeypatch.setenv(_conftest_knobs.READY_TIMEOUT_ENV_VAR, "1")
+
+    with pytest.raises(pytest.fail.Exception, match="within 1 seconds"):
+        next(session.fixture())
+    session.request.finalize()
 
 
 # ---------------------------------------------------------------------------
@@ -169,40 +174,40 @@ def test_timeout_knob_overrides_both_container_lanes(
 # ---------------------------------------------------------------------------
 
 
-def test_unset_cache_knob_keeps_the_preinstall_ephemeral(tmp_path: Path) -> None:
+async def test_unset_cache_knob_keeps_the_preinstall_ephemeral(
+    hass: HomeAssistant, session: Session
+) -> None:
     """Stock behaviour: one /config mount, and pip caches nothing."""
-    config = _config_dir(tmp_path, ["ruamel.yaml"])
+    staged = await _boot(hass, session)
 
-    container = _conftest_testcontainer._build_ha_testcontainer(config, True, _WHEEL)
-
-    assert _mount_targets(container) == {str(config): "/config"}
-    # Both preinstalls — the component manifest requirements and the checkout
-    # wheel — must keep discarding their downloads.
-    installs = _preinstalls(_entrypoint_script(container))
-    assert len(installs) >= 2
+    assert session.mounts() == {str(staged): "/config"}
+    installs = _preinstalls(session.entrypoint_script())
+    assert installs
     assert all(install.startswith("--no-cache-dir ") for install in installs)
 
 
-def test_a_mounted_pip_cache_is_used_by_every_preinstall(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_a_mounted_pip_cache_is_used_by_every_preinstall(
+    hass: HomeAssistant,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Without this, a reused run pays the full PyPI cost again every time."""
-    config = _config_dir(tmp_path, ["ruamel.yaml"])
     cache_dir = tmp_path / "pip-cache"
     monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
 
-    container = _conftest_testcontainer._build_ha_testcontainer(config, True, _WHEEL)
+    staged = await _boot(hass, session)
 
     # /root/.cache/pip is where pip inside the HA image resolves its cache: the
     # upstream image runs as root and sets neither PIP_CACHE_DIR nor
     # XDG_CACHE_HOME, so a mount elsewhere would be a directory pip never reads.
-    assert _mount_targets(container) == {
-        str(config): "/config",
+    assert session.mounts() == {
+        str(staged): "/config",
         str(cache_dir): "/root/.cache/pip",
     }
-    assert cache_dir.is_dir()
-    installs = _preinstalls(_entrypoint_script(container))
-    assert len(installs) >= 2
+    assert await hass.async_add_executor_job(cache_dir.is_dir)
+    installs = _preinstalls(session.entrypoint_script())
+    assert installs
     # Dropping --no-cache-dir is not enough: the image's pip.conf sets
     # no-cache-dir = false, which pip disables the cache for just the same.
     assert all(
@@ -211,8 +216,11 @@ def test_a_mounted_pip_cache_is_used_by_every_preinstall(
     )
 
 
-def test_the_mounted_cache_is_claimed_for_root_and_handed_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_the_mounted_cache_is_claimed_for_root_and_handed_back(
+    hass: HomeAssistant,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """pip as root only caches into a uid-0 directory; the host keeps its owner.
 
@@ -221,14 +229,10 @@ def test_the_mounted_cache_is_claimed_for_root_and_handed_back(
     otherwise pip disables the cache, or the developer's directory is left
     undeletable.
     """
-    config = _config_dir(tmp_path, ["ruamel.yaml"])
-    cache_dir = tmp_path / "pip-cache"
-    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
+    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(tmp_path / "pip-cache"))
+    await _boot(hass, session)
 
-    script = _entrypoint_script(
-        _conftest_testcontainer._build_ha_testcontainer(config, True, _WHEEL)
-    )
-
+    script = session.entrypoint_script()
     claim = script.index("chown 0:0 /root/.cache/pip")
     first_install = script.index("pip install ")
     last_install = script.rindex("pip install ")
@@ -244,8 +248,11 @@ def test_the_mounted_cache_is_claimed_for_root_and_handed_back(
 @pytest.mark.skipif(
     sys.platform == "win32", reason="the container lanes are POSIX-only"
 )
-def test_a_failed_preinstall_still_hands_the_cache_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_a_failed_preinstall_still_hands_the_cache_back(
+    hass: HomeAssistant,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """An install failure must not leave the host cache root-owned.
 
@@ -254,18 +261,14 @@ def test_a_failed_preinstall_still_hands_the_cache_back(
     ``stat`` binaries instead. The install fails, the hand-back still runs, and
     the install's status is what the container exits with.
     """
-    config = _config_dir(tmp_path, ["ruamel.yaml"])
-    cache_dir = tmp_path / "pip-cache"
-    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
-    script = _entrypoint_script(
-        _conftest_testcontainer._build_ha_testcontainer(config, False, None)
+    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(tmp_path / "pip-cache"))
+    await _boot(hass, session)
+
+    result, invocations = await hass.async_add_executor_job(
+        run_entrypoint, session.entrypoint_script(), tmp_path, 3
     )
 
-    stub_bin, calls = _stub_container_tools(tmp_path, pip_status=3)
-    result = _run_entrypoint(script, stub_bin)
-
     assert result.returncode == 3, result.stderr
-    invocations = calls.read_text(encoding="utf-8").splitlines()
     assert invocations[0] == f"chown 0:0 {_conftest_knobs.PIP_CACHE_MOUNT_PATH}"
     assert invocations[-1] == (
         f"chown -R 1000:1000 {_conftest_knobs.PIP_CACHE_MOUNT_PATH}"
@@ -276,73 +279,43 @@ def test_a_failed_preinstall_still_hands_the_cache_back(
 @pytest.mark.skipif(
     sys.platform == "win32", reason="the container lanes are POSIX-only"
 )
-def test_a_successful_preinstall_still_boots_home_assistant(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_a_successful_preinstall_still_boots_home_assistant(
+    hass: HomeAssistant,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Handing the cache back must not replace booting HA after a good install."""
-    config = _config_dir(tmp_path, ["ruamel.yaml"])
-    cache_dir = tmp_path / "pip-cache"
-    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
-    script = _entrypoint_script(
-        _conftest_testcontainer._build_ha_testcontainer(config, False, None)
+    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(tmp_path / "pip-cache"))
+    await _boot(hass, session)
+    script, booted = await hass.async_add_executor_job(
+        _boot_into, session.entrypoint_script(), tmp_path
     )
-    stub_bin, calls = _stub_container_tools(tmp_path, pip_status=0)
-    booted = tmp_path / "booted"
-    init_stub = tmp_path / "init"
-    init_stub.write_text(
-        f"#!/bin/sh\ntouch {shlex.quote(str(booted))}\nexit 7\n", encoding="utf-8"
-    )
-    init_stub.chmod(0o755)
-    script = script.replace("exec /init", f"exec {shlex.quote(str(init_stub))}")
 
-    result = _run_entrypoint(script, stub_bin)
+    result, invocations = await hass.async_add_executor_job(
+        run_entrypoint, script, tmp_path, 0
+    )
 
     assert result.returncode == 7, result.stderr
-    assert booted.exists()
-    invocations = calls.read_text(encoding="utf-8").splitlines()
+    assert await hass.async_add_executor_job(booted.exists)
     assert invocations[-1] == (
         f"chown -R 1000:1000 {_conftest_knobs.PIP_CACHE_MOUNT_PATH}"
     )
 
 
-def test_a_relative_cache_path_is_resolved_before_it_is_mounted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_a_relative_cache_path_is_resolved_before_it_is_mounted(
+    hass: HomeAssistant,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Docker needs an absolute host path; a relative value must not stay one."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, "pip-cache")
 
-    mount = _conftest_knobs.pip_cache_mount()
+    await _boot(hass, session)
 
-    assert mount is not None
-    host_dir, container_dir = mount
-    assert host_dir == tmp_path / "pip-cache"
-    assert host_dir.is_absolute()
-    assert container_dir == _conftest_knobs.PIP_CACHE_MOUNT_PATH
-
-
-def test_the_plain_container_lane_gets_the_cache_without_the_wheel(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The plain container lane shares this builder; it caches, it has no wheel."""
-    config = _config_dir(tmp_path, ["ruamel.yaml"])
-    cache_dir = tmp_path / "pip-cache"
-    monkeypatch.setenv(_conftest_knobs.PIP_CACHE_ENV_VAR, str(cache_dir))
-
-    container = _conftest_testcontainer._build_ha_testcontainer(config, False, None)
-
-    assert _mount_targets(container) == {
-        str(config): "/config",
-        str(cache_dir): "/root/.cache/pip",
-    }
-    script = _entrypoint_script(container)
-    installs = _preinstalls(script)
-    assert len(installs) >= 1
-    assert all(
-        install.startswith(f"--cache-dir {_conftest_knobs.PIP_CACHE_MOUNT_PATH} ")
-        for install in installs
-    )
-    assert _WHEEL not in script
+    assert session.mounts()[str(tmp_path / "pip-cache")] == "/root/.cache/pip"
 
 
 # ---------------------------------------------------------------------------

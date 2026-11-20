@@ -14,7 +14,6 @@ from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.components.config import floor_registry as config_floors
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
@@ -118,14 +117,13 @@ async def test_floors_are_listed_in_the_order_core_keeps_with_the_component(
     assert "config/floor_registry/list" not in sent_types(sent)
 
 
-async def test_a_field_core_adds_to_a_row_reaches_the_listing(
+async def test_core_floor_fields_and_an_added_area_field_reach_the_listing(
     hass: HomeAssistant,
     component_tools: AreaTools,
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With the component, a field Core adds to an area or floor row is listed
-    without the component naming it."""
+    """Preserve Core's complete floor row and a new area field through the component."""
     area_row = vars(ar.AreaEntry)["json_fragment"]
 
     def with_future_field(entry: ar.AreaEntry) -> json_fragment:
@@ -133,12 +131,15 @@ async def test_a_field_core_adds_to_a_row_reaches_the_listing(
         return json_fragment(json_bytes({**row, "future_field": 1}))
 
     monkeypatch.setattr(ar.AreaEntry, "json_fragment", property(with_future_field))
-    floor_row = "homeassistant.components.config.floor_registry._entry_dict"
-    original = vars(config_floors)["_entry_dict"]
-    monkeypatch.setattr(floor_row, lambda entry: {**original(entry), "future_field": 1})
     floors = fr.async_get(hass)
     ground = floors.async_create("Ground", level=0)
     ar.async_get(hass).async_create("Kitchen", floor_id=ground.floor_id)
+    core_reply = await component_core_client.send_websocket_message(
+        {"type": "config/floor_registry/list"}
+    )
+    assert core_reply["success"] is True
+    [core_floor] = core_reply["result"]
+    assert core_floor["floor_id"] == ground.floor_id
 
     with sent_commands(await pooled_socket(component_core_client)) as sent:
         listed = await component_tools.ha_list_floors_areas()
@@ -146,7 +147,7 @@ async def test_a_field_core_adds_to_a_row_reaches_the_listing(
     assert WS_REGISTRIES in sent_types(sent)
     assert "config/area_registry/list" not in sent_types(sent)
     assert "config/floor_registry/list" not in sent_types(sent)
-    assert listed["floors"][0]["future_field"] == 1
+    assert {key: listed["floors"][0][key] for key in core_floor} == core_floor
     assert listed["floors"][0]["areas"][0]["future_field"] == 1
 
 
@@ -488,7 +489,10 @@ async def test_a_reorder_core_applied_succeeds_when_the_order_cannot_be_read_bac
     ground = floors.async_create("Ground", level=0)
     attic = floors.async_create("Attic", level=2)
 
-    with _floor_list_failing_on_read(monkeypatch, read=2):
+    with (
+        caplog.at_level("WARNING", logger="ha_mcp.tools.area_reorder"),
+        _floor_list_failing_on_read(monkeypatch, read=2),
+    ):
         result = await tools.ha_set_area_or_floor(
             kind="floor", order=[attic.floor_id, ground.floor_id]
         )

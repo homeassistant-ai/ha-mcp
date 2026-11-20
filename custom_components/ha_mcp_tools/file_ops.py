@@ -317,6 +317,11 @@ _MIXED_LINE_ENDINGS = (
 )
 
 
+def file_read_error(code: str, message: str) -> dict[str, Any]:
+    """Return a file service refusal with its machine-readable reason."""
+    return {"success": False, "error_code": code, "error": message}
+
+
 def refusal_text(reason: str, path: str, details: dict[str, Any]) -> str:
     """The message for a refused edit, ``details`` being its ``_error`` fields."""
     text = REFUSALS[reason].format(path=path, **details)

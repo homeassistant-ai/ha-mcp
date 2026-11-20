@@ -122,20 +122,6 @@ def _log_received_frame(data: Any) -> None:
         logger.debug("WebSocket received: %s", _redacted_for_log(data))
 
 
-def _extract_ws_error(error: Any) -> tuple[str, str | None]:
-    """Split an HA WebSocket ``error`` payload into ``(message, code)``.
-
-    HA replies to a failed command with ``{"error": {"code": ..., "message":
-    ...}}``. Dict payloads yield both fields; a bare string (or other shape)
-    yields ``str(error)`` as the message and ``None`` for the code. The code is
-    threaded onto ``HomeAssistantCommandError`` so callers route on the stable
-    ``code`` (e.g. ``unknown_command``) instead of the message text.
-    """
-    if isinstance(error, dict):
-        return error.get("message", str(error)), error.get("code")
-    return str(error), None
-
-
 class HomeAssistantWebSocketClient:
     """WebSocket client for Home Assistant real-time communication."""
 
@@ -261,7 +247,7 @@ class HomeAssistantWebSocketClient:
             # Wait for auth response
             auth_response = await self._wait_for_auth_message("auth_ok", timeout=5)
             if not auth_response:
-                raise HomeAssistantConnectionError("Authentication timeout")
+                raise TimeoutError("Authentication timeout")
 
             self._state.mark_authenticated()
             logger.info("WebSocket connected and authenticated successfully")
@@ -588,9 +574,8 @@ class HomeAssistantWebSocketClient:
             # Process standard Home Assistant WebSocket response
             if response.get("type") == "result":
                 if response.get("success") is False:
-                    error_msg, error_code = _extract_ws_error(response.get("error", {}))
-                    raise HomeAssistantCommandError(
-                        f"Command failed: {error_msg}", error_code
+                    raise HomeAssistantCommandError.from_ws_error(
+                        response.get("error", {}), "Command failed"
                     )
 
                 # Return success response according to HA WebSocket format
@@ -683,8 +668,9 @@ class HomeAssistantWebSocketClient:
 
         if not result_response.get("success"):
             self.cancel_event_response(message_id)
-            error_msg, error_code = _extract_ws_error(result_response.get("error", {}))
-            raise HomeAssistantCommandError(f"Command failed: {error_msg}", error_code)
+            raise HomeAssistantCommandError.from_ws_error(
+                result_response.get("error", {}), "Command failed"
+            )
 
         try:
             event_response = await asyncio.wait_for(event_future, timeout=wait_timeout)
@@ -789,9 +775,8 @@ class HomeAssistantWebSocketClient:
         if response.get("type") == "result" and response.get("success"):
             return message_id
 
-        error_msg, error_code = _extract_ws_error(response.get("error", {}))
-        raise HomeAssistantCommandError(
-            f"subscribe_events failed: {error_msg}", error_code
+        raise HomeAssistantCommandError.from_ws_error(
+            response.get("error", {}), "subscribe_events failed"
         )
 
     async def unsubscribe_events(self, subscription_id: int) -> None:
@@ -1041,9 +1026,8 @@ class HomeAssistantWebSocketClient:
             return message_id, queue
 
         self._state.unregister_subscription_queue(message_id)
-        error_msg, error_code = _extract_ws_error(response.get("error", {}))
-        raise HomeAssistantCommandError(
-            f"subscribe_command({command_type!r}) failed: {error_msg}", error_code
+        raise HomeAssistantCommandError.from_ws_error(
+            response.get("error", {}), f"subscribe_command({command_type!r}) failed"
         )
 
     async def release_subscription(self, subscription_id: int) -> None:
@@ -1521,7 +1505,7 @@ class WebSocketManager:
                     )
                 raise HomeAssistantConnectionError(
                     "Failed to connect to Home Assistant WebSocket" + detail
-                )
+                ) from client.last_connect_exception
 
             self._clients[key] = client
             self._last_used[key] = time.monotonic()

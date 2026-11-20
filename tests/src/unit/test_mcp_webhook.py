@@ -407,6 +407,8 @@ async def test_legacy_document_advertises_client_secret_auth(
         "client_secret_post",
     }
     assert doc["grant_types_supported"] == ["authorization_code", "refresh_token"]
+    assert doc["issuer"] == f"{PUBLIC}{OAUTH_BASE}"
+    assert "registration_endpoint" not in doc
 
 
 async def test_none_mode_document_fixes_what_home_assistants_root_document_lacks(

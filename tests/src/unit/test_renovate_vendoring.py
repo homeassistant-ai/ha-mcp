@@ -3,6 +3,7 @@
 import json
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 import yaml
@@ -10,18 +11,43 @@ import yaml
 _ROOT = Path(__file__).resolve().parents[3]
 _PIN_FILE = "src/ha_mcp/_vendor/requirements.txt"
 _WEBSOCKETS_COMMAND = "python3 -I scripts/vendor_websockets.py"
-_FASTMCP_COMMAND = "python3 -I scripts/vendor_fastmcp.py"
+_FASTMCP_COMMAND = (
+    "uv run --no-project --with packaging python -I scripts/vendor_fastmcp.py"
+)
 _LOCK_SYNC_COMMAND = "uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment.py --sync-lock"
 _PIN_SYNC_COMMAND = "uv run --no-project --with packaging python -I scripts/sync_dev_integration_pins.py"
+
+
+class _Hook(NamedTuple):
+    packages: list[str]
+    commands: list[str]
+    file_filters: list[str]
+    tools: dict[str, dict[str, str]]
+    python: str
+
+
 _HOOKS = {
-    _WEBSOCKETS_COMMAND: (["websockets"], ["src/ha_mcp/_vendor/websockets/**"]),
-    _FASTMCP_COMMAND: (
-        ["fastmcp-slim", "mcp", "mcp-types"],
-        [
+    _WEBSOCKETS_COMMAND: _Hook(
+        packages=["websockets"],
+        commands=[_WEBSOCKETS_COMMAND],
+        file_filters=["src/ha_mcp/_vendor/websockets/**"],
+        tools={"python": {}},
+        python=">=3.14,<3.15",
+    ),
+    # The generator raises pyproject.toml floors, so the lock must follow; uv
+    # lock resolves the dev group's homeassistant, which needs Python 3.14.2 or later.
+    _FASTMCP_COMMAND: _Hook(
+        packages=["fastmcp-slim", "mcp", "mcp-types"],
+        commands=[_FASTMCP_COMMAND, "uv lock"],
+        file_filters=[
             "src/ha_mcp/_vendor/fastmcp/**",
             "src/ha_mcp/_vendor/mcp/**",
             "src/ha_mcp/_vendor/mcp_types/**",
+            "pyproject.toml",
+            "uv.lock",
         ],
+        tools={"python": {}, "uv": {}},
+        python=">=3.14.2,<3.15",
     ),
 }
 
@@ -45,16 +71,16 @@ def test_each_vendoring_hook_is_scoped_to_its_private_pins() -> None:
         if "postUpgradeTasks" in rule and rule.get("matchFileNames") == [_PIN_FILE]
     }
     assert set(rules) == set(_HOOKS), "one regeneration hook per vendoring script"
-    for command, (packages, file_filters) in _HOOKS.items():
+    for command, hook in _HOOKS.items():
         rule = rules[command]
         assert rule["matchManagers"] == ["custom.regex"]
         assert rule["matchDatasources"] == ["pypi"]
-        assert rule["matchPackageNames"] == packages
+        assert rule["matchPackageNames"] == hook.packages
         assert rule["matchFileNames"] == [_PIN_FILE]
-        assert rule["postUpgradeTasks"]["commands"] == [command]
-        assert rule["postUpgradeTasks"]["fileFilters"] == file_filters
-        assert rule["postUpgradeTasks"]["installTools"] == {"python": {}}
-        assert rule["constraints"]["python"] == ">=3.14,<3.15"
+        assert rule["postUpgradeTasks"]["commands"] == hook.commands
+        assert rule["postUpgradeTasks"]["fileFilters"] == hook.file_filters
+        assert rule["postUpgradeTasks"]["installTools"] == hook.tools
+        assert rule["constraints"]["python"] == hook.python
         # Update mode retains the matched upgrade's Python constraint in 44.50.1.
         assert rule["postUpgradeTasks"]["executionMode"] == "update"
         assert "minimumReleaseAge" not in rule
@@ -66,7 +92,7 @@ def test_vendored_fastmcp_packages_update_together() -> None:
     rule = next(
         r
         for r in config["packageRules"]
-        if r.get("postUpgradeTasks", {}).get("commands") == [_FASTMCP_COMMAND]
+        if _FASTMCP_COMMAND in r.get("postUpgradeTasks", {}).get("commands", [])
     )
     assert rule["groupName"] == "vendored fastmcp"
 
@@ -79,9 +105,11 @@ def test_vendored_fastmcp_packages_update_together() -> None:
         _WEBSOCKETS_COMMAND + "; echo unsafe",
         "echo unsafe && " + _FASTMCP_COMMAND,
         "python3 -I scripts/vendor_websocketsXpy",
-        "python3 -I scripts/vendor_fastmcpXpy",
+        "uv run --no-project --with packaging python -I scripts/vendor_fastmcpXpy",
         "python3 scripts/vendor_websockets.py",
         "python3 scripts/vendor_fastmcp.py",
+        "python3 -I scripts/vendor_fastmcp.py",
+        "uv run --no-project --with packaging python scripts/vendor_fastmcp.py",
         "python3 -I scripts/another_script.py",
         "uv lock --upgrade",
         "uv lock; echo unsafe",

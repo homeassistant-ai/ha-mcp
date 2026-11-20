@@ -25,7 +25,6 @@ from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_registries import registry_list_reply
 from .helpers import (
     clearable_value,
-    core_error_message,
     exception_to_structured_error,
     log_tool_usage,
     raise_core_refusal,
@@ -846,9 +845,7 @@ class LabelTools:
                     "message": f"Successfully deleted label: {label_id}",
                 }
             context = {"label_id": label_id}
-            # Core answers an unknown id with the generic ``invalid_info`` code, so
-            # its exact message is what tells it from any other refusal.
-            if core_error_message(result.get("error", "")) == "Label ID doesn't exist":
+            if result.get("error_code") == "invalid_info":
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.RESOURCE_NOT_FOUND,

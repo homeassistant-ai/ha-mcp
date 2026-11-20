@@ -571,3 +571,17 @@ class TestBatchActions:
 
         assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
         assert call_service.await_count == 1
+
+
+async def test_get_names_an_update_entity_core_does_not_have(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core's 404 for the state is what marks the entity as missing."""
+    await set_up_updates(hass, SoftwareUpdate("update.exists"))
+
+    with pytest.raises(ToolError) as exc_info:
+        await manage_updates(core_client, action="get", entity_ids=["update.missing"])
+
+    error = error_of(exc_info)
+    assert error["code"] == "ENTITY_NOT_FOUND"
+    assert error["message"] == "Update entity not found: update.missing"

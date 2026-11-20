@@ -24,6 +24,19 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.smart_search import SmartSearchTools
 
 
+def _cancel_second(real_method):
+    calls = 0
+
+    async def call(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise asyncio.CancelledError
+        return await real_method(*args, **kwargs)
+
+    return AsyncMock(side_effect=call)
+
+
 async def test_helper_type_cancellation_propagates(
     core_client: HomeAssistantClient,
 ) -> None:
@@ -34,12 +47,10 @@ async def test_helper_type_cancellation_propagates(
     normally with the cancelled type simply missing.
     """
     tools = SmartSearchTools(client=core_client)
-    one_cancelled = AsyncMock(
-        side_effect=[([], False), asyncio.CancelledError(), *[([], False)] * 20]
-    )
+    one_cancelled = _cancel_second(tools.search_helper_type)
 
     with (
-        patch.object(tools, "_search_helper_type", one_cancelled),
+        patch.object(tools, "search_helper_type", one_cancelled),
         pytest.raises(asyncio.CancelledError),
     ):
         await tools.deep_search("query", search_types=["helper"])
@@ -66,12 +77,10 @@ async def test_dashboard_cancellation_propagates(
     )
     assert created["success"] is True
     tools = SmartSearchTools(client=core_client)
-    one_cancelled = AsyncMock(
-        side_effect=[([], False), asyncio.CancelledError(), *[([], False)] * 20]
-    )
+    one_cancelled = _cancel_second(tools.search_one_dashboard)
 
     with (
-        patch.object(tools, "_search_one_dashboard", one_cancelled),
+        patch.object(tools, "search_one_dashboard", one_cancelled),
         pytest.raises(asyncio.CancelledError),
     ):
         await tools.deep_search("query", search_types=["dashboard"])
@@ -91,16 +100,10 @@ async def test_flow_helper_cancellation_propagates(
     for domain in ("template", "group"):
         MockConfigEntry(domain=domain, title=f"{domain} helper").add_to_hass(hass)
     tools = SmartSearchTools(client=core_client)
-    one_cancelled = AsyncMock(
-        side_effect=[
-            (None, False, False),
-            asyncio.CancelledError(),
-            *[(None, False, False)] * 20,
-        ]
-    )
+    one_cancelled = _cancel_second(tools.score_flow_entry)
 
     with (
-        patch.object(tools, "_score_flow_entry", one_cancelled),
+        patch.object(tools, "score_flow_entry", one_cancelled),
         pytest.raises(asyncio.CancelledError),
     ):
         await tools.deep_search("query", search_types=["helper"])

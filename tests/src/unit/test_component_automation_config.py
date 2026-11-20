@@ -181,9 +181,11 @@ async def test_public_validator_stands_in_for_a_missing_private_one(
     error = raised.value
     # A Core build with only the public validator; this Core's public one
     # calls the private one, so it raises what it raised above.
-    monkeypatch.delattr(automation_core_config, "_async_validate_config_item")
+    parts = automation_config.core_parts()
+    parts.validate = None
+    monkeypatch.setattr(automation_config, "core_parts", lambda: parts)
     public = AsyncMock(side_effect=error)
-    monkeypatch.setattr(automation_core_config, "async_validate_config_item", public)
+    parts.validate_or_raise = public
 
     got = await _command(component_ws, action="validate", config={})
 
@@ -196,8 +198,10 @@ async def test_core_without_a_validator_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    for name in ("_async_validate_config_item", "async_validate_config_item"):
-        monkeypatch.delattr(automation_core_config, name)
+    parts = automation_config.core_parts()
+    parts.validate = None
+    parts.validate_or_raise = None
+    monkeypatch.setattr(automation_config, "core_parts", lambda: parts)
     got = await _command(component_ws, action="validate", config={})
     assert got["status"] == "unavailable"
     assert not _bridge_failed(caplog)
@@ -207,11 +211,9 @@ async def test_unexpected_core_failure_is_unavailable_not_an_error(
     component_ws: MockHAClientWebSocket, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A failure Core cannot be made to raise here.
-    monkeypatch.setattr(
-        automation_core_config,
-        "_async_validate_config_item",
-        AsyncMock(side_effect=RuntimeError("blueprint store not loaded")),
-    )
+    parts = automation_config.core_parts()
+    parts.validate = AsyncMock(side_effect=RuntimeError("blueprint store not loaded"))
+    monkeypatch.setattr(automation_config, "core_parts", lambda: parts)
     got = await _command(component_ws, action="validate", config={})
     assert got == {"status": "unavailable", "error": "blueprint store not loaded"}
 

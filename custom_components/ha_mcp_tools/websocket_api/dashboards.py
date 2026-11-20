@@ -103,7 +103,7 @@ def _do_dashboards(
             # document per-dashboard verdicts + honesty counters the server's
             # ha_search dashboard bucket needs. Additive — a pre-#2008 server
             # ignores them.
-            "document_matches": _dashboard_document_matches(
+            "document_matches": dashboard_document_matches(
                 prepped.get("docs") or [], query_lower
             ),
             "yaml_skipped": prepped.get("yaml_skipped", 0),
@@ -340,7 +340,7 @@ def _dashboard_mode(dash: Any) -> str | None:
     return str(mode) if isinstance(mode, str) else None
 
 
-def _dashboard_document_matches(
+def dashboard_document_matches(
     docs: list[dict[str, Any]], query_lower: str
 ) -> list[dict[str, Any]]:
     """Per-dashboard whole-document verdicts: ``[{url_path, title}, ...]``.

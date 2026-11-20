@@ -7,9 +7,9 @@ dashboard it holds but has no config for ("No config found."), which the
 frontend shows as its generated default view. The second comes from Core's
 ``ConfigNotFound`` (``lovelace/dashboard.py``): a storage dashboard with nothing
 saved, a YAML dashboard whose file is missing, or any storage dashboard in
-recovery mode. The code alone cannot tell the causes apart, so the message does.
-If HA rewords either string, the lazy resolve stops firing and an empty
-dashboard reads as a failure; re-verify them on major HA upgrades.
+recovery mode. The code alone cannot tell the causes apart, so under that code
+the message does (``error_wording``). If HA rewords either string, the lazy
+resolve stops firing and an empty dashboard reads as a failure.
 """
 
 from __future__ import annotations
@@ -19,16 +19,10 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..errors import ErrorCode, create_error_response
+from ..error_wording import dashboard_has_no_config, dashboard_unknown
+from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from .helpers import extract_tool_error_message, raise_tool_error
 
-UNKNOWN_CONFIG_PREFIX = "Unknown config specified"
-# Bare (nested error shape) and with the "Command failed: " prefix that
-# ``send_websocket_message``'s flat envelope adds. Matched exactly, unlike the
-# unknown-identifier substring, so any other read failure stays a failure.
-NO_STORED_CONFIG_MESSAGES = frozenset(
-    {"No config found.", "Command failed: No config found."}
-)
 CONFIG_NOT_FOUND_CODE = "config_not_found"
 DASHBOARD_FETCH_FAILED_PREFIX = "Dashboard fetch failed: "
 
@@ -41,30 +35,43 @@ NO_STORED_CONFIG_NOTE = (
 
 def is_unknown_dashboard(error_msg: str) -> bool:
     """Whether Core rejected the identifier itself (the lazy-resolve trigger)."""
-    return UNKNOWN_CONFIG_PREFIX in error_msg
+    return dashboard_unknown(error_msg)
+
+
+def config_not_found(reply: dict[str, Any]) -> bool:
+    """Read the native code from a flattened or raw Core reply."""
+    return (reply.get("error_code") or get_error_code(reply)) == CONFIG_NOT_FOUND_CODE
+
+
+def no_stored_config(reply: dict[str, Any]) -> bool:
+    """Only differentiate the two causes once Core reports config_not_found."""
+    return config_not_found(reply) and dashboard_has_no_config(get_error_message(reply))
+
+
+def dashboard_error_code(exc: ToolError) -> str | None:
+    """Read Core's code preserved by the tool at the MCP boundary."""
+    try:
+        payload = json.loads(str(exc))
+    except ValueError, TypeError:
+        return None
+    code = payload.get("ha_error_code") if isinstance(payload, dict) else None
+    return code if isinstance(code, str) else None
 
 
 def is_no_stored_config_error(exc: ToolError) -> bool:
     """Whether ``_get_dashboard_config_internal``'s ToolError means no config."""
-    try:
-        error_data = json.loads(str(exc))
-    except json.JSONDecodeError, TypeError:
-        return False
-    if (
-        not isinstance(error_data, dict)
-        or error_data.get("ha_error_code") != CONFIG_NOT_FOUND_CODE
-    ):
+    if dashboard_error_code(exc) != CONFIG_NOT_FOUND_CODE:
         return False
     message = extract_tool_error_message(exc).removeprefix(
         DASHBOARD_FETCH_FAILED_PREFIX
     )
-    return message in NO_STORED_CONFIG_MESSAGES
+    return dashboard_has_no_config(message)
 
 
-def read_failure_code(error_msg: str) -> ErrorCode:
+def read_failure_code(reply: dict[str, Any]) -> ErrorCode:
     """RESOURCE_NOT_FOUND when Core names the identifier unknown (call after the
     lazy resolve); otherwise SERVICE_CALL_FAILED."""
-    if is_unknown_dashboard(error_msg):
+    if config_not_found(reply) and is_unknown_dashboard(get_error_message(reply) or ""):
         return ErrorCode.RESOURCE_NOT_FOUND
     return ErrorCode.SERVICE_CALL_FAILED
 

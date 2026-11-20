@@ -482,7 +482,7 @@ async def test_a_failed_component_search_falls_back_to_the_legacy_walk(
 
     monkeypatch.setattr(
         "custom_components.ha_mcp_tools.websocket_api.dashboards"
-        "._dashboard_document_matches",
+        ".dashboard_document_matches",
         _boom,
     )
     await _load(hass, "lovelace")

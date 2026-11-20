@@ -50,7 +50,7 @@ async def scene_tools(
     """The scene tools on a ``hass`` with ``stored`` scenes in scenes.yaml."""
     # Registry entries exist when a lookup runs; no need to wait for them.
     monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
-    monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
+    monkeypatch.setattr(ConfigSceneTools, "RESOLVE_RETRY_DELAY", 0)
     assert await async_setup_component(
         hass, "input_boolean", {"input_boolean": {"tv": {}}}
     )

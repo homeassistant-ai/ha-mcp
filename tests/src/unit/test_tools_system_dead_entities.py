@@ -10,7 +10,7 @@ Core writes for a registry entry nothing set up.
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -38,15 +38,12 @@ REMOVED_ENTRY = "removed-entry"
 ORPHAN = "sensor.orphan"
 
 
-def _row(entity_id: str, config_entry_id: str | None, **extra: Any) -> dict[str, Any]:
-    """An entity registry row as Core stored it."""
-    return {
-        "entity_id": entity_id,
-        "platform": "removed_integration",
-        "unique_id": entity_id,
-        "config_entry_id": config_entry_id,
-        **extra,
-    }
+class _Row(NamedTuple):
+    """An entity of a removed integration, as Core stored it before a restart."""
+
+    entity_id: str
+    config_entry_id: str | None
+    disabled_by: str | None = None
 
 
 @pytest.fixture
@@ -56,20 +53,31 @@ def load_registries() -> bool:
 
 
 @pytest.fixture
-def stored() -> list[dict[str, Any]]:
+def stored() -> list[_Row]:
     """The entity registry rows on disk; a test parametrizes it."""
     return []
 
 
 @pytest.fixture
 async def registries(
-    hass: HomeAssistant, hass_storage: dict[str, Any], stored: list[dict[str, Any]]
+    hass: HomeAssistant, hass_storage: dict[str, Any], stored: list[_Row]
 ) -> None:
     hass_storage[er.STORAGE_KEY] = {
         "version": 1,
         "minor_version": 1,
         "key": er.STORAGE_KEY,
-        "data": {"entities": stored},
+        "data": {
+            "entities": [
+                {
+                    "entity_id": row.entity_id,
+                    "platform": "removed_integration",
+                    "unique_id": row.entity_id,
+                    "config_entry_id": row.config_entry_id,
+                    **({"disabled_by": row.disabled_by} if row.disabled_by else {}),
+                }
+                for row in stored
+            ]
+        },
     }
     dr.async_setup(hass)
     for registry in (ar, cr, dr, er, fr, ir, lr):
@@ -117,7 +125,7 @@ def _ids(bucket: dict[str, Any]) -> list[str]:
     return [item["entity_id"] for item in bucket["items"]]
 
 
-@pytest.mark.parametrize("stored", [[_row(ORPHAN, REMOVED_ENTRY)]])
+@pytest.mark.parametrize("stored", [[_Row(ORPHAN, REMOVED_ENTRY)]])
 async def test_an_entity_whose_integration_was_removed_is_an_orphan(
     hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
@@ -202,7 +210,7 @@ async def test_a_disabled_entity_of_a_loaded_integration_is_not_flagged(
 
 
 @pytest.mark.parametrize(
-    "stored", [[_row(ORPHAN, REMOVED_ENTRY, disabled_by="integration")]]
+    "stored", [[_Row(ORPHAN, REMOVED_ENTRY, disabled_by="integration")]]
 )
 async def test_a_disabled_entity_whose_integration_was_removed_is_an_orphan(
     hass: HomeAssistant, client: HomeAssistantClient
@@ -217,7 +225,7 @@ async def test_a_disabled_entity_whose_integration_was_removed_is_an_orphan(
 
 
 @pytest.mark.parametrize(
-    "stored", [[_row(f"sensor.orphan_{i}", REMOVED_ENTRY) for i in range(60)]]
+    "stored", [[_Row(f"sensor.orphan_{i}", REMOVED_ENTRY) for i in range(60)]]
 )
 async def test_too_many_orphans_are_cut_with_a_hint(
     hass: HomeAssistant, client: HomeAssistantClient
@@ -249,7 +257,7 @@ def _assert_cut(bucket: dict[str, Any], total: int) -> None:
     assert "remove" in bucket["hint"].lower()
 
 
-@pytest.mark.parametrize("stored", [[_row(ORPHAN, "some-entry")]])
+@pytest.mark.parametrize("stored", [[_Row(ORPHAN, "some-entry")]])
 async def test_with_no_config_entries_the_orphan_tier_is_skipped_and_said_so(
     hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:

@@ -21,10 +21,10 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import label_registry as lr
-from homeassistant.helpers.script import Script
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
+from custom_components.ha_mcp_tools import config_references
 from custom_components.ha_mcp_tools.config_references import WS_CONFIG_REFERENCES
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.reference_validator import validate_config_references
@@ -423,7 +423,7 @@ async def test_a_core_without_a_part_names_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """After a Core rename the check stopped with no hint of which part went."""
-    monkeypatch.delattr(Script, "_find_referenced_entities")
+    monkeypatch.setattr(config_references, "core_parts", lambda: "script_entities")
 
     result = await _check(component_ws, {"actions": []})
 
