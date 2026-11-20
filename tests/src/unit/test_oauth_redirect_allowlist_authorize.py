@@ -182,11 +182,29 @@ async def test_a_refusal_blames_the_list_only_for_a_callback_the_list_could_hold
         resp = await authorize(surface, redirect_uri=callback)
 
     page = await resp.text()
-    logged = [r.getMessage() for r in caplog.records if callback in r.getMessage()]
+    logged = [r.getMessage() for r in caplog.records if CHATGPT in r.getMessage()]
     assert resp.status == 400
     assert ("add this exact address" in page) is listable
     assert len(logged) == 1
     assert (REFUSED_LINE in logged[0]) is listable
+
+
+async def test_a_refusal_log_holds_no_credentials_or_query_from_the_callback(
+    open_oauth_surface: OpenSurface, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The callback's password and query string must not reach the Home
+    Assistant log in clear text; its host and path still name the client."""
+    password, token = uuid.uuid4().hex, uuid.uuid4().hex
+    callback = f"https://user:{password}@chatgpt.example/connector/cb?token={token}"
+    surface = await open_oauth_surface(WEBHOOK_AUTH_NONE)
+
+    with caplog.at_level(logging.WARNING):
+        await authorize(surface, redirect_uri=callback)
+
+    logged = [m for m in caplog.messages if "chatgpt.example/connector/cb" in m]
+    assert len(logged) == 1
+    assert password not in caplog.text
+    assert token not in caplog.text
 
 
 async def test_a_burst_of_refusals_writes_one_line_then_a_count(
@@ -343,7 +361,7 @@ async def test_a_callback_too_long_for_any_list_is_refused_for_its_length(
         resp = await authorize(surface, redirect_uri=callback)
 
     page = await resp.text()
-    logged = [m for m in caplog.messages if callback[:200] in m]
+    logged = [m for m in caplog.messages if CHATGPT in m]
     assert resp.status == 400
     assert "Location" not in resp.headers
     assert "add this exact address" not in page

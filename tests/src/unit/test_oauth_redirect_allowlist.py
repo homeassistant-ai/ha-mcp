@@ -17,6 +17,7 @@ from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
     OPT_OAUTH_REDIRECT_ALLOWLIST,
     effective_allowlist,
     is_redirect_allowed,
+    loggable_callback,
     normalize_allowlist,
     stored_allowlist,
 )
@@ -178,3 +179,24 @@ class TestNormalizeAllowlist:
     def test_reports_an_over_long_callback(self) -> None:
         long = "https://example.com/" + "a" * MAX_OAUTH_CALLBACK_LENGTH
         assert normalize_allowlist([long]) == ([], [long])
+
+
+class TestLoggableCallback:
+    """A refused callback is logged; its userinfo, query and fragment can carry
+    a password or a token, so they must not reach the log."""
+
+    def test_keeps_scheme_host_port_and_path_only(self) -> None:
+        callback = "https://user:pw@claude.ai:8443/api/cb?token=abc#frag"
+        assert loggable_callback(callback) == "https://claude.ai:8443/api/cb"
+
+    def test_keeps_an_ipv6_host_bracketed(self) -> None:
+        assert loggable_callback("http://[::1]:5000/cb?x=1") == "http://[::1]:5000/cb"
+
+    @pytest.mark.parametrize(
+        "unparseable",
+        ["https://claude.ai:abc/cb?token=abc", "http://[::1/cb", "token=abc", ""],
+    )
+    def test_an_unparseable_callback_logs_as_a_fixed_placeholder(
+        self, unparseable: str
+    ) -> None:
+        assert loggable_callback(unparseable) == "<unparseable callback>"

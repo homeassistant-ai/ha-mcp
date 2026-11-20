@@ -185,6 +185,28 @@ def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
     return entries, invalid
 
 
+_UNPARSEABLE_CALLBACK = "<unparseable callback>"
+
+
+def loggable_callback(redirect_uri: str) -> str:
+    """``redirect_uri`` as scheme, host, port and path: the form safe to log.
+
+    Userinfo, query and fragment can carry a password or a token, so they are
+    dropped; a value that does not parse yields a fixed placeholder.
+    """
+    try:
+        parts = urlsplit(redirect_uri)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return _UNPARSEABLE_CALLBACK
+    if not parts.scheme or not host:
+        return _UNPARSEABLE_CALLBACK
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host if port is None else f"{host}:{port}"
+    return f"{parts.scheme}://{netloc}{parts.path}"
+
+
 def _loopback_key(uri: str) -> tuple[str, str, str] | None:
     parts = urlsplit(uri)
     if (

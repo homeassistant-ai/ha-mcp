@@ -75,6 +75,7 @@ from .oauth_redirect_allowlist import (
     _is_valid_redirect_uri,
     effective_allowlist,
     is_redirect_allowed,
+    loggable_callback,
 )
 
 if TYPE_CHECKING:
@@ -105,11 +106,11 @@ def _log_refused_callback(redirect_uri: str, listable: bool) -> None:
         else "a callback carrying a username, a password or a '#', or one that is "
         "too long, can never be allowed"
     )
-    # repr: the callback is attacker-supplied, and an encoded newline or
-    # terminal sequence in it must not forge log lines.
+    # repr: the path is attacker-supplied, and an encoded newline or terminal
+    # sequence in it must not forge log lines.
     _LOGGER.warning(
         "Refused a none-mode sign-in to callback %s: %s%s",
-        repr(redirect_uri[:200]),
+        repr(loggable_callback(redirect_uri)[:200]),
         reason,
         f"; {suppressed} more refused since the last such line" if suppressed else "",
     )
