@@ -120,6 +120,31 @@ def test_write_failure_rolls_back_prior_documents(tmp_path, monkeypatch):
     assert export_server_settings(tmp_path) == original
 
 
+def test_serialization_failure_restores_previous_settings_and_removes_temp_file(
+    tmp_path, monkeypatch
+):
+    features = tmp_path / "feature_flags.json"
+    features.write_text('{"fuzzy_threshold":60}')
+    original = export_server_settings(tmp_path)
+    retention = {"auto_backup_retain_per_entity": 20}
+    archive = {**original, "features": {"fuzzy_threshold": 75}, "backup": retention}
+    dumps = json.dumps
+    failure = ValueError("could not serialize retention")
+
+    def fail_retention(value, *args, **kwargs):
+        if value == retention:
+            assert json.loads(features.read_text()) == {"fuzzy_threshold": 75}
+            raise failure
+        return dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "dumps", fail_retention)
+    with pytest.raises(ValueError) as raised:
+        restore_server_settings(tmp_path, archive)
+    assert raised.value is failure
+    assert export_server_settings(tmp_path) == original
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
 def test_undo_failure_does_not_skip_earlier_files_or_mask_the_import_error(
     tmp_path, monkeypatch, caplog
 ):

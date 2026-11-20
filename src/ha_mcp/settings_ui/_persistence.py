@@ -312,7 +312,7 @@ def _atomic_write_json(
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(json.dumps(payload, indent=2))
         os.replace(tmp_name, str(path))
-    except OSError:
+    except OSError, ValueError:
         with contextlib.suppress(FileNotFoundError, OSError):
             Path(tmp_name).unlink()
         raise

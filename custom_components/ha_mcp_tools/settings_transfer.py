@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from contextlib import AsyncExitStack
+from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, TracebackType
 from typing import Any
 
 from aiohttp import web
@@ -15,7 +16,6 @@ from homeassistant.components import webhook
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers.storage import Store
 
 from . import (
     _apply_allowed_paths_locked,
@@ -28,13 +28,15 @@ from .settings_transfer_schema import InvalidBackup
 from .tools_settings_store import (
     ALLOWED_PATHS_KEY,
     EXTRA_YAML_KEYS_KEY,
-    TOOLS_STORAGE_VERSION,
+    ToolsStoreUnavailable,
+    load_tools_setting,
     save_allowed_paths,
     save_extra_yaml_keys,
     store_writes,
 )
 
 _LOGGER = logging.getLogger(__name__)
+_INCOMPLETE_ROLLBACK = "Settings import rollback incomplete"
 
 
 def _entries(hass: HomeAssistant) -> dict[str, ConfigEntry]:
@@ -76,13 +78,7 @@ async def _read_tools_setting(hass: HomeAssistant, name: str) -> list[str]:
     key, field, _, _ = _TOOLS_STORES[name]
     # Startup intentionally falls back to no grants on a read error. A backup
     # must distinguish a missing setting from a store it could not read.
-    store: Store[dict[str, list[str]]] = Store(hass, TOOLS_STORAGE_VERSION, key)
-    data = await store.async_load()
-    if data is None:
-        return []
-    if not isinstance(data, dict) or not isinstance(data.get(field), list):
-        raise InvalidBackup("invalid_backup")
-    return data[field]
+    return await load_tools_setting(hass, key, field) or []
 
 
 async def _tools_settings(hass: HomeAssistant) -> dict[str, list[str]]:
@@ -104,10 +100,6 @@ async def _write_tools_setting(
         # Unloaded entries have no live permissions cache. Setup loads the
         # saved values, including on the first setup of a newly created entry.
         await save(hass, values)
-    # HA Store logs certain write failures and returns normally. Read back
-    # through a fresh Store before reporting that the transfer succeeded.
-    if await _read_tools_setting(hass, name) != values:
-        raise OSError("Could not persist File & YAML Tools settings")
 
 
 async def async_export(hass: HomeAssistant) -> dict[str, Any]:
@@ -160,6 +152,47 @@ def _check_tools_entry(
         raise InvalidBackup("restore_failed")
 
 
+def _tools_setup_lock(entry: ConfigEntry | None) -> asyncio.Lock | nullcontext[None]:
+    """Prevent setup and unload while importing into an existing entry."""
+    if entry is None:
+        return nullcontext()
+    if entry.setup_lock.locked() or entry.state in (
+        ConfigEntryState.SETUP_IN_PROGRESS,
+        ConfigEntryState.UNLOAD_IN_PROGRESS,
+    ):
+        raise InvalidBackup("tools_entry_busy")
+    if entry.disabled_by is None and entry.state is not ConfigEntryState.LOADED:
+        raise InvalidBackup("tools_entry_unavailable")
+    return entry.setup_lock
+
+
+def _add_undo(
+    stack: AsyncExitStack,
+    label: str,
+    undo: Callable[..., Awaitable[Any]],
+    *args: Any,
+) -> None:
+    """Report an undo failure while preserving the error that started rollback."""
+
+    async def unwind(
+        _exc_type: type[BaseException] | None,
+        original: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
+        try:
+            await undo(*args)
+        except Exception as err:
+            if original is None:
+                raise
+            # Only the fixed step label and error type are safe to log.
+            _LOGGER.error(
+                "Settings import could not undo %s (%s)", label, type(err).__name__
+            )
+            original.add_note(_INCOMPLETE_ROLLBACK)
+
+    stack.push_async_exit(unwind)
+
+
 async def _rollback_tools_setting(
     hass: HomeAssistant,
     name: str,
@@ -192,7 +225,9 @@ async def _restore_tools(
             if previous == tools[name]:
                 continue
             writes.revision += 1
-            rollback.push_async_callback(
+            _add_undo(
+                rollback,
+                name,
                 _rollback_tools_setting,
                 hass,
                 name,
@@ -211,7 +246,12 @@ async def _restore_tools(
         if flow["type"] != FlowResultType.CREATE_ENTRY:
             raise InvalidBackup("restore_failed")
         created = flow["result"]
-        rollback.push_async_callback(hass.config_entries.async_remove, created.entry_id)
+        _add_undo(
+            rollback,
+            "created Tools entry",
+            hass.config_entries.async_remove,
+            created.entry_id,
+        )
         if created.state is not ConfigEntryState.LOADED:
             raise InvalidBackup("restore_failed")
 
@@ -262,7 +302,8 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
     )
     entries = _entries(hass)
     source_tools = checked["entries"].get(c.ENTRY_TYPE_TOOLS)
-    _check_tools_entry(source_tools, entries.get(c.ENTRY_TYPE_TOOLS), allow_create=True)
+    target_tools = entries.get(c.ENTRY_TYPE_TOOLS)
+    _check_tools_entry(source_tools, target_tools, allow_create=True)
     settings = checked["server_settings"]
     server = checked["entries"][c.ENTRY_TYPE_SERVER]
     hook = (
@@ -273,7 +314,12 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
     if hook != current_hook and hook in hass.data.get(webhook.DOMAIN, {}):
         raise InvalidBackup("webhook_in_use")
     directory = Path(hass.config.path(c.SERVER_CONFIG_SUBDIR))
-    async with AsyncExitStack() as rollback:
+    # Keep setup/unload from crossing the choice between live and stored
+    # settings. A newly created entry loads the persisted values in its flow.
+    async with (
+        _tools_setup_lock(target_tools),
+        AsyncExitStack() as rollback,
+    ):
         try:
             server_changes = await hass.async_add_executor_job(
                 wheel.restore_server_settings, directory, settings
@@ -283,7 +329,9 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
         except ValueError as err:
             raise InvalidBackup("invalid_backup") from err
         if server_changes is not None:
-            rollback.push_async_callback(
+            _add_undo(
+                rollback,
+                "server settings",
                 hass.async_add_executor_job,
                 wheel.rollback_server_settings,
                 directory,
@@ -355,7 +403,16 @@ async def _transfer(hass: HomeAssistant, body: Any, exporting: bool) -> web.Resp
                     "Cache-Control": "no-store",
                 },
             )
-        restart = await async_import(hass, body)
+        try:
+            restart = await async_import(hass, body)
+        except Exception as err:
+            if _INCOMPLETE_ROLLBACK not in getattr(err, "__notes__", ()):
+                raise
+            _LOGGER.error(
+                "Settings import failed (%s) with incomplete rollback",
+                type(err).__name__,
+            )
+            return _error("rollback_incomplete", 500)
         return web.json_response(
             {"success": True, "restart_required": restart},
             headers={"Cache-Control": "no-store"},
@@ -381,6 +438,8 @@ async def async_handle(
         return await asyncio.shield(
             hass.async_create_task(_transfer(hass, body, exporting))
         )
+    except ToolsStoreUnavailable as err:
+        return _error(err.code, 503)
     except InvalidBackup as err:
         code = err.code
         return _error(
@@ -393,6 +452,8 @@ async def async_handle(
                 "extra_tools_entry",
                 "tools_must_be_enabled",
                 "tools_must_be_disabled",
+                "tools_entry_busy",
+                "tools_entry_unavailable",
             }
             else 400,
         )

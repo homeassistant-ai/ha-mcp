@@ -38,13 +38,15 @@ function initSettingsTransfer() {
     }
     // Import validation errors can concern credentials. Display only known codes.
     const failure = await response.json().catch(() => null);
-    if (failure?.error === 'server_unavailable') return report('server_unavailable', true);
+    const sharedErrors = ['server_unavailable', 'allowed_paths_store_unavailable', 'extra_yaml_keys_store_unavailable'];
+    if (sharedErrors.includes(failure?.error)) return report(failure.error, true);
     if (fallback === 'export_failed') {
       if (failure?.error === 'invalid_backup') return report('invalid_source_entries', true);
       if (failure?.error === 'invalid_server_settings') return report('invalid_server_settings', true);
     }
     const importErrors = ['invalid_backup', 'incompatible_version', 'webhook_in_use', 'decision_pin_required',
-      'extra_tools_entry', 'tools_must_be_disabled', 'tools_must_be_enabled'];
+      'extra_tools_entry', 'tools_must_be_disabled', 'tools_must_be_enabled', 'tools_entry_busy',
+      'tools_entry_unavailable', 'rollback_incomplete'];
     report(fallback === 'restore_failed' && importErrors.includes(failure?.error) ? failure.error : fallback, true);
   }
 

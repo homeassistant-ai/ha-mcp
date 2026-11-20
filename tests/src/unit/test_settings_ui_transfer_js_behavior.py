@@ -104,6 +104,29 @@ def test_cancel_import_keeps_the_file_local() -> None:
     assert not result.fetches_to(_TRANSFER)
 
 
+@pytest.mark.parametrize(
+    ("operation", "code", "setting"),
+    [
+        ("export", "allowed_paths_store_unavailable", "allowed directories"),
+        ("import", "extra_yaml_keys_store_unavailable", "extra YAML keys"),
+    ],
+)
+def test_storage_error_identifies_the_affected_setting(
+    operation: str, code: str, setting: str
+) -> None:
+    action = (
+        _choose(_BUNDLE)
+        if operation == "import"
+        else "document.getElementById('transferExport').click();"
+    )
+    result = _run(
+        action,
+        responses={_TRANSFER + operation: {"status": 503, "json": {"error": code}}},
+    )
+    assert result.status and result.status.startswith("alert:")
+    assert setting in result.status
+
+
 @pytest.mark.parametrize("restart", [True, False])
 def test_confirmed_import_sends_original_file_and_reports_next_step(
     restart: bool,
@@ -156,6 +179,25 @@ def test_failed_import_never_renders_arbitrary_error_text() -> None:
     )
     assert "test-private-id" not in result.dom
     assert result.status and result.status.startswith("alert: HA-MCP could not finish")
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "message"),
+    [
+        (409, "tools_entry_busy", "Wait for it to finish"),
+        (409, "tools_entry_unavailable", "reload the entry"),
+        (500, "rollback_incomplete", "some settings could not be restored"),
+    ],
+)
+def test_import_errors_explain_next_action(
+    status: int, code: str, message: str
+) -> None:
+    result = _run(
+        _choose(_BUNDLE),
+        responses={_TRANSFER + "import": {"status": status, "json": {"error": code}}},
+    )
+    assert result.status and result.status.startswith("alert:")
+    assert message in result.status
 
 
 def test_pin_policy_explains_how_to_complete_import_on_the_destination() -> None:
