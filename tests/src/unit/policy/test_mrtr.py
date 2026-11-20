@@ -250,6 +250,57 @@ async def test_concurrent_resumes_cannot_reuse_remembered_approval(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("ha_bulk_control", {"selector": {"domain": "light"}, "action": "turn_off"}),
+        (
+            "ha_config_set_scene",
+            {"scene_id": "movie", "config": {}, "capture_devices": ["tv"]},
+        ),
+    ],
+)
+async def test_a_resume_that_loses_a_single_use_approval_leaves_no_row(
+    gate: SimpleNamespace, name: str, arguments: dict[str, Any]
+) -> None:
+    """Two resumes of one single-use request wait on its row; one runs. The
+    other gets no new row, whose approval no call could ever use."""
+    first = await gate.middleware.on_call_tool(
+        context(name=name, arguments=arguments), gate.execute
+    )
+    pending = gate.queue.list_pending()[0]
+    waiting = 0
+
+    async def approve_once_both_wait(**_progress: object) -> None:
+        nonlocal waiting
+        waiting += 1
+        if waiting == 2:
+            gate.queue.approve(pending.token)
+
+    results = await asyncio.gather(
+        *(
+            gate.middleware.on_call_tool(
+                context(
+                    first.input_required.request_state,
+                    name=name,
+                    arguments=arguments,
+                    answer="accept",
+                    progress=approve_once_both_wait,
+                ),
+                gate.execute,
+            )
+            for _ in range(2)
+        ),
+        return_exceptions=True,
+    )
+    assert results.count("saved") == 1
+    (lost,) = [r for r in results if isinstance(r, ToolError)]
+    assert pending.token in str(lost)
+    assert gate.queue.list_pending() == []
+    assert gate.executed == [name]
+
+
+@pytest.mark.anyio
 async def test_nested_script_tool_uses_blocking_fallback(gate: SimpleNamespace) -> None:
     """Continuing an outer script could replay earlier effects in that script."""
     ctx = context(request_name="ha_manage_custom_tool")

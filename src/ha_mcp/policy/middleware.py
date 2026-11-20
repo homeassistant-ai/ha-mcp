@@ -304,17 +304,9 @@ class PolicyMiddleware(Middleware):
                 remember_minutes=remember_minutes,
             ):
                 return await call_next(context)
-            # Another waiter on this shared entry consumed the approval
-            # first. This call has none of its own, so it must not ride
-            # that click: mint a fresh row and tell the caller to get it
-            # approved. Its wait budget is already spent, so it does not
-            # wait again here -- re-waiting would also let a steady
-            # stream of identical calls starve one another.
-            pending = await self._new_pending(
-                name, args_hash, args, policy=policy, dynamic_targets=dynamic_targets
+            await self._end_lost_claim(
+                pending, rule, name, args_hash, args, policy, dynamic_targets
             )
-            await self._announce(pending, rule, dynamic_targets=dynamic_targets)
-            self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         if pending.decision == "denied":
             self._queue.remove(pending.token)
             self._raise_denied_error()
@@ -584,6 +576,33 @@ class PolicyMiddleware(Middleware):
         if not reads_remembered:
             return False
         return self._queue.is_remembered(name, args_hash)
+
+    async def _end_lost_claim(
+        self,
+        pending: PendingApproval,
+        rule: Rule | None,
+        name: str,
+        args_hash: str,
+        args: dict[str, Any],
+        policy: Policy,
+        dynamic_targets: bool,
+    ) -> NoReturn:
+        """End a call whose shared entry's approval another waiter consumed.
+
+        This call has none of its own, so it must not ride that click: mint a
+        fresh row and tell the caller to get it approved. Its wait budget is
+        already spent, so it does not wait again here -- re-waiting would also
+        let a steady stream of identical calls starve one another. Only a
+        resume of the same single-use request shares a dynamic entry, and no
+        call could ever claim a new one, so that call ends with no new row.
+        """
+        if dynamic_targets:
+            self._raise_pending_error(pending, rule, dynamic_targets=True)
+        pending = await self._new_pending(
+            name, args_hash, args, policy=policy, dynamic_targets=False
+        )
+        await self._announce(pending, rule)
+        self._raise_pending_error(pending, rule)
 
     async def _new_pending(
         self,
