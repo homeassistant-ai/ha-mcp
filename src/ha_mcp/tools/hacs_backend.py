@@ -260,7 +260,7 @@ async def resolve_repository(
             suggestions=[
                 "Find it with ha_get_hacs_info(action='search', query=...)",
                 "A repository outside the catalog is added first: "
-                "ha_manage_hacs(action='add_repository', repository='owner/repo')",
+                + "ha_manage_hacs(action='add_repository', repository='owner/repo')",
             ],
             context={**context, "repository_id": repository_id},
         )

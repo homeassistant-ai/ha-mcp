@@ -16,7 +16,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from . import hacs_github, hacs_reads, hacs_writes
-from .coercion import parse_string_list_param
+from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .hacs_backend import CATEGORY_HELP
 from .helpers import (
     exception_to_structured_error,
@@ -132,6 +132,7 @@ class HacsTools:
         ] = None,
         status: Annotated[
             list[str] | str | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Only rows with one of these store statuses (action='search'), "
@@ -246,6 +247,7 @@ class HacsTools:
             exception_to_structured_error(
                 e, context={"tool": "ha_get_hacs_info", "action": action}
             )
+            return None  # unreachable: exception_to_structured_error raises
 
     @tool(
         name="ha_manage_hacs",
@@ -328,6 +330,7 @@ class HacsTools:
         ] = None,
         categories: Annotated[
             list[str] | str | None,
+            JSON_STRING_COERCION,
             Field(description="Whole categories to clear (action='clear_new')"),
         ] = None,
         show_beta: Annotated[
@@ -420,6 +423,7 @@ class HacsTools:
             exception_to_structured_error(
                 e, context={"tool": "ha_manage_hacs", "action": action}
             )
+            return None  # unreachable: exception_to_structured_error raises
 
 
 def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

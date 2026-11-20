@@ -15,6 +15,7 @@ from typing import Any
 from ..client.rest_client import HomeAssistantCommandError
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_progress import PROGRESS_STEP_TYPES
+from .config_entry_reload_watch import watch_entry_reload
 from .hacs_backend import store_command
 from .helpers import raise_tool_error
 from .integration_flow_steps import (
@@ -127,15 +128,22 @@ async def connect_github(
                 "and abort=True."
             ),
         }
-    step = await read_step(client, target, flow_id)
-    if step.get("type") == "form":
-        step = await submit_step(
-            client, target, flow_id, config={}, menu_choice=None, current=step
-        )
-        if step.get("type") in PROGRESS_STEP_TYPES:
-            # The user needs the code before anything can finish.
-            return _progress_answer(flow_id, step)
-    settled = await settle(client, target, flow_id, step)
-    if settled.get("type") in ("form", "menu"):
-        return _step_answer(await open_step_answer(client, target, flow_id, settled))
+    # Subscribed before the flow's last step is read: Core reloads the entry
+    # with the new token as the flow ends, and only a stream opened first
+    # sees that reload settle.
+    async with watch_entry_reload(client, str(target.entry_id)) as reloaded:
+        step = await read_step(client, target, flow_id)
+        if step.get("type") == "form":
+            step = await submit_step(
+                client, target, flow_id, config={}, menu_choice=None, current=step
+            )
+            if step.get("type") in PROGRESS_STEP_TYPES:
+                # The user needs the code before anything can finish.
+                return _progress_answer(flow_id, step)
+        settled = await settle(client, target, flow_id, step)
+        if settled.get("type") in ("form", "menu"):
+            return _step_answer(
+                await open_step_answer(client, target, flow_id, settled)
+            )
+        await reloaded()
     return await _outcome(ws_client, flow_id)
