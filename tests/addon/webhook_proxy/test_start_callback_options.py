@@ -105,6 +105,23 @@ async def test_unusable_callback_is_dropped_and_named_while_the_rest_apply(
     assert repr(unusable) in app.err()
 
 
+async def test_an_emptied_list_reaches_the_component_as_the_whole_list(
+    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream, variant: Variant
+) -> None:
+    """A saved list replaces the built-in one even when empty, as in the
+    HA-MCP integration; dropping it here would quietly bring the built-in
+    callbacks back for a user who removed them."""
+    app.set_options(mcp_server_url=upstream.target_url(), oauth_redirect_allowlist=[])
+
+    assert await run_main(hass, app) == 0
+
+    config = app.proxy_config()
+    if not callback_allowlist_supported(variant):
+        assert ALLOWLIST not in config
+        return
+    assert config[ALLOWLIST] == []
+
+
 async def test_allow_any_callback_reaches_the_component(
     hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream, variant: Variant
 ) -> None:
@@ -126,9 +143,10 @@ async def test_allow_any_callback_reaches_the_component(
     [
         ({}, "the built-in list"),
         ({ALLOWLIST: ["https://client.example/cb"]}, "1 configured"),
+        ({ALLOWLIST: []}, "none"),
         ({ALLOWLIST: [], ALLOW_ANY: True}, "any"),
     ],
-    ids=["default", "configured", "allow_any"],
+    ids=["default", "configured", "emptied", "allow_any"],
 )
 async def test_startup_summary_says_which_callbacks_can_sign_in(
     hass: HomeAssistant,

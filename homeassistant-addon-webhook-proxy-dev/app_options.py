@@ -162,4 +162,6 @@ def callback_summary(callbacks: CallbackOptions) -> str:
         return "any (Allow any OAuth callback URL is on)"
     if callbacks.allowlist is None:
         return "the built-in list"
+    if not callbacks.allowlist:
+        return "none (the configured list is empty, so every sign-in is refused)"
     return f"{len(callbacks.allowlist)} configured callback(s)"

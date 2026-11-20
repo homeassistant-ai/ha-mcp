@@ -116,7 +116,9 @@ configuration:
       common clients (Claude, Claude Code, ChatGPT, Gemini Enterprise).
 
       When set, this list replaces the built-in one, so include every callback
-      you need. Matching is exact, except that an http://localhost or
+      you need; a list saved empty refuses every callback (remove the option
+      in YAML mode to use the built-in list again). Matching is exact, except
+      that an http://localhost or
       http://127.0.0.1 entry matches any port. Each entry must be https (or
       http on localhost/127.0.0.1) with no username/password or #fragment.
       Restart the app after changing this option.
