@@ -14,7 +14,7 @@ def test_transfer_moves_policy_tools_visibility_and_backup_options(tmp_path):
     target = tmp_path / "target"
     source.mkdir()
     target.mkdir()
-    documents = {
+    documents: dict[str, dict[str, object]] = {
         "tool_policy.json": {"rule_effect": "allow", "rules": []},
         "tool_config.json": {"tools": {"ha_call_service": "disabled"}},
         "entity_visibility.json": {"enabled": True, "deny_entity_ids": ["light.guest"]},

@@ -5,8 +5,10 @@ from __future__ import annotations
 import copy
 
 import pytest
+from homeassistant.config_entries import SOURCE_IGNORE, ConfigEntryDisabler
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.ha_mcp_tools import settings_transfer
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
@@ -181,3 +183,72 @@ async def test_unconfirmed_tools_store_write_restores_the_other_setting(
     with pytest.raises(OSError, match="Could not persist"):
         await settings_transfer.async_import(hass, candidate)
     assert await settings_transfer.async_export(hass) == original
+
+
+@pytest.mark.parametrize(
+    ("source", "target", "error"),
+    [
+        ("absent", "enabled", "extra_tools_entry"),
+        ("disabled", "absent", "tools_must_be_disabled"),
+        ("disabled", "enabled", "tools_must_be_disabled"),
+        ("enabled", "disabled", "tools_must_be_enabled"),
+    ],
+)
+async def test_conflicting_tools_permissions_cannot_change_the_destination(
+    hass: HomeAssistant,
+    source: str,
+    target: str,
+    error: str,
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "destination", "secret_path": "/local"})
+    if target != "absent":
+        MockConfigEntry(
+            domain=DOMAIN,
+            data={"entry_type": "tools"},
+            disabled_by=ConfigEntryDisabler.USER if target == "disabled" else None,
+        ).add_to_hass(hass)
+    original = await settings_transfer.async_export(hass)
+    backup = copy.deepcopy(original)
+    backup["entries"]["server"]["data"]["webhook_id"] = "source"
+    backup["server_settings"]["tools"] = {"tools": {}}
+    if source == "absent":
+        backup["entries"].pop("tools")
+    else:
+        backup["entries"]["tools"] = {
+            "disabled": source == "disabled",
+            "allowed_dirs": [],
+            "extra_yaml_keys": [],
+        }
+
+    with pytest.raises(settings_transfer.InvalidBackup) as failure:
+        await settings_transfer.async_import(hass, backup)
+    assert failure.value.code == error
+    assert await settings_transfer.async_export(hass) == original
+
+
+async def test_disabled_tools_round_trip_without_activating_privileged_services(
+    hass: HomeAssistant,
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "source", "secret_path": "/private"})
+    tools = MockConfigEntry(
+        domain=DOMAIN,
+        data={"entry_type": "tools"},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    tools.add_to_hass(hass)
+    backup = await settings_transfer.async_export(hass)
+    assert backup["entries"]["tools"]["disabled"] is True
+    backup["entries"]["tools"]["extra_yaml_keys"] = ["mqtt"]
+    await settings_transfer.async_import(hass, backup)
+    assert tools.disabled_by is ConfigEntryDisabler.USER
+    assert not hass.services.has_service(DOMAIN, "write_file")
+    assert (await settings_transfer.async_export(hass)) == backup
+
+
+async def test_ignored_discovery_is_not_exported_as_a_tools_installation(
+    hass: HomeAssistant,
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "source", "secret_path": "/private"})
+    MockConfigEntry(domain=DOMAIN, source=SOURCE_IGNORE, data={}).add_to_hass(hass)
+    backup = await settings_transfer.async_export(hass)
+    assert set(backup["entries"]) == {"server"}

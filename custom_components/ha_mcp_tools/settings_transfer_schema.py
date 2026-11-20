@@ -127,6 +127,7 @@ _ENVELOPE = vol.Schema(
             c.ENTRY_TYPE_TOOLS: {
                 vol.Required("allowed_dirs"): [str],
                 vol.Required("extra_yaml_keys"): [str],
+                "disabled": bool,
             },
         },
         vol.Required("server_settings"): dict,
