@@ -545,6 +545,19 @@ class TestCollidingIds:
         # The removal wait watched the deleted script's entity, not the other one.
         assert "warnings" not in removed
 
+    async def test_a_repeated_remove_by_key_leaves_the_other_script(
+        self, hass: HomeAssistant, tools: ConfigScriptTools
+    ) -> None:
+        """Once key_a is gone, script.key_a is still key_b's entity."""
+        await tools.ha_config_remove_script(script_id="key_a", wait=False)
+
+        body = await rejected_call_body(
+            tools.ha_config_remove_script(script_id="key_a", wait=False)
+        )
+
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert set(await _stored(hass)) == {"key_b"}
+
     @pytest.mark.parametrize(
         ("script_id", "event"),
         [("key_a", "ran_a"), ("script.key_a", "ran_b"), ("script.key_b", "ran_b")],

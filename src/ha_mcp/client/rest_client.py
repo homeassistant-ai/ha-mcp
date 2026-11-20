@@ -2060,8 +2060,8 @@ class HomeAssistantClient:
             raise
 
     async def delete_script_config(self, script_id: str) -> dict[str, Any]:
-        """Delete Home Assistant script configuration."""
-        resolved_id = await self._resolve_script_id(script_id)
+        bare = not script_id.startswith("script.")  # deletes only under that key
+        resolved_id = script_id if bare else await self._resolve_script_id(script_id)
         try:
             endpoint = f"config/script/config/{resolved_id}"
             response = await self._request("DELETE", endpoint)

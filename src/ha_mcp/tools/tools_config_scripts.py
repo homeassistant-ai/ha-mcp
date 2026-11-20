@@ -1066,7 +1066,7 @@ class ConfigScriptTools:
         script_id: Annotated[
             str,
             Field(
-                description="Script identifier to delete — bare storage key ('old_script') or entity_id ('script.old_script'); a bare id names the script stored under that key even when another script's entity is 'script.<id>'."
+                description="Script identifier to delete — bare storage key ('old_script') or entity_id ('script.old_script'); a bare id deletes only the script stored under that key, even when another script's entity is 'script.<id>'."
             ),
         ],
         wait: Annotated[

@@ -199,10 +199,26 @@ async def test_a_renamed_script_is_removed_under_its_storage_key(
 ) -> None:
     await _renamed(hass, entity_registry, "old_name", "new_name")
 
-    result = await config_client.delete_script_config("new_name")
+    result = await config_client.delete_script_config("script.new_name")
 
     assert result["script_id"] == "old_name"
     assert await error_status(config_client.get_script_config("old_name")) == 404
+
+
+async def test_a_bare_id_deletes_no_script_but_the_one_under_that_key(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """A bare id is a storage key: a retry after the delete must not reach the
+    script whose entity is script.<id>."""
+    await _renamed(hass, entity_registry, "old_name", "new_name")
+
+    assert await error_status(config_client.delete_script_config("new_name")) == 404
+
+    assert (await config_client.get_script_config("old_name"))[
+        "script_id"
+    ] == "old_name"
 
 
 async def test_a_renamed_script_is_written_under_its_storage_key(

@@ -26,7 +26,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
-from ._tool_errors import error_body, error_of
+from ._tool_errors import error_body, error_of, rejected_call_body
 from ._tools_config_scenes_core import (
     TV_ON,
     category,
@@ -258,7 +258,7 @@ class TestRemove:
             [scene("night_light_led_desk_strip", "LED Desk Strip")],
         )
 
-        result = await tools.ha_config_remove_scene(scene_id="led_desk_strip")
+        result = await tools.ha_config_remove_scene(scene_id="scene.led_desk_strip")
 
         assert result["scene_id"] == "night_light_led_desk_strip"
         assert result["operation"] == "deleted"
@@ -321,6 +321,24 @@ class TestNotAStorageScene:
         error = error_of(exc)
         assert error["code"] == "CONFIG_NOT_FOUND"
         assert "hue" in error["message"]
+
+    async def test_remove_by_the_name_of_a_yaml_scene_with_an_id_is_not_storage(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """scene.key_a is a YAML scene with id key_b, which scenes.yaml lacks."""
+        tools = await scene_tools(
+            hass, core_client, monkeypatch, yaml_only=[scene("key_b", "Key A")]
+        )
+
+        body = await rejected_call_body(
+            tools.ha_config_remove_scene(scene_id="key_a", wait=False)
+        )
+
+        assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+        assert hass.states.get("scene.key_a") is not None
 
     @pytest.mark.parametrize("transform", [False, True])
     async def test_hash_bearing_set_names_the_owning_integration(
@@ -625,6 +643,24 @@ class TestStorageKeyPrecedence:
         assert hass.states.get("scene.first") is None
         assert hass.states.get("scene.key_a") is not None
         assert not any("scene.key_a" in w for w in result.get("warnings", []))
+
+    @pytest.mark.parametrize("repeat", ["key_a", "first"])
+    async def test_a_bare_id_removes_no_scene_stored_under_another_key(
+        self, hass: HomeAssistant, collided: ConfigSceneTools, repeat: str
+    ) -> None:
+        """A bare id is a storage key: a repeated remove of key_a, or the name
+        of key_a's entity, must not reach the scene another entity names."""
+        if repeat == "key_a":
+            await collided.ha_config_remove_scene(scene_id="key_a", wait=False)
+        before = await stored_scenes(hass)
+
+        body = await rejected_call_body(
+            collided.ha_config_remove_scene(scene_id=repeat, wait=False)
+        )
+
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert f"scene.{repeat}" in body["error"]["message"]
+        assert await stored_scenes(hass) == before
 
 
 class TestEntityIdForm:

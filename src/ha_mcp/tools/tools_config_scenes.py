@@ -81,6 +81,24 @@ _SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
 logger = logging.getLogger(__name__)
 
 
+def _refuse_bare_id_of_another_key(scene_id: str, storage_key: str) -> NoReturn:
+    """No scene is stored under the bare ``scene_id``; ``scene.<scene_id>`` is
+    the scene stored under ``storage_key``. A delete never falls back to it, so
+    a repeated delete cannot reach another scene."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            f"No scene is stored under key '{scene_id}', so nothing was deleted; "
+            f"scene.{scene_id} is the scene stored under '{storage_key}'",
+            suggestions=[
+                f"Pass 'scene.{scene_id}' to delete that scene",
+                "Use ha_search(domain_filter='scene') to find storage keys",
+            ],
+            context={"scene_id": scene_id, "storage_key": storage_key},
+        )
+    )
+
+
 def _raise_scene_not_storage_error(scene_id: str, platform: str | None) -> NoReturn:
     """Raise ``CONFIG_NOT_FOUND`` for a scene that exists but has no editable config.
 
@@ -1261,7 +1279,8 @@ class ConfigSceneTools:
             str,
             Field(
                 description="Scene to delete: storage key (e.g. 'old_scene') or "
-                "entity_id (e.g. 'scene.old_scene')."
+                "entity_id (e.g. 'scene.old_scene'). A bare id deletes only the "
+                "scene stored under that key."
             ),
         ],
         wait: Annotated[
@@ -1311,6 +1330,14 @@ class ConfigSceneTools:
             # CONFIG_NOT_FOUND rather than the misleading generic 404 (#1971).
             resolution = await self._client._resolve_scene(scene_id)
             resolved_id = resolution.storage_key
+            # A bare id is a storage key; a scene not in storage is refused below.
+            bare = not scene_id.startswith("scene.")
+            if (
+                bare
+                and resolved_id != scene_id
+                and await self._client._config_exists("scene", resolved_id)
+            ):
+                _refuse_bare_id_of_another_key(scene_id, resolved_id)
 
             # Resolve actual entity_id BEFORE delete — once the registry
             # entry is gone, the unique_id lookup can no longer find it.
