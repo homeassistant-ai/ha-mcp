@@ -216,11 +216,20 @@ class Flow:
         self.texts: set[str] = set(outer.texts) if outer else set()
         self.fixed: set[str] = set(outer.fixed) if outer else set()
         self.nodes = list(_body(scope))
-        # The names this scope binds itself, other than its functions.
+        # The names this scope binds itself, other than its functions. A
+        # comprehension's target is bound in the comprehension alone.
+        looped = {
+            name
+            for node in self.nodes
+            if isinstance(node, ast.comprehension)
+            for name in ast.walk(node.target)
+        }
         self.bound = {
             node.id
             for node in self.nodes
-            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+            if isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node not in looped
         }
         if not isinstance(scope, ast.Module):
             self.bound |= {

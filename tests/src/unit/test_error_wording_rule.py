@@ -138,6 +138,13 @@ REFUSED = {
         def handle(exc: Exception):
             return is_missing(exc)
         """,
+    "a comprehension target named like the helper": """
+        def is_missing(text):
+            return "not found" in text
+        def handle(exc: Exception):
+            values = [is_missing for is_missing in ()]
+            return is_missing(str(exc))
+        """,
     "a regex function imported by name": """
         from re import search as find
         def handle(err: Exception):
