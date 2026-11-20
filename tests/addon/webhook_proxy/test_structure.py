@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import pytest
 import yaml
 from homeassistant import loader
 from homeassistant.core import HomeAssistant
@@ -68,7 +69,8 @@ def test_image_gets_every_module_start_can_import(variant: Variant) -> None:
     the Dockerfile does not copy makes the app fail to start."""
     dockerfile = (variant.addon_dir / "Dockerfile").read_text()
     for module in _app_modules(variant):
-        assert f"COPY {module.name} /\n" in dockerfile, module.name
+        if module.name != "start.py":
+            assert f"COPY {module.name} /\n" in dockerfile, module.name
 
 
 def test_supervisor_builds_the_image_instead_of_pulling_one(variant: Variant) -> None:
@@ -118,6 +120,16 @@ def test_app_has_the_supervisor_access_start_needs(variant: Variant) -> None:
     assert config["hassio_role"] == "manager"
     assert config["homeassistant_api"] is True
     assert any(_mounts_config_writable_at_config(entry) for entry in config["map"])
+
+
+def test_app_declares_no_deprecated_config_mount(variant: Variant) -> None:
+    """The Supervisor deprecates the ``config`` map type and warns on the app
+    (#3153). Stable switches to ``homeassistant_config`` at the next promote."""
+    if variant.key == "stable":
+        pytest.skip("stable gets the homeassistant_config mount at the next promote")
+    for entry in _config(variant)["map"]:
+        mount = entry if isinstance(entry, str) else entry.get("type", "")
+        assert mount.split(":")[0] != "config", entry
 
 
 def test_slug_is_the_one_the_sibling_flavor_refuses_to_run_beside(

@@ -98,7 +98,7 @@ DEV = Flavor(
     config_name="Nabu Casa - Webhook Proxy for HA MCP (Dev)",
     config_description=(
         "DEV CHANNEL (unstable) — remote access proxy via Nabu Casa or any "
-        "reverse proxy. Cannot run alongside the stable Webhook Proxy add-on."
+        "reverse proxy. Cannot run alongside the stable Webhook Proxy app."
     ),
     boot="manual",
     stage="experimental",

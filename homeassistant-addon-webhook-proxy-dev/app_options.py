@@ -1,7 +1,8 @@
 """Read and validate the app's options for ``start.py``.
 
-Pure functions: ``start.py`` passes in every path and its log function, so
-this module builds no paths of its own.
+Reads the options file and loads the component's allowlist module from the
+bundled component source; ``start.py`` passes in both locations and its log
+functions.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 def read_app_options(
     config_file: Path, log_error: Callable[[str], None]
 ) -> dict | None:
-    """Read the add-on options from ``config_file`` (``/data/options.json``).
+    """Read the app (add-on) options from ``config_file`` (``/data/options.json``).
 
     Returns a dict of the parsed option values (defaults filled in for anything
     absent), or None when the file is present but unreadable/corrupt — a
@@ -53,14 +54,14 @@ def read_app_options(
             oauth_client_id = config.get("oauth_client_id", "")
             oauth_client_secret = config.get("oauth_client_secret", "")
             # Unset by default in config.yaml options (no default value), so an
-            # upgrader inherits nothing — the mode is resolved below.
+            # upgrader inherits nothing; start.py resolves the mode.
             oauth_mode_option = config.get("oauth_mode", "")
             regenerate_oauth_creds = bool(config.get("regenerate_oauth_creds", False))
             debug_logging = bool(config.get("debug_logging", False))
             oauth_redirect_allowlist = config.get("oauth_redirect_allowlist")
             oauth_allow_any_callback = bool(config.get("oauth_allow_any_callback"))
         except (OSError, json.JSONDecodeError) as e:
-            # Fail closed: the add-on config is present but unreadable/corrupt,
+            # Fail closed: the app config is present but unreadable/corrupt,
             # so the user's intent is unknown — including whether OAuth should
             # be enforced. Continuing would leave enable_oauth at its False
             # default, silently serving an unauthenticated proxy (URL-secrecy
@@ -68,19 +69,19 @@ def read_app_options(
             log_error("")
             log_error("=" * 70)
             log_error(
-                f"  Could not read the add-on configuration ({type(e).__name__}): {e}"
+                f"  Could not read the app configuration ({type(e).__name__}): {e}"
             )
             log_error("")
-            log_error("  The add-on options file could not be parsed, so your")
+            log_error("  The app options file could not be parsed, so your")
             log_error("  configured intent is unknown — including whether OAuth")
             log_error("  should be enforced. Starting now could serve the webhook")
-            log_error("  WITHOUT the authentication you asked for, so the add-on is")
+            log_error("  WITHOUT the authentication you asked for, so the app is")
             log_error("  refusing to start.")
             log_error("")
-            log_error("  Restart the add-on to recover: the Supervisor rewrites")
+            log_error("  Restart the app to recover: the Supervisor rewrites")
             log_error("  this file from your saved configuration on every start,")
             log_error("  so a restart normally heals a corrupted copy. If the")
-            log_error("  error persists across restarts, re-save the add-on's")
+            log_error("  error persists across restarts, re-save the app's")
             log_error("  Configuration tab and check the system's storage.")
             log_error("=" * 70)
             log_error("")
@@ -108,6 +109,8 @@ class CallbackOptions(NamedTuple):
     # Normalized list; None follows the component's built-in list.
     allowlist: list[str] | None
     allow_any: bool
+    # Entries the user configured, before any were dropped.
+    configured: int = 0
 
 
 def _load_allowlist_module(component_src: Path) -> ModuleType:
@@ -123,27 +126,39 @@ def _load_allowlist_module(component_src: Path) -> ModuleType:
 
 
 def resolve_callback_options(
-    options: dict, component_src: Path, log_error: Callable[[str], None]
+    options: dict,
+    component_src: Path,
+    log_error: Callable[[str], None],
+    log_warning: Callable[[str], None],
 ) -> CallbackOptions:
     """Validate 'Allowed OAuth callback URLs', dropping and naming unusable
     entries and any beyond the entry limit."""
     raw = options["oauth_redirect_allowlist"]
     allow_any = bool(options["oauth_allow_any_callback"])
+    if options["enable_oauth"] and (raw is not None or allow_any):
+        log_warning(
+            "'Allowed OAuth callback URLs' and 'Allow any OAuth callback URL' "
+            "apply only while Enable OAuth is off; they have no effect now."
+        )
     if raw is None:
         return CallbackOptions(None, allow_any)
     allowlist = _load_allowlist_module(component_src)
     limit: int = allowlist.MAX_OAUTH_CALLBACKS
-    entries, invalid = allowlist.normalize_allowlist(
-        raw if isinstance(raw, list) else [raw]
-    )
-    if dropped := invalid + entries[limit:]:
+    values = raw if isinstance(raw, list) else [raw]
+    entries, invalid = allowlist.normalize_allowlist(values)
+    if invalid:
         log_error(
-            f"Ignoring 'Allowed OAuth callback URLs' entries {dropped}: each must "
-            "be https (or http on localhost/127.0.0.1), with no username/password "
-            f"and no #fragment, at most {allowlist.MAX_OAUTH_CALLBACK_LENGTH} "
-            f"characters; at most {limit} entries."
+            f"Ignoring 'Allowed OAuth callback URLs' entries {invalid}: each must "
+            "be https or http on a loopback address such as localhost or "
+            "127.0.0.1, with no username/password and no #fragment, at most "
+            f"{allowlist.MAX_OAUTH_CALLBACK_LENGTH} characters."
         )
-    return CallbackOptions(entries[:limit], allow_any)
+    if beyond := entries[limit:]:
+        log_error(
+            f"Ignoring 'Allowed OAuth callback URLs' entries {beyond}: they are "
+            f"beyond the limit of {limit} entries."
+        )
+    return CallbackOptions(entries[:limit], allow_any, len(values))
 
 
 def callback_config(callbacks: CallbackOptions) -> dict:
@@ -162,6 +177,13 @@ def callback_summary(callbacks: CallbackOptions) -> str:
         return "any (Allow any OAuth callback URL is on)"
     if callbacks.allowlist is None:
         return "the built-in list"
+    if not callbacks.allowlist and callbacks.configured:
+        what = (
+            "the 1 configured entry was"
+            if callbacks.configured == 1
+            else f"all {callbacks.configured} configured entries were"
+        )
+        return f"none ({what} ignored, so every sign-in is refused)"
     if not callbacks.allowlist:
         return "none (the configured list is empty, so every sign-in is refused)"
     return f"{len(callbacks.allowlist)} configured callback(s)"

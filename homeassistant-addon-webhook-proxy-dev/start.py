@@ -1359,9 +1359,12 @@ def _write_proxy_config(proxy_config: dict) -> bool:
     return True
 
 
-def _install_integration_and_handle_restart() -> None:
+def _install_integration_and_handle_restart() -> bool:
     """Install/refresh the integration and run the first-install / version-change
-    restart flows (notifications, Repairs, and config-entry setup)."""
+    restart flows (notifications, Repairs, and config-entry setup).
+
+    Returns True while Home Assistant still runs the previous integration code.
+    """
     # Install the mcp_proxy_dev custom component
     first_install, version_changed = _install_integration()
 
@@ -1498,6 +1501,7 @@ def _install_integration_and_handle_restart() -> None:
                 "/services/persistent_notification/dismiss",
                 {"notification_id": stale},
             )
+    return version_changed
 
 
 def _enforce_oauth_or_disable(enable_oauth: bool) -> None:
@@ -1647,6 +1651,7 @@ def _log_startup_urls(
     oauth_client_secret: str,
     debug_logging: bool,
     callbacks: app_options.CallbackOptions,
+    restart_pending: bool,
 ) -> None:
     """Log the local/remote MCP URLs and any OAuth / debug-logging hints."""
     # Log URLs. resolved_remote may already have been computed above for
@@ -1691,6 +1696,8 @@ def _log_startup_urls(
         log_info("    values across addon restarts.")
     else:
         summary = app_options.callback_summary(callbacks)
+        if restart_pending:
+            summary += " (applies once Home Assistant is restarted)"
         log_info("")
         log_info(f"  OAuth callbacks allowed to sign in: {summary}")
     if debug_logging:
@@ -1804,7 +1811,7 @@ def main() -> int:
     debug_logging = options["debug_logging"]
     config = options["config"]
     callbacks = app_options.resolve_callback_options(
-        options, Path("/opt/mcp_proxy_dev"), log_error
+        options, Path("/opt/mcp_proxy_dev"), log_error, log_warning
     )
 
     oauth = _resolve_oauth_settings(
@@ -1842,7 +1849,7 @@ def main() -> int:
     if not _write_proxy_config(proxy_config):
         return 1
 
-    _install_integration_and_handle_restart()
+    restart_pending = _install_integration_and_handle_restart()
 
     # The integration's OAuth views serve only while the heartbeat is fresh,
     # and the stale-code probe below hits one of those views — touch it BEFORE
@@ -1866,6 +1873,7 @@ def main() -> int:
         oauth_client_secret,
         debug_logging,
         callbacks,
+        restart_pending,
     )
 
     # Install SIGTERM/SIGINT handlers so a Supervisor "stop" shuts down through
