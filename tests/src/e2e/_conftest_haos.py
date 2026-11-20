@@ -25,7 +25,6 @@ from haos_runtime import (
     _authenticate_ws_supervisor,
     _wait_supervisor_running,
     enable_config_entry,
-    inject_marketplace_token_in_qcow2,
     login_for_token,
     refresh_dev_addon_source_in_qcow2,
     remove_tools_entry_in_qcow2,
@@ -38,6 +37,7 @@ from haos_runtime import (
     wait_for_addon_ha_link_ready,
     wait_for_addon_mcp_ready,
 )
+from marketplace_token import inject_marketplace_token_in_qcow2
 from recorder_seed import session_recorder_seed
 
 # Import test constants

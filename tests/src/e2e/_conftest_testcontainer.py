@@ -15,7 +15,7 @@ from testcontainers.core.container import DockerContainer
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_runtime
-from haos_runtime import inject_marketplace_token
+from marketplace_token import inject_marketplace_token
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))

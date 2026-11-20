@@ -3,15 +3,15 @@
 ``inject_marketplace_token`` is the shared transform behind both CI injection
 paths (the testcontainer seed copy in ``e2e/_conftest_testcontainer.py`` and
 the HAOS qcow2 pre-boot edit in
-``haos_runtime.inject_marketplace_token_in_qcow2``). It connects the
+``marketplace_token.inject_marketplace_token_in_qcow2``). It connects the
 Marketplace to GitHub in CI, so its GitHub calls don't ride the shared-IP
 60 req/h unauthenticated budget.
 
 Every document below is what Core writes to ``.storage/core.config_entries``:
 the entries are Core's own storage records of real config entries.
 
-``haos_runtime`` is loaded by file path: its module-level imports are
-stdlib-only, so this collects everywhere, without assuming ``tests/src``
+``haos_runtime`` and ``marketplace_token`` are loaded by file path: their
+module-level imports are stdlib-only, so this collects everywhere, without assuming ``tests/src``
 is importable as a package.
 """
 
@@ -39,11 +39,10 @@ from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 from ._hacs_marketplace import set_up_marketplace
 from ._marketplace_records import unload_marketplace
 
-HAOS_RUNTIME_PATH = Path(__file__).resolve().parents[1] / "haos_runtime.py"
 
-
-def _load_haos_runtime() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("haos_runtime", HAOS_RUNTIME_PATH)
+def _load(name: str) -> ModuleType:
+    path = Path(__file__).resolve().parents[1] / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None
     assert spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -52,7 +51,8 @@ def _load_haos_runtime() -> ModuleType:
     return mod
 
 
-haos_runtime = _load_haos_runtime()
+haos_runtime = _load("haos_runtime")
+marketplace_token = _load("marketplace_token")
 
 
 def _stored(entry: MockConfigEntry) -> dict[str, Any]:
@@ -95,7 +95,7 @@ async def test_the_token_keeps_the_marketplace_entry_and_its_acceptances(
     await unload_marketplace(hass)
     before = copy.deepcopy(doc["data"]["entries"])
 
-    assert haos_runtime.inject_marketplace_token(doc, "ghs_test_token") is True
+    assert marketplace_token.inject_marketplace_token(doc, "ghs_test_token") is True
 
     marketplace = doc["data"]["entries"][1]
     # The key the Marketplace reads its GitHub account from.
@@ -109,14 +109,14 @@ async def test_the_token_keeps_the_marketplace_entry_and_its_acceptances(
 
 def test_a_stale_token_is_replaced() -> None:
     doc = _doc(MockConfigEntry(domain="marketplace", data={"token": "stale"}))
-    assert haos_runtime.inject_marketplace_token(doc, "fresh") is True
+    assert marketplace_token.inject_marketplace_token(doc, "fresh") is True
     assert doc["data"]["entries"][0]["data"] == {"token": "fresh"}
 
 
 def test_a_document_without_the_marketplace_is_left_untouched() -> None:
     doc = _doc(MockConfigEntry(domain="sun"), MockConfigEntry(domain="demo"))
     before = copy.deepcopy(doc)
-    assert haos_runtime.inject_marketplace_token(doc, "tok") is False
+    assert marketplace_token.inject_marketplace_token(doc, "tok") is False
     assert doc == before
 
 
@@ -129,8 +129,8 @@ def test_qcow2_injector_is_noop_without_token(
     def _fail(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("guestfish must not run without GITHUB_TOKEN")
 
-    monkeypatch.setattr(haos_runtime.subprocess, "run", _fail)
-    haos_runtime.inject_marketplace_token_in_qcow2(tmp_path / "image.qcow2")
+    monkeypatch.setattr(marketplace_token.subprocess, "run", _fail)
+    marketplace_token.inject_marketplace_token_in_qcow2(tmp_path / "image.qcow2")
 
 
 # set_embedded_server_pip_spec (#1527): matched by entry_id, because the
