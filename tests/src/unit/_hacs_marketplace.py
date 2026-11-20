@@ -10,13 +10,14 @@ replacing Core's install step and raising Core's own exceptions from it.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
+from homeassistant.components.marketplace.enums import MarketplaceSignal
 from homeassistant.components.marketplace.repositories.base import Repository
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -149,6 +150,26 @@ def core_install(**behaviour: Any) -> Iterator[MagicMock]:
         Repository, "async_install_repository", autospec=True, **behaviour
     ) as install:
         yield install
+
+
+@asynccontextmanager
+async def install_progress_events(
+    socket: HomeAssistantWebSocketClient,
+) -> AsyncIterator[list[dict[str, Any]]]:
+    """Every install progress Core dispatched while the block ran, as
+    ``marketplace/subscribe`` streams it."""
+    sub_id, queue = await socket.subscribe_command(
+        "marketplace/subscribe",
+        signal=MarketplaceSignal.REPOSITORY_INSTALL_PROGRESS.value,
+    )
+    events: list[dict[str, Any]] = []
+    try:
+        yield events
+    finally:
+        # Releasing the subscription drops what is still queued.
+        while not queue.empty():
+            events.append(queue.get_nowait()["event"])
+        await socket.release_subscription(sub_id)
 
 
 async def pooled_socket(client: HomeAssistantClient) -> HomeAssistantWebSocketClient:

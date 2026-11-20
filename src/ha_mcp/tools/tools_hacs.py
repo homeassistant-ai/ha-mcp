@@ -15,7 +15,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
-from . import hacs_github, hacs_reads, hacs_writes
+from . import hacs_github, hacs_reads, hacs_source, hacs_writes
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .hacs_backend import CATEGORY_HELP
 from .helpers import (
@@ -55,8 +55,14 @@ _MANAGE_ACTIONS: dict[
     "clear_new": (hacs_writes.clear_new, {"repository_id", "categories"}),
     "acknowledge_critical": (hacs_writes.acknowledge_critical, {"repository"}),
     "connect_github": (hacs_github.connect_github, {"flow_id", "abort"}),
+    "set_download_source": (
+        hacs_source.set_download_source,
+        {"config", "flow_id", "abort"},
+    ),
     "accept_warning": (hacs_writes.accept_warning, {"confirm"}),
 }
+# The entry flows' steps go over Core's REST flow API.
+_FLOW_ACTIONS = {"connect_github", "set_download_source"}
 
 
 def _reject_foreign_params(action: str, supplied: dict[str, Any]) -> None:
@@ -105,13 +111,16 @@ class HacsTools:
     async def ha_get_hacs_info(
         self,
         action: Annotated[
-            Literal["search", "info", "removed", "critical", "detect"],
+            Literal[
+                "search", "info", "removed", "critical", "detect", "download_source"
+            ],
             Field(
                 description=(
                     "'search' the store's repositories, 'info' for one repository, "
                     "'removed' for repositories the catalog removed, 'critical' "
                     "for those it marks critical, 'detect' for the categories a "
-                    "GitHub repository's content fits"
+                    "GitHub repository's content fits, 'download_source' for the "
+                    "sources the Marketplace can download from and the one in use"
                 )
             ),
         ],
@@ -206,6 +215,8 @@ class HacsTools:
         **Caveats:** ``info`` marks the repository as seen (Core clears its
         ``new`` flag) and may fetch it from GitHub. ``detect`` needs the
         accepted first-run warning and a connected GitHub account.
+        ``download_source`` opens and ends the Marketplace entry's options
+        flow, as the panel's "Download source" does.
         """
         try:
             socket = await self._socket()
@@ -233,6 +244,8 @@ class HacsTools:
                 data = await hacs_reads.removed(socket, query, max_results, offset)
             elif action == "critical":
                 data = await hacs_reads.critical(socket)
+            elif action == "download_source":
+                data = await hacs_source.download_source(socket, self._client)
             else:
                 repository = validate_identifier_not_empty(
                     repository,
@@ -272,6 +285,7 @@ class HacsTools:
                 "clear_new",
                 "acknowledge_critical",
                 "connect_github",
+                "set_download_source",
                 "accept_warning",
             ],
             Field(
@@ -286,7 +300,8 @@ class HacsTools:
                     "(the store has no un-ignore); 'clear_new' clears the new "
                     "flag; 'acknowledge_critical' confirms a critical removal "
                     "was seen; 'connect_github' runs the GitHub sign-in one "
-                    "step per call; "
+                    "step per call; 'set_download_source' picks where the "
+                    "Marketplace downloads from, one step per call; "
                     "'accept_warning' accepts the first-run warning for the "
                     "user this server connects as"
                 )
@@ -356,19 +371,38 @@ class HacsTools:
                 )
             ),
         ] = None,
+        config: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "action='set_download_source': the answer to the form, "
+                    "sent to Home Assistant as given, e.g. {'profile': "
+                    "'<one of its options>'}. A mirror is run by a third party "
+                    "(Home Assistant's text for each option names who): the "
+                    "user picks one, not you."
+                )
+            ),
+        ] = None,
         flow_id: Annotated[
             str | None,
             Field(
                 description=(
-                    "action='connect_github': the sign-in flow a previous call "
-                    "opened; without it a new one opens"
+                    "action='connect_github' / 'set_download_source': the flow "
+                    "a previous call opened; without it a new one opens"
                 )
             ),
         ] = None,
         abort: Annotated[
             bool | None,
-            Field(description="action='connect_github': True ends flow_id's flow"),
+            Field(
+                description=(
+                    "action='connect_github' / 'set_download_source': True "
+                    "ends flow_id's flow"
+                )
+            ),
         ] = None,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Manage Home Assistant's Marketplace (what HACS became in 2026.11): install, update, remove and add repositories.
 
@@ -386,6 +420,9 @@ class HacsTools:
         - Connect GitHub: ha_manage_hacs(action="connect_github"), then again with
           the flow_id it returns for the URL and code the user enters on GitHub,
           then again with flow_id once they did, for the outcome
+        - Change the download source: ha_manage_hacs(action="set_download_source")
+          returns the form and flow_id; once the user chose, call again with
+          flow_id and config={"profile": "<their choice>"}
 
         **Caveats:** An installed integration loads after a Home Assistant
         restart, and a new dashboard card after a browser cache clear. The
@@ -394,7 +431,8 @@ class HacsTools:
         warning, which Home Assistant keeps per user, so the user's own
         acceptance in the UI does not cover this server: ask whether they read
         it (Settings > Marketplace) before ``accept_warning``. Adding and
-        detecting a repository need a connected GitHub account.
+        detecting a repository need a connected GitHub account. A saved
+        download source reloads the Marketplace, and the call waits for it.
         """
         supplied = {
             "repository_id": repository_id,
@@ -405,16 +443,18 @@ class HacsTools:
             "show_beta": show_beta,
             "confirm_replace_built_in": confirm_replace_built_in,
             "confirm": confirm,
+            "config": config,
             "flow_id": flow_id,
             "abort": abort,
         }
         try:
             _reject_foreign_params(action, supplied)
             handler, parameters = _MANAGE_ACTIONS[action]
-            arguments = {name: supplied[name] for name in parameters}
-            if action == "connect_github":
-                # The flow steps go over the REST flow API.
+            arguments: dict[str, Any] = {name: supplied[name] for name in parameters}
+            if action in _FLOW_ACTIONS:
                 arguments["client"] = self._client
+            elif action == "download":
+                arguments["ctx"] = ctx
             data = await handler(await self._socket(), **arguments)
             return await self._answer(data)
         except ToolError:

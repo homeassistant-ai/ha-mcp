@@ -3,6 +3,8 @@
 from functools import partial
 from typing import Any
 
+from ha_mcp._vendor.fastmcp import Context
+
 from ..errors import ErrorCode, create_error_response
 from .coercion import parse_string_list_param
 from .hacs_backend import (
@@ -12,6 +14,7 @@ from .hacs_backend import (
     resolve_repository,
     store_command,
 )
+from .hacs_install_progress import install_progress
 from .hacs_own_repository import (
     ownership_refusal_records,
     route_own_repository_download,
@@ -80,6 +83,7 @@ async def download(
     repository_id: str | None,
     version: str | None,
     confirm_replace_built_in: bool | None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     repository_id = _require(repository_id, "repository_id", "download")
     repository_id, version, reroute_note = await route_own_repository_download(
@@ -93,15 +97,17 @@ async def download(
         fields["version"] = version
     if confirm_replace_built_in:
         fields["confirm_replace_built_in"] = True
-    await store_command(
-        ws_client,
-        "marketplace/repository/install",
-        {**context, "version": version},
-        timeout=GITHUB_COMMAND_TIMEOUT,
-        on_timeout=_outcome_unknown("install", actual_id),
-        refusal_records=partial(ownership_refusal_records, ws_client),
-        **fields,
-    )
+    full_name = row.get("full_name") if row else None
+    async with install_progress(ws_client, ctx, actual_id, full_name):
+        await store_command(
+            ws_client,
+            "marketplace/repository/install",
+            {**context, "version": version},
+            timeout=GITHUB_COMMAND_TIMEOUT,
+            on_timeout=_outcome_unknown("install", actual_id),
+            refusal_records=partial(ownership_refusal_records, ws_client),
+            **fields,
+        )
     return {
         **_done(
             "download",

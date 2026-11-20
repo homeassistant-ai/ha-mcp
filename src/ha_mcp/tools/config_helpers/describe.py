@@ -28,6 +28,7 @@ from ..config_entry_flow_errors import (
     abort_reason_text,
     progress_action_text,
 )
+from ..config_entry_flow_form import iter_schema_fields
 from ..config_entry_flow_introspect import abort_probe_flow, menu_choices
 from ..flow_translations import (
     fetch_flow_strings,
@@ -153,12 +154,53 @@ def _with_help(
         _with_help(field.get("fields", []), help_text, f"{field['name']}.")
 
 
+def _translated_selects(schema: Any) -> dict[str, tuple[str, list[Any]]]:
+    """Each select whose options Core labels in its ``selector`` strings, by
+    field name: the translation key and the option values."""
+    selects: dict[str, tuple[str, list[Any]]] = {}
+    for field in iter_schema_fields(schema):
+        selector = field.get("selector")
+        cfg = selector.get("select") if isinstance(selector, dict) else None
+        if isinstance(cfg, dict) and isinstance(cfg.get("translation_key"), str):
+            options = _option_values(cfg.get("options") or [])
+            selects[str(field.get("name"))] = (cfg["translation_key"], options)
+    return selects
+
+
+def _put_labels(
+    fields: list[dict[str, Any]], labels: dict[str, dict[str, str]]
+) -> None:
+    for field in fields:
+        if field.get("name") in labels:
+            field["option_labels"] = labels[field["name"]]
+        _put_labels(field.get("fields", []), labels)
+
+
+async def _with_option_labels(
+    client: Any, domain: str, fields: list[dict[str, Any]], schema: Any
+) -> None:
+    """The label the HA UI shows for each option of a translated select."""
+    selects = _translated_selects(schema)
+    if not selects:
+        return
+    strings = await fetch_flow_strings(client, domain, "selector") or {}
+    labels: dict[str, dict[str, str]] = {}
+    for name, (key, options) in selects.items():
+        prefix = f"component.{domain}.selector.{key}.options."
+        found = {
+            o: strings[f"{prefix}{o}"] for o in options if f"{prefix}{o}" in strings
+        }
+        if found:
+            labels[name] = found
+    _put_labels(fields, labels)
+
+
 async def describe_form(
     client: Any, domain: str | None, path: str, step: dict[str, Any]
 ) -> dict[str, Any]:
-    """A flow form in brief: ``fields`` with HA's help text for each,
-    ``more_forms``/``note`` unless the form is the flow's last, and
-    ``warnings`` when Core's strings could not be read.
+    """A flow form in brief: ``fields`` with HA's help text for each (and a
+    select's ``option_labels``), ``more_forms``/``note`` unless the form is
+    the flow's last, and ``warnings`` when Core's strings could not be read.
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
     or ``config_subentries.<type>``. Without a ``domain`` there is no help
@@ -174,6 +216,7 @@ async def describe_form(
             described["warnings"] = [strings_unread_warning(domain)]
         else:
             _with_help(fields, field_help(strings, domain, path, step_id))
+        await _with_option_labels(client, domain, fields, step.get("data_schema"))
     declared = None
     outline_lost = False
     if step_id and domain and path in ("config", "options"):

@@ -16,7 +16,7 @@ from ..client.rest_client import HomeAssistantCommandError
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_progress import PROGRESS_STEP_TYPES
 from .config_entry_reload_watch import watch_entry_reload
-from .hacs_backend import store_command
+from .hacs_backend import marketplace_entry, store_command
 from .helpers import raise_tool_error
 from .integration_flow_steps import (
     FlowTarget,
@@ -33,20 +33,8 @@ _ACTION = {"action": "connect_github"}
 
 async def _target(ws_client: Any) -> FlowTarget:
     """The Marketplace entry's reconfigure flow."""
-    reply = await ws_client.send_command("config_entries/get", domain="marketplace")
-    entries = reply.get("result") or []
-    if not entries:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.COMPONENT_NOT_INSTALLED,
-                "Home Assistant has no Marketplace entry to connect GitHub to.",
-                suggestions=[
-                    "The Marketplace comes with Home Assistant 2026.11 and newer."
-                ],
-                context=_ACTION,
-            )
-        )
-    return FlowTarget("reconfigure", "marketplace", entries[0]["entry_id"])
+    entry = await marketplace_entry(ws_client, _ACTION)
+    return FlowTarget("reconfigure", "marketplace", entry["entry_id"])
 
 
 async def _outcome(ws_client: Any, flow_id: str) -> dict[str, Any]:

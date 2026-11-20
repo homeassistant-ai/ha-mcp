@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import timedelta
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.marketplace.const import DOMAIN as MARKETPLACE
@@ -21,37 +21,38 @@ from homeassistant.components.marketplace.exceptions import (
 )
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.setup import async_setup_component
-from homeassistant.util import dt as dt_util
-from pytest_homeassistant.common import (
-    MockConfigEntry,
-    MockUser,
-    async_fire_time_changed,
+from pytest_homeassistant.common import MockConfigEntry, MockUser
+from pytest_homeassistant.test_util.aiohttp import (
+    AiohttpClientMocker,
+    AiohttpClientMockResponse,
 )
-from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp.__main__ import OAuthProxyClient
 from ha_mcp._vendor.fastmcp.server.auth.auth import AccessToken
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.client.websocket_client import (
     DEFAULT_COMMAND_WAIT_TIMEOUT,
     HomeAssistantWebSocketClient,
 )
 from ha_mcp.tools.tools_hacs import HacsTools
 
+from ._backup_snapshot_core import Heartbeats
 from ._client_spies import sent_commands
-from ._command_faults import received
+from ._command_faults import arrival, received
 from ._hacs_actions_core import (
-    USER_CODE,
     add_connected_marketplace,
     serve_card,
-    serve_github_sign_in,
+    serve_files,
     serve_repository,
 )
 from ._hacs_marketplace import (
     CARD_ID,
     add_marketplace,
     core_install,
+    install_progress_events,
     pooled_socket,
     sent_with,
     serve_removed,
@@ -681,119 +682,43 @@ class TestAddRepository:
         assert any("connect_github" in s for s in suggestions(body))
 
 
-PENDING = {"error": "authorization_pending"}
-CONFIRMED = {"access_token": "gho_token", "token_type": "bearer", "scope": ""}
+OTHER_CARD = "someone/other-card"
+OTHER_CARD_ID = "600700800"
 
 
-class TestConnectGitHub:
-    """The GitHub sign-in is the Marketplace entry's reconfigure flow, which
-    only the tool that opened it can carry on (#3127)."""
+def _progress_of(events: list[dict[str, Any]], full_name: str) -> list[int]:
+    """The numbers Core dispatched for ``full_name``; False ends an install."""
+    return [
+        e["progress"]
+        for e in events
+        if e["repository"] == full_name and e["progress"] is not False
+    ]
 
-    @pytest.fixture(autouse=True)
-    async def flows(self, hass: HomeAssistant) -> None:
-        """Core's config-entry flow API, which every Home Assistant serves."""
-        assert await async_setup_component(hass, "config", {})
+
+class TestInstallProgress:
+    """Core's install progress, forwarded as MCP progress: the numbers the
+    panel's install dialog shows while a repository installs."""
 
     @staticmethod
-    async def _signing_in(
+    async def _installable(
         hass: HomeAssistant,
         aioclient_mock: AiohttpClientMocker,
         hass_storage: dict[str, Any],
-        *token_answers: dict[str, Any],
+        socket: HomeAssistantWebSocketClient,
+        **other_card_files: Any,
     ) -> MockConfigEntry:
-        """The Marketplace, GitHub answering the device sign-in."""
-        serve_github_sign_in(aioclient_mock, *token_answers)
-        return await _set_up(
-            hass, add_marketplace(hass, aioclient_mock, hass_storage, REPOSITORIES)
-        )
+        """The Marketplace, GitHub serving the card and another card in full."""
+        serve_card(aioclient_mock, CARD, int(CARD_ID))
+        serve_files(aioclient_mock, CARD)
+        serve_card(aioclient_mock, OTHER_CARD, int(OTHER_CARD_ID))
+        serve_files(aioclient_mock, OTHER_CARD, **other_card_files)
+        repositories = {**REPOSITORIES, OTHER_CARD_ID: stored(OTHER_CARD, "plugin")}
+        entry = add_marketplace(hass, aioclient_mock, hass_storage, repositories)
+        await _set_up(hass, entry)
+        await socket.send_command("marketplace/warning/accept")
+        return entry
 
-    @staticmethod
-    def _open(hass: HomeAssistant) -> set[str]:
-        return {f["flow_id"] for f in hass.config_entries.flow.async_progress()}
-
-    async def test_the_flow_opens_at_its_first_step_and_can_be_ended(
-        self, hass: HomeAssistant, marketplace: MockConfigEntry, tools: HacsTools
-    ) -> None:
-        opened = (await tools.ha_manage_hacs(action="connect_github"))["data"]
-        assert (opened["flow_type"], opened["step_id"]) == ("form", "reconfigure")
-        assert opened["flow_id"] in self._open(hass)
-
-        ended = await tools.ha_manage_hacs(
-            action="connect_github", flow_id=opened["flow_id"], abort=True
-        )
-        assert ended["data"]["aborted"] is True
-        assert opened["flow_id"] not in self._open(hass)
-
-    async def test_an_ended_flow_says_nothing_about_github(
-        self,
-        hass: HomeAssistant,
-        component_core_client: HomeAssistantClient,
-        aioclient_mock: AiohttpClientMocker,
-        hass_storage: dict[str, Any],
-    ) -> None:
-        """Seen live: on an instance GitHub was connected to all along, a call
-        with the flow_id of an aborted sign-in answered that GitHub is
-        connected, as if that sign-in had finished."""
-        entry = await _set_up(
-            hass,
-            add_connected_marketplace(hass, aioclient_mock, hass_storage, REPOSITORIES),
-        )
-        tools = HacsTools(component_core_client)
-        try:
-            flow_id = await self._flow_id(tools)
-            await tools.ha_manage_hacs(
-                action="connect_github", flow_id=flow_id, abort=True
-            )
-            body = await rejected_call_body(
-                tools.ha_manage_hacs(action="connect_github", flow_id=flow_id)
-            )
-        finally:
-            await hass.config_entries.async_unload(entry.entry_id)
-
-        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert body["flow_id"] == flow_id
-
-    async def _flow_id(self, tools: HacsTools) -> str:
-        opened = await tools.ha_manage_hacs(action="connect_github")
-        flow_id: str = opened["data"]["flow_id"]
-        return flow_id
-
-    async def test_the_code_comes_back_at_once_and_the_outcome_once_entered(
-        self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        aioclient_mock: AiohttpClientMocker,
-        hass_storage: dict[str, Any],
-        tools: HacsTools,
-    ) -> None:
-        """The device step answers with GitHub's URL and the code before the
-        user entered it; once they did, Core ends the flow by itself and the
-        next call reads the outcome from the Marketplace."""
-        entry = await self._signing_in(
-            hass, aioclient_mock, hass_storage, PENDING, CONFIRMED
-        )
-        try:
-            flow_id = await self._flow_id(tools)
-            device = (
-                await tools.ha_manage_hacs(action="connect_github", flow_id=flow_id)
-            )["data"]
-            assert flow_id in self._open(hass)
-            # GitHub's interval passes and the code is checked again.
-            async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
-            await hass.async_block_till_done()
-            outcome = (
-                await tools.ha_manage_hacs(action="connect_github", flow_id=flow_id)
-            )["data"]
-        finally:
-            await hass.config_entries.async_unload(entry.entry_id)
-
-        assert (device["flow_type"], device["step_id"]) == ("progress", "device")
-        assert device["description_placeholders"]["code"] == USER_CODE
-        assert device["description_placeholders"]["url"].startswith("https://")
-        assert outcome["github_connected"] is True
-        assert flow_id not in self._open(hass)
-
-    async def test_a_code_confirmed_at_once_ends_the_sign_in_in_that_call(
+    async def test_cores_progress_of_the_install_reaches_the_caller(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
@@ -802,45 +727,95 @@ class TestConnectGitHub:
         tools: HacsTools,
         socket: HomeAssistantWebSocketClient,
     ) -> None:
-        entry = await self._signing_in(hass, aioclient_mock, hass_storage, CONFIRMED)
+        entry = await self._installable(hass, aioclient_mock, hass_storage, socket)
+        heartbeats = Heartbeats()
         try:
-            flow_id = await self._flow_id(tools)
-            outcome = (
-                await tools.ha_manage_hacs(action="connect_github", flow_id=flow_id)
-            )["data"]
-            await hass.async_block_till_done()
-            info = await socket.send_command("marketplace/info")
+            async with install_progress_events(socket) as dispatched:
+                await tools.ha_manage_hacs(
+                    action="download", repository_id=CARD_ID, ctx=heartbeats.context
+                )
         finally:
             await hass.config_entries.async_unload(entry.entry_id)
 
-        assert outcome["github_connected"] is True
-        assert info["result"]["github_connected"] is True
+        assert _progress_of(dispatched, CARD)
+        assert [p for p, _ in heartbeats.reports] == _progress_of(dispatched, CARD)
 
-    async def test_a_sign_in_github_refuses_keeps_cores_reason(
+    async def test_another_repositorys_progress_is_not_forwarded(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
         aioclient_mock: AiohttpClientMocker,
         hass_storage: dict[str, Any],
         tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
     ) -> None:
-        entry = await self._signing_in(
-            hass,
-            aioclient_mock,
-            hass_storage,
-            {"error": "expired_token", "error_description": "The code expired"},
+        """Core installs one repository at a time, and one already installing
+        when the call starts reports on the same signal while the call's own
+        install waits for it."""
+        downloading, release = asyncio.Event(), asyncio.Event()
+
+        async def held_file(
+            method: str, url: Any, data: Any
+        ) -> AiohttpClientMockResponse:
+            downloading.set()
+            await release.wait()
+            return AiohttpClientMockResponse(method, url, text="other card")
+
+        entry = await self._installable(
+            hass, aioclient_mock, hass_storage, socket, side_effect=held_file
         )
+        heartbeats = Heartbeats()
         try:
-            flow_id = await self._flow_id(tools)
-            body = await rejected_call_body(
-                tools.ha_manage_hacs(action="connect_github", flow_id=flow_id)
-            )
+            async with install_progress_events(socket) as dispatched:
+                other = asyncio.create_task(
+                    socket.send_command(INSTALL, repository=OTHER_CARD_ID)
+                )
+                await downloading.wait()
+                with arrival(hass, INSTALL) as arrived:
+                    call = asyncio.create_task(
+                        tools.ha_manage_hacs(
+                            action="download",
+                            repository_id=CARD_ID,
+                            ctx=heartbeats.context,
+                        )
+                    )
+                    waiting = asyncio.create_task(arrived.wait())
+                    await asyncio.wait(
+                        {waiting, call}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    waiting.cancel()
+                release.set()
+                await asyncio.gather(call, other)
         finally:
+            release.set()
             await hass.config_entries.async_unload(entry.entry_id)
 
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert body["details"]["reason"] == "activation_failed"
-        assert flow_id not in self._open(hass)
+        assert _progress_of(dispatched, OTHER_CARD)
+        assert [p for p, _ in heartbeats.reports] == _progress_of(dispatched, CARD)
+
+    async def test_an_install_goes_ahead_when_its_progress_cannot_be_followed(
+        self,
+        accepted: None,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        heartbeats = Heartbeats()
+        with (
+            core_install() as install,
+            patch.object(
+                socket,
+                "subscribe_command",
+                AsyncMock(side_effect=HomeAssistantConnectionError("lost")),
+            ) as unanswered,
+        ):
+            result = await tools.ha_manage_hacs(
+                action="download", repository_id=CARD_ID, ctx=heartbeats.context
+            )
+
+        assert unanswered.await_count == 1
+        assert install.await_count == 1
+        assert result["data"]["repository_id"] == CARD_ID
+        assert heartbeats.reports == []
 
 
 async def test_acknowledging_a_critical_removal_returns_cores_list(

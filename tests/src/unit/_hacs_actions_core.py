@@ -104,6 +104,18 @@ def serve_repository(
         aioclient_mock.get(url, text=json.dumps(body), headers=_JSON)
 
 
+def serve_files(
+    aioclient_mock: AiohttpClientMocker, full_name: str, **answer: Any
+) -> None:
+    """GitHub's raw content of each of ``full_name``'s files: ``answer`` is
+    ``aioclient_mock``'s (``side_effect=`` to hold it), a few bytes without
+    it. Call it before the Marketplace is added."""
+    aioclient_mock.get(
+        re.compile(rf"https://raw\.githubusercontent\.com/{re.escape(full_name)}/.*"),
+        **(answer or {"text": f"// {full_name}"}),
+    )
+
+
 USER_CODE = "ABCD-1234"
 
 

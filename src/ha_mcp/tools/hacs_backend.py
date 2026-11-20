@@ -95,8 +95,10 @@ _SUGGESTIONS = {
         "The message carries GitHub's answer. ha_get_hacs_info(action='search') "
         + "shows the Marketplace's state in its store block.",
         "ha_get_system_health reports under marketplace whether GitHub and "
-        + "the catalog are reachable and which download source is in use; the "
-        + "source is an option of the Marketplace entry (ha_set_integration).",
+        + "the catalog are reachable and which download source is in use; "
+        + "ha_get_hacs_info(action='download_source') shows the sources to "
+        + "choose from and ha_manage_hacs(action='set_download_source') "
+        + "switches it.",
     ],
     # Core gives these two one code (invalid_format); its translation key
     # tells them apart.
@@ -247,6 +249,23 @@ async def store_command(
             raise_error=True,
         )
     return reply.get("result")
+
+
+async def marketplace_entry(ws_client: Any, context: dict[str, Any]) -> dict[str, Any]:
+    """Core's config entry of the Marketplace."""
+    reply = await ws_client.send_command("config_entries/get", domain="marketplace")
+    entries = reply.get("result") or []
+    if not entries:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                "Home Assistant has no Marketplace entry.",
+                suggestions=_NOT_AVAILABLE,
+                context=context,
+            )
+        )
+    entry: dict[str, Any] = entries[0]
+    return entry
 
 
 async def resolve_repository(
