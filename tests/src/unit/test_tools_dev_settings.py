@@ -6,6 +6,7 @@ add-on, at the Supervisor upstream (``_tools_dev_core.supervisor``).
 """
 
 import asyncio
+import os
 import sys
 import threading
 from pathlib import Path
@@ -21,7 +22,6 @@ from ha_mcp.config import (
     get_global_settings,
     reset_global_settings,
 )
-from ha_mcp.settings_ui._persistence import _atomic_write_json
 from ha_mcp.tools.tools_dev import FEATURE_FLAG, DevTools
 
 from ._dev_tool_env import _isolated_env as _isolated_env
@@ -114,17 +114,21 @@ class TestSettingsMatrix:
         resume = threading.Event()
         finished = threading.Event()
 
-        def paused_write(path: Path, payload: dict[str, Any]) -> None:
+        target = override_path()
+        replace = os.replace
+
+        def paused_replace(source: str, destination: str) -> None:
+            if Path(destination) != target:
+                replace(source, destination)
+                return
             try:
                 writing.set()
                 assert resume.wait(10)
-                _atomic_write_json(path, payload)
+                replace(source, destination)
             finally:
                 finished.set()
 
-        monkeypatch.setattr(
-            "ha_mcp.settings_ui._persistence._atomic_write_json", paused_write
-        )
+        monkeypatch.setattr(os, "replace", paused_replace)
         setter = asyncio.create_task(
             dev_tools.ha_dev_manage_settings(
                 action="set", setting="log_level", value="DEBUG"
