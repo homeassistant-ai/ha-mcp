@@ -8,7 +8,6 @@ answers only where a test serves it (``_hacs_actions_core``).
 from __future__ import annotations
 
 import asyncio
-from asyncio import FIRST_COMPLETED
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
@@ -268,7 +267,9 @@ class TestConnectGitHub:
                     tools.ha_manage_hacs(action="connect_github", flow_id=flow_id)
                 )
                 reloading = asyncio.ensure_future(entered.wait())
-                await asyncio.wait({call, reloading}, return_when=FIRST_COMPLETED)
+                await asyncio.wait(
+                    {call, reloading}, return_when=asyncio.FIRST_COMPLETED
+                )
                 reloading.cancel()
                 # Time for a call that does not wait to read the Marketplace.
                 for _ in range(100):
