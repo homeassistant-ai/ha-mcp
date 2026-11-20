@@ -399,7 +399,25 @@ class TestRepositorySettings:
         assert (sent["repository"], sent["version"]) == (CARD_ID, "main")
         info = await socket.send_command(REPO_INFO, repository_id=CARD_ID)
         assert info["result"]["selected_tag"] == "main"
-        assert result["data"]["version"] == "main"
+        assert result["data"]["selected_tag"] == "main"
+        assert "warnings" not in result
+
+    async def test_a_pin_the_marketplace_does_not_install_from_is_reported(
+        self,
+        accepted: None,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """Seen live: Core answers a pin to a ref the repository does not have
+        with success and goes on installing from another version. The result
+        carries the version Core installs from, and says the pin is not it."""
+        result = await tools.ha_manage_hacs(
+            action="set_version", repository_id=CARD_ID, version="no-such-ref"
+        )
+        info = await socket.send_command(REPO_INFO, repository_id=CARD_ID)
+        assert info["result"]["ref"] != "no-such-ref"
+        assert result["data"]["ref"] == info["result"]["ref"]
+        assert "no-such-ref" in result["warnings"][0]
 
     async def test_beta_versions_can_be_shown(
         self,
@@ -407,11 +425,12 @@ class TestRepositorySettings:
         tools: HacsTools,
         socket: HomeAssistantWebSocketClient,
     ) -> None:
-        await tools.ha_manage_hacs(
+        result = await tools.ha_manage_hacs(
             action="set_beta", repository_id=CARD_ID, show_beta=True
         )
         info = await socket.send_command(REPO_INFO, repository_id=CARD_ID)
         assert info["result"]["beta"] is True
+        assert result["data"]["beta"] is True
 
     async def test_set_beta_needs_show_beta(
         self, marketplace: MockConfigEntry, tools: HacsTools
@@ -586,6 +605,38 @@ class TestAddRepository:
         assert body["ha_error_code"] == "repository_exists"
         assert any("action='search'" in s for s in suggestions(body))
 
+    @pytest.mark.parametrize(
+        ("arguments", "translation_key", "hint"),
+        [
+            (
+                {"repository": "noslash", "category": "plugin"},
+                "invalid_repository",
+                "owner/repo",
+            ),
+            (
+                {"repository": "owner/my-card", "category": "appdaemon"},
+                "invalid_category",
+                "action='detect'",
+            ),
+        ],
+        ids=["repository", "category"],
+    )
+    async def test_a_refused_input_says_what_core_takes(
+        self,
+        connected: MockConfigEntry,
+        tools: HacsTools,
+        arguments: dict[str, str],
+        translation_key: str,
+        hint: str,
+    ) -> None:
+        """Seen live: Core gives both refusals one code, and the suggestion
+        pointed at a repository's info, which neither has."""
+        body = await rejected_call_body(
+            tools.ha_manage_hacs(action="add_repository", **arguments)
+        )
+        assert body["translation_key"] == translation_key
+        assert any(hint in s for s in suggestions(body))
+
     async def test_a_github_account_is_connected_through_the_marketplace(
         self, accepted: None, tools: HacsTools
     ) -> None:
@@ -640,6 +691,35 @@ class TestConnectGitHub:
         )
         assert ended["data"]["aborted"] is True
         assert opened["flow_id"] not in self._open(hass)
+
+    async def test_an_ended_flow_says_nothing_about_github(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+    ) -> None:
+        """Seen live: on an instance GitHub was connected to all along, a call
+        with the flow_id of an aborted sign-in answered that GitHub is
+        connected, as if that sign-in had finished."""
+        entry = await _set_up(
+            hass,
+            add_connected_marketplace(hass, aioclient_mock, hass_storage, REPOSITORIES),
+        )
+        tools = HacsTools(component_core_client)
+        try:
+            flow_id = await self._flow_id(tools)
+            await tools.ha_manage_hacs(
+                action="connect_github", flow_id=flow_id, abort=True
+            )
+            body = await rejected_call_body(
+                tools.ha_manage_hacs(action="connect_github", flow_id=flow_id)
+            )
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert body["flow_id"] == flow_id
 
     async def _flow_id(self, tools: HacsTools) -> str:
         opened = await tools.ha_manage_hacs(action="connect_github")

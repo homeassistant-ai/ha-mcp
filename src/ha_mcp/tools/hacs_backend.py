@@ -87,17 +87,27 @@ _SUGGESTIONS = {
         "It is listed already: find its id with "
         "ha_get_hacs_info(action='search', query='<owner/repo>').",
     ],
+    # Core gives these two one code (invalid_format); its translation key
+    # tells them apart.
+    "invalid_repository": [
+        "repository takes 'owner/repo' or the repository's GitHub URL.",
+    ],
+    "invalid_category": [
+        "ha_get_hacs_info(action='detect', repository=...) names the "
+        "categories a repository fits; search's store.categories lists the "
+        "Marketplace's.",
+    ],
 }
 
-# For a refusal no code above names: what to read before acting on it.
+# For a refusal nothing above names: what to read before acting on it.
 _DEFAULT_SUGGESTIONS = {
     ErrorCode.RESOURCE_NOT_FOUND: [
         "Find the repository's id with ha_get_hacs_info(action='search')",
     ],
     ErrorCode.COMPONENT_NOT_INSTALLED: _NOT_AVAILABLE,
     ErrorCode.SERVICE_CALL_FAILED: [
-        "Core's message says why the Marketplace refused; "
-        "ha_get_hacs_info(action='info') shows the repository's current state",
+        "The message is Core's own reason. ha_get_hacs_info(action='search') "
+        "shows the Marketplace's state in its store block.",
     ],
 }
 
@@ -171,7 +181,11 @@ def raise_store_error(
     then neither can be updated and the suggestions are the way out of that.
     """
     code = _ERROR_CODES.get(err.code or "", ErrorCode.SERVICE_CALL_FAILED)
-    suggestions = _SUGGESTIONS.get(err.code or "") or _DEFAULT_SUGGESTIONS[code]
+    suggestions = (
+        _SUGGESTIONS.get(err.translation_key or "")
+        or _SUGGESTIONS.get(err.code or "")
+        or _DEFAULT_SUGGESTIONS[code]
+    )
     if owner := _directory_owner(err):
         owners = {r.lower() for r in installed_records or []}
         if len(owners) > 1 and owner.lower() in owners:

@@ -52,6 +52,17 @@ async def _target(
     return actual_id, row, context
 
 
+async def _held(
+    ws_client: Any, actual_id: str, context: dict[str, Any]
+) -> dict[str, Any]:
+    """The repository as the Marketplace holds it after a write: Core answers
+    a version or beta change with no body."""
+    held = await store_command(
+        ws_client, "marketplace/repository/info", context, repository_id=actual_id
+    )
+    return held or {}
+
+
 def _done(
     action: str, actual_id: str, row: dict[str, Any] | None, message: str
 ) -> dict[str, Any]:
@@ -163,9 +174,24 @@ async def set_version(
         repository=actual_id,
         version=version,
     )
+    # Core answers a ref the repository does not have with success and goes on
+    # installing from another version, so the result is what it holds.
+    held = await _held(ws_client, actual_id, context)
+    pinned, ref = held.get("selected_tag"), held.get("ref")
+    kept = ref == version or (pinned is None and version == held.get("default_branch"))
+    message = f"The Marketplace installs {{name}} from {ref}"
     return {
-        **_done("set_version", actual_id, row, "Set {name} to " + version),
-        "version": version,
+        **_done("set_version", actual_id, row, message),
+        "selected_tag": pinned,
+        "ref": ref,
+        "warnings": []
+        if kept
+        else [
+            f"The Marketplace answered without making {version} the version it "
+            f"installs (selected_tag is {pinned}, ref {ref}). Check the tag or "
+            "branch name: ha_get_hacs_info(action='info', include_releases=True) "
+            "lists the releases."
+        ],
     }
 
 
@@ -190,9 +216,10 @@ async def set_beta(
         repository=actual_id,
         show_beta=show_beta,
     )
-    shown = "shows" if show_beta else "hides"
+    beta = bool((await _held(ws_client, actual_id, context)).get("beta"))
+    shown = "shows" if beta else "hides"
     message = f"The Marketplace {shown} beta versions of " + "{name}"
-    return {**_done("set_beta", actual_id, row, message), "show_beta": show_beta}
+    return {**_done("set_beta", actual_id, row, message), "beta": beta}
 
 
 async def ignore(ws_client: Any, repository_id: str | None) -> dict[str, Any]:
