@@ -48,9 +48,12 @@ def serve_repository(
     files: tuple[str, ...],
     *,
     archived: bool = False,
+    releases: tuple[str, ...] = (),
+    renamed_from: str | None = None,
 ) -> None:
-    """GitHub's answers for a repository with ``files`` and a ``hacs.json``,
-    and no releases.
+    """GitHub's answers for a repository with ``files`` and a ``hacs.json``
+    at every ref, and ``releases`` (tags, newest first). ``renamed_from`` is
+    a name it had before, under which GitHub answers with the current one.
 
     Call it before the Marketplace is added: ``aioclient_mock`` answers with
     the first match, and ``add_marketplace`` refuses every other request.
@@ -85,12 +88,17 @@ def serve_repository(
             "pushed_at": "2026-01-01T00:00:00Z",
             "owner": {"login": owner},
         },
-        f"{repo}/releases": [],
-        f"{repo}/git/trees/main": {
-            "sha": "0" * 40,
-            "truncated": False,
-            "tree": tree,
-        },
+        f"{repo}/releases": [
+            {
+                "tag_name": tag,
+                "name": tag,
+                "draft": False,
+                "prerelease": False,
+                "published_at": "2026-01-01T00:00:00Z",
+                "assets": [],
+            }
+            for tag in releases
+        ],
         f"{repo}/contents/hacs.json": {
             "type": "file",
             "encoding": "base64",
@@ -100,8 +108,54 @@ def serve_repository(
         },
         f"{repo}/branches/main": {"name": "main", "commit": {"sha": "2" * 40}},
     }
+    if renamed_from:
+        answers[f"{_API}/{renamed_from}"] = answers[repo]
     for url, body in answers.items():
         aioclient_mock.get(url, text=json.dumps(body), headers=_JSON)
+    aioclient_mock.get(
+        re.compile(rf"{re.escape(repo)}/git/trees/.*"),
+        text=json.dumps({"sha": "0" * 40, "truncated": False, "tree": tree}),
+        headers=_JSON,
+    )
+
+
+def serve_rate_limit(aioclient_mock: AiohttpClientMocker, full_name: str) -> None:
+    """GitHub refuses ``full_name`` with its rate-limit answer. Call it before
+    the Marketplace is added."""
+    aioclient_mock.get(
+        f"{_API}/{full_name}",
+        status=403,
+        text=json.dumps({"message": "API rate limit exceeded for 127.0.0.1."}),
+        headers=_JSON,
+    )
+
+
+def serve_integration(
+    aioclient_mock: AiohttpClientMocker, full_name: str, github_id: int, domain: str
+) -> None:
+    """GitHub's answers for a repository holding the integration ``domain``,
+    its ``manifest.json`` included. Call it before the Marketplace is added."""
+    path = f"custom_components/{domain}/manifest.json"
+    manifest = {"domain": domain, "name": domain, "version": "1.0.0"}
+    aioclient_mock.get(
+        f"{_API}/{full_name}/contents/{path}",
+        text=json.dumps(
+            {
+                "type": "file",
+                "encoding": "base64",
+                "name": "manifest.json",
+                "path": path,
+                "content": base64.b64encode(json.dumps(manifest).encode()).decode(),
+            }
+        ),
+        headers=_JSON,
+    )
+    serve_repository(
+        aioclient_mock,
+        full_name,
+        github_id,
+        (path, f"custom_components/{domain}/__init__.py"),
+    )
 
 
 def serve_files(

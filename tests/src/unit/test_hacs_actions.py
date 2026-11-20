@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.marketplace.const import DOMAIN as MARKETPLACE
@@ -24,14 +23,12 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry, MockUser
 from pytest_homeassistant.test_util.aiohttp import (
     AiohttpClientMocker,
-    AiohttpClientMockResponse,
 )
 
 from ha_mcp.__main__ import OAuthProxyClient
 from ha_mcp._vendor.fastmcp.server.auth.auth import AccessToken
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
-    HomeAssistantConnectionError,
 )
 from ha_mcp.client.websocket_client import (
     DEFAULT_COMMAND_WAIT_TIMEOUT,
@@ -39,20 +36,18 @@ from ha_mcp.client.websocket_client import (
 )
 from ha_mcp.tools.tools_hacs import HacsTools
 
-from ._backup_snapshot_core import Heartbeats
 from ._client_spies import sent_commands
-from ._command_faults import arrival, received
+from ._command_faults import received
 from ._hacs_actions_core import (
     add_connected_marketplace,
     serve_card,
-    serve_files,
+    serve_rate_limit,
     serve_repository,
 )
 from ._hacs_marketplace import (
     CARD_ID,
     add_marketplace,
     core_install,
-    install_progress_events,
     pooled_socket,
     sent_with,
     serve_removed,
@@ -386,7 +381,29 @@ class TestRepositorySettings:
         body = await rejected_call_body(call)
         assert body["timeout_seconds"] == 60.0
 
-    async def test_a_version_is_pinned_in_the_marketplace(
+    async def test_githubs_rate_limit_points_at_connecting_an_account(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+        tools: HacsTools,
+    ) -> None:
+        serve_rate_limit(aioclient_mock, CARD)
+        entry = await _set_up(
+            hass, add_marketplace(hass, aioclient_mock, hass_storage, REPOSITORIES)
+        )
+        try:
+            body = await rejected_call_body(
+                tools.ha_manage_hacs(action="update_information", repository_id=CARD_ID)
+            )
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert body["ha_error_code"] == "github_rate_limited"
+        assert any("connect_github" in s for s in suggestions(body))
+
+    async def test_a_version_is_selected_in_the_marketplace(
         self,
         accepted: None,
         tools: HacsTools,
@@ -403,15 +420,15 @@ class TestRepositorySettings:
         assert result["data"]["selected_tag"] == "main"
         assert "warnings" not in result
 
-    async def test_a_pin_the_marketplace_does_not_install_from_is_reported(
+    async def test_a_ref_core_did_not_select_is_reported(
         self,
         accepted: None,
         tools: HacsTools,
         socket: HomeAssistantWebSocketClient,
     ) -> None:
-        """Seen live: Core answers a pin to a ref the repository does not have
-        with success and goes on installing from another version. The result
-        carries the version Core installs from, and says the pin is not it."""
+        """Seen live: Core answers a ref the repository does not have with
+        success and reads the repository at another. The result carries the
+        ref Core reads, and says it is not the one asked for."""
         result = await tools.ha_manage_hacs(
             action="set_version", repository_id=CARD_ID, version="no-such-ref"
         )
@@ -419,6 +436,50 @@ class TestRepositorySettings:
         assert info["result"]["ref"] != "no-such-ref"
         assert result["data"]["ref"] == info["result"]["ref"]
         assert "no-such-ref" in result["warnings"][0]
+
+    async def test_the_default_branch_clears_the_selection_without_a_warning(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """Core clears selected_tag for the default branch and reads a
+        repository with releases at its newest one, so the ref it answers is
+        not the branch asked for; that is not a refused selection."""
+        serve_repository(
+            aioclient_mock,
+            CARD,
+            int(CARD_ID),
+            ("lovelace-mushroom.js",),
+            releases=("v1",),
+        )
+        entry = await _set_up(
+            hass,
+            add_marketplace(
+                hass,
+                aioclient_mock,
+                hass_storage,
+                {CARD_ID: stored(CARD, "plugin", selected_tag="v1")},
+            ),
+        )
+        try:
+            await socket.send_command("marketplace/warning/accept")
+            # Core keeps no default branch in storage; a read from GitHub sets it.
+            await socket.send_command(REFRESH, repository=CARD_ID)
+            result = await tools.ha_manage_hacs(
+                action="set_version", repository_id=CARD_ID, version="main"
+            )
+            info = await socket.send_command(REPO_INFO, repository_id=CARD_ID)
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert info["result"]["default_branch"] == "main"
+        assert info["result"]["selected_tag"] is None
+        assert result["data"]["selected_tag"] is None
+        assert "warnings" not in result
 
     async def test_beta_versions_can_be_shown(
         self,
@@ -432,6 +493,41 @@ class TestRepositorySettings:
         info = await socket.send_command(REPO_INFO, repository_id=CARD_ID)
         assert info["result"]["beta"] is True
         assert result["data"]["beta"] is True
+
+    @pytest.mark.parametrize(
+        ("arguments", "written"),
+        [
+            ({"action": "set_version", "version": "main"}, ("selected_tag", "main")),
+            ({"action": "set_beta", "show_beta": True}, ("beta", True)),
+        ],
+        ids=["set_version", "set_beta"],
+    )
+    async def test_a_readback_without_an_answer_keeps_the_accepted_write(
+        self,
+        hass: HomeAssistant,
+        accepted: None,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+        arguments: dict[str, Any],
+        written: tuple[str, Any],
+    ) -> None:
+        """Core answers the write with no body, and its repository read can
+        reach GitHub; a read that gets no answer after the write was accepted
+        must not report the write as failed."""
+        before = timers(hass)
+        async with held_command(hass, REPO_INFO) as reading:
+            call = asyncio.create_task(
+                tools.ha_manage_hacs(repository_id=CARD_ID, **arguments)
+            )
+            await reading.reached_by(call)
+            await outwait(hass, 59, 60, before)
+            result = await call
+        info = await socket.send_command(REPO_INFO, repository_id=CARD_ID)
+
+        field, value = written
+        assert result["success"] is True
+        assert info["result"][field] == value
+        assert any(f"repository_id='{CARD_ID}'" in w for w in result["warnings"])
 
     async def test_set_beta_needs_show_beta(
         self, marketplace: MockConfigEntry, tools: HacsTools
@@ -459,9 +555,29 @@ class TestRepositorySettings:
         tools: HacsTools,
         socket: HomeAssistantWebSocketClient,
     ) -> None:
-        await tools.ha_manage_hacs(action="clear_new", categories=["lovelace"])
+        result = await tools.ha_manage_hacs(action="clear_new", categories=["lovelace"])
         assert (await _row(socket, CARD_ID))["new"] is False
         assert (await _row(socket, STORE_ONLY_ID))["new"] is True
+        assert "warnings" not in result
+
+    async def test_a_category_the_store_lacks_is_named_not_claimed_cleared(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """Seen live: Core clears nothing in a category it does not have and
+        answers success; the tool said it cleared every repository there."""
+        result = await tools.ha_manage_hacs(
+            action="clear_new", categories=["appdaemon"]
+        )
+
+        info = await socket.send_command("marketplace/info")
+        [warning] = result["warnings"]
+        assert "appdaemon" in warning
+        assert all(c in warning for c in info["result"]["categories"])
+        assert "appdaemon" not in result["data"]["message"]
+        assert (await _row(socket, CARD_ID))["new"] is True
 
     async def test_clear_new_takes_one_target(
         self,
@@ -520,10 +636,17 @@ class TestAddRepository:
         hass_storage: dict[str, Any],
     ) -> AsyncIterator[MockConfigEntry]:
         """The Marketplace with a GitHub account connected and its warning
-        accepted; GitHub answers for a card and for two repositories whose
-        category cannot be told: one holds a card and an integration, one
-        nothing."""
+        accepted; GitHub answers for a card, for a card renamed from
+        owner/old-card, and for two repositories whose category cannot be
+        told: one holds a card and an integration, one nothing."""
         serve_card(aioclient_mock, "owner/my-card", 777)
+        serve_repository(
+            aioclient_mock,
+            "owner/new-card",
+            780,
+            ("new-card.js",),
+            renamed_from="owner/old-card",
+        )
         serve_repository(
             aioclient_mock,
             "owner/several",
@@ -555,6 +678,49 @@ class TestAddRepository:
             ("owner/my-card", "plugin")
         ]
         assert result["data"]["repository_id"] == "777"
+
+    async def test_a_repository_listed_under_its_new_name_is_pointed_at_search(
+        self, connected: MockConfigEntry, tools: HacsTools
+    ) -> None:
+        """GitHub answers a renamed repository under its new name, which Core
+        lists; the old one the caller gave finds no row."""
+        result = await tools.ha_manage_hacs(
+            action="add_repository", repository="owner/old-card", category="plugin"
+        )
+
+        assert result["data"]["repository_id"] is None
+        assert any("another name" in w for w in result["warnings"])
+
+    async def test_a_list_read_without_an_answer_keeps_the_added_repository(
+        self,
+        hass: HomeAssistant,
+        connected: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """Core added the repository before the list read that finds its id;
+        that read getting no answer must not report the add as failed."""
+        before = timers(hass)
+        async with held_command(hass, LIST, first_only=True) as listing:
+            call = asyncio.create_task(
+                tools.ha_manage_hacs(
+                    action="add_repository",
+                    repository="owner/my-card",
+                    category="plugin",
+                )
+            )
+            await listing.reached_by(call)
+            await outwait(
+                hass,
+                DEFAULT_COMMAND_WAIT_TIMEOUT - 1,
+                DEFAULT_COMMAND_WAIT_TIMEOUT,
+                before,
+            )
+            result = await call
+
+        assert result["data"]["repository_id"] is None
+        assert any("search" in w for w in result["warnings"])
+        assert "777" in {r["id"] for r in (await socket.send_command(LIST))["result"]}
 
     async def test_without_a_category_the_detected_one_is_used(
         self,
@@ -651,17 +817,10 @@ class TestAddRepository:
         assert body["ha_error_code"] == "app_repository"
         assert any("ha_manage_app" in s for s in suggestions(body))
 
-    async def test_a_repository_github_does_not_have_points_at_system_health(
-        self,
-        connected: MockConfigEntry,
-        aioclient_mock: AiohttpClientMocker,
-        tools: HacsTools,
+    async def test_a_github_that_does_not_answer_points_at_system_health(
+        self, connected: MockConfigEntry, tools: HacsTools
     ) -> None:
-        aioclient_mock.get(
-            "https://api.github.com/repos/owner/gone",
-            status=404,
-            json={"message": "Not Found"},
-        )
+        """GitHub answers nothing for a repository it was not told to serve."""
         body = await rejected_call_body(
             tools.ha_manage_hacs(
                 action="add_repository", repository="owner/gone", category="plugin"
@@ -682,208 +841,65 @@ class TestAddRepository:
         assert any("connect_github" in s for s in suggestions(body))
 
 
-OTHER_CARD = "someone/other-card"
-OTHER_CARD_ID = "600700800"
-
-
-def _progress_of(events: list[dict[str, Any]], full_name: str) -> list[int]:
-    """The numbers Core dispatched for ``full_name``; False ends an install."""
-    return [
-        e["progress"]
-        for e in events
-        if e["repository"] == full_name and e["progress"] is not False
-    ]
-
-
-class TestInstallProgress:
-    """Core's install progress, forwarded as MCP progress: the numbers the
-    panel's install dialog shows while a repository installs."""
-
-    @staticmethod
-    async def _installable(
-        hass: HomeAssistant,
-        aioclient_mock: AiohttpClientMocker,
-        hass_storage: dict[str, Any],
-        socket: HomeAssistantWebSocketClient,
-        **other_card_files: Any,
-    ) -> MockConfigEntry:
-        """The Marketplace, GitHub serving the card and another card in full."""
-        serve_card(aioclient_mock, CARD, int(CARD_ID))
-        serve_files(aioclient_mock, CARD)
-        serve_card(aioclient_mock, OTHER_CARD, int(OTHER_CARD_ID))
-        serve_files(aioclient_mock, OTHER_CARD, **other_card_files)
-        repositories = {**REPOSITORIES, OTHER_CARD_ID: stored(OTHER_CARD, "plugin")}
-        entry = add_marketplace(hass, aioclient_mock, hass_storage, repositories)
-        await _set_up(hass, entry)
-        await socket.send_command("marketplace/warning/accept")
-        return entry
-
-    async def test_cores_progress_of_the_install_reaches_the_caller(
+class TestAcknowledgeCritical:
+    @pytest.fixture
+    async def critical(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
         aioclient_mock: AiohttpClientMocker,
         hass_storage: dict[str, Any],
-        tools: HacsTools,
-        socket: HomeAssistantWebSocketClient,
-    ) -> None:
-        entry = await self._installable(hass, aioclient_mock, hass_storage, socket)
-        heartbeats = Heartbeats()
-        try:
-            async with install_progress_events(socket) as dispatched:
-                await tools.ha_manage_hacs(
-                    action="download", repository_id=CARD_ID, ctx=heartbeats.context
-                )
-        finally:
-            await hass.config_entries.async_unload(entry.entry_id)
-
-        assert _progress_of(dispatched, CARD)
-        assert [p for p, _ in heartbeats.reports] == _progress_of(dispatched, CARD)
-
-    async def test_another_repositorys_progress_is_not_forwarded(
-        self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        aioclient_mock: AiohttpClientMocker,
-        hass_storage: dict[str, Any],
-        tools: HacsTools,
-        socket: HomeAssistantWebSocketClient,
-    ) -> None:
-        """Core installs one repository at a time, and one already installing
-        when the call starts reports on the same signal while the call's own
-        install waits for it."""
-        downloading, release = asyncio.Event(), asyncio.Event()
-
-        async def held_file(
-            method: str, url: Any, data: Any
-        ) -> AiohttpClientMockResponse:
-            downloading.set()
-            await release.wait()
-            return AiohttpClientMockResponse(method, url, text="other card")
-
-        entry = await self._installable(
-            hass, aioclient_mock, hass_storage, socket, side_effect=held_file
+    ) -> AsyncIterator[MockConfigEntry]:
+        """The Marketplace with one critical removal stored, not acknowledged."""
+        serve_removed(aioclient_mock, [])
+        store_critical(
+            hass_storage,
+            [
+                {
+                    "repository": "bad/actor",
+                    "reason": "Steals tokens",
+                    "link": "https://example.invalid/bad",
+                    "acknowledged": False,
+                }
+            ],
         )
-        heartbeats = Heartbeats()
-        try:
-            async with install_progress_events(socket) as dispatched:
-                other = asyncio.create_task(
-                    socket.send_command(INSTALL, repository=OTHER_CARD_ID)
-                )
-                await downloading.wait()
-                with arrival(hass, INSTALL) as arrived:
-                    call = asyncio.create_task(
-                        tools.ha_manage_hacs(
-                            action="download",
-                            repository_id=CARD_ID,
-                            ctx=heartbeats.context,
-                        )
-                    )
-                    waiting = asyncio.create_task(arrived.wait())
-                    await asyncio.wait(
-                        {waiting, call}, return_when=asyncio.FIRST_COMPLETED
-                    )
-                    waiting.cancel()
-                release.set()
-                await asyncio.gather(call, other)
-        finally:
-            release.set()
-            await hass.config_entries.async_unload(entry.entry_id)
+        entry = await _set_up(
+            hass, add_marketplace(hass, aioclient_mock, hass_storage, REPOSITORIES)
+        )
+        yield entry
+        await hass.config_entries.async_unload(entry.entry_id)
 
-        assert _progress_of(dispatched, OTHER_CARD)
-        assert [p for p, _ in heartbeats.reports] == _progress_of(dispatched, CARD)
-
-    async def test_an_install_goes_ahead_when_its_progress_cannot_be_followed(
+    async def test_acknowledging_a_critical_removal_returns_cores_list(
         self,
-        accepted: None,
+        critical: MockConfigEntry,
         tools: HacsTools,
         socket: HomeAssistantWebSocketClient,
     ) -> None:
-        heartbeats = Heartbeats()
-        with (
-            core_install() as install,
-            patch.object(
-                socket,
-                "subscribe_command",
-                AsyncMock(side_effect=HomeAssistantConnectionError("lost")),
-            ) as unanswered,
-        ):
-            result = await tools.ha_manage_hacs(
-                action="download", repository_id=CARD_ID, ctx=heartbeats.context
-            )
-
-        assert unanswered.await_count == 1
-        assert install.await_count == 1
-        assert result["data"]["repository_id"] == CARD_ID
-        assert heartbeats.reports == []
-
-
-async def test_acknowledging_a_critical_removal_returns_cores_list(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    aioclient_mock: AiohttpClientMocker,
-    hass_storage: dict[str, Any],
-    tools: HacsTools,
-    socket: HomeAssistantWebSocketClient,
-) -> None:
-    serve_removed(aioclient_mock, [])
-    store_critical(
-        hass_storage,
-        [
-            {
-                "repository": "bad/actor",
-                "reason": "Steals tokens",
-                "link": "https://example.invalid/bad",
-                "acknowledged": False,
-            }
-        ],
-    )
-    entry = await _set_up(
-        hass, add_marketplace(hass, aioclient_mock, hass_storage, REPOSITORIES)
-    )
-    try:
         result = await tools.ha_manage_hacs(
             action="acknowledge_critical", repository="bad/actor"
         )
         native = await socket.send_command("marketplace/critical/list")
-    finally:
-        await hass.config_entries.async_unload(entry.entry_id)
 
-    assert result["data"]["critical"] == native["result"]
-    assert native["result"][0]["acknowledged"] is True
+        assert result["data"]["critical"] == native["result"]
+        assert native["result"][0]["acknowledged"] is True
 
+    @pytest.mark.parametrize(
+        "repository", ["nobody/never-critical", "Bad/Actor"], ids=["unknown", "case"]
+    )
+    async def test_a_name_core_holds_no_critical_row_for_is_not_acknowledged(
+        self,
+        critical: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+        repository: str,
+    ) -> None:
+        """Seen live: Core matches the name exactly and answers its whole list
+        either way, and the tool said it acknowledged the removal."""
+        body = await rejected_call_body(
+            tools.ha_manage_hacs(action="acknowledge_critical", repository=repository)
+        )
+        native = await socket.send_command("marketplace/critical/list")
 
-@pytest.mark.parametrize(
-    ("arguments", "foreign"),
-    [
-        # "Uninstall this version" is not something remove can do.
-        ({"action": "remove", "repository_id": "1", "version": "v4.0.0"}, "version"),
-        ({"action": "download", "repository_id": "1", "category": "theme"}, "category"),
-        (
-            {"action": "add_repository", "repository": "o/r", "repository_id": "1"},
-            "repository_id",
-        ),
-        (
-            {
-                "action": "set_beta",
-                "repository_id": "1",
-                "show_beta": True,
-                "confirm": True,
-            },
-            "confirm",
-        ),
-        ({"action": "connect_github", "repository": "o/r"}, "repository"),
-        ({"action": "remove", "repository_id": "1", "abort": True}, "abort"),
-    ],
-)
-async def test_a_parameter_of_another_action_is_refused_not_dropped(
-    tools: HacsTools,
-    socket: HomeAssistantWebSocketClient,
-    arguments: dict[str, Any],
-    foreign: str,
-) -> None:
-    with sent_commands(socket) as spy:
-        body = await rejected_call_body(tools.ha_manage_hacs(**arguments))
-    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert body["foreign_parameters"] == [foreign]
-    spy.assert_not_awaited()
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert any("action='critical'" in s for s in suggestions(body))
+        assert native["result"][0]["acknowledged"] is False

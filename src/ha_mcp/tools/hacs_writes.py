@@ -5,11 +5,17 @@ from typing import Any
 
 from ha_mcp._vendor.fastmcp import Context
 
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .coercion import parse_string_list_param
 from .hacs_backend import (
     GITHUB_COMMAND_TIMEOUT,
     LIST,
+    missing_category_warning,
     native_category,
     resolve_repository,
     store_command,
@@ -55,15 +61,34 @@ async def _target(
     return actual_id, row, context
 
 
+# A read after a write Core already accepted that fails this way is a warning:
+# the write stands.
+_UNREAD = (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
+
+
 async def _held(
-    ws_client: Any, actual_id: str, context: dict[str, Any]
-) -> dict[str, Any]:
-    """The repository as the Marketplace holds it after a write: Core answers
-    a version or beta change with no body."""
-    held = await store_command(
-        ws_client, "marketplace/repository/info", context, repository_id=actual_id
-    )
-    return held or {}
+    ws_client: Any, actual_id: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """The repository as the Marketplace holds it after a write (Core answers
+    a version or beta change with no body), or None and a warning. Core may
+    read it from GitHub first."""
+    try:
+        reply = await ws_client.send_command(
+            "marketplace/repository/info",
+            _wait_timeout=GITHUB_COMMAND_TIMEOUT,
+            repository_id=actual_id,
+        )
+    except _UNREAD as err:
+        return None, (
+            f"The Marketplace accepted the change, but reading the repository "
+            f"back failed ({err}); read it with ha_get_hacs_info(action='info', "
+            f"repository_id='{actual_id}')."
+        )
+    return reply.get("result") or {}, None
 
 
 def _done(
@@ -180,24 +205,37 @@ async def set_version(
         repository=actual_id,
         version=version,
     )
-    # Core answers a ref the repository does not have with success and goes on
-    # installing from another version, so the result is what it holds.
-    held = await _held(ws_client, actual_id, context)
-    pinned, ref = held.get("selected_tag"), held.get("ref")
-    kept = ref == version or (pinned is None and version == held.get("default_branch"))
-    message = f"The Marketplace installs {{name}} from {ref}"
+    # Core selects the ref the Marketplace reads the repository at and installs
+    # nothing; it answers a ref the repository does not have with success and
+    # reads another, so the result is what it holds.
+    held, unread = await _held(ws_client, actual_id)
+    selected, ref = (held or {}).get("selected_tag"), (held or {}).get("ref")
+    kept = ref == version or (
+        selected is None and version == (held or {}).get("default_branch")
+    )
+    selection = (
+        f"The Marketplace now reads {{name}} at {ref}."
+        if held is not None
+        else f"The Marketplace accepted {version} for {{name}}."
+    )
+    message = (
+        f"{selection} Nothing was installed: ha_manage_hacs(action='download', "
+        f"version='{version}') installs it, and a download without version "
+        "resets this selection."
+    )
+    warnings = [unread] if unread else []
+    if held is not None and not kept:
+        warnings.append(
+            f"The Marketplace answered without selecting {version} (selected_tag "
+            f"is {selected}, ref {ref}). Check the tag or branch name: "
+            "ha_get_hacs_info(action='info', include_releases=True) lists the "
+            "releases."
+        )
     return {
         **_done("set_version", actual_id, row, message),
-        "selected_tag": pinned,
+        "selected_tag": selected,
         "ref": ref,
-        "warnings": []
-        if kept
-        else [
-            f"The Marketplace answered without making {version} the version it "
-            f"installs (selected_tag is {pinned}, ref {ref}). Check the tag or "
-            "branch name: ha_get_hacs_info(action='info', include_releases=True) "
-            "lists the releases."
-        ],
+        "warnings": warnings,
     }
 
 
@@ -222,10 +260,19 @@ async def set_beta(
         repository=actual_id,
         show_beta=show_beta,
     )
-    beta = bool((await _held(ws_client, actual_id, context)).get("beta"))
-    shown = "shows" if beta else "hides"
-    message = f"The Marketplace {shown} beta versions of " + "{name}"
-    return {**_done("set_beta", actual_id, row, message), "beta": beta}
+    held, unread = await _held(ws_client, actual_id)
+    beta = bool(held.get("beta")) if held is not None else None
+    if beta is None:
+        message = "The Marketplace accepted the beta setting of {name}"
+    else:
+        message = (
+            f"The Marketplace {'shows' if beta else 'hides'} beta versions of {{name}}"
+        )
+    return {
+        **_done("set_beta", actual_id, row, message),
+        "beta": beta,
+        "warnings": [unread] if unread else [],
+    }
 
 
 async def ignore(ws_client: Any, repository_id: str | None) -> dict[str, Any]:
@@ -255,7 +302,7 @@ async def clear_new(
     repository_id: str | None,
     categories: list[str] | str | None,
 ) -> dict[str, Any]:
-    names = parse_string_list_param(categories, "categories", allow_csv=True)
+    names = parse_string_list_param(categories, "categories", allow_csv=True) or None
     if (repository_id is None) == (names is None):
         raise_tool_error(
             create_error_response(
@@ -265,18 +312,25 @@ async def clear_new(
             )
         )
     if names is not None:
+        context: dict[str, Any] = {"action": "clear_new", "categories": names}
+        store = await store_command(ws_client, "marketplace/info", context) or {}
+        warnings = [w for name in names if (w := missing_category_warning(name, store))]
         native = [native_category(name) for name in names]
         await store_command(
             ws_client,
             "marketplace/repositories/clear_new",
-            {"action": "clear_new", "categories": native},
+            context,
             categories=native,
         )
+        cleared = [c for c in native if c in (store.get("categories") or [])]
         return {
             "action": "clear_new",
             "categories": native,
             "message": "Cleared the new flag of every repository in "
-            + ", ".join(native),
+            + ", ".join(cleared)
+            if cleared
+            else "Cleared no new flag: the Marketplace has none of these categories",
+            "warnings": warnings,
         }
     actual_id, row, context = await _target(ws_client, "clear_new", repository_id)
     await store_command(
@@ -309,7 +363,18 @@ async def add_repository(
         repository=repository,
         category=category,
     )
-    rows = await store_command(ws_client, LIST, context, categories=[category]) or []
+    found = "find its id with ha_get_hacs_info(action='search')"
+    rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    try:
+        reply = await ws_client.send_command(LIST, categories=[category])
+    except _UNREAD as err:
+        warnings.append(
+            f"The Marketplace added {repository}, but reading its list back "
+            f"failed ({err}); {found}."
+        )
+    else:
+        rows = reply.get("result") or []
     # The repository may be given as a GitHub URL; its row is under owner/repo.
     given = repository.strip().lower().rstrip("/").removesuffix(".git")
     row = next(
@@ -321,6 +386,11 @@ async def add_repository(
         ),
         None,
     )
+    if row is None and not warnings:
+        warnings.append(
+            f"The Marketplace added {repository}, but lists it under another "
+            f"name; {found}."
+        )
     return {
         "action": "add_repository",
         "repository": repository,
@@ -328,12 +398,7 @@ async def add_repository(
         "repository_id": str(row["id"]) if row else None,
         "message": f"Added {repository} to the Marketplace as {category}",
         "data": row,
-        "warnings": []
-        if row
-        else [
-            f"The Marketplace added {repository}, but lists it under another "
-            "name; find its id with ha_get_hacs_info(action='search')."
-        ],
+        "warnings": warnings,
     }
 
 
@@ -374,17 +439,38 @@ async def acknowledge_critical(
     ws_client: Any, repository: str | None
 ) -> dict[str, Any]:
     repository = _require(repository, "repository", "acknowledge_critical")
-    critical = await store_command(
-        ws_client,
-        "marketplace/critical/acknowledge",
-        {"action": "acknowledge_critical", "repository": repository},
-        repository=repository,
+    context = {"action": "acknowledge_critical", "repository": repository}
+    critical = (
+        await store_command(
+            ws_client,
+            "marketplace/critical/acknowledge",
+            context,
+            repository=repository,
+        )
+        or []
     )
+    # Core answers its whole list whether or not a row has that exact name.
+    if not any(
+        row.get("repository") == repository and row.get("acknowledged")
+        for row in critical
+    ):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"The Marketplace holds no critical removal named '{repository}'; "
+                "nothing was acknowledged.",
+                suggestions=[
+                    "ha_get_hacs_info(action='critical') lists the critical "
+                    "removals under the exact names this action takes",
+                ],
+                context=context,
+            )
+        )
     return {
         "action": "acknowledge_critical",
         "repository": repository,
         "message": f"Acknowledged the critical removal of {repository}",
-        "critical": critical or [],
+        "critical": critical,
     }
 
 

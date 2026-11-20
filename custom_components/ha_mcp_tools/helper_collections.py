@@ -16,6 +16,8 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any
 
+from probatio import to_field_list
+
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
@@ -66,26 +68,19 @@ def collection_owner(hass: HomeAssistant, helper_type: str) -> Any:
     return owner
 
 
-def _optional_attr(module: str, name: str) -> Any:
-    try:
-        return getattr(importlib.import_module(module), name)
-    except ImportError, AttributeError:
-        return None
-
-
-# Resolved at import, off the event loop.
-_TO_FIELD_LIST = _optional_attr("probatio", "to_field_list")
-
-
 def _convert(schema: Any) -> list[dict[str, Any]]:
     """Serialize with Core's serializer."""
     from homeassistant.helpers import config_validation as cv
 
     try:
-        return list(_TO_FIELD_LIST(schema, custom_serializer=cv.custom_serializer))
+        fields = to_field_list(schema, custom_serializer=cv.custom_serializer)
     except Exception as err:
         _LOGGER.debug("Schema serializer failed", exc_info=True)
         raise ValueError(f"{type(err).__name__}: {err}") from err
+    # Only a mapping serializes to a field list.
+    if not isinstance(fields, list):
+        raise ValueError(f"not a mapping schema: {fields!r}")
+    return fields
 
 
 def _serialize(schema: dict[Any, Any]) -> list[dict[str, Any]]:

@@ -16,9 +16,11 @@ from ..client.rest_client import (
 from .hacs_backend import (
     GITHUB_COMMAND_TIMEOUT,
     LIST,
+    missing_category_warning,
     native_category,
     resolve_repository,
     store_command,
+    store_state_warning,
 )
 from .helpers import safe_progress
 
@@ -76,6 +78,22 @@ def _passes_filters(
     return not installed_only or bool(row.get("installed"))
 
 
+def _unmatched_status_warnings(
+    rows: list[dict[str, Any]], statuses: list[str] | None
+) -> list[str]:
+    """A warning for each requested status no listed row carries, naming the
+    statuses the list does carry."""
+    carried = {str(row.get("status")) for row in rows if row.get("status")}
+    if any(row.get("installed") for row in rows):
+        carried.add("installed")
+    return [
+        f"No listed repository has the status '{status}'; the list's statuses "
+        "are: " + ", ".join(sorted(carried))
+        for status in statuses or []
+        if status not in carried
+    ]
+
+
 def _panel_order(row: dict[str, Any]) -> tuple[bool, bool, int, str]:
     """Installed first, then new, then the most starred, then by name."""
     return (
@@ -119,15 +137,12 @@ async def search(
     store = await store_command(ws_client, "marketplace/info", context) or {}
     fields: dict[str, Any] = {}
     warnings: list[str] = []
+    if incomplete := store_state_warning(store):
+        warnings.append(incomplete)
     if category:
-        native = native_category(category)
-        fields["categories"] = [native]
-        offered = store.get("categories") or []
-        if native not in offered:
-            warnings.append(
-                f"The Marketplace has no '{category}' category; it has: "
-                + ", ".join(offered)
-            )
+        fields["categories"] = [native_category(category)]
+        if missing := missing_category_warning(category, store):
+            warnings.append(missing)
     await safe_progress(
         ctx, progress=1, total=3, message="fetching the Marketplace repository list"
     )
@@ -135,6 +150,7 @@ async def search(
     await safe_progress(
         ctx, progress=2, total=3, message=f"filtering {len(rows)} repositories"
     )
+    warnings.extend(_unmatched_status_warnings(rows, statuses))
     terms = query.lower().split()
     matches = sorted(
         (
@@ -195,11 +211,14 @@ async def info(
 ) -> dict[str, Any]:
     context = {"action": "info", "repository_id": repository_id}
     actual_id, _ = await resolve_repository(ws_client, repository_id, context)
+    # Core reads a repository it has not read since it started from GitHub.
     result = (
         await store_command(
             ws_client,
             "marketplace/repository/info",
             context,
+            timeout=GITHUB_COMMAND_TIMEOUT,
+            on_timeout=["GitHub may be slow; reading is safe to retry"],
             repository_id=actual_id,
         )
         or {}
@@ -210,7 +229,7 @@ async def info(
         result.update(releases)
     return {
         **result,
-        "repository_id": repository_id,
+        "repository_id": actual_id,
         "readme_note": README_NOTE,
         "warnings": warnings,
     }

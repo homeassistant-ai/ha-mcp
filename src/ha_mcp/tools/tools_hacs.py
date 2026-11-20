@@ -294,8 +294,11 @@ class HacsTools:
                     "'add_repository' adds a custom repository; "
                     "'remove_repository' forgets a custom one that is not "
                     "installed; 'update_information' re-reads a repository from "
-                    "GitHub; 'set_version' pins a tag or branch (the default "
-                    "branch clears the pin); 'set_beta' shows or hides "
+                    "GitHub; 'set_version' selects the tag or branch the "
+                    "Marketplace reads the repository at and installs nothing "
+                    "(the default branch clears the selection, and the next "
+                    "download without version resets it; to install a version "
+                    "pass version to 'download'); 'set_beta' shows or hides "
                     "prereleases; 'ignore' hides a repository's removal notice "
                     "(the store has no un-ignore); 'clear_new' clears the new "
                     "flag; 'acknowledge_critical' confirms a critical removal "
@@ -311,8 +314,9 @@ class HacsTools:
             str | None,
             Field(
                 description=(
-                    f"{_REPOSITORY_ID_HELP} (every repository action; for "
-                    "'clear_new' instead of categories)"
+                    f"{_REPOSITORY_ID_HELP} (action='download', 'remove', "
+                    "'remove_repository', 'update_information', 'set_version', "
+                    "'set_beta', 'ignore'; 'clear_new' instead of categories)"
                 )
             ),
         ] = None,
@@ -408,14 +412,16 @@ class HacsTools:
 
         This tool writes; to search the store or read a repository use
         ``ha_get_hacs_info``. Use ``update_information`` to surface a
-        just-published release: the Marketplace re-reads a repository on its
-        own only every 48 hours, and only with a connected GitHub account.
+        just-published release: on its own the Marketplace re-reads an
+        installed custom repository only every 48 hours, and only with a
+        connected GitHub account; catalog repositories follow the catalog,
+        which it refreshes every 6 hours without one.
 
         **Examples:**
         - Install the latest: ha_manage_hacs(action="download", repository_id="441028036")
         - Install a version: ha_manage_hacs(action="download", repository_id="piitaya/lovelace-mushroom", version="v4.0.0")
         - Add a custom repository: ha_manage_hacs(action="add_repository", repository="owner/repo")
-        - Pin a version: ha_manage_hacs(action="set_version", repository_id="owner/repo", version="v1.2.0")
+        - Read a repository at another version, installing nothing: ha_manage_hacs(action="set_version", repository_id="owner/repo", version="v1.2.0")
         - Accept the warning: ha_manage_hacs(action="accept_warning", confirm=True)
         - Connect GitHub: ha_manage_hacs(action="connect_github"), then again with
           the flow_id it returns for the URL and code the user enters on GitHub,
@@ -427,12 +433,13 @@ class HacsTools:
         **Caveats:** An installed integration loads after a Home Assistant
         restart, and a new dashboard card after a browser cache clear. The
         Marketplace refuses to uninstall an integration while it has config
-        entries. Installs, version and beta changes wait for the first-run
-        warning, which Home Assistant keeps per user, so the user's own
-        acceptance in the UI does not cover this server: ask whether they read
-        it (Settings > Marketplace) before ``accept_warning``. Adding and
-        detecting a repository need a connected GitHub account. A saved
-        download source reloads the Marketplace, and the call waits for it.
+        entries. Installs, version and beta changes, and adding or detecting
+        a repository wait for the first-run warning, which Home Assistant
+        keeps per user, so the user's own acceptance in the UI does not cover
+        this server: ask whether they read it (Settings > Marketplace) before
+        ``accept_warning``. Adding and detecting a repository also need a
+        connected GitHub account. A saved download source reloads the
+        Marketplace, and the call waits for it.
         """
         supplied = {
             "repository_id": repository_id,

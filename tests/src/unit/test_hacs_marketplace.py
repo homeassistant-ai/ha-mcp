@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.marketplace.enums import DisabledReason, MarketplaceStage
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
@@ -242,6 +243,42 @@ class TestSearch:
         assert statuses["homeassistant-ai/ha-mcp-integration"] == "pending-upgrade"
         assert {r["full_name"] for r in result["data"]["results"]} == expected
 
+    async def test_installed_only_leaves_out_what_is_not_installed(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        rows = await _rows(socket)
+        installed = {r["full_name"] for r in rows if r["installed"]}
+        assert installed
+        assert len(installed) < len(rows)
+
+        result = await tools.ha_get_hacs_info(
+            action="search", installed_only=True, max_results=100
+        )
+
+        assert {r["full_name"] for r in result["data"]["results"]} == installed
+
+    async def test_a_status_no_row_carries_is_named_with_the_lists_statuses(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """Seen live: an underscore for Core's hyphen matched nothing and the
+        empty page said nothing about why."""
+        result = await tools.ha_get_hacs_info(
+            action="search", status=["pending_upgrade"]
+        )
+
+        statuses = {row["status"] for row in await _rows(socket)}
+        assert "pending-upgrade" in statuses
+        assert result["data"]["total_matches"] == 0
+        [warning] = result["warnings"]
+        assert "pending_upgrade" in warning
+        assert all(status in warning for status in statuses)
+
     @pytest.mark.parametrize(
         ("source", "everything"), [("custom", True), ("catalog", False)]
     )
@@ -300,6 +337,33 @@ class TestSearch:
         assert "appdaemon" in warning
         assert all(category in warning for category in info["result"]["categories"])
 
+    @pytest.mark.parametrize("state", ["rate_limit", "startup"])
+    async def test_a_marketplace_not_running_says_its_list_may_be_incomplete(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        state: str,
+    ) -> None:
+        """Disabled, or still starting, Core's list may lack catalog
+        repositories: no match is not "not there", and a missing one is not
+        one to add."""
+        manager = marketplace.runtime_data
+        if state == "rate_limit":
+            manager.disable(DisabledReason.RATE_LIMIT)
+        else:
+            manager.set_stage(MarketplaceStage.STARTUP)
+
+        found = await tools.ha_get_hacs_info(action="search", query="catalog-only")
+        missing = await rejected_call_body(
+            tools.ha_get_hacs_info(action="info", repository_id="someone/catalog-only")
+        )
+
+        assert found["data"]["total_matches"] == 0
+        assert any(state in w for w in found["warnings"])
+        assert missing["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert state in missing["error"]["message"]
+        assert not any("add_repository" in s for s in suggestions(missing))
+
     async def test_a_page_says_where_the_next_one_starts(
         self, marketplace: MockConfigEntry, tools: HacsTools
     ) -> None:
@@ -347,6 +411,21 @@ class TestInfo:
         assert store_commands(spy) == [LIST, REPO_INFO]
         assert [s["repository_id"] for s in sent_with(spy, REPO_INFO)] == [CARD_ID]
         assert result["data"]["full_name"] == CARD
+        # The id the writes answer with, not the name the caller passed.
+        assert result["data"]["repository_id"] == CARD_ID
+
+    async def test_the_read_waits_githubs_budget(
+        self,
+        marketplace: MockConfigEntry,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        """Core reads a repository it has not read since it started from
+        GitHub before it answers."""
+        with sent_commands(socket) as spy:
+            await tools.ha_get_hacs_info(action="info", repository_id=CARD_ID)
+        [sent] = sent_with(spy, REPO_INFO)
+        assert sent["_wait_timeout"] > DEFAULT_COMMAND_WAIT_TIMEOUT
 
     async def test_an_unknown_id_keeps_the_stores_answer_as_not_found(
         self,
@@ -409,12 +488,14 @@ class TestInfo:
         self, hass: HomeAssistant, marketplace: MockConfigEntry, tools: HacsTools
     ) -> None:
         before = timers(hass)
-        async with held_command(hass, RELEASES):
+        async with held_command(hass, RELEASES) as releases:
             call = asyncio.create_task(
                 tools.ha_get_hacs_info(
                     action="info", repository_id=CARD_ID, include_releases=True
                 )
             )
+            # The info read before it waits as long; it has its answer by now.
+            await releases.reached_by(call)
             await outwait(hass, 59, 60, before)
             await asyncio.wait([call])
         out = call.result()

@@ -37,21 +37,38 @@ async def _target(ws_client: Any) -> FlowTarget:
     return FlowTarget("reconfigure", "marketplace", entry["entry_id"])
 
 
-async def _outcome(ws_client: Any, flow_id: str) -> dict[str, Any]:
-    """The flow's last step was read; the Marketplace says whether GitHub is
-    connected."""
+def _unanswered_why(settled: dict[str, Any] | None) -> str:
+    """What the reload watch observed, for a Marketplace that did not answer."""
+    if settled is None:
+        return "no settled reload of it was observed"
+    state = settled.get("state")
+    if state != "loaded":
+        return (
+            f"it reloaded with the new token and is '{state}', not loaded; the "
+            "Home Assistant log says why"
+        )
+    return "it had reloaded and was loaded"
+
+
+async def _outcome(
+    ws_client: Any, flow_id: str, settled: dict[str, Any] | None
+) -> dict[str, Any]:
+    """The flow's last step was read and ``settled`` is the entry after the
+    reload Core ran with the new token (None when none was observed); the
+    Marketplace says whether GitHub is connected."""
     opened_flows.pop(flow_id, None)
-    answer: dict[str, Any] = {**_ACTION, "flow_id": flow_id, "flow_open": False}
+    answer: dict[str, Any] = {**_ACTION, "flow_id": flow_id}
     try:
         info = await ws_client.send_command("marketplace/info")
     except HomeAssistantCommandError as err:
-        # Core reloads the entry with the new token as the flow ends.
         return {
             **answer,
             "github_connected": None,
+            "entry_state": settled.get("state") if settled else None,
             "warnings": [
-                f"The Marketplace did not answer yet ({err}); read "
-                "store.github_connected with ha_get_hacs_info(action='search')."
+                f"The Marketplace did not report its GitHub state ({err}): "
+                f"{_unanswered_why(settled)}. Read store.github_connected with "
+                "ha_get_hacs_info(action='search')."
             ],
         }
     connected = bool((info.get("result") or {}).get("github_connected"))
@@ -133,5 +150,5 @@ async def connect_github(
             return _step_answer(
                 await open_step_answer(client, target, flow_id, settled)
             )
-        await reloaded()
-    return await _outcome(ws_client, flow_id)
+        settled_entry = await reloaded()
+    return await _outcome(ws_client, flow_id, settled_entry)

@@ -40,7 +40,7 @@ async def _subscribe(ws_client: Any) -> tuple[int, asyncio.Queue[Any]] | None:
             wait_timeout=_SUBSCRIBE_TIMEOUT,
         )
     except Exception as err:  # noqa: BLE001
-        logger.debug("No install progress, the subscription failed: %r", err)
+        logger.warning("No install progress, the subscription failed: %r", err)
         return None
     return subscription
 
@@ -69,6 +69,11 @@ async def _forward(
         if full_name is None:
             full_name = await _full_name(ws_client, repository_id)
             if full_name is None:
+                logger.warning(
+                    "No install progress: repository %s is not in the "
+                    "Marketplace's list, which names what its progress is for",
+                    repository_id,
+                )
                 return
         if event.get("repository") == full_name:
             await safe_progress(
@@ -101,6 +106,9 @@ async def install_progress(
             queue.put_nowait(_END)
             await asyncio.wait({forwarder}, timeout=_DRAIN_TIMEOUT)
             forwarder.cancel()
-            await asyncio.gather(forwarder, return_exceptions=True)
+            [ended] = await asyncio.gather(forwarder, return_exceptions=True)
+            # A cancel is the normal end; it is no Exception.
+            if isinstance(ended, Exception):
+                logger.warning("Install progress stopped: %r", ended)
         finally:
             await ws_client.release_subscription(sub_id)

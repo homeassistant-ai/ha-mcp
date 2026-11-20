@@ -7,16 +7,23 @@ answers only where a test serves it (``_hacs_actions_core``).
 
 from __future__ import annotations
 
+import asyncio
+from asyncio import FIRST_COMPLETED
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
+from unittest.mock import patch
 
 import pytest
+from homeassistant.components.marketplace import (
+    async_setup_entry as setup_marketplace,
+)
 from homeassistant.components.marketplace.const import CONF_PROFILE
 from homeassistant.components.marketplace.const import DOMAIN as MARKETPLACE
 from homeassistant.components.marketplace.profiles import DEFAULT_PROFILE, PROFILES
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.translation import async_get_translations
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
@@ -38,6 +45,7 @@ from ._hacs_marketplace import (
     pooled_socket,
     set_up_marketplace,
     stored,
+    suggestions,
 )
 from ._mock_flow_integration import answer_translations
 from ._tool_errors import rejected_call_body
@@ -78,6 +86,27 @@ async def marketplace(
         yield entry
     finally:
         await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("ha_manage_hacs", {"action": "connect_github"}),
+        ("ha_manage_hacs", {"action": "set_download_source"}),
+        ("ha_get_hacs_info", {"action": "download_source"}),
+    ],
+    ids=["connect_github", "set_download_source", "download_source"],
+)
+async def test_a_flow_action_without_a_marketplace_entry_is_a_missing_component(
+    hass: HomeAssistant, tools: HacsTools, tool: str, arguments: dict[str, Any]
+) -> None:
+    """The flows are the Marketplace entry's; with no entry there is none to
+    open, and the answer says how the Marketplace comes."""
+    body = await rejected_call_body(getattr(tools, tool)(**arguments))
+
+    assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+    assert any("2026.11" in s for s in suggestions(body))
+    assert hass.config_entries.async_entries(MARKETPLACE) == []
 
 
 class TestConnectGitHub:
@@ -158,8 +187,9 @@ class TestConnectGitHub:
         tools: HacsTools,
     ) -> None:
         """The device step answers with GitHub's URL and the code before the
-        user entered it; once they did, Core ends the flow by itself and the
-        next call reads the outcome from the Marketplace."""
+        user entered it; once they did, Core holds the flow at its last step
+        until it is read, and the next call reads it, which ends the flow, and
+        the outcome from the Marketplace."""
         entry = await self._signing_in(
             hass, aioclient_mock, hass_storage, PENDING, CONFIRMED
         )
@@ -205,7 +235,81 @@ class TestConnectGitHub:
             await hass.config_entries.async_unload(entry.entry_id)
 
         assert outcome["github_connected"] is True
+        # The flow's end is the answer itself, as every other finished one.
+        assert "flow_open" not in outcome
         assert info["result"]["github_connected"] is True
+
+    async def test_the_outcome_waits_for_the_reload_with_the_new_token(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+        tools: HacsTools,
+    ) -> None:
+        """Core reloads the Marketplace with the token as the flow ends, and
+        it answers nothing until set up again: a status read while that setup
+        runs says nothing about the sign-in."""
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def held_setup(core: HomeAssistant, entry: MockConfigEntry) -> Any:
+            entered.set()
+            await release.wait()
+            return await setup_marketplace(core, entry)
+
+        entry = await self._signing_in(hass, aioclient_mock, hass_storage, CONFIRMED)
+        try:
+            flow_id = await self._flow_id(tools)
+            with patch(
+                "homeassistant.components.marketplace.async_setup_entry",
+                side_effect=held_setup,
+            ):
+                call = asyncio.create_task(
+                    tools.ha_manage_hacs(action="connect_github", flow_id=flow_id)
+                )
+                reloading = asyncio.ensure_future(entered.wait())
+                await asyncio.wait({call, reloading}, return_when=FIRST_COMPLETED)
+                reloading.cancel()
+                # Time for a call that does not wait to read the Marketplace.
+                for _ in range(100):
+                    await asyncio.sleep(0)
+                waited = not call.done()
+                release.set()
+                outcome = (await call)["data"]
+        finally:
+            release.set()
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert waited
+        assert outcome["github_connected"] is True
+
+    async def test_a_reload_that_fails_with_the_new_token_is_named(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+        tools: HacsTools,
+    ) -> None:
+        """The Marketplace answers nothing after a reload that failed: the
+        call says what the reload ended in, not that it did not answer yet."""
+        entry = await self._signing_in(hass, aioclient_mock, hass_storage, CONFIRMED)
+        try:
+            flow_id = await self._flow_id(tools)
+            with patch(
+                "homeassistant.components.marketplace.async_setup_entry",
+                side_effect=ConfigEntryError("GitHub refused the token"),
+            ):
+                outcome = await tools.ha_manage_hacs(
+                    action="connect_github", flow_id=flow_id
+                )
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        failed = ConfigEntryState.SETUP_ERROR.value
+        assert outcome["data"]["github_connected"] is None
+        assert outcome["data"]["entry_state"] == failed
+        assert any(failed in w for w in outcome["warnings"])
 
     async def test_a_sign_in_github_refuses_keeps_cores_reason(
         self,
@@ -306,8 +410,32 @@ class TestDownloadSource:
 
         assert marketplace.options[CONF_PROFILE] == other
         assert saved["entry_state"] == ConfigEntryState.LOADED.value
-        assert saved["download_source"]["fields"][0]["current"] == other
+        # The write reads the form back under the read's own name.
+        assert saved["options_schema"]["fields"][0]["current"] == other
         assert read["options_schema"]["fields"][0]["current"] == other
+
+    async def test_a_reload_that_leaves_the_marketplace_unloaded_is_reported(
+        self, hass: HomeAssistant, marketplace: MockConfigEntry, tools: HacsTools
+    ) -> None:
+        """Core saves the source and reloads; a setup that then fails leaves
+        the Marketplace unloaded, which the call must not pass off as done."""
+        opened = (await tools.ha_manage_hacs(action="set_download_source"))["data"]
+        [field] = opened["fields"]
+        other = next(o for o in field["options"] if o != field["current"])
+
+        with patch(
+            "homeassistant.components.marketplace.async_setup_entry",
+            side_effect=ConfigEntryError("GitHub refused the download source"),
+        ):
+            saved = await tools.ha_manage_hacs(
+                action="set_download_source",
+                flow_id=opened["flow_id"],
+                config={CONF_PROFILE: other},
+            )
+
+        assert marketplace.state is ConfigEntryState.SETUP_ERROR
+        assert saved["data"]["entry_state"] == ConfigEntryState.SETUP_ERROR.value
+        assert any(ConfigEntryState.SETUP_ERROR.value in w for w in saved["warnings"])
 
     async def test_the_source_already_in_use_is_saved_without_a_claimed_reload(
         self,
@@ -335,10 +463,10 @@ class TestDownloadSource:
         assert marketplace.options[CONF_PROFILE] == field["current"]
         assert saved["data"]["entry_state"] is None
         assert (
-            saved["data"]["download_source"]["fields"][0]["current"]
+            saved["data"]["options_schema"]["fields"][0]["current"]
             == (field["current"])
         )
-        assert any("No reload" in w for w in saved["warnings"])
+        assert saved["warnings"]
 
     async def test_a_source_core_does_not_offer_is_cores_refusal(
         self, hass: HomeAssistant, marketplace: MockConfigEntry, tools: HacsTools

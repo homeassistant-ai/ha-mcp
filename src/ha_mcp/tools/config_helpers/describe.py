@@ -28,7 +28,6 @@ from ..config_entry_flow_errors import (
     abort_reason_text,
     progress_action_text,
 )
-from ..config_entry_flow_form import iter_schema_fields
 from ..config_entry_flow_introspect import abort_probe_flow, menu_choices
 from ..flow_translations import (
     fetch_flow_strings,
@@ -154,36 +153,50 @@ def _with_help(
         _with_help(field.get("fields", []), help_text, f"{field['name']}.")
 
 
-def _translated_selects(schema: Any) -> dict[str, tuple[str, list[Any]]]:
+def _translated_selects(
+    schema: Any, prefix: str = ""
+) -> dict[str, tuple[str, list[Any]]]:
     """Each select whose options Core labels in its ``selector`` strings, by
-    field name: the translation key and the option values."""
+    field name (``<section>.<field>`` in a section, as ``_with_help`` keys
+    it): the translation key and the option values."""
     selects: dict[str, tuple[str, list[Any]]] = {}
-    for field in iter_schema_fields(schema):
+    for field in schema if isinstance(schema, list) else []:
+        if not isinstance(field, dict):
+            continue
+        if isinstance(field.get("schema"), list):
+            selects.update(
+                _translated_selects(field["schema"], f"{field.get('name')}.")
+            )
+            continue
         selector = field.get("selector")
         cfg = selector.get("select") if isinstance(selector, dict) else None
         if isinstance(cfg, dict) and isinstance(cfg.get("translation_key"), str):
             options = _option_values(cfg.get("options") or [])
-            selects[str(field.get("name"))] = (cfg["translation_key"], options)
+            selects[f"{prefix}{field.get('name')}"] = (cfg["translation_key"], options)
     return selects
 
 
 def _put_labels(
-    fields: list[dict[str, Any]], labels: dict[str, dict[str, str]]
+    fields: list[dict[str, Any]], labels: dict[str, dict[str, str]], prefix: str = ""
 ) -> None:
     for field in fields:
-        if field.get("name") in labels:
-            field["option_labels"] = labels[field["name"]]
-        _put_labels(field.get("fields", []), labels)
+        key = f"{prefix}{field['name']}"
+        if key in labels:
+            field["option_labels"] = labels[key]
+        _put_labels(field.get("fields", []), labels, f"{field['name']}.")
 
 
 async def _with_option_labels(
     client: Any, domain: str, fields: list[dict[str, Any]], schema: Any
-) -> None:
-    """The label the HA UI shows for each option of a translated select."""
+) -> str | None:
+    """The label the HA UI shows for each option of a translated select; a
+    warning when Core's strings could not be read."""
     selects = _translated_selects(schema)
     if not selects:
-        return
-    strings = await fetch_flow_strings(client, domain, "selector") or {}
+        return None
+    strings = await fetch_flow_strings(client, domain, "selector")
+    if strings is None:
+        return strings_unread_warning(domain)
     labels: dict[str, dict[str, str]] = {}
     for name, (key, options) in selects.items():
         prefix = f"component.{domain}.selector.{key}.options."
@@ -193,6 +206,7 @@ async def _with_option_labels(
         if found:
             labels[name] = found
     _put_labels(fields, labels)
+    return None
 
 
 async def describe_form(
@@ -216,7 +230,11 @@ async def describe_form(
             described["warnings"] = [strings_unread_warning(domain)]
         else:
             _with_help(fields, field_help(strings, domain, path, step_id))
-        await _with_option_labels(client, domain, fields, step.get("data_schema"))
+        unread = await _with_option_labels(
+            client, domain, fields, step.get("data_schema")
+        )
+        if unread and unread not in described.get("warnings", []):
+            described.setdefault("warnings", []).append(unread)
     declared = None
     outline_lost = False
     if step_id and domain and path in ("config", "options"):

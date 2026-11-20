@@ -68,16 +68,25 @@ async def set_download_source(
         settled = await reloaded()
     saved = await _options_form(client, entry)
     warnings = saved.get("warnings") or []
+    state = settled.get("state") if settled else None
     if settled is None:
         warnings.append(
-            "No reload of the Marketplace was seen: Home Assistant reloads it "
-            "only when the saved source differs from the one before."
+            "No settled reload of the Marketplace was observed. Home Assistant "
+            "reloads it only when the saved source differs from the one before; "
+            "the reload may also not have been visible or not settled within "
+            "the wait. Settings > Devices & services > Marketplace shows its "
+            "state."
+        )
+    elif state != "loaded":
+        warnings.append(
+            f"The Marketplace reloaded with the saved source and is now "
+            f"'{state}', not loaded; the Home Assistant log says why."
         )
     return {
         **answer,
-        "entry_state": settled.get("state") if settled else None,
-        "download_source": saved.get("options_schema"),
-        "message": "Home Assistant saved the download source; download_source "
+        "entry_state": state,
+        "options_schema": saved.get("options_schema"),
+        "message": "Home Assistant saved the download source; options_schema "
         "is the form read back from it, with the saved choice as current.",
         **({"warnings": warnings} if warnings else {}),
     }

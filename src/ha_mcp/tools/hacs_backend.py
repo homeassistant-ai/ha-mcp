@@ -155,6 +155,33 @@ def native_category(category: str) -> str:
     return _CATEGORY_ALIASES.get(lowered, lowered)
 
 
+def store_state_warning(store: dict[str, Any]) -> str | None:
+    """A warning when the Marketplace (``marketplace/info``) is disabled or
+    not yet running: its list may then lack repositories it has."""
+    if reason := store.get("disabled_reason"):
+        return (
+            f"The Marketplace is disabled ({reason}), so its repository list may "
+            "be incomplete; ha_get_system_health reports under marketplace why."
+        )
+    if store.get("startup") or store.get("stage") != "running":
+        return (
+            f"The Marketplace is not running yet (stage {store.get('stage')!r}), "
+            "so its repository list may be incomplete; search again once it is."
+        )
+    return None
+
+
+def missing_category_warning(category: str, store: dict[str, Any]) -> str | None:
+    """A warning when the Marketplace (``marketplace/info``) has no such
+    category; Core answers one it lacks as if nothing matched."""
+    offered = store.get("categories") or []
+    if native_category(category) in offered:
+        return None
+    return f"The Marketplace has no '{category}' category; it has: " + ", ".join(
+        offered
+    )
+
+
 def _owned_directory_suggestions(owner: str) -> list[str]:
     """The store refused an install because another installed record owns the
     integration's directory: the owner is the record to install or update."""
@@ -283,13 +310,19 @@ async def resolve_repository(
     for row in rows or []:
         if str(row.get("full_name") or "").lower() == wanted.lower():
             return str(row["id"]), row
+    store = await store_command(ws_client, "marketplace/info", context) or {}
+    incomplete = store_state_warning(store)
     raise_tool_error(
         create_error_response(
             ErrorCode.RESOURCE_NOT_FOUND,
-            f"Repository '{wanted}' not found in the Marketplace's list.",
+            f"Repository '{wanted}' not found in the Marketplace's list."
+            + (f" {incomplete}" if incomplete else ""),
             suggestions=[
                 "Find it with ha_get_hacs_info(action='search', query=...)",
-                "A repository outside the catalog is added first: "
+                "Retry once the Marketplace is running; a catalog repository "
+                + "is listed then without being added"
+                if incomplete
+                else "A repository outside the catalog is added first: "
                 + "ha_manage_hacs(action='add_repository', repository='owner/repo')",
             ],
             context={**context, "repository_id": repository_id},

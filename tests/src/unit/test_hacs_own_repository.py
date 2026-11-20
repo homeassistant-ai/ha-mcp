@@ -31,6 +31,7 @@ from ha_mcp.client.websocket_client import (
 from ha_mcp.tools.tools_hacs import HacsTools
 
 from ._client_spies import sent_commands
+from ._hacs_actions_core import serve_integration
 from ._hacs_marketplace import (
     CARD_ID,
     MAIN,
@@ -79,15 +80,6 @@ DOUBLED = {
         "someone/hue", "integration", installed="v1", domain="hue_fork"
     ),
 }
-
-
-def _owned(directory: str, owner: str) -> MarketplaceError:
-    """Core's refusal of an install whose directory another record owns."""
-    return MarketplaceError(
-        translation_domain="marketplace",
-        translation_key="integration_owned",
-        translation_placeholders={"domain": directory, "owner": owner},
-    )
 
 
 @pytest.fixture
@@ -217,16 +209,18 @@ async def test_two_installed_records_leave_the_decision_to_the_store(
 
 
 async def test_a_refused_download_on_a_doubled_install_carries_the_way_out(
-    marketplace: OpenMarketplace, tools: HacsTools
+    marketplace: OpenMarketplace,
+    tools: HacsTools,
+    aioclient_mock: AiohttpClientMocker,
 ) -> None:
     """The store's ownership refusal on a doubled install names an owner that
     cannot be updated either, so the suggestions are the recovery routes, and
     the tool looks up the installed records behind the refusal."""
+    serve_integration(aioclient_mock, MAIN, int(MAIN_ID), OWN)
     await marketplace(DOUBLED)
-    with core_install(side_effect=_owned(OWN, MIRROR)):
-        body = await rejected_call_body(
-            tools.ha_manage_hacs(action="download", repository_id=MAIN)
-        )
+    body = await rejected_call_body(
+        tools.ha_manage_hacs(action="download", repository_id=MAIN)
+    )
 
     hints = " ".join(suggestions(body))
     assert "Repairs" in hints
@@ -237,17 +231,19 @@ async def test_a_refused_download_on_a_doubled_install_carries_the_way_out(
 
 
 async def test_another_integrations_refusal_names_its_owner_to_update(
-    marketplace: OpenMarketplace, tools: HacsTools
+    marketplace: OpenMarketplace,
+    tools: HacsTools,
+    aioclient_mock: AiohttpClientMocker,
 ) -> None:
     """A download refused because another installed record owns the
     directory points at that owner. Both HA-MCP listings are installed, but
     the refusal is about some other integration, so HA-MCP's repair routes
     would not help."""
+    serve_integration(aioclient_mock, "fork/hue", int(HUE_FORK_ID), "hue_fork")
     await marketplace(DOUBLED)
-    with core_install(side_effect=_owned("hue_fork", "someone/hue")):
-        body = await rejected_call_body(
-            tools.ha_manage_hacs(action="download", repository_id=HUE_FORK_ID)
-        )
+    body = await rejected_call_body(
+        tools.ha_manage_hacs(action="download", repository_id=HUE_FORK_ID)
+    )
 
     hints = " ".join(suggestions(body))
     assert 'ha_manage_hacs(action="download", repository_id="someone/hue")' in hints
