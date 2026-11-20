@@ -9,6 +9,7 @@ backup directory that cannot be created.
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 from pathlib import Path
 from typing import Any
@@ -478,14 +479,15 @@ async def test_mandatory_capture_raises_when_the_disk_is_full(
 ) -> None:
     """A full disk is carried with its remediation for the structured error."""
     kitchen = add_label(label_registry, "Kitchen")
-    native_replace = os.replace
+    operation = "rename" if os.name == "nt" else "link"
+    native_publish = getattr(os, operation)
 
-    def replace(src: Any, dst: Any, *args: Any, **kwargs: Any) -> None:
+    def publish(src: Any, dst: Any, *args: Any, **kwargs: Any) -> None:
         if Path(os.fsdecode(dst)).parent == snapshot_manager.backup_dir:
-            raise OSError("No space left on device")
-        native_replace(src, dst, *args, **kwargs)
+            raise OSError(errno.ENOSPC, "No space left on device")
+        native_publish(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(os, operation, publish)
 
     with pytest.raises(bm.MandatoryBackupError) as exc:
         await snapshot_manager.maybe_snapshot(

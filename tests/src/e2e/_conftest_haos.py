@@ -28,16 +28,17 @@ from haos_runtime import (
     inject_hacs_token_in_qcow2,
     login_for_token,
     refresh_dev_addon_source_in_qcow2,
-    refresh_recorder_in_qcow2,
     remove_tools_entry_in_qcow2,
     set_default_backup_password,
     stage_embedded_server_feature_flags_in_qcow2,
     stage_embedded_server_wheel_in_qcow2,
     stage_home_assistant_tls_in_qcow2,
+    stage_recorder_seed_in_qcow2,
     trigger_dev_addon_update,
     wait_for_addon_ha_link_ready,
     wait_for_addon_mcp_ready,
 )
+from recorder_seed import session_recorder_seed
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -68,7 +69,7 @@ def _haos_worker_setup(base_image_path: Path) -> Path:
 
     Each pytest-xdist worker gets its own QEMU instance, so it needs its
     own port set (otherwise hostfwd collides on bind) and its own
-    writable qcow2 (otherwise the recorder-refresh + dev-addon-staging
+    writable qcow2 (otherwise the recorder-seed + dev-addon-staging
     mutations race). On a single-worker (no ``-n``) run, ``worker_id``
     is ``"master"`` and we keep the base ports + base image path — same
     behavior as before the parallel work.
@@ -149,11 +150,9 @@ def _prepare_haos_image(
         ),
         image_path,
     )
-    # Shift the baked recorder timestamps forward so seeded rows fall
-    # inside history's 24h window (same intent as the testcontainer
-    # path's _refresh_recorder_timestamps). Must run before boot
-    # because HA Core takes an exclusive lock on the DB.
-    refresh_recorder_in_qcow2(image_path)
+    # Replace the baked recorder database with this session's freshly
+    # generated one. Must run before boot: guestfish edits the qcow2 offline.
+    stage_recorder_seed_in_qcow2(image_path, session_recorder_seed())
     # Authenticate HACS with the CI GitHub token (parity with the
     # testcontainer path's injection below) so HACS repo adds don't
     # ride the shared-IP 60 req/h unauthenticated GitHub budget —

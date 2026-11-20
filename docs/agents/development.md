@@ -44,7 +44,10 @@ worktree references.
 E2E tests live in `tests/src/e2e/` (not `tests/e2e/`), use testcontainers,
 and require a running Docker daemon. Launch them from `tests/` so pytest
 loads the correct `conftest.py`. Unit tests in `tests/src/unit/` do not use
-Docker.
+Docker. Each E2E session first has the pinned Core write its recorder
+database (`tests/src/recorder_seed.py`), so start the suite where Core runs
+(Linux, macOS or WSL) on a Python whose SQLite is 3.40.1 or newer; uv's
+managed Python has one.
 
 For a fork branch, dispatch `gh workflow run pr.yml --repo OWNER/FORK --ref BRANCH`;
 for targeted HAOS tests, use `haos-e2e-tests.yml` instead with

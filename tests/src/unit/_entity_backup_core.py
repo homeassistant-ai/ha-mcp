@@ -202,8 +202,8 @@ def backup_dir(settings: config.Settings) -> Path:
 
 
 def backup_files(directory: Path) -> list[str]:
-    """The names in the backup directory (empty before the first snapshot)."""
-    return sorted(p.name for p in directory.glob("*")) if directory.exists() else []
+    """The snapshot names in the backup directory, excluding its lock file."""
+    return sorted(p.name for p in directory.glob("*.yaml"))
 
 
 @contextmanager

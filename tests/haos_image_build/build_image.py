@@ -2259,7 +2259,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
         )
 
 
-def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
+def bake_test_state(qcow2: Path) -> None:
     """Inject tests/initial_test_state into the qcow2 via libguestfs.
 
     Runs *after* HAOS has been shut down so the qcow2 isn't in use. Uses
@@ -2283,8 +2283,8 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
     LOG.info("Baking seed state into qcow2 via libguestfs from %s", initial_state_path)
     workdir = Path(tempfile.mkdtemp(prefix="haos-bake-"))
     try:
-        # Stage the seed under a temp dir so we can normalise the recorder
-        # DB and inject custom components before tarring (see below).
+        # Stage the seed under a temp dir so we can inject custom components
+        # before tarring (see below).
         staging = workdir / "config"
         shutil.copytree(initial_state_path, staging)
 
@@ -2388,29 +2388,6 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
                 }
             )
         )
-
-        # Recorder DB normalisation. initial_test_state ships
-        # home-assistant_v2.db in WAL journal mode but WITHOUT the
-        # companion .wal/.shm files — when HAOS opens it, SQLite finds
-        # the main DB inconsistent (last shutdown didn't checkpoint) and
-        # logs "database disk image is malformed", which crashes the
-        # recorder executor. VACUUM INTO a new file produces a single-
-        # file, journal-mode, fully consistent DB with the same data —
-        # no WAL dependency.
-        db_src = staging / "home-assistant_v2.db"
-        if db_src.exists():
-            import sqlite3
-
-            vacuumed = workdir / "home-assistant_v2.db"
-            con = sqlite3.connect(str(db_src))
-            try:
-                con.execute(f"VACUUM INTO '{vacuumed}'")
-            finally:
-                con.close()
-            shutil.move(str(vacuumed), str(db_src))
-            LOG.info(
-                "Vacuumed recorder DB → %s (size %d B)", db_src, db_src.stat().st_size
-            )
 
         seed_tar = workdir / "seed.tar"
         # --owner=0 --group=0 + --numeric-owner forces the archived files

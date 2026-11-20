@@ -130,8 +130,8 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 
 The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and
 `_conftest_haos._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
-(HAOS). The qcow2 edit is offline and per-worker, like the recorder / HACS
-refreshers, and raises rather than warning: a silent no-op would leave the
+(HAOS). The qcow2 edit is offline and per-worker, like the recorder seed
+staging and the HACS refresher, and raises rather than warning: a silent no-op would leave the
 entry in place and the lane would re-test the ordinary topology while
 reporting green.
 
@@ -149,12 +149,28 @@ component capabilities answer while the privileged *services* stay gone —
 that split is the whole point of the lanes, and `test_tools_entry_absent.py`
 asserts both halves.
 
+## Recorder seed
+
+No recorder database is committed. At the start of each E2E session
+`src/recorder_seed.py` has the pinned Core's own recorder write one
+(`session_recorder_seed`), with states and statistics from before the session,
+relative to now. Every backend boots on that file.
+`src/unit/recorder_seed_generator.py` owns the span and the entities it covers,
+under the unit tree's real-Core rules: to give another entity history, add it
+there; do not commit rows or shift timestamps. The
+[test commands](../docs/agents/development.md#test-commands) say what the
+generator needs from the host.
+
 ## Unit Tests Run on Real Home Assistant Core
 
 `tests/src/unit/` and `tests/addon/` import Core from the dev group
 (`homeassistant`, pinned with `pytest-homeassistant` to the e2e image's Core)
 and run under Core's own test plugin, which their `conftest.py` loads; its
 entry point is blocked in `pyproject.toml`, so E2E sessions never load it.
+Test code that drives Core lives in one of these two trees, the only ones the
+checks below scan. A new directory under `tests/` goes inside a tree CI runs in
+full (`src/unit`, `src/e2e`, `addon`, `uat`); anywhere else CI would ignore it,
+and `src/unit/test_tests_tree_layout.py` fails.
 A test never writes its own Home Assistant. A hand-made one asserts against a
 guess of what Core does, and such guesses have shipped bugs (#2752):
 

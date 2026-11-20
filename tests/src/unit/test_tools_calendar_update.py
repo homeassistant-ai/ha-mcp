@@ -11,11 +11,14 @@ calendars: ``calendar.test`` is Core's Local Calendar, which supports updates;
 changed is read back from Core's calendar view.
 """
 
+import asyncio
 import datetime as dt
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+from homeassistant.components.local_calendar.const import STORAGE_PATH
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.typing import MockHAClientWebSocket, WebSocketGenerator
 
@@ -390,6 +393,47 @@ async def test_an_updated_occurrence_is_snapshotted_by_its_recurrence_id(
 
     key = f"calendar.test::{second['uid']}::{second['recurrence_id']}"
     assert _captured(backups) == {key: "Standup"}
+
+
+async def test_long_provider_uid_keeps_each_occurrences_pre_edit_snapshot(
+    hass: HomeAssistant, backups: bm.BackupManager, core_client: HomeAssistantClient
+) -> None:
+    uid = "provider-" + "a" * 300
+    source = Path(hass.config.path(STORAGE_PATH.format(key="imported")))
+    await asyncio.to_thread(
+        source.write_text,
+        "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//test//EN\nBEGIN:VEVENT\n"
+        f"UID:{uid}\nDTSTAMP:20260601T100000Z\nDTSTART:20260615T100000Z\n"
+        "DTEND:20260615T101500Z\nRRULE:FREQ=DAILY;COUNT=2\nSUMMARY:Original\n"
+        "END:VEVENT\nEND:VCALENDAR\n",
+        encoding="utf-8",
+    )
+    await local_calendar(hass, "Imported")
+    calendar = "calendar.imported"
+    events = await listed_events(core_client, calendar)
+    assert len(events) == 2
+    for event in events:
+        assert event["uid"] == uid
+        result = await _update(
+            core_client,
+            entity_id=calendar,
+            uid=uid,
+            recurrence_id=event["recurrence_id"],
+            start=event["start"]["dateTime"],
+            end=event["end"]["dateTime"],
+        )
+        assert result["success"]
+
+    assert [e["summary"] for e in await listed_events(core_client, calendar)] == [
+        "Renamed",
+        "Renamed",
+    ]
+    for event in events:
+        identity = f"{calendar}::{uid}::{event['recurrence_id']}"
+        [row] = backups.list_snapshots(domain="calendar_event", entity_id=identity)
+        snapshot = backups.read_snapshot(row["name"])
+        assert snapshot["entity_id"] == identity
+        assert snapshot["config"] == {"calendar_entity_id": calendar, **event}
 
 
 async def test_a_ranged_update_is_not_snapshotted(

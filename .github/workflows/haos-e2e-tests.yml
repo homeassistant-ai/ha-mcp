@@ -177,7 +177,7 @@ jobs:
         id: key
         # Cache invalidates when ANY input that gets baked into the qcow2
         # changes — build script (addon list / HAOS pin), initial_test_state
-        # (seed config + recorder DB + .storage), and the custom components
+        # (seed config + .storage), and the custom components
         # the bake stages into /config. git ls-tree uses object IDs so the
         # hash is reproducible across runs (no mtime noise like `find`
         # would have).
@@ -508,7 +508,7 @@ jobs:
       # base: the key hashes bake-input paths only, and every PR-level source /
       # feature-flag override happens in-VM at test time on each worker's overlay
       # (see stage_embedded_server_wheel_in_qcow2 /
-      # stage_embedded_server_feature_flags_in_qcow2 / refresh_recorder_in_qcow2
+      # stage_embedded_server_feature_flags_in_qcow2 / stage_recorder_seed_in_qcow2
       # in _conftest_haos.py) — never on the cached base.
 
       - name: Install uv
@@ -760,7 +760,7 @@ jobs:
       # to the shared key for all to restore, and PR-level addon/source
       # overrides happen *in-VM at test time* (see
       # ``refresh_dev_addon_source_in_qcow2`` /
-      # ``refresh_recorder_in_qcow2`` in _conftest_haos.py) on each
+      # ``stage_recorder_seed_in_qcow2`` in _conftest_haos.py) on each
       # worker's per-worker overlay — never on the base qcow2 that
       # gets cached.
 
