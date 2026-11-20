@@ -51,6 +51,9 @@ class TestManageTheme:
         assert listing["count"] >= 2, (
             f"Expected at least the 2 seeded themes, got {listing['count']}: {listing}"
         )
+        # Test Theme B declares a dark mode; Test Theme A declares none.
+        assert listing["modes"].get("Test Theme B") == ["dark"], listing
+        assert "Test Theme A" not in listing["modes"], listing
 
         logger.info(f"Installed themes: {listing}")
 
@@ -111,6 +114,20 @@ class TestManageTheme:
             assert set_a_dark["data"]["default_theme"] == "Test Theme B", (
                 "Setting dark theme with a real name must not change light default"
             )
+
+            # An unknown theme comes back as Core's refusal and changes nothing.
+            refused = await MCPAssertions(mcp_client).call_tool_failure(
+                "ha_manage_theme",
+                {"action": "set", "theme_name": "No Such Theme"},
+                expected_error="No Such Theme",
+            )
+            assert refused["error"]["code"] == "VALIDATION_INVALID_PARAMETER", refused
+            assert refused["ha_error_code"] == "invalid_format", refused
+            list_after_refusal = parse_mcp_result(
+                await mcp_client.call_tool("ha_manage_theme", {"action": "list"})
+            )
+            assert list_after_refusal["data"]["default_theme"] == "Test Theme B"
+            assert list_after_refusal["data"]["default_dark_theme"] == "Test Theme A"
 
         finally:
             # Cleanup: restore container to clean state for sibling tests.
