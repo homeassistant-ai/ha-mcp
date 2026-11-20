@@ -1,4 +1,4 @@
-"""Process-wide async lock serialising config/policy read-modify-write.
+"""Event-loop and file locks serialising config/policy read-modify-write.
 
 Both the web settings handlers (async) and the developer tools (which run
 their file I/O in ``asyncio.to_thread`` while holding this lock on the event
@@ -6,10 +6,9 @@ loop) acquire this single lock around any load-modify-save of
 ``tool_config.json`` or ``tool_policy.json``, so two concurrent writers can't
 read the same on-disk state and then clobber each other's update.
 
-The lazily constructed ``asyncio.Lock`` binds to the running loop on first
-``acquire()``, so a test
-fixture with its own loop isn't locked into an import-time loop. Assumes the
-single-uvicorn-loop deployment every ha-mcp server uses.
+An embedded server reload can start a new worker loop in the same process.
+Each loop shares an asyncio lock among its active writers. The file lock
+also serializes writers in different loops or processes.
 
 Leaf at import time (stdlib-only at module scope; ``data_paths`` is imported
 lazily inside ``config_file_lock`` — keep it that way) so settings_ui, policy,
@@ -25,6 +24,7 @@ import os
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from typing import Any
+from weakref import WeakValueDictionary
 
 try:  # POSIX
     import fcntl
@@ -37,15 +37,21 @@ except ImportError:  # pragma: no cover - POSIX
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_WRITE_LOCK: asyncio.Lock | None = None
+_CONFIG_WRITE_LOCKS: WeakValueDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+    WeakValueDictionary()
+)
 
 
 def get_config_write_lock() -> asyncio.Lock:
-    """Return the shared config/policy write lock (lazy singleton)."""
-    global _CONFIG_WRITE_LOCK
-    if _CONFIG_WRITE_LOCK is None:
-        _CONFIG_WRITE_LOCK = asyncio.Lock()
-    return _CONFIG_WRITE_LOCK
+    """Share the lock with other writers on the running event loop."""
+    loop = asyncio.get_running_loop()
+    lock = _CONFIG_WRITE_LOCKS.get(loop)
+    if lock is None:
+        # Owners and waiters keep the lock alive. A strong cache entry would
+        # retain the retired worker loop through a formerly contended lock.
+        lock = asyncio.Lock()
+        _CONFIG_WRITE_LOCKS[loop] = lock
+    return lock
 
 
 @contextlib.asynccontextmanager
