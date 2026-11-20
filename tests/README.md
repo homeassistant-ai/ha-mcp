@@ -21,6 +21,9 @@ uv run hamcp-test-env --no-interactive
 
 ### Direct pytest
 
+Besides Docker, an E2E session needs a host that can run Home Assistant Core:
+see the [test commands](../docs/agents/development.md#test-commands).
+
 ```bash
 # All E2E tests (parallel — 2 workers)
 uv run pytest tests/src/e2e/ -n2 --dist loadscope -v

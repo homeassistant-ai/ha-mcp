@@ -406,214 +406,19 @@ def is_haos_backend_selected() -> bool:
     return bool(raw and Path(raw).exists())
 
 
-def _execute_recorder_sql(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> Any:
-    """Run ``sql``; return the fetched row, or None if the table/column is absent."""
-    import sqlite3
-
-    try:
-        return conn.execute(sql, params).fetchone()
-    except sqlite3.OperationalError as exc:
-        msg = str(exc).lower()
-        if "no such table" in msg or "no such column" in msg:
-            return None
-        raise
-
-
-def _prepare_recorder_connection(conn: Any, db_local: Path) -> None:
-    """Checkpoint any preexisting WAL and switch the connection to DELETE mode."""
-    # The bake's seed DB is in WAL journal mode. Our copy-in only
-    # ships the .db file (not -wal / -shm) into the qcow2, so any
-    # pending WAL frames written during our UPDATE would land in
-    # the workdir alongside the .db and never reach HAOS — HA Core
-    # then sees a .db whose page tree is mid-transaction, raises
-    # ``sqlite3.DatabaseError: database disk image is malformed``,
-    # and renames the seed to ``.corrupt.<ts>`` before booting with
-    # an empty fresh DB. (Captured in PR #1361 diagnostics: see
-    # /supervisor/homeassistant/home-assistant_v2.db.corrupt.*.)
-    #
-    # Fix: checkpoint any preexisting WAL into the main file, then
-    # switch this connection to DELETE mode so our UPDATEs write
-    # straight to .db with no journal artefacts. End state on disk:
-    # one self-contained .db file. HA Core will switch it back to
-    # WAL on first boot — its preferred mode.
-    #
-    # Both PRAGMAs return rows we MUST inspect: a busy WAL
-    # checkpoint or a refused mode switch silently leaves the
-    # same corruption the comment above describes.
-    ckpt_row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-    # Result shape: (busy, log_pages, checkpointed_pages). busy=0
-    # means all frames were merged into the main DB.
-    if ckpt_row is not None and ckpt_row[0] not in (0, None):
-        raise RuntimeError(
-            f"wal_checkpoint(TRUNCATE) reported busy={ckpt_row[0]} on "
-            f"{db_local}; another connection is holding WAL frames. "
-            f"Aborting refresh — copy-in would still produce a "
-            f"WAL/SHM-mismatched DB inside the qcow2."
-        )
-    mode_row = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
-    if mode_row is None or mode_row[0] != "delete":
-        raise RuntimeError(
-            f"Failed to switch {db_local} to DELETE journal mode "
-            f"(got {mode_row!r}); subsequent UPDATEs would write WAL "
-            f"frames that the qcow2 copy-in won't include."
-        )
-
-
-def _apply_recorder_offset(
-    conn: Any, timestamp_columns: dict[str, tuple[str, ...]], offset: float
-) -> None:
-    """Shift every recorder timestamp column by ``offset`` seconds, then commit."""
-    for table, cols in timestamp_columns.items():
-        for col in cols:
-            _execute_recorder_sql(
-                conn,
-                f"UPDATE {table} SET {col} = {col} + ? WHERE {col} IS NOT NULL",
-                (offset,),
-            )
-    conn.commit()
-
-
-def _shift_recorder_timestamps(db_local: Path, target_age_seconds: float) -> bool:
-    """Shift ``db_local``'s recorder timestamps so the newest lands recently.
-
-    Returns True if a shift was applied (the DB must be copied back into the
-    qcow2), or False if the timestamps were already recent enough to skip.
-    """
-    import sqlite3
-
-    # Same logic as _conftest_seed._refresh_recorder_timestamps. Kept inline
-    # rather than importing because conftest pulls in heavy dev deps
-    # (docker, testcontainers) that the HAOS-only paths don't need.
-    TIMESTAMP_COLUMNS = {
-        "states": ("last_updated_ts", "last_changed_ts", "last_reported_ts"),
-        "events": ("time_fired_ts",),
-        "statistics": ("start_ts", "created_ts"),
-        "statistics_short_term": ("start_ts", "created_ts"),
-    }
-    conn = sqlite3.connect(str(db_local))
-    try:
-        _prepare_recorder_connection(conn, db_local)
-        newest = 0.0
-        matched_columns = 0
-        for table, cols in TIMESTAMP_COLUMNS.items():
-            for col in cols:
-                row = _execute_recorder_sql(conn, f"SELECT MAX({col}) FROM {table}")
-                if row is None:
-                    continue
-                matched_columns += 1
-                if row[0] is not None and isinstance(row[0], (int, float)):
-                    newest = max(newest, float(row[0]))
-
-        # Schema drift guard: if HAOS bumps the recorder schema and renames
-        # every column in TIMESTAMP_COLUMNS, the loop above silently
-        # `continue`s through all of them and newest stays 0. Without this
-        # check, history pagination tests would mysteriously fail with "no
-        # data" instead of pointing at the schema bump. Mirrors the
-        # testcontainer _refresh_recorder_timestamps "raise vs no-op"
-        # discipline.
-        if matched_columns == 0:
-            raise RuntimeError(
-                f"Recorder DB at {db_local} matched zero TIMESTAMP_COLUMNS "
-                f"entries — recorder schema may have drifted; update "
-                f"TIMESTAMP_COLUMNS to match the new column names."
-            )
-        if newest <= 0:
-            raise RuntimeError(
-                f"Recorder DB at {db_local} has no numeric timestamps in "
-                f"any of the {matched_columns} matched columns — the bake "
-                f"may have produced an empty DB; re-run "
-                f"`uv run python scripts/bake_pagination_seed.py`."
-            )
-
-        target = time.time() - target_age_seconds
-        offset = target - newest
-        if offset <= 0:
-            LOG.info(
-                "Recorder timestamps already recent (newest=%.0f, "
-                "target=%.0f); no shift needed",
-                newest,
-                target,
-            )
-            return False
-
-        _apply_recorder_offset(conn, TIMESTAMP_COLUMNS, offset)
-        LOG.info("Shifted recorder timestamps by %+.0fs", offset)
-        return True
-    finally:
-        conn.close()
-
-
-def refresh_recorder_in_qcow2(
-    image_path: Path, *, target_age_seconds: float = 300.0
-) -> None:
-    """Shift recorder timestamps inside the baked qcow2 to look ``recent``.
-
-    The image cache key is content-hashed, so a cache hit re-uses an image
-    whose ``home-assistant_v2.db`` timestamps are frozen at bake time —
-    once that exceeds the ~24h window history queries use, every history
-    pagination test silently regresses. This helper extracts the DB from
-    the qcow2, runs the same uniform timestamp shift the testcontainer
-    path does (``_conftest_seed._refresh_recorder_timestamps``), and copies the
-    file back in place. Done once per pytest session before QEMU boots.
-
-    Uses guestfish (libguestfs) for both copy-out and copy-in; sqlite3
-    stdlib for the shift itself. ~30s wall-clock overhead per session.
-    """
+def stage_recorder_seed_in_qcow2(image_path: Path, seed_db: Path) -> None:
+    """Put ``seed_db`` into the qcow2 as Core's recorder database, before boot."""
+    import shutil
     import tempfile
 
-    workdir = Path(tempfile.mkdtemp(prefix="haos-ts-refresh-"))
+    workdir = Path(tempfile.mkdtemp(prefix="haos-recorder-seed-"))
     db_local = workdir / "home-assistant_v2.db"
     try:
-        # copy-out the recorder DB from the qcow2's hassos-data partition.
-        subprocess.run(
-            [
-                "guestfish",
-                "--ro",
-                "-a",
-                str(image_path),
-                "run",
-                ":",
-                "mount",
-                "/dev/sda8",
-                "/",
-                ":",
-                "copy-out",
-                "/supervisor/homeassistant/home-assistant_v2.db",
-                str(workdir),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-
-        if not _shift_recorder_timestamps(db_local, target_age_seconds):
-            return
-
-        # copy-in the shifted DB, and PURGE any stale ``-wal`` / ``-shm``
-        # sidecars in the qcow2. Two-part fix: the PRAGMA block above
-        # handles the workdir DB (no WAL frames leaving our process); this
-        # block handles the qcow2 side.
-        #
-        # The bake (build_image.py) boots HA Core to bootstrap state — Core
-        # writes the recorder DB in WAL mode and leaves
-        # ``home-assistant_v2.db``, ``home-assistant_v2.db-wal``, and
-        # ``home-assistant_v2.db-shm`` in the supervisor data dir. Our
-        # copy-out only fetches the ``.db``, so when we copy the edited
-        # ``.db`` back, the old ``-wal`` / ``-shm`` from bake are still
-        # there — referencing page numbers from the pre-edit ``.db`` that
-        # no longer exist. On boot HA Core opens ``.db`` + ``-wal``
-        # together, sqlite finds the page-tree inconsistent, and raises
-        # ``sqlite3.DatabaseError: database disk image is malformed``
-        # (PR #1361 diagnostics: ha-core-runtime.log captured this exact
-        # message, plus ``home-assistant_v2.db-wal.corrupt.<ts>`` proving
-        # a WAL file was present). The seed is then renamed to
-        # ``.corrupt.<ts>`` and HA boots with a fresh empty DB — losing
-        # all the pre-baked history rows.
-        #
-        # --rw so guestfish opens the qcow2 for write; the file's
-        # owner/perms inside the qcow2 are preserved by libguestfs when
-        # overwriting an existing path.
+        # copy-in keeps the source's basename.
+        shutil.copyfile(seed_db, db_local)
+        # The bake leaves Core's -wal / -shm beside its own database. A stale
+        # WAL next to a different .db makes Core mark the database corrupt
+        # and boot with an empty one, so both sidecars are removed.
         try:
             subprocess.run(
                 [
@@ -642,25 +447,17 @@ def refresh_recorder_in_qcow2(
                 text=True,
                 timeout=180,
             )
-        except subprocess.CalledProcessError, subprocess.TimeoutExpired:
-            # Partial-write recovery hint: the previous copy-out + sqlite
-            # mutate succeeded but the write-back is gone, so the qcow2's
-            # recorder DB is whatever the bake left there. Subsequent runs
-            # against this cached image will repeat the same shift on the
-            # original timestamps — safe but slow. If the recorder DB
-            # appears corrupt downstream, delete the image and let the
-            # next CI run rebuild.
+        except subprocess.CalledProcessError as err:
             LOG.error(
-                "guestfish copy-in failed for %s; cached qcow2 may need "
-                "a manual rebuild (delete /tmp/haos-test-image.qcow2 + "
-                "the matching cache key, then re-run)",
-                image_path,
+                "guestfish recorder seed copy-in failed (exit %s)\n"
+                "stdout:\n%s\nstderr:\n%s",
+                err.returncode,
+                err.stdout,
+                err.stderr,
             )
             raise
-        LOG.info("Refreshed recorder DB in %s", image_path)
+        LOG.info("Staged recorder seed in %s", image_path)
     finally:
-        import shutil
-
         shutil.rmtree(workdir, ignore_errors=True)
 
 

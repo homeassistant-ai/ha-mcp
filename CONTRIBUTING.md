@@ -7,7 +7,7 @@ Thank you for your interest in contributing!
 1. **Fork and clone** the repository
 2. **Install**: `uv sync --group dev`. Two of Home Assistant's integration requirements build from source, so this needs a C++ compiler (`g++` on Debian and Ubuntu, the Xcode command-line tools on macOS).
 3. **Install hooks**: `uv run lefthook install`
-4. **Test**: `uv run pytest tests/src/e2e/ -n2 --dist loadscope -v` (requires Docker)
+4. **Test**: `uv run pytest tests/src/e2e/ -n2 --dist loadscope -v` (requires Docker; the [test commands](docs/agents/development.md#test-commands) list what else the host needs)
 5. **Make changes** and commit
 6. **Open Pull Request**
 
