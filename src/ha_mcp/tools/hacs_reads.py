@@ -1,7 +1,8 @@
 """The read actions of ``ha_get_hacs_info`` on Core's Marketplace.
 
 The Marketplace has no search command: ``search`` is HA-MCP's filter over the
-store's list, matching and ordering the rows the way its panel does.
+store's list. The status, type and source filters and the row order are the
+panel's; the word match is HA-MCP's own.
 """
 
 from typing import Any
@@ -21,7 +22,7 @@ from .hacs_backend import (
 )
 from .helpers import safe_progress
 
-# The row values the panel's search box looks through.
+# The row values a query word is looked for in.
 _SEARCHED = (
     "name",
     "full_name",

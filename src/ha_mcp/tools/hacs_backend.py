@@ -56,8 +56,8 @@ _SUGGESTIONS = {
     ],
     "github_not_connected": [
         "Connect a GitHub account: ha_manage_hacs(action='connect_github') "
-        "starts the sign-in, and the user finishes it in Settings > "
-        "Marketplace (a device code on GitHub). Retry afterwards.",
+        "runs the sign-in one step per call and returns the code the user "
+        "enters on GitHub. Retry afterwards.",
     ],
     "github_rate_limited": [
         "GitHub's anonymous rate limit ran out; wait and retry, or connect a "
