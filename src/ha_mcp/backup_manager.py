@@ -117,6 +117,7 @@ from .backup_registry_items import fetch_label as _fetch_label
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
+from .backup_scenes import current_scene_key, fetch_scene, restore_scene
 from .backup_tags import restore_tag, tag_snapshot
 from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
@@ -1702,6 +1703,8 @@ class BackupManager:
             return await current_entity_id(self._client, target, data["config"])
         if domain == "todo_item":
             return todo_current_key(target, data["config"])
+        if domain == "scene":
+            return await current_scene_key(self._client, target, data["config"])
         return target
 
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
@@ -2131,20 +2134,6 @@ async def _fetch_script(client: Any, entity_id: str) -> Any:
 
 async def _restore_script(client: Any, entity_id: str, config: Any) -> Any:
     return await client.upsert_script_config(config, entity_id)
-
-
-async def _fetch_scene(client: Any, entity_id: str) -> Any:
-    try:
-        result = await client.get_scene_config(entity_id)
-    except HomeAssistantError as err:
-        if getattr(err, "status_code", None) == 404:
-            return None
-        raise
-    return result.get("config", result) if isinstance(result, dict) else result
-
-
-async def _restore_scene(client: Any, entity_id: str, config: Any) -> Any:
-    return await client.upsert_scene_config(config, entity_id)
 
 
 def _require_list(value: Any, endpoint: str) -> list[Any]:
@@ -3366,7 +3355,7 @@ _KNOWN_HELPER_TYPES = sorted(_HELPER_LIST_TYPES)
 def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("automation", _fetch_automation, _restore_automation))
     mgr.register(DomainHandler("script", _fetch_script, _restore_script))
-    mgr.register(DomainHandler("scene", _fetch_scene, _restore_scene))
+    mgr.register(DomainHandler("scene", fetch_scene, restore_scene))
     mgr.register(DomainHandler("dashboard", fetch_dashboard, restore_dashboard))
     mgr.register(
         DomainHandler(
