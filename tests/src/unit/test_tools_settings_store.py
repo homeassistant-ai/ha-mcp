@@ -36,7 +36,8 @@ async def test_quarantined_store_prevents_an_empty_backup(
     await add_tools_entry(hass)
     bundle = await settings_transfer.async_export(hass)
     assert bundle["entries"]["tools"] == {"allowed_dirs": [], "extra_yaml_keys": []}
-    path = Path(Store(hass, 1, key).path)
+    store: Store[dict[str, list[str]]] = Store(hass, 1, key)
+    path = Path(store.path)
     path.parent.mkdir(exist_ok=True)
     path.with_name(f"{key}.corrupt.2026-11-01").write_text("{", encoding="utf-8")
     with pytest.raises(ToolsStoreUnavailable) as err:
@@ -45,7 +46,7 @@ async def test_quarantined_store_prevents_an_empty_backup(
 
     # A genuine replacement clears the error even if Core kept the old file.
     field = "paths" if key == ALLOWED_PATHS_KEY else "keys"
-    await Store(hass, 1, key).async_save({field: []})
+    await store.async_save({field: []})
     assert await settings_transfer.async_export(hass) == bundle
 
 
