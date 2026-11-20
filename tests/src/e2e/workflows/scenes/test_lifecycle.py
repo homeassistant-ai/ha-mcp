@@ -70,8 +70,8 @@ async def _wait_for_scene_removed(
     timeout: int = 15,
     poll_interval: float = 1.0,
 ) -> bool:
-    """Poll until ``entity_id``'s state read answers ``ENTITY_NOT_FOUND``, then
-    read the config once: it must answer ``ENTITY_NOT_FOUND`` too.
+    """Poll until ``entity_id``'s state read and then the config read both
+    answer ``ENTITY_NOT_FOUND``; any other config answer is read again.
 
     Polling the config read alone is not enough: it answers ``CONFIG_NOT_FOUND``
     while the entity still lives. Any other failed read, an auth error say, does
@@ -88,7 +88,8 @@ async def _wait_for_scene_removed(
                 get_data = await safe_call_tool(
                     mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
                 )
-                return _error_code(get_data) == "ENTITY_NOT_FOUND"
+                if _error_code(get_data) == "ENTITY_NOT_FOUND":
+                    return True
         except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"Scene removal check failed: {e}")
         await asyncio.sleep(poll_interval)
