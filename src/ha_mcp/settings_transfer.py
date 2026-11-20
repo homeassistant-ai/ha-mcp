@@ -31,6 +31,7 @@ from .visibility.model import VisibilityConfig
 from .visibility.persistence import VISIBILITY_FILENAME
 
 _LOGGER = logging.getLogger(__name__)
+INCOMPLETE_ROLLBACK_NOTE = "Settings import rollback incomplete"
 
 # Never use a path from the uploaded document. A null section records that
 # the source used defaults and must clear any override on the destination.
@@ -54,6 +55,10 @@ _REVISIONED_DEFAULTS: dict[str, Policy | VisibilityConfig] = {
 
 class DecisionPinRequired(ValueError):
     """The source accepts approval events and the destination needs its own PIN."""
+
+
+class ServerSettingsRollbackIncomplete(RuntimeError):
+    """One or more server settings could not be restored."""
 
 
 def _validate_overrides(values: dict[str, Any], types: Mapping[str, type]) -> None:
@@ -193,8 +198,9 @@ def _next_revision(
 
 def _undo_documents(
     directory: Path, changes: list[_DocumentChange], *, published: bool
-) -> None:
-    """Attempt every undo step under the caller's file lock."""
+) -> bool:
+    """Attempt every undo under the caller's file lock and report completeness."""
+    complete = True
     for change in reversed(changes):
         path = directory / _FILES[change.key]
         try:
@@ -218,10 +224,12 @@ def _undo_documents(
                         "Could not roll back %s because the decision PIN was removed",
                         path.name,
                     )
+                    complete = False
                     continue
                 previous = _next_revision(change.key, previous, change.written)
             _replace(path, previous)
         except (OSError, ValueError) as err:
+            complete = False
             # Exception messages may include settings or paths supplied by the
             # operator. Report only the fixed filename and exception class.
             _LOGGER.error(
@@ -229,12 +237,14 @@ def _undo_documents(
                 path.name,
                 type(err).__name__,
             )
+    return complete
 
 
 def rollback_server_settings(directory: Path, changes: ServerSettingsChanges) -> None:
     """Undo only writes from this import that no later save has replaced."""
     with config_file_lock(directory):
-        _undo_documents(directory, changes.documents, published=True)
+        if not _undo_documents(directory, changes.documents, published=True):
+            raise ServerSettingsRollbackIncomplete(INCOMPLETE_ROLLBACK_NOTE)
 
 
 def restore_server_settings(
@@ -266,8 +276,9 @@ def restore_server_settings(
                 _replace(path, change.written)
                 changed.append(change)
                 change.stamp = _file_stamp(path)
-        except OSError, ValueError:
-            _undo_documents(data_dir, changed, published=False)
+        except (OSError, ValueError) as err:
+            if not _undo_documents(data_dir, changed, published=False):
+                err.add_note(INCOMPLETE_ROLLBACK_NOTE)
             raise
     if not changed:
         return None
