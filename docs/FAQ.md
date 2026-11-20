@@ -1092,8 +1092,8 @@ How the wait looks depends on the client:
 
 Nested calls inside custom scripts always use the blocking wait, because
 resuming a script could repeat earlier actions. Selector-based bulk calls
-can only use their own approval within the original wait window; a fresh
-call requires a fresh approval.
+and scene writes with `capture_devices` can only use their own approval
+within the original wait window; a fresh call requires a fresh approval.
 
 A rule in **Tool Security Policies** holds the call and shows it in the
 settings UI, which only helps while that tab is open. Every held request is
@@ -1131,12 +1131,14 @@ The announcement is one best-effort attempt per held request, not a
 delivery guarantee. If firing the event fails or times out it is logged as
 a warning and the request still waits in the settings UI; nothing re-sends
 it. A retry of the same call joins the same held request and is not
-announced a second time — one request, one notification. Only a request
+announced a second time — one request, one notification — except for the
+single-use requests below, where each fresh call gets its own. Only a request
 that is replaced by a new one is announced again, with the new token; the
 token from the previous event is dead by then.
 
-A selector-based `ha_bulk_control` request is announced with `single_use:
-true` and **no** `expires_at`. It is bound to the one call that created it
+A selector-based `ha_bulk_control` request, and a `ha_config_set_scene`
+request with `capture_devices`, is announced with `single_use: true` and
+**no** `expires_at`. It is bound to the one call that created it
 and is gone once that call stops waiting, which is well before the policy's
 TTL — approving it later does nothing, and the agent has to call the tool
 again.
