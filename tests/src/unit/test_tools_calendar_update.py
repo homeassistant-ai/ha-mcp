@@ -11,6 +11,7 @@ calendars: ``calendar.test`` is Core's Local Calendar, which supports updates;
 changed is read back from Core's calendar view.
 """
 
+import asyncio
 import datetime as dt
 from pathlib import Path
 from typing import Any
@@ -399,7 +400,8 @@ async def test_long_provider_uid_keeps_each_occurrences_pre_edit_snapshot(
 ) -> None:
     uid = "provider-" + "a" * 300
     source = Path(hass.config.path(STORAGE_PATH.format(key="imported")))
-    source.write_text(
+    await asyncio.to_thread(
+        source.write_text,
         "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//test//EN\nBEGIN:VEVENT\n"
         f"UID:{uid}\nDTSTAMP:20260601T100000Z\nDTSTART:20260615T100000Z\n"
         "DTEND:20260615T101500Z\nRRULE:FREQ=DAILY;COUNT=2\nSUMMARY:Original\n"
