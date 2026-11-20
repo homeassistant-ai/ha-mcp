@@ -526,14 +526,12 @@ class TestSceneLifecycle:
             {"scene_id": scene_id, "wait": False},
         )
 
-    async def test_capture_of_a_differently_cased_id_replaces_its_entry(
+    async def test_a_captured_entity_is_saved_with_its_state(
         self, mcp_client, cleanup_tracker
     ):
-        """Capturing ``LIGHT.BED_LIGHT`` replaces the stored ``light.bed_light``
-        entry and keeps its metadata: readback holds one entry for the light.
-        The unit tests pin the same property; this one sends capture_entities
-        through the MCP schema."""
-        scene_id = f"capture_case_{uuid4().hex[:8]}"
+        """capture_entities through the MCP schema stores the light's live state.
+        How a capture merges into the config is pinned in the unit tests."""
+        scene_id = f"capture_entity_{uuid4().hex[:8]}"
         cleanup_tracker.track("scene", f"scene.{scene_id}")
         mcp = MCPAssertions(mcp_client)
         try:
@@ -541,25 +539,14 @@ class TestSceneLifecycle:
                 "ha_config_set_scene",
                 {
                     "scene_id": scene_id,
-                    "config": {
-                        "name": scene_id,
-                        "entities": {
-                            "light.bed_light": {"state": "off", "brightness": 5}
-                        },
-                        "metadata": {"light.bed_light": {"entity_only": False}},
-                    },
-                    "capture_entities": ["LIGHT.BED_LIGHT"],
+                    "config": {"name": scene_id},
+                    "capture_entities": ["light.bed_light"],
                 },
             )
             stored = await mcp.call_tool_success(
                 "ha_config_get_scene", {"scene_id": scene_id}
             )
-            assert list(stored["config"]["entities"]) == ["light.bed_light"]
-            # The supplied entry had no attributes; the captured state has them.
             assert "friendly_name" in stored["config"]["entities"]["light.bed_light"]
-            assert stored["config"]["metadata"] == {
-                "light.bed_light": {"entity_only": False}
-            }
         finally:
             await safe_call_tool(
                 mcp_client, "ha_config_remove_scene", {"scene_id": scene_id}
