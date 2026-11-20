@@ -4,7 +4,7 @@ Dashboard resource hosting tools for Home Assistant MCP server.
 Provides tools for managing dashboard resources (custom cards, CSS, JS):
 - Inline resources: Code embedded directly in the resource URL as a
   ``data:`` URI — stored in HA's own resource registry, served by nothing
-- External resources: URLs to /local/ (incl. /local/community/), /hacsfiles/, or CDNs
+- External resources: URLs to /local/ (incl. /local/community/) or CDNs
 
 Inline resources were previously served by a Cloudflare Worker that decoded
 base64 content embedded in its URL, based on issue #71's claim that browsers
@@ -226,7 +226,7 @@ class ResourceTools:
         - List with full content: ha_config_list_dashboard_resources(include_content=True)
         - Verify an edit by hash: ha_config_list_dashboard_resources(include_hash=True)
 
-        Home Assistant 2026.6+ exposes resource management in the UI by default;
+        Home Assistant exposes resource management in the UI by default;
         API access works regardless of UI availability.
         """
         try:
@@ -369,12 +369,12 @@ class ResourceTools:
           a file and use url='/local/...' on such a deployment. (HA itself ships
           no CSP.)
         - url: External resource URL — /local/... (/config/www/; Marketplace
-          cards: /local/community/...), /hacsfiles/... (HACS cards) or
-          https://... (CDN). Supports all types: 'module', 'js', 'css', 'html'.
+          cards: /local/community/...) or https://... (CDN). Supports all
+          types: 'module', 'js', 'css', 'html'.
 
         EXAMPLES:
         - Inline: ha_config_set_dashboard_resource(content="class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);", resource_type="module")
-        - Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.
+        - Store cards need no call: in storage mode the Marketplace registers the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.
         - Update: ha_config_set_dashboard_resource(url="/local/my-card-v2.js", resource_type="module", resource_id="abc123")
         - Patch: ha_config_set_dashboard_resource(resource_id="abc123", edits=[{"old": "color: red", "new": "color: blue"}], config_hash="<_config_hash from the list>")
 
@@ -406,7 +406,7 @@ class ResourceTools:
                     message="Provide either 'content' (inline code) or 'url' (external), not both",
                     suggestions=[
                         "Use content= for inline JavaScript/CSS code",
-                        "Use url= for /local/, /hacsfiles/, or https:// resources",
+                        "Use url= for /local/ or https:// resources",
                     ],
                 )
             )
@@ -418,7 +418,7 @@ class ResourceTools:
                     message="Either 'content' (inline code) or 'url' (external) is required",
                     suggestions=[
                         "Use content= for inline JavaScript/CSS code",
-                        "Use url= for /local/, /hacsfiles/, or https:// resources",
+                        "Use url= for /local/ or https:// resources",
                     ],
                 )
             )
@@ -435,7 +435,7 @@ class ResourceTools:
                     "pass the code itself via content= instead",
                     suggestions=[
                         "Use content=<your JS/CSS source> (the tool builds the data: URI)",
-                        "url= is for /local/, /hacsfiles/, and https:// resources",
+                        "url= is for /local/ and https:// resources",
                     ],
                 )
             )

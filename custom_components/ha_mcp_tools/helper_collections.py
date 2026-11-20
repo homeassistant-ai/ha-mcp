@@ -73,26 +73,19 @@ def _optional_attr(module: str, name: str) -> Any:
         return None
 
 
-# Resolved at import, off the event loop: Core 2026.9+ serializes with
-# probatio, earlier Core with voluptuous_serialize.
+# Resolved at import, off the event loop.
 _TO_FIELD_LIST = _optional_attr("probatio", "to_field_list")
-_VS_CONVERT = _optional_attr("voluptuous_serialize", "convert")
 
 
 def _convert(schema: Any) -> list[dict[str, Any]]:
-    """Serialize with Core's serializer for this Core version."""
+    """Serialize with Core's serializer."""
     from homeassistant.helpers import config_validation as cv
 
-    errors: list[str] = []
-    for convert in (_TO_FIELD_LIST, _VS_CONVERT):
-        if convert is None:
-            continue
-        try:
-            return list(convert(schema, custom_serializer=cv.custom_serializer))
-        except Exception as err:
-            _LOGGER.debug("Schema serializer failed", exc_info=True)
-            errors.append(f"{type(err).__name__}: {err}")
-    raise ValueError("; ".join(errors) or "no schema serializer available")
+    try:
+        return list(_TO_FIELD_LIST(schema, custom_serializer=cv.custom_serializer))
+    except Exception as err:
+        _LOGGER.debug("Schema serializer failed", exc_info=True)
+        raise ValueError(f"{type(err).__name__}: {err}") from err
 
 
 def _serialize(schema: dict[Any, Any]) -> list[dict[str, Any]]:

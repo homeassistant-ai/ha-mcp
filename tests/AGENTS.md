@@ -72,7 +72,7 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
 - **The in-process "server" config entry** of that same component (#1527) is
   the embedded backend only, seeded separately. That one IS lane-specific.
 
-In production the component is optional (it ships via HACS), so server code
+In production the component is optional (it ships via the Marketplace), so server code
 reading component-only data must degrade honestly for installs without it.
 
 ## Combined PR lanes (`E2E_COMBINE_TOPOLOGIES=1`)

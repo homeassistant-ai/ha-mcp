@@ -12,7 +12,7 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from .helper_collections import _INVALID_ERRORS, _convert, _optional_attr
+from .helper_collections import _INVALID_ERRORS, _optional_attr
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -117,22 +117,18 @@ def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
 def _describe(schema: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
     try:
-        if _TO_JSON_SCHEMA is not None:
-            try:
-                result["schema"] = _TO_JSON_SCHEMA(
-                    schema,
-                    strict=True,
-                    custom_serializer=partial(_core_serializer, strict=True),
-                )
-                result["description_complete"] = True
-            except Exception:
-                _LOGGER.debug("Core contract needs lossy serialization", exc_info=True)
-                result["schema"] = _TO_JSON_SCHEMA(
-                    schema, custom_serializer=_core_serializer
-                )
-                result["description_complete"] = False
-        else:
-            result["fields"] = _convert(schema)
+        try:
+            result["schema"] = _TO_JSON_SCHEMA(
+                schema,
+                strict=True,
+                custom_serializer=partial(_core_serializer, strict=True),
+            )
+            result["description_complete"] = True
+        except Exception:
+            _LOGGER.debug("Core contract needs lossy serialization", exc_info=True)
+            result["schema"] = _TO_JSON_SCHEMA(
+                schema, custom_serializer=_core_serializer
+            )
             result["description_complete"] = False
     except Exception:
         _LOGGER.debug("Core contract cannot be serialized", exc_info=True)
@@ -244,5 +240,4 @@ async def statistics_metadata(
         if converter and converter.UNIT_CLASS in units:
             output = requested if requested in converter.VALID_UNITS else stored
         record["output_unit_of_measurement"] = output
-        record["conversion_unit_class"] = converter.UNIT_CLASS if converter else None
     return {"records": records}

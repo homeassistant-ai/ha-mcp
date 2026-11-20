@@ -145,7 +145,7 @@ SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
         vol.Required("action"): vol.In(["add", "replace", "remove", "replace_file"]),
         vol.Required("yaml_path"): cv.string,
         vol.Optional("content"): cv.string,
-        # Back-compat shim: the component reaches users via HACS ahead of the
+        # Back-compat shim: the component reaches users via the store ahead of the
         # server, so a 0.10.0 component runs against the prior stable server
         # until that server's next release. Pre-7.9.0 servers still send
         # "backup": true on every edit_yaml_config call; this strict
@@ -3123,7 +3123,7 @@ def _build_get_caller_token_handler(
                 "error_code": "manifest_unreadable",
                 "error": (
                     "ha_mcp_tools manifest version could not be read. "
-                    "Reinstall the integration via HACS or the Marketplace."
+                    "Reinstall the integration via the Marketplace."
                 ),
             }
         return {

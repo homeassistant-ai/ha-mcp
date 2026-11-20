@@ -96,7 +96,7 @@ def _is_disabled() -> bool:
 def is_update_check_disabled() -> bool:
     """Public accessor for the HA_MCP_DISABLE_UPDATE_CHECK opt-out.
 
-    The HACS auto-refresh nudge gates on the same switch: an operator who
+    The Marketplace auto-refresh nudge gates on the same switch: an operator who
     opted out of update phone-home should not get update-driven side
     effects either.
     """
@@ -385,15 +385,12 @@ def update_command_hint(current: str, info: UpdateInfo | None = None) -> str:
         # In-process (custom component) server: each component release
         # installs its own server build when Home Assistant restarts.
         return (
-            "Update the HA-MCP integration in HACS (the Marketplace on "
-            "Home Assistant 2026.11+), then restart Home Assistant."
+            "Update the HA-MCP integration in the Marketplace, then restart "
+            "Home Assistant."
         )
     if is_running_in_addon():
         # Add-on users update through the Supervisor UI, not pip/docker.
-        return (
-            "Update from Settings -> Apps -> Home Assistant MCP Server "
-            "(Settings -> Add-ons before Home Assistant 2026.2)."
-        )
+        return "Update from Settings -> Apps -> Home Assistant MCP Server."
     dev = is_dev_version(current)
     if _running_in_docker():
         # Dev images are tagged :dev (rolling); :stable is the stable channel.

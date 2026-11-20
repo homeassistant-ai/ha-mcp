@@ -55,7 +55,6 @@ from .statistics_helpers import (
     resolve_requested_units,
     statistics_warnings,
 )
-from .statistics_resets import restore_reset_timestamps
 from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
@@ -1045,11 +1044,8 @@ async def _fetch_statistics(
         metadata,
         metadata_failure,
     )
-    resolved_units = await resolve_requested_units(
+    await resolve_requested_units(
         client, entities_statistics, command_params.get("units", {})
-    )
-    reset_warnings = await restore_reset_timestamps(
-        client, result_data, metadata, command_params, resolved_units
     )
     all_stat_types = (
         stat_types_list
@@ -1086,7 +1082,7 @@ async def _fetch_statistics(
         },
     }
 
-    warnings = statistics_warnings(entities_statistics) + reset_warnings
+    warnings = statistics_warnings(entities_statistics)
     if empty_entities:
         warnings += [
             f"No statistics found for: {', '.join(empty_entities)}. "

@@ -528,30 +528,6 @@ class TestDashboardResourceUrlPatterns:
 
         logger.info("External URL pattern test completed successfully")
 
-    async def test_hacsfiles_url_pattern(self, mcp_client):
-        """Test /hacsfiles/ URL pattern (HACS resources)."""
-        logger.info("Starting hacsfiles URL pattern test")
-        mcp = MCPAssertions(mcp_client)
-
-        add_data = await mcp.call_tool_success(
-            "ha_config_set_dashboard_resource",
-            {"url": "/hacsfiles/button-card/button-card.js", "resource_type": "module"},
-        )
-        resource_id = add_data.get("resource_id")
-
-        try:
-            assert add_data["success"] is True
-            assert add_data["url"] == "/hacsfiles/button-card/button-card.js"
-        finally:
-            if resource_id:
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_config_delete_dashboard_resource",
-                    {"resource_id": resource_id},
-                )
-
-        logger.info("Hacsfiles URL pattern test completed successfully")
-
 
 async def _raw_resource_url(
     ha_client: HomeAssistantClient, resource_id: str | None

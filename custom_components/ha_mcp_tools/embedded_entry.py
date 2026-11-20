@@ -126,7 +126,7 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # entry.data, and those writes must not self-reload.
     domain_data[DATA_LAST_OPTIONS] = dict(entry.options)
 
-    # The server package arrives with the component release HACS delivers
+    # The server package arrives with the component release the Marketplace delivers
     # (the manifest pins it), so the server update entity, its PyPI poll and
     # the automatic reinstall are gone. Drop the entity they left behind.
     _remove_retired_update_entity(hass, entry)

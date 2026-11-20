@@ -96,7 +96,7 @@ async def _embedded_precheck(client: Any, *, safe_mode: bool) -> list[str]:
             "one: it stays down until Home Assistant is next "
             "restarted normally."
         )
-    # A missing field (older Core, renamed key) means the check was not made,
+    # A missing field (a renamed key) means the check was not made,
     # so it warns like an unanswered command instead of passing silently.
     recorder = await _core_info(client, "recorder/info")
     if recorder is None or not isinstance(recorder.get("migration_in_progress"), bool):

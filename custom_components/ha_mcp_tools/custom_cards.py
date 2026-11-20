@@ -1,8 +1,8 @@
 """Custom (``custom:``) cards, asked about themselves (issue #2632).
 
 A custom card ships as a JavaScript file registered as a dashboard resource
-(``/hacsfiles/...`` from HACS, ``/local/...`` from ``www``, which is where
-the Marketplace puts cards, under ``/local/community/``). Each file runs in
+(``/local/...`` from ``www``, which is where the Marketplace puts cards,
+under ``/local/community/``). Each file runs in
 its own QuickJS sandbox on top of linkedom, a DOM written for non-browser
 runtimes: no network, no filesystem. The card then answers through the same
 calls the dashboard makes: its editor's and its own ``setConfig`` reject a
@@ -52,7 +52,7 @@ _PREPARE_SECONDS = 15.0
 _REFRESH_SECONDS = 10.0
 _SETTLE_JOBS = 20_000
 _SETTLE_SECONDS = 5.0
-_RESOURCE_PREFIXES = (("/hacsfiles/", "www/community"), ("/local/", "www"))
+_LOCAL_PREFIX = "/local/"
 # These failures are not configuration verdicts in a partial browser environment.
 # TypeError can also reject real config; preserve it as an inconclusive check.
 _SANDBOX_ERRORS = ("ReferenceError", "RangeError", "SyntaxError")
@@ -187,14 +187,14 @@ function card(op, p) {
 
 
 def resource_path(config_dir: Path, url: str) -> Path | None:
-    """The file a dashboard resource URL serves, kept inside its www folder."""
+    """The file a ``/local/`` resource URL serves, kept inside ``www``."""
     path = unquote(url.split("?", 1)[0].split("#", 1)[0])
-    for prefix, folder in _RESOURCE_PREFIXES:
-        if path.startswith(prefix):
-            base = (config_dir / folder).resolve()
-            target = (base / path[len(prefix) :]).resolve()
-            if target.is_relative_to(base) and target.suffix == ".js":
-                return target
+    if not path.startswith(_LOCAL_PREFIX):
+        return None
+    base = (config_dir / "www").resolve()
+    target = (base / path[len(_LOCAL_PREFIX) :]).resolve()
+    if target.is_relative_to(base) and target.suffix == ".js":
+        return target
     return None
 
 

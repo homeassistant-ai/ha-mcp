@@ -201,7 +201,7 @@ async def load_inline_resource(client: Any, resource_id: str) -> tuple[str, str]
     """Fetch an inline resource and return ``(decoded_content, resource_type)``.
 
     Raises ``RESOURCE_NOT_FOUND`` for an unknown ID, a ``not_inline``
-    validation error for /local/, /hacsfiles/, https:// or undecodable URLs,
+    validation error for /local/, https:// or undecodable URLs,
     an ``unsupported_type`` validation error for an inline row whose type a
     ``data:`` URI cannot carry (legacy ``js``/``html`` worker rows), and
     Core's mapped error when the listing itself fails.
@@ -242,7 +242,7 @@ async def load_inline_resource(client: Any, resource_id: str) -> tuple[str, str]
                 },
                 suggestions=[
                     "Edit the file behind a /local/ URL with ha_write_file instead",
-                    "HACS and CDN resources are managed by their source",
+                    "Marketplace and CDN resources are managed by their source",
                 ],
             )
         )

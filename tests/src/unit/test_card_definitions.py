@@ -492,7 +492,7 @@ async def test_describe_drops_stale_capabilities_after_unknown_command(
 
 def test_resource_urls_map_to_files_inside_www(tmp_path: Path) -> None:
     www = tmp_path / "www"
-    assert cc.resource_path(tmp_path, "/hacsfiles/mushroom/mushroom.js?hacstag=1") == (
+    assert cc.resource_path(tmp_path, "/local/community/mushroom/mushroom.js?v=1") == (
         (www / "community" / "mushroom" / "mushroom.js").resolve()
     )
     assert cc.resource_path(tmp_path, "/local/cards/my%20card.js") == (
@@ -500,7 +500,7 @@ def test_resource_urls_map_to_files_inside_www(tmp_path: Path) -> None:
     )
     for url in (
         "/local/../secrets.yaml",
-        "/hacsfiles/../../configuration.js",
+        "/local/community/../../configuration.js",
         "/local/styles.css",
         "https://cdn.example.com/card.js",
     ):

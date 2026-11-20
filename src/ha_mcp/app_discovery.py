@@ -20,23 +20,10 @@ from .client.supervisor_client import make_supervisor_httpx_client
 
 logger = logging.getLogger(__name__)
 
-# First Core release whose Model Context Protocol integration handles app
-# discovery (home-assistant/core#180378). Older cores turn the message into a
-# discovery card that drops the URL and asks for one by hand.
-MCP_DISCOVERY_MIN_CORE = (2026, 10)
 # The app's start.py writes the secret path here before it starts the server,
 # and serves on this port.
 SECRET_PATH_FILE = Path("/data/secret_path.txt")
 APP_PORT = 9583
-
-
-def core_supports_mcp_discovery(version: str) -> bool:
-    """Whether a Core version string (``2026.10.0``, ``2026.10.0b1``) is new enough."""
-    try:
-        year, month = (int(part) for part in version.split(".")[:2])
-    except ValueError:
-        return False
-    return (year, month) >= MCP_DISCOVERY_MIN_CORE
 
 
 async def _supervisor_data(client: httpx.AsyncClient, path: str) -> dict[str, Any]:
@@ -58,14 +45,6 @@ async def announce_mcp_discovery() -> None:
             logger.warning("%s is empty; MCP discovery skipped.", SECRET_PATH_FILE)
             return
         async with make_supervisor_httpx_client(timeout=10.0, verify=True) as client:
-            version = str((await _supervisor_data(client, "/core/info")).get("version"))
-            if not core_supports_mcp_discovery(version):
-                logger.info(
-                    "Home Assistant %s cannot discover MCP apps (needs 2026.10+); "
-                    "restart this app after updating Home Assistant.",
-                    version,
-                )
-                return
             info = await _supervisor_data(client, "/addons/self/info")
             hostname = info.get("hostname")
             if not hostname:

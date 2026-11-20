@@ -25,7 +25,7 @@ from homeassistant.exceptions import HomeAssistantError
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT, COMPONENT_VIA_HACS
+from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT, COMPONENT_VIA_MARKETPLACE
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.tools.service_response import (
     RESPONSE_CALL_FAILED_HINT,
@@ -201,7 +201,7 @@ async def test_a_response_call_core_refuses_by_schema_stays_a_validation_error(
     assert calls == []
     (hint,) = _may_have_run_hints(exc)
     assert COMPONENT_INSTALL_HINT not in hint
-    assert f"update an older one {COMPONENT_VIA_HACS}" in hint
+    assert f"update an older one {COMPONENT_VIA_MARKETPLACE}" in hint
 
 
 async def test_a_rejected_response_inside_the_service_is_its_failure(

@@ -58,9 +58,7 @@ async def _flow_texts(
     domain, path = flow.domain, flow.path
     if isinstance(step.get("translation_domain"), str):
         # The reason belongs to another integration. A subentry abort reads
-        # it under that integration's config strings, as the frontend's dev
-        # branch does; the release Core 2026.8.0 pins reads
-        # config_subentries.<type>.abort instead.
+        # it under that integration's config strings, as the frontend does.
         domain = step["translation_domain"]
         if kind == "abort" and path.startswith("config_subentries."):
             path = "config"

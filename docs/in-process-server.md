@@ -51,20 +51,13 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 ## Requirements
 
 Only the current stable Home Assistant release is officially supported; a
-beta may be, with a fallback to stable, but that is not guaranteed. The floors
-below are technical limits, not supported versions. Three apply, from the
-outside in:
+beta may be, with a fallback to stable, but that is not guaranteed. The floor
+below is a technical limit, not a supported version:
 
-- **HACS (the Marketplace from 2026.11) installs the component only on Home
-  Assistant 2026.8.0 or newer** (`hacs.json`), the floor the config flow also enforces for the in-process
-  server entry.
-- **The integration does not load at all before Core 2026.7.** From component
-  2.1.3 the manifest declares `voluptuous-openapi`, and earlier Core releases
-  pin that package to an older version, so the requirement cannot resolve and
-  Home Assistant refuses to set up the integration, File & YAML entry included.
-- **Between 2026.7 and 2026.8.0 a manual copy loads**, but the config flow
-  blocks creation of the in-process server entry; the File & YAML services
-  entry still works with an external app or Docker server.
+- **The Marketplace installs the component only on Home Assistant 2026.11.0 or
+  newer** (`hacs.json`), the floor the config flow also enforces for the
+  in-process server entry. A manual copy is held to the same floor: the
+  component uses Core APIs that older releases do not have.
 
 Older Core releases also constrain other dependencies to versions that cannot
 run current `ha-mcp` servers.
@@ -75,19 +68,17 @@ In the navigation paths below, older installed releases use **HA-MCP Custom
 Component** where the new release uses **HA-MCP — Manage Home Assistant with AI**.
 Searching for **HA-MCP** finds either name.
 
-1. **Install the component.** Install **HA-MCP — Manage Home Assistant with AI** from HACS,
-   or on Home Assistant 2026.11+ from the built-in **Marketplace** after accepting
-   its first-run warning and searching for **HA-MCP**. It is
-   in the default catalog, so Marketplace installs need no connected GitHub account
-   or custom repository. In HACS, search for **HA-MCP** and **Download**.
+1. **Install the component.** Install **HA-MCP — Manage Home Assistant with AI** from
+   the built-in **Marketplace** after accepting its first-run warning and
+   searching for **HA-MCP**. It is in the default catalog, so installs need no
+   connected GitHub account or custom repository.
    An install from the earlier
    `homeassistant-ai/ha-mcp-integration` mirror keeps receiving the same
-   releases; on the Marketplace, keep GitHub connected for background checks on
-   that custom repository. Keep it on that one repository: the Marketplace
-   in Home Assistant 2026.11 allows one listing per integration, so do not
-   also download the main repository over it (`ha_manage_hacs` routes a
-   download of either to the installed one). Or, without
-   HACS, copy the `custom_components/ha_mcp_tools` directory from this repository
+   releases; keep GitHub connected for background checks on that custom
+   repository. Keep it on that one repository: the Marketplace allows one
+   listing per integration, so do not also download the main repository over
+   it (`ha_manage_hacs` routes a download of either to the installed one). Or,
+   without the Marketplace, copy the `custom_components/ha_mcp_tools` directory from this repository
    into your Home Assistant `config/custom_components/` directory (so you end up
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.
 2. **Add the in-process server entry.** Go to **Settings → Devices & Services →
@@ -276,7 +267,7 @@ Configure there just reports that.)
 The server is part of the component release. Each HA-MCP integration
 release names the exact `ha-mcp` build it was released with as an integration
 requirement, and Home Assistant installs it like any integration's Python
-packages. For HACS- or Marketplace-managed installs, update the component from
+packages. For Marketplace-managed installs, update the component from
 its update entity under **Settings → System → Updates**; manual
 installs can replace the component files with the new release. Either path
 carries the matching server, and restarting Home Assistant after the update
@@ -286,13 +277,13 @@ HA-MCP is in the default catalog, which the Marketplace refreshes every six
 hours without a GitHub connection. Custom repositories, including the
 `homeassistant-ai/ha-mcp-integration` distribution mirror, still need a GitHub
 connection for the Marketplace's 48-hour background checks. To have a newly
-updated server ask for a repository refresh right away, turn on **Refresh the component in HACS after an update** in
+updated server ask for a repository refresh right away, turn on **Refresh the component in the Marketplace after an update** in
 the settings panel's Advanced settings (Operations); installs that already did
 this before it became optional keep it on.
 
 **Development builds** follow the main branch. Turn on the **Pre-release**
-switch of the HA-MCP repository (in HACS, or on its Marketplace
-device, where the entity starts disabled, on Home Assistant 2026.11+) to receive them; each
+switch of the HA-MCP repository (on its Marketplace device, where the entity
+starts disabled) to receive them; each
 pre-release pins the exact `ha-mcp-dev` build published from the same commit.
 Turn the switch off to return to stable releases with the next stable update.
 Moving between the two swaps `ha-mcp-dev` and `ha-mcp` as described below.
@@ -329,8 +320,8 @@ defaults apply to newly created server entries.
 **Update controls change:** the **Release channel** and **Automatic server
 updates** options and the server update entity are gone (the entity is removed
 from the registry on the first start). A 2.x install on the `dev` channel moves
-to the stable server with this release; turn on the **Pre-release** switch (HACS,
-or the Marketplace on 2026.11+) to keep receiving development builds.
+to the stable server with this release; turn on the **Pre-release** switch in the
+Marketplace to keep receiving development builds.
 
 **Existing OAuth clients may need configuration:** in secret-URL (`none`) mode,
 the callback allowlist applies to existing installations too. A client whose
@@ -547,7 +538,7 @@ reads `Requirements for ha_mcp_tools not found`. Fix the cause the log
 names above that line, then restart Home Assistant.
 
 **Nothing happens after updating the component.** Home Assistant loads custom
-integration code at startup, so after HACS, the Marketplace or a manual copy delivers a new
+integration code at startup, so after the Marketplace or a manual copy delivers a new
 version you must **restart Home Assistant** for the update to take effect.
 
 **Skill guidance is empty after installing from a GitHub tarball.** The **ha-mcp
