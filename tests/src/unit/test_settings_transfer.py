@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from ha_mcp.settings_transfer import (
+    INCOMPLETE_ROLLBACK_NOTE,
+    ServerSettingsRollbackIncomplete,
     export_server_settings,
     restore_server_settings,
     rollback_server_settings,
@@ -141,6 +143,7 @@ def test_serialization_failure_restores_previous_settings_and_removes_temp_file(
     with pytest.raises(ValueError) as raised:
         restore_server_settings(tmp_path, archive)
     assert raised.value is failure
+    assert INCOMPLETE_ROLLBACK_NOTE not in getattr(failure, "__notes__", ())
     assert export_server_settings(tmp_path) == original
     assert not list(tmp_path.glob(".*.tmp"))
 
@@ -174,10 +177,43 @@ def test_undo_failure_does_not_skip_earlier_files_or_mask_the_import_error(
     with pytest.raises(OSError) as raised:
         restore_server_settings(tmp_path, imported)
     assert raised.value is write_error
+    assert INCOMPLETE_ROLLBACK_NOTE in write_error.__notes__
     assert not (tmp_path / "tool_config.json").exists()
     assert json.loads(policy.read_text())["wait_seconds"] == 30
     assert "rollback failed for tool_policy.json (OSError)" in caplog.text
     assert "private" not in caplog.text
+
+
+def test_later_rollback_reports_failure_after_attempting_remaining_files(
+    tmp_path, monkeypatch, caplog
+):
+    original = export_server_settings(tmp_path)
+    changes = restore_server_settings(
+        tmp_path,
+        {
+            **original,
+            "features": {"fuzzy_threshold": 75},
+            "backup": {"auto_backup_retain_per_entity": 20},
+        },
+    )
+    assert changes is not None
+    backup = tmp_path / "backup_settings.json"
+    unlink = Path.unlink
+
+    def fail_backup_undo(path, *args, **kwargs):
+        if path == backup:
+            raise OSError("private storage error")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_backup_undo)
+    with pytest.raises(ServerSettingsRollbackIncomplete) as raised:
+        rollback_server_settings(tmp_path, changes)
+    assert export_server_settings(tmp_path) == {
+        **original,
+        "backup": {"auto_backup_retain_per_entity": 20},
+    }
+    assert "rollback failed for backup_settings.json (OSError)" in caplog.text
+    assert "private" not in caplog.text + str(raised.value)
 
 
 def test_later_rollback_only_reverts_unchanged_import_writes(tmp_path):

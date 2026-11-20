@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import json
+import os
 import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -27,20 +29,28 @@ from freezegun.api import FrozenDateTimeFactory
 from homeassistant.auth.const import GROUP_ID_ADMIN, GROUP_ID_READ_ONLY
 from homeassistant.components import frontend
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry, MockUser
 from pytest_homeassistant.typing import ClientSessionGenerator
 from yarl import URL
 
 from custom_components.ha_mcp_tools import ui_panel
-from custom_components.ha_mcp_tools.const import DATA_WEBHOOK, DATA_WEBHOOK_ID, DOMAIN
+from custom_components.ha_mcp_tools.const import (
+    DATA_WEBHOOK,
+    DATA_WEBHOOK_ID,
+    DOMAIN,
+    SERVER_CONFIG_SUBDIR,
+)
 from custom_components.ha_mcp_tools.mcp_webhook import (
     WEBHOOK_AUTH_NONE,
     async_register_webhook,
     async_unregister_webhook,
 )
+from custom_components.ha_mcp_tools.tools_settings_store import ALLOWED_PATHS_KEY
+from ha_mcp import settings_transfer as server_transfer
 
-from ._config_flow_core import add_options_entry
+from ._config_flow_core import add_options_entry, add_tools_entry
 from ._garbled_upstream import garbled_upstream
 
 # The HTTP surface the boot page, the session endpoint and the proxy share.
@@ -426,6 +436,103 @@ class TestProxyForwarding:
         assert resp.status == 400
         assert await resp.json() == {"success": False, "error": "invalid_backup"}
         assert not running_server.seen
+
+    @pytest.mark.parametrize("failure", ["published", "early_value", "early_io"])
+    async def test_failed_server_document_undo_reports_incomplete_and_continues(
+        self,
+        hass: HomeAssistant,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+        monkeypatch: pytest.MonkeyPatch,
+        failure: str,
+    ) -> None:
+        add_options_entry(hass, data={"webhook_id": "old", "secret_path": "/old"})
+        await add_tools_entry(hass, loaded=True)
+        client = await hass_client_no_auth()
+        headers = {"Sec-Fetch-Site": "same-origin"}
+        exported = await client.post(
+            _APP + "api/settings/transfer/export",
+            cookies=admin_cookies,
+            json={},
+            headers=headers,
+        )
+        assert exported.status == 200
+        bundle = await exported.json()
+        incoming = bundle["server_settings"]
+        previous = {
+            **incoming,
+            "tools": {},
+            "features": {"fuzzy_threshold": 60},
+            "backup": {"auto_backup_retain_per_entity": 12},
+        }
+        directory = Path(hass.config.path(SERVER_CONFIG_SUBDIR))
+        await hass.async_add_executor_job(
+            server_transfer.restore_server_settings, directory, previous
+        )
+        incoming.update(
+            tools={"tools": {}},
+            features={"fuzzy_threshold": 70},
+            backup={"auto_backup_retain_per_entity": 13},
+        )
+        real_replace = os.replace
+        failed_undo = "backup" if failure == "published" else "features"
+        names = {
+            "backup_settings.json": "backup",
+            "feature_flags.json": "features",
+            "tool_config.json": "tools",
+        }
+        undone: list[str] = []
+
+        def replace(src: str, dst: str) -> None:
+            path = Path(dst)
+            if path.parent == directory and path.name in names:
+                key = names[path.name]
+                value = json.loads(Path(src).read_bytes())
+                if failure == "early_io" and key == "backup" and value == incoming[key]:
+                    raise OSError("ordinary preference write failed")
+                if value == previous[key]:
+                    undone.append(key)
+                    if key == failed_undo:
+                        raise OSError("ordinary preference undo failed")
+            real_replace(src, dst)
+
+        real_dumps = json.dumps
+
+        def dumps(value: object, **kwargs):
+            if failure == "early_value" and value == incoming["backup"]:
+                raise ValueError("ordinary preference serialization failed")
+            return real_dumps(value, **kwargs)
+
+        real_load = Store.async_load
+
+        async def load(store: Store):
+            if store.key == ALLOWED_PATHS_KEY:
+                raise OSError("synthetic store unavailable")
+            return await real_load(store)
+
+        monkeypatch.setattr(os, "replace", replace)
+        monkeypatch.setattr(json, "dumps", dumps)
+        monkeypatch.setattr(Store, "async_load", load)
+        response = await client.post(
+            _APP + "api/settings/transfer/import",
+            cookies=admin_cookies,
+            json=bundle,
+            headers=headers,
+        )
+        assert response.status == 500
+        assert await response.json() == {
+            "success": False,
+            "error": "rollback_incomplete",
+        }
+        actual = await hass.async_add_executor_job(
+            server_transfer.export_server_settings, directory
+        )
+        assert actual == {**previous, failed_undo: incoming[failed_undo]}
+        assert undone == (
+            ["backup", "features", "tools"]
+            if failure == "published"
+            else ["features", "tools"]
+        )
 
     async def test_server_down_returns_503(
         self,

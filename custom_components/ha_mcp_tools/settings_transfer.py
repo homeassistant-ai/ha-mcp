@@ -36,6 +36,7 @@ from .tools_settings_store import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+# Shared with the lazily loaded server wheel's INCOMPLETE_ROLLBACK_NOTE.
 _INCOMPLETE_ROLLBACK = "Settings import rollback incomplete"
 
 
@@ -327,6 +328,8 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
         except wheel.DecisionPinRequired as err:
             raise InvalidBackup("decision_pin_required") from err
         except ValueError as err:
+            if _INCOMPLETE_ROLLBACK in getattr(err, "__notes__", ()):
+                raise
             raise InvalidBackup("invalid_backup") from err
         if server_changes is not None:
             _add_undo(
