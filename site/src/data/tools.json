@@ -4257,16 +4257,21 @@
   {
     "name": "ha_manage_theme",
     "title": "Manage Frontend Themes",
-    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through HACS\n(the Marketplace on 2026.11+, both via ha_manage_hacs); editing custom theme files goes through\nha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name\nand attempts an automatic theme reload).\n\nWhen to use: action='list' discovers installed theme names and the\ncurrent defaults; action='set' selects the backend default theme\n(optionally per light/dark mode).\n\nSCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):\nTaking a dashboard screenshot makes the Puppet engine write the saved\ntheme of the Home Assistant user its token belongs to, which also\nflips that user's live web and mobile sessions. The screenshot tools\nare read-only and only *report* this; use action='set_engine_theme'\nwith the value quoted in their warning to put it back, and\naction='get_engine_theme' to inspect it. These act on that engine\naccount's per-user profile via frontend/set_user_data, which is a\ndifferent layer from the backend default that action='set' changes.\nGiving the engine its own dedicated user and token avoids the issue\nentirely.\n\nCaveats: action='set' changes the backend-selected default only -\nusers who explicitly picked a theme in their profile keep their\nchoice. Theme names are validated by Home Assistant at call time.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set dark-mode theme: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", mode=\"dark\")\n- Restore built-in default: ha_manage_theme(\n      action=\"set\", theme_name=\"default\")\n- Inspect the engine account's theme: ha_manage_theme(\n      action=\"get_engine_theme\")\n- Undo a screenshot's theme change (pass BOTH values from the\n  warning, so a theme changed since then is not overwritten):\n  ha_manage_theme(action=\"set_engine_theme\",\n      value={\"theme\": \"\", \"dark\": False},\n      expected_current={\"theme\": \"default\", \"dark\": True})",
+    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through HACS\n(the Marketplace on 2026.11+, both via ha_manage_hacs); theme files\nare edited with ha_write_file or ha_config_set_yaml (beta), which\nreload themes after the edit. After any other change to theme files,\nha_reload_core(target='themes') loads them.\n\nWhen to use: action='list' discovers installed theme names, the modes\neach theme declares and the current defaults; action='set' selects\nthe backend default theme, the dark-mode one, or both in one call,\nand returns the defaults Home Assistant then holds. Home Assistant\ndescribes frontend.set_theme's fields in\nha_list_services(domain='frontend', detail_level='full').\n\nSCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):\nTaking a dashboard screenshot makes the Puppet engine write the saved\ntheme of the Home Assistant user its token belongs to, which also\nflips that user's live web and mobile sessions. The screenshot tools\nare read-only and only *report* this; use action='set_engine_theme'\nwith the value quoted in their warning to put it back, and\naction='get_engine_theme' to inspect it. These act on that engine\naccount's per-user profile via frontend/set_user_data, which is a\ndifferent layer from the backend default that action='set' changes.\nGiving the engine its own dedicated user and token avoids the issue\nentirely.\n\nCaveats: action='set' changes the backend-selected defaults only -\nusers who explicitly picked a theme in their profile keep their\nchoice.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set light and dark defaults: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", theme_name_dark=\"nord_dark\")\n- Inspect the engine account's theme: ha_manage_theme(\n      action=\"get_engine_theme\")\n- Undo a screenshot's theme change (pass BOTH values from the\n  warning, so a theme changed since then is not overwritten):\n  ha_manage_theme(action=\"set_engine_theme\",\n      value={\"theme\": \"\", \"dark\": False},\n      expected_current={\"theme\": \"default\", \"dark\": True})",
     "inputSchema": {
       "properties": {
         "action": {
           "type": "ThemeAction",
-          "description": "Theme operation: 'list' installed themes, 'set' the backend default theme, or read/restore the screenshot engine account's own per-user theme with 'get_engine_theme' / 'set_engine_theme'."
+          "description": "Theme operation: 'list' installed themes, 'set' the backend default themes, or read/restore the screenshot engine account's own per-user theme with 'get_engine_theme' / 'set_engine_theme'."
         },
         "theme_name": {
           "type": "str | None",
-          "description": "Theme name when action='set'. Must be an installed theme; 'default' restores the built-in theme, 'none' resets the chosen mode to the built-in default.",
+          "description": "action='set': the default theme, sent as frontend.set_theme's 'name'.",
+          "default": null
+        },
+        "theme_name_dark": {
+          "type": "str | None",
+          "description": "action='set': the dark-mode default theme, sent as frontend.set_theme's 'name_dark'; 'none' removes the dark-mode override.",
           "default": null
         },
         "expected_current": {
@@ -4282,11 +4287,6 @@
         "value": {
           "type": "dict[str, Any] | None",
           "description": "Frontend user-data theme object when action='set_engine_theme', e.g. {'theme': '', 'dark': False}. An empty dict restores default/auto behavior.",
-          "default": null
-        },
-        "mode": {
-          "type": "Literal['light', 'dark'] | None",
-          "description": "Which mode the theme applies to when action='set'. Defaults to light.",
           "default": null
         }
       },
