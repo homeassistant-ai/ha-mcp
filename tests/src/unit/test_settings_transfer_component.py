@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 import pytest
 from homeassistant.config_entries import SOURCE_IGNORE, ConfigEntryDisabler
@@ -10,9 +11,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from pytest_homeassistant.common import MockConfigEntry
 
-from custom_components.ha_mcp_tools import settings_transfer
+from custom_components.ha_mcp_tools import SERVICE_SET_ALLOWED_PATHS, settings_transfer
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
-from custom_components.ha_mcp_tools.const import DOMAIN
+from custom_components.ha_mcp_tools.const import DOMAIN, SERVER_CONFIG_SUBDIR
+from ha_mcp.policy.persistence import load_policy, save_policy
+from ha_mcp.utils.config_write_lock import config_file_lock
 
 from ._config_flow_core import (
     add_options_entry,
@@ -20,6 +23,7 @@ from ._config_flow_core import (
     start_options_flow,
     submit_options_step,
 )
+from ._file_services import make_file_service
 
 
 async def test_mirror_backup_restores_connection_and_permissions_on_main(
@@ -110,6 +114,7 @@ async def test_mirror_backup_restores_connection_and_permissions_on_main(
         ("data", "admin_token", "foreign"),
         ("options", "pip_spec", "foreign"),
         ("options", "server_url", "https://foreign.invalid"),
+        ("options", "external_url", "https://example.invalid:65536"),
         ("data", "secret_path", "/"),
         ("options", "enable_webhook", "false"),
         ("options", "webhook_auth", "legacy"),
@@ -158,6 +163,60 @@ async def test_failed_entry_update_restores_prior_tools_and_server_file(
     with pytest.raises(OSError, match="storage failure"):
         await settings_transfer.async_import(hass, candidate)
     assert await settings_transfer.async_export(hass) == original
+
+
+async def test_tools_failure_keeps_policy_and_permission_saves_made_after_import(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    call = await make_file_service(hass)
+    add_options_entry(hass, data={"webhook_id": "old", "secret_path": "/old"})
+    candidate = await settings_transfer.async_export(hass)
+    candidate["server_settings"]["policy"] = {"wait_seconds": 12}
+    candidate["server_settings"]["tools"] = {"tools": {}}
+    candidate["entries"]["tools"] = {
+        "allowed_dirs": ["blueprints"],
+        "extra_yaml_keys": ["mqtt"],
+    }
+    directory = Path(hass.config.path(SERVER_CONFIG_SUBDIR))
+
+    def edit_policy() -> None:
+        with config_file_lock(directory):
+            policy = load_policy(directory)
+            assert policy.wait_seconds == 12
+            save_policy(directory, policy.model_copy(update={"wait_seconds": 43}))
+
+    save = Store.async_save
+
+    async def fail_last_write(store, data):
+        if data == {"keys": ["mqtt"]}:
+            await hass.async_add_executor_job(edit_policy)
+            # An ordinary writer explicitly kept this imported value. Its
+            # save still wins even though a content-only check would match.
+            assert (await call(SERVICE_SET_ALLOWED_PATHS, {"paths": ["blueprints"]}))[
+                "paths"
+            ] == ["blueprints"]
+            raise OSError("tools store unavailable")
+        await save(store, data)
+
+    monkeypatch.setattr(Store, "async_save", fail_last_write)
+    with pytest.raises(OSError, match="tools store unavailable"):
+        await settings_transfer.async_import(hass, candidate)
+    restored = await settings_transfer.async_export(hass)
+    assert restored["server_settings"]["policy"]["wait_seconds"] == 43
+    assert restored["entries"]["tools"]["allowed_dirs"] == ["blueprints"]
+    assert restored["server_settings"]["tools"] is None
+    assert restored["entries"]["tools"]["extra_yaml_keys"] == []
+
+
+async def test_importing_a_changed_search_timeout_requests_a_home_assistant_restart(
+    hass: HomeAssistant,
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "old", "secret_path": "/old"})
+    backup = await settings_transfer.async_export(hass)
+    backup["server_settings"]["features"] = {"individual_config_timeout": 27.0}
+    assert await settings_transfer.async_import(hass, backup) is True
+    assert await settings_transfer.async_import(hass, backup) is False
 
 
 async def test_unconfirmed_tools_store_write_restores_the_other_setting(

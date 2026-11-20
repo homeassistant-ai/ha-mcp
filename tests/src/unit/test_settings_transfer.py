@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from ha_mcp.settings_transfer import export_server_settings, restore_server_settings
+from ha_mcp.settings_transfer import (
+    export_server_settings,
+    restore_server_settings,
+    rollback_server_settings,
+)
 
 
 def test_transfer_moves_policy_tools_visibility_and_backup_options(tmp_path):
@@ -62,17 +66,16 @@ def test_import_advances_the_local_edit_revision_even_on_reset(
     before = export_server_settings(tmp_path)
     assert "version" not in before[section]
     bundle = {**before, section: {**incoming, "version": 500}}
-    assert restore_server_settings(tmp_path, bundle) == before
+    assert restore_server_settings(tmp_path, bundle) is not None
     assert json.loads(path.read_text())["version"] == 8
     assert restore_server_settings(tmp_path, bundle) is None
     assert json.loads(path.read_text())["version"] == 8
-    restored = export_server_settings(tmp_path)
     reset = {**bundle, section: None}
-    assert restore_server_settings(tmp_path, reset) == restored
+    assert restore_server_settings(tmp_path, reset) is not None
     assert json.loads(path.read_text())["version"] == 9
     assert restore_server_settings(tmp_path, reset) is None
     assert export_server_settings(tmp_path)[section] is None
-    assert restore_server_settings(tmp_path, before) == reset
+    assert restore_server_settings(tmp_path, before) is not None
     assert json.loads(path.read_text())["version"] == 10
     assert export_server_settings(tmp_path) == before
 
@@ -115,6 +118,102 @@ def test_write_failure_rolls_back_prior_documents(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         restore_server_settings(tmp_path, replacement)
     assert export_server_settings(tmp_path) == original
+
+
+def test_undo_failure_does_not_skip_earlier_files_or_mask_the_import_error(
+    tmp_path, monkeypatch, caplog
+):
+    policy = tmp_path / "tool_policy.json"
+    policy.write_text('{"wait_seconds":20}')
+    original = export_server_settings(tmp_path)
+    imported = {
+        **original,
+        "tools": {"tools": {}},
+        "policy": {"wait_seconds": 30},
+        "visibility": {"enabled": True},
+    }
+    write_error = OSError("private write details")
+    replace = os.replace
+
+    def fail_two_writes(src, dest):
+        if Path(dest).name == "entity_visibility.json":
+            raise write_error
+        if (
+            Path(dest) == policy
+            and json.loads(Path(src).read_text())["wait_seconds"] == 20
+        ):
+            raise OSError("private rollback details")
+        return replace(src, dest)
+
+    monkeypatch.setattr(os, "replace", fail_two_writes)
+    with pytest.raises(OSError) as raised:
+        restore_server_settings(tmp_path, imported)
+    assert raised.value is write_error
+    assert not (tmp_path / "tool_config.json").exists()
+    assert json.loads(policy.read_text())["wait_seconds"] == 30
+    assert "rollback failed for tool_policy.json (OSError)" in caplog.text
+    assert "private" not in caplog.text
+
+
+def test_later_rollback_only_reverts_unchanged_import_writes(tmp_path):
+    original = export_server_settings(tmp_path)
+    changes = restore_server_settings(
+        tmp_path,
+        {
+            **original,
+            "policy": {"wait_seconds": 20},
+            "visibility": {"enabled": True},
+            "tools": {"tools": {"ha_search": "disabled"}},
+            "features": {"redact_secrets": True},
+        },
+    )
+    assert changes is not None
+    # A subsequent policy save now has identical portable content but a new
+    # edit revision. A save to an unversioned file can also rewrite identical JSON.
+    policy = tmp_path / "tool_policy.json"
+    saved_policy = {**json.loads(policy.read_text()), "version": 12}
+    policy.write_text(json.dumps(saved_policy))
+    features = tmp_path / "feature_flags.json"
+    saved_features = tmp_path / "separate-save.json"
+    saved_features.write_bytes(features.read_bytes())
+    os.replace(saved_features, features)
+    backup = tmp_path / "backup_settings.json"
+    backup.write_text('{"enable_auto_backup":false}')
+
+    rollback_server_settings(tmp_path, changes)
+    assert json.loads(policy.read_text()) == saved_policy
+    assert json.loads(features.read_text()) == {"redact_secrets": True}
+    assert json.loads(backup.read_text()) == {"enable_auto_backup": False}
+    assert not (tmp_path / "tool_config.json").exists()
+    visibility = json.loads((tmp_path / "entity_visibility.json").read_text())
+    assert visibility["enabled"] is False
+    assert visibility["version"] == 3
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "restart"),
+    [
+        (None, {"individual_fetch_batch_size": 15}, True),
+        ({"individual_fetch_batch_size": 15}, None, True),
+        (
+            {"individual_fetch_batch_size": 15},
+            {"individual_fetch_batch_size": 20},
+            True,
+        ),
+        (
+            {"individual_fetch_batch_size": 15},
+            {"individual_fetch_batch_size": 15, "read_only_mode": True},
+            False,
+        ),
+    ],
+)
+def test_receipt_flags_changed_restart_overrides(tmp_path, before, after, restart):
+    if before is not None:
+        (tmp_path / "feature_flags.json").write_text(json.dumps(before))
+    original = export_server_settings(tmp_path)
+    changes = restore_server_settings(tmp_path, {**original, "features": after})
+    assert changes is not None
+    assert changes.restart_required is restart
 
 
 @pytest.mark.parametrize(

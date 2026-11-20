@@ -73,6 +73,14 @@ from .file_ops import (
     write_text_atomic,
 )
 from .file_post_action import after_file_write, reload_after_edit
+from .tools_settings_store import (
+    ALLOWED_PATHS_KEY,
+    EXTRA_YAML_KEYS_KEY,
+    TOOLS_STORAGE_VERSION,
+    save_allowed_paths,
+    save_extra_yaml_keys,
+    store_writes,
+)
 from .volume_mounts import PARENT_ERRORS, on_mounted_volume, os_error_text
 from .websocket_api import async_register_commands
 from .yaml_find import SERVICE_FIND_YAML_KEY, register_find_yaml_key
@@ -122,8 +130,6 @@ _HASS_DATA_TOKEN_KEY = "caller_token"
 # affect token bootstrap, and the security credential is never mixed with user
 # config. Loaded into hass.data at setup and updated in place by
 # set_allowed_paths so enforcement picks up changes with no HA restart.
-_ALLOWED_PATHS_STORAGE_KEY = f"{DOMAIN}_allowed_paths"
-_ALLOWED_PATHS_STORAGE_VERSION = 1
 _HASS_DATA_ALLOWED_PATHS_KEY = "allowed_paths"
 
 # User-configurable extra YAML write keys (#1887). Same store-per-concern
@@ -134,8 +140,6 @@ _HASS_DATA_ALLOWED_PATHS_KEY = "allowed_paths"
 # effective write allowlist is the union of the two (the server reads this store
 # via get_extra_yaml_keys). YAML_KEY_DENYLIST members are stripped on the way in
 # and re-checked at enforcement, so the store can never widen the deny floor.
-_EXTRA_YAML_KEYS_STORAGE_KEY = f"{DOMAIN}_extra_yaml_keys"
-_EXTRA_YAML_KEYS_STORAGE_VERSION = 1
 _HASS_DATA_EXTRA_YAML_KEYS_KEY = "extra_yaml_keys"
 
 # Service schemas
@@ -347,9 +351,7 @@ async def _load_allowed_paths(hass: HomeAssistant) -> list[str]:
     first run or a malformed store — fail safe to "no extra access" rather than
     raising, mirroring :func:`_load_or_create_caller_token`.
     """
-    store: Store = Store(
-        hass, _ALLOWED_PATHS_STORAGE_VERSION, _ALLOWED_PATHS_STORAGE_KEY
-    )
+    store: Store = Store(hass, TOOLS_STORAGE_VERSION, ALLOWED_PATHS_KEY)
     try:
         data = await store.async_load()
     except Exception:
@@ -396,14 +398,6 @@ async def _load_allowed_paths(hass: HomeAssistant) -> list[str]:
     return normalized
 
 
-async def _save_allowed_paths(hass: HomeAssistant, paths: list[str]) -> None:
-    """Persist the user-configurable extra directories to .storage."""
-    store: Store = Store(
-        hass, _ALLOWED_PATHS_STORAGE_VERSION, _ALLOWED_PATHS_STORAGE_KEY
-    )
-    await store.async_save({"paths": paths})
-
-
 def _normalize_extra_yaml_keys(raw: Any) -> tuple[list[str], list[Any]]:
     """Clean a candidate extra-YAML-keys list into ``(kept, dropped)`` (#1887).
 
@@ -441,9 +435,7 @@ async def _load_extra_yaml_keys(hass: HomeAssistant) -> list[str]:
     deny floor is also re-checked at enforcement). Empty list on first run or a
     malformed store.
     """
-    store: Store = Store(
-        hass, _EXTRA_YAML_KEYS_STORAGE_VERSION, _EXTRA_YAML_KEYS_STORAGE_KEY
-    )
+    store: Store = Store(hass, TOOLS_STORAGE_VERSION, EXTRA_YAML_KEYS_KEY)
     try:
         data = await store.async_load()
     except Exception:
@@ -475,15 +467,14 @@ async def _load_extra_yaml_keys(hass: HomeAssistant) -> list[str]:
     return kept
 
 
-async def _save_extra_yaml_keys(hass: HomeAssistant, keys: list[str]) -> None:
-    """Persist the user-configurable extra YAML write keys to .storage."""
-    store: Store = Store(
-        hass, _EXTRA_YAML_KEYS_STORAGE_VERSION, _EXTRA_YAML_KEYS_STORAGE_KEY
-    )
-    await store.async_save({"keys": keys})
-
-
 async def _apply_allowed_paths(
+    hass: HomeAssistant, raw_paths: Any
+) -> tuple[list[str], list[Any]]:
+    async with store_writes(hass, ALLOWED_PATHS_KEY).writing():
+        return await _apply_allowed_paths_locked(hass, raw_paths)
+
+
+async def _apply_allowed_paths_locked(
     hass: HomeAssistant, raw_paths: Any
 ) -> tuple[list[str], list[Any]]:
     """Normalize, persist, and hot-swap the extra directories (#1567, #1887).
@@ -505,12 +496,19 @@ async def _apply_allowed_paths(
             rejected.append(entry)
         elif norm not in normalized:
             normalized.append(norm)
-    await _save_allowed_paths(hass, normalized)
+    await save_allowed_paths(hass, normalized)
     hass.data.setdefault(DOMAIN, {})[_HASS_DATA_ALLOWED_PATHS_KEY] = normalized
     return normalized, rejected
 
 
 async def _apply_extra_yaml_keys(
+    hass: HomeAssistant, raw_keys: Any
+) -> tuple[list[str], list[Any]]:
+    async with store_writes(hass, EXTRA_YAML_KEYS_KEY).writing():
+        return await _apply_extra_yaml_keys_locked(hass, raw_keys)
+
+
+async def _apply_extra_yaml_keys_locked(
     hass: HomeAssistant, raw_keys: Any
 ) -> tuple[list[str], list[Any]]:
     """Normalize, persist, and hot-swap the extra YAML write keys (#1887).
@@ -521,7 +519,7 @@ async def _apply_extra_yaml_keys(
     enforcement applies live. Returns ``(kept, rejected)``.
     """
     normalized, rejected = _normalize_extra_yaml_keys(raw_keys)
-    await _save_extra_yaml_keys(hass, normalized)
+    await save_extra_yaml_keys(hass, normalized)
     hass.data.setdefault(DOMAIN, {})[_HASS_DATA_EXTRA_YAML_KEYS_KEY] = normalized
     return normalized, rejected
 
