@@ -20,6 +20,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    SceneIdNotAnEntityError,
     SceneStorageConfigNotFoundError,
 )
 from ..errors import (
@@ -38,7 +39,6 @@ from ..utils.python_sandbox import (
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, parse_json_param
 from .component_config_reads import fetch_entity_lookup_via_component
-from .config_helpers.registry import validate_registry_ids
 from .config_write_helpers import (
     apply_entity_category,
     attach_skill_content,
@@ -57,7 +57,14 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references as ref_check
-from .scene_capture import capture_scene_states
+from .scene_capture import merge_captures, read_captures
+from .scene_checks import (
+    category_problems,
+    entity_form_create_problems,
+    raise_problems,
+    raise_scene_id_refusal,
+    scene_body_problems,
+)
 from .scene_discovery import discover_scenes
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import search_related
@@ -144,49 +151,6 @@ def _skip_scene_activation_backup(kwargs: dict[str, Any]) -> bool:
         and kwargs.get("config") is None
         and kwargs.get("python_transform") is None
     )
-
-
-def _guard_scene_body(config: dict[str, Any], storage_key: Any, action: str) -> None:
-    """Refuse a config Core would not store as this scene under ``storage_key``.
-
-    Core writes the body over the entry at the URL key but keeps the body's
-    ``id``, so a different id moves the scene to it: the registry entry under
-    the old key is orphaned and the scene reloads as a new entity (#1168).
-    Renaming is remove + create. ``id`` is optional and ``None`` means the
-    same as leaving it out, but Core refuses ``None``, so it is dropped.
-
-    A ``platform`` key is refused too: Core then stores the body as a scene
-    platform, loading only the scenes its ``states`` lists, not this scene.
-    """
-    if "platform" in config:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                "config is one scene, not a 'platform' stanza; Core would store "
-                "it as a list of scenes under this key instead of as this scene",
-                suggestions=["Drop 'platform' and 'states'; pass name and entities"],
-                context={"action": action, "scene_id": storage_key},
-            )
-        )
-    if "id" in config and config["id"] is None:
-        del config["id"]
-    if "id" in config and config["id"] != storage_key:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                f"config['id'] {config['id']!r} differs from the scene's storage "
-                f"key {storage_key!r}; Core would store the scene under the new id",
-                suggestions=[
-                    f"Keep config['id'] as {storage_key!r}, or leave it out",
-                    "To rename a scene, use ha_config_remove_scene + ha_config_set_scene",
-                ],
-                context={
-                    "action": action,
-                    "scene_id": storage_key,
-                    "attempted_id": config["id"],
-                },
-            )
-        )
 
 
 class ConfigSceneTools:
@@ -325,23 +289,6 @@ class ConfigSceneTools:
             )
         return f"scene.{scene_id}"
 
-    async def _validate_category_id(self, category: str) -> None:
-        """Confirm ``category`` exists in the ``scene`` category registry.
-
-        Issue #1168 R5 blocker 9: ``apply_entity_category`` forwards the
-        supplied ID blindly to the entity-registry update; HA accepts a
-        non-existent category ID without complaint, leaving the registry
-        with a phantom reference invisible in
-        ``ha_config_get_category(scope='scene')`` results. Pre-validating
-        the ID against the live category registry is the only place the
-        phantom can be caught without changing HA itself. Issue #2159 moved
-        the check onto the shared cross-registry validator so every write
-        tool rejects dangling references identically.
-        """
-        await validate_registry_ids(
-            self._client, None, None, {"scene": category}, fail_closed=True
-        )
-
     @tool(
         name="ha_config_get_scene",
         tags={"Scenes"},
@@ -354,8 +301,9 @@ class ConfigSceneTools:
             str | None,
             Field(
                 description="Scene storage ID from listing (e.g. 'movie_night') "
-                "or the scene's entity_id; an entity_id is resolved to the "
-                "storage ID."
+                "or the scene's entity_id (e.g. 'scene.movie_night'). A bare id "
+                "is a storage key; 'scene.<x>' is an entity_id, resolved to its "
+                "storage key."
             ),
         ] = None,
         query: Annotated[
@@ -428,6 +376,8 @@ class ConfigSceneTools:
             return await self._legacy_get_scene(scene_id)
         except ToolError:
             raise
+        except SceneIdNotAnEntityError as e:
+            raise_scene_id_refusal(e.identifier, e.storage_key)
         except SceneStorageConfigNotFoundError as e:
             # The entity resolved but scenes.yaml has no config for it - a Hue/
             # vendor or raw-YAML scene. Surface CONFIG_NOT_FOUND, not the
@@ -630,7 +580,12 @@ class ConfigSceneTools:
     async def ha_config_set_scene(
         self,
         scene_id: Annotated[
-            str, Field(description="Scene identifier (e.g., 'movie_night')")
+            str,
+            Field(
+                description="Scene storage key (e.g. 'movie_night') or entity_id "
+                "(e.g. 'scene.movie_night'). A new scene takes the bare key; "
+                "Core names its entity after 'name'."
+            ),
         ],
         config: Annotated[
             dict[str, Any] | None,
@@ -871,6 +826,8 @@ class ConfigSceneTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
+        except SceneIdNotAnEntityError as e:
+            raise_scene_id_refusal(e.identifier, e.storage_key)
         except SceneStorageConfigNotFoundError as e:
             # Set on a non-storage scene: the hash-verify / python_transform
             # pre-fetch read 404s because the entity has no editable scenes.yaml
@@ -1017,17 +974,11 @@ class ConfigSceneTools:
                 )
             )
 
-        _guard_scene_body(transformed_config, original_id, "python_transform")
+        raise_problems(
+            scene_body_problems(transformed_config, original_id, "python_transform")
+            + await category_problems(self._client, category)
+        )
         self._prune_scene_metadata(transformed_config, resolved_id)
-
-        # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
-        # the upsert commits. Validating after the write produced the
-        # exact partial-state-mutation pattern this PR's auto-attach
-        # contract was meant to eliminate — scene was rewritten,
-        # caller saw VALIDATION_INVALID_PARAMETER on a phantom
-        # category, and the storage state had already moved.
-        if category:
-            await self._validate_category_id(category)
 
         # ``resolved_id`` is the storage key (write target); ``scene_id``
         # stays the caller id so a missing ``name`` defaults caller-facing
@@ -1162,31 +1113,7 @@ class ConfigSceneTools:
             scene_id,
             category,
         )
-        if capture_entities or capture_devices:
-            await capture_scene_states(
-                self._client, config_dict, capture_entities or [], capture_devices or []
-            )
-
-        # Issue #1168 R6 blocker 15: pre-validate ``category`` BEFORE
-        # the hash check + upsert commits. Same partial-state hazard as
-        # the python_transform branch — a phantom category must not
-        # rewrite the scene before erroring.
-        #
-        # Issue #1168 R8 (post-merge follow-up): gate on
-        # ``effective_category`` truthy, not on the user-facing
-        # ``category`` param. ``_validate_scene_config`` promotes a
-        # top-level ``config["category"]`` into ``effective_category``
-        # when the user passed ``category=None``; the R7 fix gated on
-        # ``category is not None`` to skip the WS round-trip when no
-        # category was supplied, but that left the dict-promoted path
-        # uncovered — a phantom category in ``config["category"]``
-        # would skip validation and reach ``apply_entity_category``,
-        # which attaches the phantom ID to the entity registry without
-        # checking it exists. Truthy check covers both sources and
-        # still skips the WS call when neither produces a category.
-        if effective_category:
-            await self._validate_category_id(effective_category)
-
+        problems: list[dict[str, Any]] = []
         # Issue #1168 R3 blocker 7: when caller passes ``config_hash``,
         # honor the optimistic-locking semantics promised by the field
         # description. ``_fetch_and_verify_hash`` raises ToolError on
@@ -1224,7 +1151,18 @@ class ConfigSceneTools:
                 resolved_id
             ):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
-        _guard_scene_body(config_dict, resolved_id, "set")
+            else:
+                problems += entity_form_create_problems(scene_id, resolved_id)
+        # These input refusals (entity-form create, body, category, captures)
+        # come in one response.
+        problems += scene_body_problems(config_dict, resolved_id, "set")
+        problems += await category_problems(self._client, effective_category)
+        captured = await read_captures(
+            self._client, capture_entities or [], capture_devices or [], problems
+        )
+        raise_problems(problems)
+        if captured:
+            merge_captures(config_dict, captured, capture_entities or [])
 
         references = await ref_check(self._client, config_dict, "scene")
         # ``resolved_id`` is already the storage key (from the hash-verify
@@ -1320,7 +1258,11 @@ class ConfigSceneTools:
     async def ha_config_remove_scene(
         self,
         scene_id: Annotated[
-            str, Field(description="Scene identifier to delete (e.g., 'old_scene')")
+            str,
+            Field(
+                description="Scene to delete: storage key (e.g. 'old_scene') or "
+                "entity_id (e.g. 'scene.old_scene')."
+            ),
         ],
         wait: Annotated[
             bool,
@@ -1413,6 +1355,8 @@ class ConfigSceneTools:
             }
         except ToolError:
             raise
+        except SceneIdNotAnEntityError as e:
+            raise_scene_id_refusal(e.identifier, e.storage_key)
         except SceneStorageConfigNotFoundError as e:
             # Entity resolved but scenes.yaml has no config for it - a Hue/
             # vendor or raw-YAML scene, not a genuinely missing entity (#1971).

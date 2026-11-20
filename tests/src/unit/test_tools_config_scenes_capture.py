@@ -150,6 +150,82 @@ class TestCapture:
         assert movie["entities"] == {"light.desk": {"brightness": 180, "state": "on"}}
         assert movie["metadata"] == {"light.desk": {"entity_only": False}}
 
+    async def test_a_recapture_with_a_fresh_hash_stores_the_live_state(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """The recapture the 'requires config' refusal suggests: the config and hash
+        from ``ha_config_get_scene`` plus ``capture_entities``."""
+        hass.states.async_set("light.desk", "on", {"brightness": 77})
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={"name": "Test Scene"},
+            capture_entities=["light.desk"],
+            wait=False,
+        )
+        current = await tools.ha_config_get_scene(scene_id="test_scene")
+        current["config"]["metadata"]["light.desk"] = {"entity_only": False}
+        hass.states.async_set("light.desk", "on", {"brightness": 150})
+
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config=current["config"],
+            config_hash=current["config_hash"],
+            capture_entities=["light.desk"],
+            wait=False,
+        )
+
+        stored = await stored_scene(hass, "test_scene")
+        assert stored["entities"] == {"light.desk": {"brightness": 150, "state": "on"}}
+        assert stored["metadata"] == {"light.desk": {"entity_only": False}}
+        assert await config_hash(tools, "test_scene") != current["config_hash"]
+
+    async def test_a_recapture_with_a_stale_hash_is_refused_unwritten(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        hass.states.async_set("light.desk", "on", {"brightness": 77})
+        stale = await tools.ha_config_get_scene(scene_id="test_scene")
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={"name": "Edited", "entities": TV_ON},
+            wait=False,
+        )
+        before = await stored_scenes(hass)
+
+        body = await set_refused(
+            tools,
+            config=stale["config"],
+            config_hash=stale["config_hash"],
+            capture_entities=["light.desk"],
+        )
+
+        assert "current_config_hash" in body
+        assert await stored_scenes(hass) == before
+
+    async def test_independent_refusals_come_in_one_response(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        before = await stored_scenes(hass)
+        body = await set_refused(
+            tools,
+            config={"id": "other", "platform": "homeassistant", "name": "Test Scene"},
+            capture_entities=["light.nope_missing"],
+        )
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        problems = body["problems"]
+        assert [p["code"] for p in problems] == [
+            "VALIDATION_FAILED",
+            "VALIDATION_FAILED",
+            "ENTITY_NOT_FOUND",
+        ]
+        assert "'platform'" in problems[0]["message"]
+        assert "'other'" in problems[1]["message"]
+        assert problems[2]["context"]["entity_ids"] == ["light.nope_missing"]
+        suggestions = body["error"]["suggestions"]
+        assert "Drop 'platform' and 'states'; pass name and entities" in suggestions
+        assert "Use ha_search to find the entity_ids" in suggestions
+        assert await stored_scenes(hass) == before
+
     @pytest.mark.parametrize("capture", ["capture_entities", "capture_devices"])
     async def test_an_empty_capture_list_without_config_is_refused_unwritten(
         self, hass: HomeAssistant, tools: ConfigSceneTools, capture: str
@@ -232,10 +308,27 @@ class TestCapture:
         assert body["action"] == "capture"
         upsert.assert_not_awaited()
 
+    async def test_an_id_naming_another_entity_by_path_is_refused_unwritten(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """The REST read of ``a/../b`` answers ``b``'s state: no capture of ``a``,
+        and ``b`` is not what the call named."""
+        before = await stored_scenes(hass)
+        body = await set_refused(
+            tools,
+            scene_id="movie",
+            config={"name": "Movie"},
+            capture_entities=["light.nope/../input_boolean.tv"],
+        )
+
+        assert body["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert await stored_scenes(hass) == before
+
     async def test_a_lost_connection_names_the_entity_unwritten(
         self, core_client: HomeAssistantClient, tools: ConfigSceneTools
     ) -> None:
-        """A read that never reaches Core is refused like one Core fails."""
+        """A read that never reaches Core is refused like one Core fails. The
+        scene exists, so only the capture reads a state."""
         with (
             patch.object(
                 core_client,
@@ -246,7 +339,7 @@ class TestCapture:
         ):
             body = await set_refused(
                 tools,
-                scene_id="movie",
+                scene_id="test_scene",
                 config={"name": "Movie"},
                 capture_entities=["input_boolean.tv"],
             )
@@ -301,6 +394,22 @@ class TestCaptureThroughTheComponent:
         stored = await stored_scene(hass, "movie")
         assert set(stored["entities"]) == {"light.desk", "input_boolean.tv"}
         assert stored["entities"]["light.desk"] == {"brightness": 180, "state": "on"}
+
+    async def test_a_write_without_a_capture_sends_no_frame(
+        self, tools: ConfigSceneTools
+    ) -> None:
+        with patch.object(
+            scene_capture,
+            "fetch_states_via_component",
+            wraps=scene_capture.fetch_states_via_component,
+        ) as frames:
+            await tools.ha_config_set_scene(
+                scene_id="movie",
+                config={"name": "Movie", "entities": TV_ON},
+                wait=False,
+            )
+
+        frames.assert_not_awaited()
 
     async def test_ids_the_component_misses_are_refused_unwritten(
         self, tools: ConfigSceneTools
@@ -410,6 +519,36 @@ class TestDeviceCapture:
 
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert body["device_id"] == "nope"
+        assert await stored_scenes(hass) == before
+
+    @pytest.mark.parametrize("known", [False, True])
+    async def test_a_device_refusal_comes_with_an_entity_refusal(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        tools: ConfigSceneTools,
+        known: bool,
+    ) -> None:
+        """A device refusal and an entity refusal of one call come back together,
+        and nothing is written."""
+        device = "nope"
+        if known:
+            device = _lamp(hass, entity_registry)
+            hass.states.async_remove("light.lamp")
+        before = await stored_scenes(hass)
+        body = await set_refused(
+            tools,
+            scene_id="movie",
+            config={"name": "Movie"},
+            capture_devices=[device],
+            capture_entities=["light.nope_missing"],
+        )
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert [p["code"] for p in body["problems"]] == [
+            "ENTITY_NOT_FOUND" if known else "RESOURCE_NOT_FOUND",
+            "ENTITY_NOT_FOUND",
+        ]
         assert await stored_scenes(hass) == before
 
     async def test_a_device_with_nothing_to_capture_is_refused_unwritten(

@@ -23,19 +23,16 @@ SCENE_IGNORED_DOMAINS = frozenset(
 )  # fmt: skip
 
 
-async def _read_states(
-    client: Any, entity_ids: list[str]
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """The entities' states and the ids without one: one component frame, or
-    one REST read per id when the component path returns ``None``; a REST
-    failure other than 404 raises."""
+async def _read_states(client: Any, entity_ids: list[str]) -> list[dict[str, Any]]:
+    """The states Core answers for ``entity_ids``: one component frame, or one
+    REST read per id when the component path returns ``None``; a REST 404 is
+    skipped, any other REST failure raises."""
+    if not entity_ids:
+        return []
     component = await fetch_states_via_component(client, entity_ids)
     if component is not None:
-        found = component["states"]
-        missing = [entity_id for entity_id in entity_ids if entity_id not in found]
-        return list(found.values()), missing
+        return list(component["states"].values())
     states: list[dict[str, Any]] = []
-    missing = []
     for entity_id in entity_ids:
         try:
             states.append(await client.get_entity_state(entity_id))
@@ -49,14 +46,16 @@ async def _read_states(
                         "retry, or capture without it"
                     ],
                 )
-            missing.append(entity_id)
-    return states, missing
+    return states
 
 
-async def _device_members(client: Any, device_ids: list[str]) -> dict[str, list[str]]:
+async def _device_members(
+    client: Any, device_ids: list[str], problems: list[dict[str, Any]]
+) -> dict[str, list[str]]:
     """Each device's entities as the scene editor's device picker lists them:
     its registry entries with no entity category, not hidden, outside
-    ``SCENE_IGNORED_DOMAINS``. The rows come from the component's device read."""
+    ``SCENE_IGNORED_DOMAINS``. The rows come from the component's device read;
+    an unknown device is added to ``problems``."""
     members: dict[str, list[str]] = {}
     for device_id in device_ids:
         reply = await fetch_device_via_component(
@@ -83,7 +82,7 @@ async def _device_members(client: Any, device_ids: list[str]) -> dict[str, list[
                 )
             )
         if reply["device"] is None:
-            raise_tool_error(
+            problems.append(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     f"Device not found: {device_id}; nothing was written",
@@ -91,6 +90,7 @@ async def _device_members(client: Any, device_ids: list[str]) -> dict[str, list[
                     context={"device_id": device_id},
                 )
             )
+            continue
         members[device_id] = [
             row["entity_id"]
             for row in reply["entities"]
@@ -101,40 +101,32 @@ async def _device_members(client: Any, device_ids: list[str]) -> dict[str, list[
     return members
 
 
-async def capture_scene_states(
+async def read_captures(
     client: Any,
-    config: dict[str, Any],
     entity_ids: list[str],
     device_ids: list[str],
-) -> None:
-    """Write the current states of ``entity_ids`` and of the devices'
-    entities into ``config['entities']``.
-
-    The frontend's scene editor stores a state with all its attributes and
-    marks an entity it added on its own ``entity_only`` in ``metadata``; a
-    device's entity gets no mark, and one without a state is skipped. A picked
-    entity without a state, or a device none of whose entities has one, refuses
-    the call. Core applies what each domain can reproduce. A captured state
-    replaces the entity's entry; an entity already in the scene keeps its
-    metadata. An ``entities`` or ``metadata`` that is no dict is left for Core
-    to refuse.
-    """
-    devices = await _device_members(client, device_ids)
+    problems: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """The current states of ``entity_ids`` and of the devices' entities, keyed
+    by Core's entity_id, as the scene editor stores them: a state with all its
+    attributes. A device entity without a state is skipped. An unknown device,
+    a device none of whose entities has a state, and a picked entity without
+    one are added to ``problems``."""
+    devices = await _device_members(client, device_ids, problems)
     member_ids = [e for members in devices.values() for e in members]
-    states, missing = await _read_states(
-        client, list(dict.fromkeys([*entity_ids, *member_ids]))
-    )
+    states = await _read_states(client, list(dict.fromkeys([*entity_ids, *member_ids])))
     # Core finds a differently cased id; the entry is keyed as Core names it.
     captured = {
         state["entity_id"]: {**state.get("attributes", {}), "state": state["state"]}
         for state in states
     }
-    missing = [e for e in missing if e in entity_ids]
+    # Judged by the reply's entity_id: a REST read of ``a/../b`` answers ``b``.
+    missing = [e for e in entity_ids if e.lower() not in captured]
     empty = [
         d for d, members in devices.items() if not any(m in captured for m in members)
     ]
     if empty:
-        raise_tool_error(
+        problems.append(
             create_error_response(
                 ErrorCode.ENTITY_NOT_FOUND,
                 f"Device {', '.join(empty)} has no entity with a state the scene "
@@ -147,7 +139,7 @@ async def capture_scene_states(
             )
         )
     if missing:
-        raise_tool_error(
+        problems.append(
             create_error_response(
                 ErrorCode.ENTITY_NOT_FOUND,
                 f"No state to capture for {', '.join(missing)}; nothing was written",
@@ -155,6 +147,18 @@ async def capture_scene_states(
                 context={"entity_ids": missing},
             )
         )
+    return captured
+
+
+def merge_captures(
+    config: dict[str, Any], captured: dict[str, dict[str, Any]], entity_ids: list[str]
+) -> None:
+    """Write ``captured`` into ``config['entities']`` as the scene editor saves:
+    an entity picked on its own (in ``entity_ids``) that is new to the scene is
+    marked ``entity_only`` in ``metadata``, a device's entity is not. A
+    captured state replaces the entity's entry; an entity already in the scene
+    keeps its metadata. An ``entities`` or ``metadata`` that is no dict is left
+    for Core to refuse."""
     entities = config.setdefault("entities", {})
     metadata = config.setdefault("metadata", {})
     if not isinstance(entities, dict) or not isinstance(metadata, dict):

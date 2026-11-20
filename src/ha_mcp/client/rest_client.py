@@ -46,6 +46,7 @@ from .exceptions import (
 from .exceptions import (
     HomeAssistantError as HomeAssistantError,
 )
+from .exceptions import SceneIdNotAnEntityError
 from .models import ErrorLogPage
 from .supervisor_client import make_supervisor_httpx_client
 from .transport_errors import is_ssl_error, redirect_message
@@ -94,11 +95,11 @@ _ADMIN_ONLY_401_MESSAGE = (
 class SceneResolution:
     """Outcome of resolving a scene identifier via the entity registry.
 
-    ``registry_hit`` records whether ``config/entity_registry/get`` returned a
-    usable ``unique_id`` - i.e. the entity EXISTS (a bare id that won as a storage
-    key carries False, its entity unread). It is the signal that
-    separates a genuinely-missing scene from one that exists but is not editable
-    through HA's scene config API (a Hue/vendor scene, or a raw-YAML scene): both
+    ``registry_hit`` records whether the storage key came from the registry entry
+    of the scene's own entity - i.e. the entity EXISTS (a bare id that won as a
+    storage key carries False: the registry named another scene). It separates a
+    genuinely-missing scene from one that exists but is not editable through
+    HA's scene config API (a Hue/vendor scene, or a raw-YAML scene): both
     resolve fine yet 404 on ``config/scene/config/{id}``, because that endpoint is
     backed only by the managed ``scenes.yaml`` (issue #1971). ``platform`` carries
     the registry entry's integration domain (``"hue"``, ``"homeassistant"``, …)
@@ -2115,10 +2116,10 @@ class HomeAssistantClient:
         config", and ``platform`` names the owning integration (issue #1971).
 
         A bare id that is a storage key wins over another scene whose entity
-        is ``scene.<id>``; ``scene.<id>`` is refused, not read as key ``<id>``,
-        when the registry has no such entity but that key holds a scene. The
-        config is read only for a bare id whose registry key differs and for an
-        unregistered ``scene.<id>``.
+        is ``scene.<id>``; ``scene.<id>`` raises :class:`SceneIdNotAnEntityError`
+        instead of being read as key ``<id>`` when the registry has no such
+        entity but that key holds a scene. The config is read only for a bare id
+        whose registry key differs and for an unregistered ``scene.<id>``.
 
         ``registry_hit=False`` marks a bare id the registry did not confirm: a
         guess after a failed lookup, which a write path must not trust, or a
@@ -2162,11 +2163,7 @@ class HomeAssistantClient:
                 return registered
             return fallback if await self._scene_config_exists(bare_id) else registered
         if qualified and unregistered and await self._scene_config_exists(bare_id):
-            raise HomeAssistantAPIError(
-                f"{identifier} is no registered entity, but storage key '{bare_id}' "
-                f"holds a scene; pass '{bare_id}' for it, another id for a new one",
-                status_code=404,
-            )
+            raise SceneIdNotAnEntityError(identifier, bare_id)
         return fallback
 
     async def _scene_config_exists(self, storage_key: str) -> bool:
@@ -2181,13 +2178,15 @@ class HomeAssistantClient:
 
     async def resolve_scene_id(self, identifier: str) -> str:
         """
-        Resolve a scene identifier to its storage key via the entity registry.
+        Resolve a scene identifier to its storage key (entity registry, plus a
+        config read when ids collide).
 
         Scenes may be renamed in the HA UI, changing the entity_id but keeping
         the original storage key. Like :meth:`_resolve_script_id`, this returns
         the bare storage key and needs a WebSocket entity registry lookup because
         the state attributes do not surface it. Unlike it, :meth:`_resolve_scene`
-        gives a bare storage key precedence, refuses an unregistered ``scene.<id>``
+        may also read the scene config, gives a bare storage key precedence,
+        raises :class:`SceneIdNotAnEntityError` for an unregistered ``scene.<id>``
         when key ``<id>`` holds a scene, and carries ``registry_hit``/``platform``.
 
         Thin wrapper over :meth:`_resolve_scene` for callers that only need the

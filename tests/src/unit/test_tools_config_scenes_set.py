@@ -9,15 +9,18 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.tools.scene_checks import category_problems
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
+from ._tool_errors import error_of
 from ._tools_config_scenes_core import (
     TV_ON,
     category,
@@ -27,6 +30,7 @@ from ._tools_config_scenes_core import (
     scene_tools,
     sent_of_type,
     set_refused,
+    stored_scene,
     stored_scenes,
     upserts,
 )
@@ -406,6 +410,22 @@ class TestConfigWrite:
         upsert.assert_not_awaited()
         assert await stored_scenes(hass) == before
 
+    async def test_a_none_id_in_the_config_is_dropped(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """Core refuses ``id: None``; it means the same as leaving ``id`` out."""
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={"id": None, "name": "Test Scene", "entities": TV_OFF},
+            wait=False,
+        )
+
+        assert await stored_scene(hass, "test_scene") == {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": TV_OFF,
+        }
+
     async def test_a_renamed_scenes_own_id_in_the_config_is_written(
         self,
         hass: HomeAssistant,
@@ -718,6 +738,49 @@ class TestCategoryValidation:
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "phantom_via_config_dict" in error["message"]
         upsert.assert_not_awaited()
+
+    @pytest.mark.parametrize("transform", [False, True])
+    async def test_an_unknown_category_is_refused_with_the_rest(
+        self,
+        core_client: HomeAssistantClient,
+        tools: ConfigSceneTools,
+        transform: bool,
+    ) -> None:
+        change = (
+            {
+                "python_transform": "config['id'] = 'other'",
+                "config_hash": await config_hash(tools, "test_scene"),
+            }
+            if transform
+            else {"config": {"id": "other", "entities": TV_ON}}
+        )
+        with upserts(core_client) as upsert:
+            body = await set_refused(
+                tools, scene_id="test_scene", category="phantom_id", **change
+            )
+
+        assert [p["code"] for p in body["problems"]] == [
+            "VALIDATION_FAILED",
+            "VALIDATION_INVALID_PARAMETER",
+        ]
+        upsert.assert_not_awaited()
+
+    async def test_an_unreadable_category_registry_refuses_the_call_alone(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """A transport failure is no input problem: it is not folded into the
+        collected refusals, so the caller can tell to retry."""
+        with (
+            patch.object(
+                core_client,
+                "send_websocket_message",
+                AsyncMock(side_effect=HomeAssistantConnectionError("down")),
+            ),
+            pytest.raises(ToolError) as exc,
+        ):
+            await category_problems(core_client, "lighting")
+
+        assert error_of(exc)["code"].startswith("CONNECTION")
 
     async def test_no_category_lookup_without_a_category(
         self, hass: HomeAssistant, tools: ConfigSceneTools, sent: AsyncMock

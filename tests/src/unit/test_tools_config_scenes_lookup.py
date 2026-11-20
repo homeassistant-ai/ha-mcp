@@ -18,7 +18,11 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
@@ -33,6 +37,7 @@ from ._tools_config_scenes_core import (
     scene,
     scene_tools,
     sent_of_type,
+    set_refused,
     stored_scenes,
     upserts,
 )
@@ -638,7 +643,7 @@ class TestEntityIdForm:
             hass, core_client, monkeypatch, [scene("key_a", "First")]
         )
 
-    @pytest.mark.parametrize("action", ["get", "set", "remove"])
+    @pytest.mark.parametrize("action", ["get", "set", "set_hashed", "remove"])
     async def test_it_does_not_reach_another_scene_by_its_key(
         self, hass: HomeAssistant, orphaned_key: ConfigSceneTools, action: str
     ) -> None:
@@ -650,6 +655,12 @@ class TestEntityIdForm:
                 config={"name": "Brand New", "entities": TV_ON},
                 wait=False,
             ),
+            "set_hashed": lambda: orphaned_key.ha_config_set_scene(
+                scene_id="scene.key_a",
+                config={"entities": TV_ON},
+                config_hash="any",
+                wait=False,
+            ),
             "remove": lambda: orphaned_key.ha_config_remove_scene(
                 scene_id="scene.key_a", wait=False
             ),
@@ -657,20 +668,68 @@ class TestEntityIdForm:
         with pytest.raises(ToolError) as exc:
             await call()
 
-        assert error_of(exc)["code"].endswith("_NOT_FOUND")
-        assert "pass 'key_a'" in str(exc.value)
+        error = error_of(exc)
+        assert error["code"] == "VALIDATION_FAILED"
+        assert any("'key_a'" in s for s in error["suggestions"])
+        assert any("entity_id" in s for s in error["suggestions"])
         assert await stored_scenes(hass) == before
 
-    async def test_it_still_creates_a_new_scene(
+    async def test_a_backup_snapshot_reads_it_as_absent(
+        self, core_client: HomeAssistantClient, orphaned_key: ConfigSceneTools
+    ) -> None:
+        """A backup snapshot reads a 404 from this read as no prior config."""
+        with pytest.raises(HomeAssistantAPIError) as exc:
+            await core_client.get_scene_config("scene.key_a")
+
+        assert exc.value.status_code == 404
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"name": "RV Movie Night", "entities": TV_ON},
+            {"entities": TV_ON},
+        ],
+    )
+    async def test_a_create_by_entity_id_takes_the_bare_key(
+        self, hass: HomeAssistant, orphaned_key: ConfigSceneTools, config: dict
+    ) -> None:
+        """Core names the new entity after the scene's name, so the entity_id
+        form of a scene that does not exist yet is never a create."""
+        before = await stored_scenes(hass)
+        body = await set_refused(orphaned_key, scene_id="scene.rv_movie", config=config)
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert any("'rv_movie'" in s for s in body["error"]["suggestions"])
+        assert await stored_scenes(hass) == before
+
+    async def test_an_entity_form_create_is_refused_with_the_rest(
+        self, hass: HomeAssistant, orphaned_key: ConfigSceneTools
+    ) -> None:
+        before = await stored_scenes(hass)
+        body = await set_refused(
+            orphaned_key,
+            scene_id="scene.rv_movie",
+            config={"name": "RV Movie Night", "platform": "homeassistant"},
+        )
+
+        assert [p["code"] for p in body["problems"]] == ["VALIDATION_FAILED"] * 2
+        assert await stored_scenes(hass) == before
+
+    async def test_a_scene_created_by_key_refuses_the_entity_form_of_the_key(
         self, hass: HomeAssistant, orphaned_key: ConfigSceneTools
     ) -> None:
         await orphaned_key.ha_config_set_scene(
-            scene_id="scene.brand_new",
-            config={"name": "Brand New", "entities": TV_ON},
-            wait=False,
+            scene_id="rv_movie",
+            config={"name": "RV Movie Night", "entities": TV_ON},
+            wait=True,
         )
 
-        assert {s["id"] for s in await stored_scenes(hass)} == {"key_a", "brand_new"}
+        with pytest.raises(ToolError) as exc:
+            await orphaned_key.ha_config_get_scene(scene_id="scene.rv_movie")
+
+        assert error_of(exc)["code"] == "VALIDATION_FAILED"
+        found = await orphaned_key.ha_config_get_scene(scene_id="rv_movie")
+        assert found["config"]["name"] == "RV Movie Night"
 
     async def test_search_gives_an_unregistered_scene_neither_key_nor_config(
         self,
