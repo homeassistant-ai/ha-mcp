@@ -311,6 +311,36 @@ async def test_a_callback_carrying_credentials_is_refused(
     assert result == (400, None)
 
 
+@pytest.mark.parametrize(
+    ("callback", "listable"),
+    [(OTHER_CALLBACK, True), ("https://u:pw@other.example/cb", False)],
+    ids=["unlisted", "carries-credentials"],
+)
+async def test_a_refusal_blames_the_list_only_for_a_callback_the_list_could_hold(
+    proxy_client: TestClient,
+    variant: Variant,
+    caplog: pytest.LogCaptureFixture,
+    callback: str,
+    listable: bool,
+) -> None:
+    """The app's option refuses a callback carrying credentials, so telling the
+    administrator to list one sends them to a setting that cannot help."""
+    _require_allowlist(variant)
+    _verifier, challenge = pkce_pair()
+
+    with caplog.at_level(logging.WARNING):
+        response = await _authorize(
+            proxy_client, variant, challenge, redirect_uri=callback
+        )
+
+    page = await response.text()
+    logged = [r.getMessage() for r in caplog.records if callback in r.getMessage()]
+    assert response.status == 400
+    assert ("add this exact address" in page) is listable
+    assert len(logged) == 1
+    assert (REFUSED_LINE in logged[0]) is listable
+
+
 async def test_allow_any_callback_accepts_an_unlisted_callback(
     hass: HomeAssistant,
     hass_client_no_auth: ClientSessionGenerator,

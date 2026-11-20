@@ -173,6 +173,32 @@ async def test_a_refusal_is_logged_with_the_callback(
     assert any(CHATGPT in line for line in refusal_lines(caplog))
 
 
+@pytest.mark.parametrize(
+    ("callback", "listable"),
+    [(CHATGPT, True), ("https://user:pw@chatgpt.example/connector/cb", False)],
+    ids=["unlisted", "carries-credentials"],
+)
+async def test_a_refusal_blames_the_list_only_for_a_callback_the_list_could_hold(
+    open_oauth_surface: OpenSurface,
+    caplog: pytest.LogCaptureFixture,
+    callback: str,
+    listable: bool,
+) -> None:
+    """Configure refuses a callback carrying credentials, so telling the
+    administrator to list one sends them to a setting that cannot help."""
+    surface = await open_oauth_surface(WEBHOOK_AUTH_NONE)
+
+    with caplog.at_level(logging.WARNING):
+        resp = await authorize(surface, redirect_uri=callback)
+
+    page = await resp.text()
+    logged = [r.getMessage() for r in caplog.records if callback in r.getMessage()]
+    assert resp.status == 400
+    assert ("add this exact address" in page) is listable
+    assert len(logged) == 1
+    assert (REFUSED_LINE in logged[0]) is listable
+
+
 async def test_a_burst_of_refusals_writes_one_line_then_a_count(
     open_oauth_surface: OpenSurface,
     caplog: pytest.LogCaptureFixture,
