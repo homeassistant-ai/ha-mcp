@@ -35,8 +35,8 @@ Consequences:
 ### Custom dashboard cards are the user's own code
 
 To describe and check `custom:` cards, the `ha_mcp_tools` component runs the
-JavaScript files the user registered as dashboard resources (`/local/...`) in a
-QuickJS sandbox inside Home Assistant. ha-mcp installs no
+JavaScript files the user registered as dashboard resources (`/hacsfiles/...`,
+`/local/...`) in a QuickJS sandbox inside Home Assistant. ha-mcp installs no
 card; it only runs cards the user chose to install, the same files their
 browsers already run with a logged-in Home Assistant session. Deciding which
 cards are safe to install is the user's responsibility. The sandbox exposes no

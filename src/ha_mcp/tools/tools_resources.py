@@ -4,7 +4,7 @@ Dashboard resource hosting tools for Home Assistant MCP server.
 Provides tools for managing dashboard resources (custom cards, CSS, JS):
 - Inline resources: Code embedded directly in the resource URL as a
   ``data:`` URI — stored in HA's own resource registry, served by nothing
-- External resources: URLs to /local/ (incl. /local/community/) or CDNs
+- External resources: URLs to /local/ (incl. /local/community/), /hacsfiles/, or CDNs
 
 Inline resources were previously served by a Cloudflare Worker that decoded
 base64 content embedded in its URL, based on issue #71's claim that browsers
@@ -369,8 +369,9 @@ class ResourceTools:
           a file and use url='/local/...' on such a deployment. (HA itself ships
           no CSP.)
         - url: External resource URL — /local/... (/config/www/; Marketplace
-          cards: /local/community/...) or https://... (CDN). Supports all
-          types: 'module', 'js', 'css', 'html'.
+          cards: /local/community/...), /hacsfiles/... (the older path
+          for the same folder) or https://... (CDN). Supports all types:
+          'module', 'js', 'css', 'html'.
 
         EXAMPLES:
         - Inline: ha_config_set_dashboard_resource(content="class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);", resource_type="module")
@@ -406,7 +407,7 @@ class ResourceTools:
                     message="Provide either 'content' (inline code) or 'url' (external), not both",
                     suggestions=[
                         "Use content= for inline JavaScript/CSS code",
-                        "Use url= for /local/ or https:// resources",
+                        "Use url= for /local/, /hacsfiles/, or https:// resources",
                     ],
                 )
             )
@@ -418,7 +419,7 @@ class ResourceTools:
                     message="Either 'content' (inline code) or 'url' (external) is required",
                     suggestions=[
                         "Use content= for inline JavaScript/CSS code",
-                        "Use url= for /local/ or https:// resources",
+                        "Use url= for /local/, /hacsfiles/, or https:// resources",
                     ],
                 )
             )
@@ -435,7 +436,7 @@ class ResourceTools:
                     "pass the code itself via content= instead",
                     suggestions=[
                         "Use content=<your JS/CSS source> (the tool builds the data: URI)",
-                        "url= is for /local/ and https:// resources",
+                        "url= is for /local/, /hacsfiles/, and https:// resources",
                     ],
                 )
             )
