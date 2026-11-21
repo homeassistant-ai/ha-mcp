@@ -24,7 +24,6 @@
   "src/ha_mcp/tools/tools_dev.py": 2359,
   "src/ha_mcp/tools/tools_entities.py": 2023,
   "src/ha_mcp/tools/tools_filesystem.py": 1011,
-  "src/ha_mcp/tools/tools_history.py": 1094,
   "src/ha_mcp/tools/tools_integrations.py": 2796,
   "src/ha_mcp/tools/tools_registry.py": 1027,
   "src/ha_mcp/tools/tools_service.py": 2387,
@@ -45,11 +44,11 @@
   "tests/src/e2e/workflows/filesystem/test_file_operations.py": 1093,
   "tests/src/e2e/workflows/filesystem/test_yaml_config.py": 1705,
   "tests/src/e2e/workflows/scripts/test_lifecycle.py": 1341,
-  "tests/src/haos_runtime.py": 2530,
+  "tests/src/haos_runtime.py": 2515,
   "tests/src/unit/test_astro_setup_js_behavior.py": 1088,
   "tests/src/unit/test_best_practice_checker.py": 2961,
   "tests/src/unit/test_locale_parity.py": 2614,
-  "tests/src/unit/test_read_only.py": 1171,
+  "tests/src/unit/test_read_only.py": 1158,
   "tests/src/unit/test_settings_ui_js_behavior.py": 7781,
   "tests/uat/stories/run_story.py": 1713
 }
