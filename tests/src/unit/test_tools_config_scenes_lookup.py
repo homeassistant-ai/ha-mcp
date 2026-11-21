@@ -26,6 +26,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
+from ._command_faults import registry_lookup_failing
 from ._tool_errors import error_body, error_of, rejected_call_body
 from ._tools_config_scenes_core import (
     TV_ON,
@@ -646,6 +647,28 @@ class TestStorageKeyPrecedence:
         assert hass.states.get("scene.first") is None
         assert hass.states.get("scene.key_a") is not None
         assert not any("scene.key_a" in w for w in result.get("warnings", []))
+
+    @pytest.mark.parametrize("remove", [True, False])
+    async def test_an_entity_id_the_registry_cannot_look_up_writes_nothing(
+        self, hass: HomeAssistant, collided: ConfigSceneTools, remove: bool
+    ) -> None:
+        """A failed lookup is no answer: ``scene.key_a`` is not key ``key_a``."""
+
+        call = (
+            collided.ha_config_remove_scene(scene_id="scene.key_a", wait=False)
+            if remove
+            else collided.ha_config_set_scene(
+                scene_id="scene.key_a",
+                config={"name": "Edited", "entities": TV_ON},
+                wait=False,
+            )
+        )
+        with registry_lookup_failing(hass):
+            body = await rejected_call_body(call)
+
+        assert "registry unavailable" in body["error"]["message"]
+        names = {s["id"]: s["name"] for s in await stored_scenes(hass)}
+        assert names == {"key_a": "First", "key_b": "Key A"}
 
     async def test_a_repeated_remove_by_key_leaves_the_other_scene(
         self, hass: HomeAssistant, collided: ConfigSceneTools

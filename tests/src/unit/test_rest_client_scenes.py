@@ -14,18 +14,19 @@ from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
+    SceneIdNotAnEntityError,
     SceneResolution,
     SceneStorageConfigNotFoundError,
 )
 
-from ._command_faults import before_handling, dropped_on, pooled_socket
+from ._command_faults import dropped_on, pooled_socket, registry_lookup_failing
 from ._rest_client_config_core import (
     config_client as config_client,
 )
@@ -293,18 +294,32 @@ async def test_a_failed_read_of_a_bare_storage_key_is_not_skipped(
     assert exc_info.value.status_code == 500
 
 
-async def test_an_entity_id_the_registry_cannot_look_up_is_not_refused(
+async def test_a_key_that_is_no_entity_id_is_refused_naming_the_key(
     hass: HomeAssistant, config_client: HomeAssistantClient
 ) -> None:
-    """Only the registry's "not found" refuses ``scene.<id>`` over key ``<id>``;
-    a failed lookup falls back to the key as an unconfirmed guess."""
+    """A storage key may hold a hyphen; Core refuses ``scene.movie-night`` as an
+    entity_id, so it names no entity and is refused as for an unregistered one."""
+    await load(hass, "scene", [{**MOVIE_NIGHT, "id": "movie-night"}])
+
+    with pytest.raises(SceneIdNotAnEntityError, match="'movie-night'"):
+        await config_client.resolve_scene_id("scene.movie-night")
+    assert await config_client.resolve_scene_id("movie-night") == "movie-night"
+
+
+async def test_an_entity_id_the_registry_cannot_look_up_is_refused(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    """A failed lookup is no answer: ``scene.<id>`` is not guessed to be key
+    ``<id>``, which can hold another scene, while a bare id stays its key."""
     await load(hass, "scene", [{**MOVIE_NIGHT, "id": "key_a", "name": "First"}])
 
-    def fail(msg: dict[str, Any]) -> None:
-        raise HomeAssistantError("registry unavailable")
-
-    with before_handling(hass, "config/entity_registry/get", fail):
-        assert await config_client.resolve_scene_id("scene.key_a") == "key_a"
+    with registry_lookup_failing(hass):
+        with pytest.raises(
+            HomeAssistantCommandError, match="registry unavailable"
+        ) as refused:
+            await config_client.resolve_scene_id("scene.key_a")
+        assert refused.value.code == "home_assistant_error"
+        assert await config_client.resolve_scene_id("key_a") == "key_a"
 
 
 async def test_an_id_the_registry_does_not_know_resolves_to_itself(

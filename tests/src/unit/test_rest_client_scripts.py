@@ -18,10 +18,11 @@ from homeassistant.helpers import entity_registry as er
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
 
-from ._command_faults import dropped_on, pooled_socket
+from ._command_faults import dropped_on, pooled_socket, registry_lookup_failing
 from ._gateway import Gateway
 from ._gateway import gateway as gateway
 from ._gateway import gateway_client as gateway_client
@@ -297,6 +298,24 @@ async def test_a_bare_storage_key_names_its_own_script(
     await _collided(hass, entity_registry)
 
     assert (await config_client.get_script_config(identifier))["script_id"] == key
+
+
+async def test_an_entity_id_the_registry_cannot_look_up_is_refused(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """A failed lookup is no answer: ``script.key_a`` is not guessed to be key
+    ``key_a``, which holds another script, while a bare id stays its key."""
+    await _collided(hass, entity_registry)
+
+    with registry_lookup_failing(hass):
+        with pytest.raises(
+            HomeAssistantCommandError, match="registry unavailable"
+        ) as refused:
+            await config_client.get_script_config("script.key_a")
+        assert refused.value.code == "home_assistant_error"
+        assert (await config_client.get_script_config("key_a"))["script_id"] == "key_a"
 
 
 # --- a caller that resolved the storage key already (#1813, #1935) ------------------

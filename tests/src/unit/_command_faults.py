@@ -21,6 +21,7 @@ import pytest
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -105,6 +106,18 @@ def before_handling(
         yield
     finally:
         websocket_api.async_register_command(hass, command, core_handler, schema)
+
+
+@contextmanager
+def registry_lookup_failing(hass: HomeAssistant) -> Iterator[None]:
+    """Core's handler of ``config/entity_registry/get`` raises meanwhile, so
+    Core answers each lookup with an error other than ``not_found``."""
+
+    def fail(msg: dict[str, Any]) -> None:
+        raise HomeAssistantError("registry unavailable")
+
+    with before_handling(hass, "config/entity_registry/get", fail):
+        yield
 
 
 @asynccontextmanager

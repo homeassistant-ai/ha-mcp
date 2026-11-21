@@ -26,6 +26,7 @@ from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.tools.ws_waiters import wait_for_entity_registered
 
 from ._blueprint_actions_core import BEDTIME, SCRIPT_PATH
+from ._command_faults import registry_lookup_failing
 from ._config_dir_yaml import setup_from_configuration, write_config_files
 from ._tool_errors import rejected_call_body
 
@@ -544,6 +545,43 @@ class TestCollidingIds:
         assert set(await _stored(hass)) == {kept}
         # The removal wait watched the deleted script's entity, not the other one.
         assert "warnings" not in removed
+
+    @pytest.mark.parametrize(
+        ("script_id", "remove"),
+        [
+            ("script.key_a", True),
+            ("script.key_a", False),
+            ("script.first", False),
+            ("first", False),
+        ],
+    )
+    async def test_an_entity_id_the_registry_cannot_look_up_writes_nothing(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        script_id: str,
+        remove: bool,
+    ) -> None:
+        """A failed lookup is no answer: ``script.key_a`` is not key ``key_a``,
+        and neither ``script.first`` nor ``first``, key_a's entity slug, creates
+        key ``first``."""
+
+        call = (
+            tools.ha_config_remove_script(script_id=script_id, wait=False)
+            if remove
+            else tools.ha_config_set_script(
+                script_id=script_id, config={**BODY, "alias": "New"}, wait=False
+            )
+        )
+        with registry_lookup_failing(hass):
+            body = await rejected_call_body(call)
+
+        assert "registry unavailable" in body["error"]["message"]
+        stored = await _stored(hass)
+        assert {key: s["alias"] for key, s in stored.items()} == {
+            "key_a": "A",
+            "key_b": "B",
+        }
 
     async def test_a_repeated_remove_by_key_leaves_the_other_script(
         self, hass: HomeAssistant, tools: ConfigScriptTools

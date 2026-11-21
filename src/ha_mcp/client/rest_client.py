@@ -1952,33 +1952,17 @@ class HomeAssistantClient:
 
         A UI rename changes the entity_id but keeps the storage key, which the
         registry holds as the entity's ``unique_id``. ``script.<x>`` names that
-        entity, or key ``<x>`` when the registry names none. A bare id that is itself a
+        entity, or key ``<x>`` when the registry names none; a failed lookup of
+        it raises (:meth:`_registry_entry`). A bare id that is itself a
         storage key names that script, not another one whose entity is
         ``script.<id>``: the config is read when the registry key of
         ``script.<id>`` differs from the bare id, and a failure of that read
         other than a 404 propagates.
         """
         bare_id = identifier.removeprefix("script.")
-        entity_id = f"script.{bare_id}"
-        unique_id = None
-        try:
-            result = await self.send_websocket_message(
-                {"type": "config/entity_registry/get", "entity_id": entity_id}
-            )
-            if result.get("success") is not False:
-                unique_id = result.get("result", {}).get("unique_id")
-        except HomeAssistantConnectionError:
-            # A dead transport must not become a silent guess: the fallback
-            # below assumes the storage key equals the bare entity_id, which is
-            # exactly what a UI rename breaks. Guessing it on a write path
-            # writes a NEW object under the wrong key instead of updating the
-            # renamed one, so let the caller fail loud (#1947).
-            raise
-        except Exception:
-            logger.debug(
-                f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
-                exc_info=True,  # Log full traceback for better debugging
-            )
+        unique_id = (await self._registry_entry("script", identifier) or {}).get(
+            "unique_id"
+        )
         qualified = identifier != bare_id
         # Another key only from script.<bare_id>'s entry: the script tools'
         # _script_entity_id relies on it.
@@ -2107,54 +2091,61 @@ class HomeAssistantClient:
         is ``scene.<id>``; ``scene.<id>`` raises :class:`SceneIdNotAnEntityError`
         instead of being read as key ``<id>`` when the registry has no such
         entity but that key holds a scene. The config is read only for a bare id
-        whose registry key differs and for an unregistered ``scene.<id>``.
+        whose registry key differs or whose lookup failed, and for an
+        unregistered ``scene.<id>``.
 
-        ``registry_hit=False`` marks a bare id the registry did not confirm: a
-        guess after a failed lookup, which a write path must not trust, or a
-        storage key the config read confirmed. A connection error, or a
-        non-404 failure of that read, propagates.
+        ``registry_hit=False`` marks a key the registry did not name: a stored
+        key the config read confirmed, or the slug of an unregistered id. A
+        lookup that fails otherwise raises (:meth:`_registry_entry`), as does a
+        non-404 failure of that read.
         """
         bare_id = identifier.removeprefix("scene.")
-        entity_id = f"scene.{bare_id}"
-        registered: SceneResolution | None = None
-        unregistered = False
-        try:
-            result = await self.send_websocket_message(
-                {"type": "config/entity_registry/get", "entity_id": entity_id}
-            )
-            unregistered = result.get("error_code") == "not_found"
-            if result.get("success") is not False:
-                entry = result.get("result") or {}
-                unique_id = entry.get("unique_id")
-                if unique_id:
-                    registered = SceneResolution(
-                        storage_key=str(unique_id),
-                        registry_hit=True,
-                        platform=entry.get("platform"),
-                    )
-        except HomeAssistantConnectionError:
-            # A dead transport must not become a silent guess: the fallback
-            # below assumes the storage key equals the bare entity_id, which is
-            # exactly what a UI rename breaks. Guessing it on a write path
-            # writes a NEW object under the wrong key instead of updating the
-            # renamed one, so let the caller fail loud (#1947).
-            raise
-        except Exception:
-            logger.debug(
-                f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
-                exc_info=True,
-            )
+        entry = await self._registry_entry("scene", identifier)
         fallback = SceneResolution(bare_id, registry_hit=False, platform=None)
         qualified = identifier != bare_id
-        if registered is not None:
+        if entry and entry.get("unique_id"):
+            registered = SceneResolution(
+                str(entry["unique_id"]),
+                registry_hit=True,
+                platform=entry.get("platform"),
+            )
             if qualified or registered.storage_key == bare_id:
                 return registered
             return (
                 fallback if await self._config_exists("scene", bare_id) else registered
             )
-        if qualified and unregistered and await self._config_exists("scene", bare_id):
+        if qualified and entry is None and await self._config_exists("scene", bare_id):
             raise SceneIdNotAnEntityError(identifier, bare_id)
         return fallback
+
+    async def _registry_entry(
+        self, domain: str, identifier: str
+    ) -> dict[str, Any] | None:
+        """The registry entry of ``<domain>.<id>``, None when the registry has
+        none or Core refuses ``<domain>.<id>`` as an entity_id.
+
+        Any other failure is no answer, and a guess could reach another object:
+        it raises, except for a bare id that is a storage key, which names that
+        object anyway. A dead transport propagates too, so a renamed object's
+        update is not written under a guessed key (#1947).
+        """
+        bare_id = identifier.removeprefix(f"{domain}.")
+        entity_id = f"{domain}.{bare_id}"
+        answers = frozenset({"not_found", "invalid_format"})
+        result = await self.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id},
+            expected_error_codes=answers,
+        )
+        if result.get("success") is not False:
+            entry: dict[str, Any] = result.get("result") or {}
+            return entry
+        if result.get("error_code") in answers or (
+            identifier == bare_id and await self._config_exists(domain, bare_id)
+        ):
+            return None
+        raise HomeAssistantCommandError.from_reply(
+            result, f"Could not look up {entity_id}: {result.get('error')}"
+        )
 
     async def _config_exists(self, domain: str, storage_key: str) -> bool:
         """Whether Core's config API holds a ``domain`` config under ``storage_key``."""
