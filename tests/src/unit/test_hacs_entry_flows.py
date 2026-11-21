@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
@@ -34,6 +35,7 @@ from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools import config_entry_reload_watch
 from ha_mcp.tools.tools_hacs import HacsTools
 
+from ._command_faults import dropped_on, unanswered
 from ._hacs_actions_core import (
     USER_CODE,
     add_connected_marketplace,
@@ -52,6 +54,7 @@ from ._tool_errors import rejected_call_body
 REPOSITORIES = {CARD_ID: stored("piitaya/lovelace-mushroom", "plugin")}
 PENDING = {"error": "authorization_pending"}
 CONFIRMED = {"access_token": "gho_token", "token_type": "bearer", "scope": ""}
+INFO = "marketplace/info"
 
 
 @pytest.fixture
@@ -311,6 +314,40 @@ class TestConnectGitHub:
         assert outcome["data"]["github_connected"] is None
         assert outcome["data"]["entry_state"] == failed
         assert any(failed in w for w in outcome["warnings"])
+
+    @pytest.mark.parametrize("fault", ["unanswered", "dropped"])
+    async def test_a_finished_sign_in_whose_status_read_gets_no_answer_says_so(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+        monkeypatch: pytest.MonkeyPatch,
+        fault: str,
+    ) -> None:
+        """The flow has ended when the Marketplace is asked about GitHub, so
+        a status read that gets no answer cannot fail the sign-in."""
+        entry = await self._signing_in(hass, aioclient_mock, hass_storage, CONFIRMED)
+        try:
+            flow_id = await self._flow_id(tools)
+            async with AsyncExitStack() as faults:
+                if fault == "unanswered":
+                    await faults.enter_async_context(
+                        unanswered(hass, INFO, monkeypatch)
+                    )
+                else:
+                    faults.enter_context(dropped_on(hass, INFO, socket))
+                outcome = await tools.ha_manage_hacs(
+                    action="connect_github", flow_id=flow_id
+                )
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert outcome["data"]["github_connected"] is None
+        assert any("github_connected" in w for w in outcome["warnings"])
+        assert flow_id not in self._open(hass)
 
     async def test_a_sign_in_github_refuses_keeps_cores_reason(
         self,

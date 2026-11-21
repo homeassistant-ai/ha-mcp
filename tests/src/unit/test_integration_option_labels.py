@@ -40,10 +40,13 @@ from ._mock_flow_integration import answer_translations, mock_flow_integration
 from ._ws_transport import abort_transport
 
 _DOMAIN = "label_demo"
+# More suggestions than a select that also takes a custom value shows.
+_UNITS = [f"unit_{n}" for n in range(30)]
 _STRINGS = {
     "selector": {
         "day_level": {"options": {"low": "Low light", "high": "High light"}},
         "night_level": {"options": {"dim": "Dimmed", "off": "Off"}},
+        "unit": {"options": {unit: f"Unit {unit}" for unit in _UNITS}},
     }
 }
 TRANSLATIONS = "frontend/get_translations"
@@ -64,6 +67,11 @@ _SCHEMA = vol.Schema(
         vol.Required("night"): section(
             vol.Schema({vol.Required("level"): _select(["dim", "off"], "night_level")}),
             {"collapsed": False},
+        ),
+        vol.Required("unit"): SelectSelector(
+            SelectSelectorConfig(
+                options=_UNITS, custom_value=True, translation_key="unit"
+            )
         ),
     }
 )
@@ -124,6 +132,21 @@ async def test_each_section_keeps_its_own_selects_labels(
     assert day["option_labels"] == await _labels(hass, "day_level", ["low", "high"])
     assert night["option_labels"] == await _labels(hass, "night_level", ["dim", "off"])
     assert "option_labels" not in fields["level"]
+
+
+async def test_a_cut_suggestion_list_labels_only_the_suggestions_it_shows(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry: MockConfigEntry
+) -> None:
+    """A select that also takes a custom value shows only its first
+    suggestions; labels for the others would put the whole list back."""
+    resp = await IntegrationTools(core_client).ha_get_integration(
+        entry_id=entry.entry_id, include_schema=True
+    )
+
+    [unit] = [f for f in resp["options_schema"]["fields"] if f["name"] == "unit"]
+    shown = [option for option in unit["options"] if option in _UNITS]
+    assert len(shown) < len(_UNITS)
+    assert unit["option_labels"] == await _labels(hass, "unit", shown)
 
 
 async def test_a_failed_label_read_is_a_warning(

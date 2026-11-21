@@ -314,14 +314,26 @@ class TestWrites:
         )
         skip_on_github(download)
         assert download.get("success"), download
-        async with MCPAssertions(mcp_client) as mcp:
-            await mcp.call_tool_success(
-                "ha_manage_hacs", {"action": "remove", "repository_id": repo_id}
-            )
-            info = await mcp.call_tool_success(
-                "ha_get_hacs_info", {"action": "info", "repository_id": repo_id}
-            )
-        assert info["data"]["installed"] is False
+        removed = False
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                await mcp.call_tool_success(
+                    "ha_manage_hacs", {"action": "remove", "repository_id": repo_id}
+                )
+                removed = True
+                info = await mcp.call_tool_success(
+                    "ha_get_hacs_info", {"action": "info", "repository_id": repo_id}
+                )
+            assert info["data"]["installed"] is False
+        finally:
+            with CleanupSteps() as cleanup:
+                if not removed:
+                    with cleanup.step():
+                        await safe_call_tool(
+                            mcp_client,
+                            "ha_manage_hacs",
+                            {"action": "remove", "repository_id": repo_id},
+                        )
 
     async def test_beta_versions_are_shown_and_hidden(self, mcp_client):
         found = await search(mcp_client, max_results=1)

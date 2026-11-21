@@ -12,7 +12,11 @@ its last step until it is read; that read ends it, and the Marketplace's
 
 from typing import Any
 
-from ..client.rest_client import HomeAssistantCommandError
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_progress import PROGRESS_STEP_TYPES
 from .config_entry_reload_watch import watch_entry_reload
@@ -60,7 +64,11 @@ async def _outcome(
     answer: dict[str, Any] = {**_ACTION, "flow_id": flow_id}
     try:
         info = await ws_client.send_command("marketplace/info")
-    except HomeAssistantCommandError as err:
+    except (
+        HomeAssistantCommandError,
+        HomeAssistantCommandTimeout,
+        HomeAssistantConnectionError,
+    ) as err:
         return {
             **answer,
             "github_connected": None,

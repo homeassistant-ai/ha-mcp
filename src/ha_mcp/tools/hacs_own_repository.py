@@ -16,7 +16,11 @@ import logging
 import re
 from typing import Any
 
-from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from ..hacs_auto_refresh import CANDIDATE_REPO_FULL_NAMES
 from .hacs_backend import LIST, is_owned_directory_refusal
@@ -84,7 +88,12 @@ async def ownership_refusal_records(
     refusal can be explained; None for any other error, with no store call."""
     if not is_owned_directory_refusal(err):
         return None
-    records = await installed_own_records(ws_client)
+    try:
+        records = await installed_own_records(ws_client)
+    except HomeAssistantConnectionError:
+        # Core's refusal goes to the caller without the records, not this error.
+        logger.debug("Lost the connection listing the records", exc_info=True)
+        return None
     return [str(r.get("full_name")) for r in records or []]
 
 

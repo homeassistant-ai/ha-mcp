@@ -171,7 +171,10 @@ def _translated_selects(
         selector = field.get("selector")
         cfg = selector.get("select") if isinstance(selector, dict) else None
         if isinstance(cfg, dict) and isinstance(cfg.get("translation_key"), str):
-            options = _option_values(cfg.get("options") or [])
+            # The options compact_field keeps; its remainder marker has no label.
+            options = _option_values(
+                cfg.get("options") or [], suggestions=bool(cfg.get("custom_value"))
+            )
             selects[f"{prefix}{field.get('name')}"] = (cfg["translation_key"], options)
     return selects
 

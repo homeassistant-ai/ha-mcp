@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import ExitStack
 from typing import Any
 
 import pytest
@@ -30,7 +31,7 @@ from ha_mcp.client.websocket_client import (
 from ha_mcp.tools.tools_hacs import HacsTools
 
 from ._client_spies import sent_commands
-from ._command_faults import received
+from ._command_faults import before_handling, dropped_on, received
 from ._hacs_actions_core import serve_card, serve_files, serve_integration
 from ._hacs_marketplace import (
     CARD_ID,
@@ -222,6 +223,31 @@ async def test_a_refused_download_on_a_doubled_install_carries_the_way_out(
     assert f'action="download", repository_id="{MIRROR}"' not in hints
     assert sorted(body["installed"]) == [MAIN, MIRROR]
     assert body["translation_key"] == "integration_owned"
+
+
+async def test_a_dropped_record_lookup_keeps_cores_ownership_refusal(
+    hass: HomeAssistant,
+    marketplace: OpenMarketplace,
+    tools: HacsTools,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
+    """The connection drops while the tool reads which records are installed
+    after Core refused the download: the caller still gets Core's refusal."""
+    await marketplace(DOUBLED)
+    # Only the lookup after the install is dropped, not the reroute's.
+    with (
+        ExitStack() as stack,
+        before_handling(
+            hass,
+            INSTALL,
+            lambda _: stack.enter_context(dropped_on(hass, LIST, socket)),
+        ),
+    ):
+        body = await rejected_call_body(
+            tools.ha_manage_hacs(action="download", repository_id=MAIN)
+        )
+
+    assert body.get("translation_key") == "integration_owned", body
 
 
 async def test_another_integrations_refusal_names_its_owner_to_update(
