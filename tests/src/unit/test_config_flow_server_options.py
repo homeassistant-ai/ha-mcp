@@ -25,16 +25,18 @@ from custom_components.ha_mcp_tools.const import (
     DATA_OAUTH_CLIENT_SECRET,
     DATA_OAUTH_SIGNING_KEY,
     DATA_WEBHOOK_ID,
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
-    MAX_OAUTH_CALLBACKS,
     OPT_ADMIN_TOKEN_REPLACEMENT,
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_WEBHOOK_AUTH,
     WEBHOOK_AUTH_LEGACY,
     WEBHOOK_AUTH_NONE,
+)
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
+    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
+    MAX_OAUTH_CALLBACKS,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
 from custom_components.ha_mcp_tools.server_credentials import (
     ADMIN_PASSWORD,

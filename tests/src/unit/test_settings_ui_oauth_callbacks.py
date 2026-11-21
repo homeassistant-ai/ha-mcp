@@ -13,7 +13,7 @@ from pytest_homeassistant.common import MockConfigEntry
 from starlette.requests import Request
 from starlette.types import Message
 
-from custom_components.ha_mcp_tools.const import (
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
 )

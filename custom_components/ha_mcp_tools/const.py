@@ -335,31 +335,9 @@ OPT_ACCESS_OFF_AFTER_RESTART = "access_off_after_restart"
 # straight into entry.data (_adopt_token); it is never stored in options or
 # shown back.
 OPT_ADMIN_TOKEN_REPLACEMENT = "admin_token_replacement"
-# The callback URLs the none-mode auto-approve /authorize may redirect to
-# (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
-# empty one, replaces it. Read per request, so a change needs no reload.
-OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
 # When True, the none-mode /authorize accepts any well-formed callback instead
 # of only the allowlist: the administrator's choice to turn the list off.
 OPT_OAUTH_ALLOW_ANY_CALLBACK = "oauth_allow_any_callback"
-# The common OAuth clients' published callbacks. Clients whose callback is
-# unique per app or connector need their own entry: ChatGPT apps on
-# chatgpt.com/connector/oauth/<id>, and Copilot Studio's per-connector
-# global.consent.azure-apim.net/redirect/<connector> URL.
-DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
-    "https://claude.ai/api/mcp/auth_callback",
-    # Anthropic's announced future callback domain.
-    "https://claude.com/api/mcp/auth_callback",
-    # Claude Code (any port, per the loopback rule).
-    "http://localhost/callback",
-    "http://127.0.0.1/callback",
-    "https://chatgpt.com/connector_platform_oauth_redirect",
-    # Gemini Enterprise.
-    "https://vertexaisearch.cloud.google.com/oauth-redirect",
-)
-# Bounds every writer of the list applies (Configure, the panel's WS command).
-MAX_OAUTH_CALLBACKS = 50
-MAX_OAUTH_CALLBACK_LENGTH = 2048
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"
