@@ -98,9 +98,20 @@ async def test_entity_id_stays_in_one_proxy_path_segment(
     assert paths[0].endswith(b".missing%2Fextra")
 
 
-async def test_declared_oversize_is_refused(
-    hass: HomeAssistant, core_client: HomeAssistantClient, monkeypatch: Any
+@pytest.mark.parametrize("declared_length", [True, False], ids=["declared", "streamed"])
+async def test_oversize_image_is_refused(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: Any,
+    declared_length: bool,
 ) -> None:
+    async def omit_length(response: httpx.Response) -> None:
+        # A proxy may stream Core's bytes without forwarding their length.
+        del response.headers["content-length"]
+
+    if not declared_length:
+        core_client.httpx_client.event_hooks["response"].append(omit_length)
+
     monkeypatch.setattr(tools_camera, "MAX_IMAGE_ENTITY_BYTES", 1024)
     payload = _png(4, 4) + b"0" * 2048
     await _serve(hass, TestImage(hass, "huge", payload))
@@ -110,7 +121,7 @@ async def test_declared_oversize_is_refused(
 
     assert error_of(exc_info)["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
     body = error_body(exc_info)
-    assert body["declared_bytes"] == len(payload)
+    assert body["declared_bytes"] == (len(payload) if declared_length else None)
     assert "cannot resize" in body["error"]["suggestion"]
     assert body["limit_bytes"] == 1024
     assert body["entity_id"] == "image.huge"

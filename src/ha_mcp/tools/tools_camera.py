@@ -199,7 +199,7 @@ class CameraTools:
     @tool(
         name="ha_get_camera_image",
         tags={"Camera"},
-        annotations=read_only_hints("Get Camera Image", open_world=False),
+        annotations=read_only_hints("Get Camera Image", open_world=True),
     )
     @log_tool_usage
     async def ha_get_camera_image(
