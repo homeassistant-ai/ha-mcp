@@ -84,16 +84,6 @@ def parse_cursor_token(token: str) -> tuple[str, int]:
     return cursor, int(skip)
 
 
-def token_cursor(token: str) -> str:
-    """The cursor carried by ``token``; raises ``ValueError`` when malformed."""
-    return parse_cursor_token(token)[0]
-
-
-def token_skip(token: str) -> int:
-    """The skip carried by ``token``; raises ``ValueError`` when malformed."""
-    return parse_cursor_token(token)[1]
-
-
 def range_header(lines: int, offset: int = 0) -> str:
     """The ``Range`` expression for the ``offset``-th window back from newest."""
     return f"entries=:{-(offset + lines - 1)}:{lines}"

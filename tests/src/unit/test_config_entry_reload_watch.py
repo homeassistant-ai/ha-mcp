@@ -1,457 +1,350 @@
-"""Unit tests for the config-entry reload-watch primitives.
+"""What a reconfigure reports about its reload, watched on real Home Assistant Core.
 
-Exercises `_entry_fragments`, `_is_transient_reconfigure_state`,
-`_observe_reload_settled` and `watch_entry_reload` directly. How a reconfigure
-reports the watch's answer is covered, with the watch stubbed, in
-`test_integration_reconfigure.py`.
+``watch_entry_reload`` subscribes to ``config_entries/subscribe`` on the
+server's own client before the submit. Here the reconfigure is a test
+integration's own flow, run by Core's flow manager, and every entry fragment
+the watch reads is the one Core pushes. How ``ha_set_integration`` turns the
+answer into a status is covered in ``test_integration_reconfigure.py``.
 """
 
+from __future__ import annotations
+
 import asyncio
+import contextlib
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from datetime import timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import voluptuous as vol
+from homeassistant.config_entries import (
+    SOURCE_RECONFIGURE,
+    ConfigEntry,
+    ConfigEntryDisabler,
+    ConfigFlow,
+    ConfigFlowResult,
+)
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
+from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant.common import (
+    MockConfigEntry,
+    MockModule,
+    async_fire_time_changed,
+    mock_config_flow,
+    mock_integration,
+    mock_platform,
+)
 
-from ha_mcp.tools import config_entry_reload_watch
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.config_entry_reload_watch import (
-    _TRANSIENT_RECONFIGURE_STATES,
-    _entry_fragments,
-    _is_transient_reconfigure_state,
-    _observe_reload_settled,
+    COMMIT_VISIBLE_TIMEOUT,
+    RELOAD_SETTLE_TIMEOUT,
     watch_entry_reload,
 )
 
-#: Timestamps bracketing a commit: the subscribe snapshot's baseline value,
-#: and the value `async_update_entry` bumps `modified_at` to.
-_BEFORE = 1786953600.0
-_AFTER = 1786953605.0
+from ._command_faults import pooled_socket, received
+from ._ws_transport import abort_transport
+
+DOMAIN = "reload_watch"
+
+Settled = dict[str, Any] | None
 
 
-def _frame(entry: dict[str, Any], *, change: str | None = "updated") -> dict[str, Any]:
-    """One `config_entries/subscribe` frame; `change=None` models the snapshot."""
-    return {"id": 1, "type": "event", "event": [{"type": change, "entry": entry}]}
+class EntrySetup:
+    """The test integration's entry setup: loads, or raises ``error``."""
+
+    def __init__(self) -> None:
+        self.error: Exception | None = None
+
+    async def setup_entry(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        if self.error is not None:
+            raise self.error
+
+    async def unload_entry(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        return None
 
 
-def _queue_of(*frames: dict[str, Any]) -> asyncio.Queue[dict[str, Any]]:
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    for frame in frames:
-        queue.put_nowait(frame)
-    return queue
+class _ReconfigureFlow(ConfigFlow):
+    VERSION = 1
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is None:
+            return self.async_show_form(
+                step_id="reconfigure",
+                data_schema=vol.Schema(
+                    {vol.Required("host"): str, vol.Required("reload"): bool}
+                ),
+            )
+        entry = self._get_reconfigure_entry()
+        data = {"host": user_input["host"]}
+        if user_input["reload"]:
+            return self.async_update_reload_and_abort(entry, data=data)
+        return self.async_update_and_abort(entry, data=data)
 
 
-# === _entry_fragments ===
-
-
-def test_entry_fragments_yields_only_the_matching_entry_id() -> None:
-    """A frame can carry dispatches for entries other than the one we watch."""
-    entry_a = {"entry_id": "entry-a", "state": "loaded"}
-    entry_b = {"entry_id": "entry-b", "state": "loaded"}
-    message = {
-        "event": [
-            {"type": "updated", "entry": entry_a},
-            {"type": "updated", "entry": entry_b},
-        ]
-    }
-
-    assert list(_entry_fragments(message, "entry-a")) == [entry_a]
-
-
-def test_entry_fragments_skips_non_dict_items_in_the_event_list() -> None:
-    """A malformed dispatch item must be ignored, not raise."""
-    message = {"event": ["not-a-dict", None, 42]}
-
-    assert list(_entry_fragments(message, "entry-a")) == []
-
-
-def test_entry_fragments_skips_items_whose_entry_is_not_a_dict() -> None:
-    """Neither a non-dict `entry` value nor a missing one is a fragment."""
-    message = {
-        "event": [
-            {"type": "updated", "entry": "entry-a"},
-            {"type": "updated"},
-        ]
-    }
-
-    assert list(_entry_fragments(message, "entry-a")) == []
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        pytest.param({}, id="missing_event_key"),
-        pytest.param({"event": None}, id="event_key_is_none"),
-    ],
-)
-def test_entry_fragments_tolerates_a_frame_with_no_event_list(
-    message: dict[str, Any],
-) -> None:
-    """`message.get("event") or []` must handle both absent and null events."""
-    assert list(_entry_fragments(message, "entry-a")) == []
-
-
-def test_entry_fragments_yields_the_matching_entry_from_a_snapshot_frame() -> None:
-    """The subscribe answer's snapshot carries every current entry in one frame."""
-    entry_a = {"entry_id": "entry-a", "state": "loaded"}
-    entry_b = {"entry_id": "entry-b", "state": "not_loaded"}
-    entry_c = {"entry_id": "entry-c", "state": "loaded"}
-    message = {
-        "type": None,
-        "event": [
-            {"type": None, "entry": entry_a},
-            {"type": None, "entry": entry_b},
-            {"type": None, "entry": entry_c},
-        ],
-    }
-
-    assert list(_entry_fragments(message, "entry-b")) == [entry_b]
-
-
-# === _is_transient_reconfigure_state ===
-
-
-@pytest.mark.parametrize("state", sorted(_TRANSIENT_RECONFIGURE_STATES))
-def test_is_transient_reconfigure_state_is_true_for_every_transient_state(
-    state: str,
-) -> None:
-    assert _is_transient_reconfigure_state({"state": state}) is True
-
-
-@pytest.mark.parametrize(
-    "state", ["loaded", "setup_retry", "setup_error", "failed_unload"]
-)
-def test_is_transient_reconfigure_state_is_false_for_terminal_states(
-    state: str,
-) -> None:
-    assert _is_transient_reconfigure_state({"state": state}) is False
-
-
-@pytest.mark.parametrize("state", sorted(_TRANSIENT_RECONFIGURE_STATES))
-def test_a_disabled_entry_is_never_transient_even_at_a_transient_state(
-    state: str,
-) -> None:
-    """A disabled entry sits at `not_loaded` permanently, so it is terminal."""
-    entry = {"state": state, "disabled_by": "user"}
-
-    assert _is_transient_reconfigure_state(entry) is False
-
-
-# === _observe_reload_settled ===
-
-
-@pytest.mark.asyncio
-async def test_a_baseline_with_nothing_after_it_never_commits_and_times_out() -> None:
-    """Nothing follows the baseline within budget, so it can never commit."""
-    entry_id = "entry-1"
-    queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _BEFORE})
-    )
-
-    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_a_pre_commit_state_change_cannot_settle_even_to_a_terminal_state() -> (
-    None
-):
-    """A foreign transition sharing the baseline's `modified_at` predates the commit.
-
-    `setup_retry` always has a pending retry; one firing mid-flow must not be
-    mistaken for the reconfigure's own outcome.
-    """
-    entry_id = "entry-1"
-    queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _BEFORE}),
-        _frame({"entry_id": entry_id, "state": "setup_error", "modified_at": _BEFORE}),
-    )
-
-    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_the_commit_fragment_itself_cannot_settle() -> None:
-    """The commit carries new data but the pre-reload state.
-
-    Settling on it would report the pre-reload state as observed.
-    """
-    entry_id = "entry-1"
-    queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _BEFORE}),
-        _frame(
-            {
-                "entry_id": entry_id,
-                "state": "loaded",
-                "modified_at": _AFTER,
-                "data": {"host": "x"},
-            }
+@pytest.fixture
+def entry_setup(hass: HomeAssistant) -> Iterator[EntrySetup]:
+    setup = EntrySetup()
+    mock_integration(
+        hass,
+        MockModule(
+            DOMAIN,
+            async_setup_entry=setup.setup_entry,
+            async_unload_entry=setup.unload_entry,
         ),
     )
-
-    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_the_first_non_transient_state_change_after_commit_settles() -> None:
-    """Only a state change AFTER the commit is the reload's own outcome."""
-    entry_id = "entry-1"
-    final_fragment = {"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}
-    queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _BEFORE}),
-        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _AFTER}),
-        _frame(final_fragment),
-    )
-
-    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
-
-    assert result == final_fragment
+    mock_platform(hass, f"{DOMAIN}.config_flow")
+    with mock_config_flow(DOMAIN, _ReconfigureFlow):
+        yield setup
 
 
-@pytest.mark.asyncio
-async def test_post_commit_transient_states_are_consumed_until_the_first_non_transient_change() -> (
-    None
-):
-    """Only the state that finally leaves the transient set is the outcome."""
-    entry_id = "entry-1"
-    final_fragment = {"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}
-    queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _BEFORE}),
-        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _AFTER}),
-        _frame(
-            {"entry_id": entry_id, "state": "unload_in_progress", "modified_at": _AFTER}
-        ),
-        _frame({"entry_id": entry_id, "state": "not_loaded", "modified_at": _AFTER}),
-        _frame(
-            {"entry_id": entry_id, "state": "setup_in_progress", "modified_at": _AFTER}
-        ),
-        _frame(final_fragment),
-    )
-
-    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
-
-    assert result == final_fragment
+@pytest.fixture
+async def entry_stream(hass: HomeAssistant) -> None:
+    """Core's ``config`` integration, which answers ``config_entries/subscribe``."""
+    assert await async_setup_component(hass, "config", {})
 
 
-@pytest.mark.asyncio
-async def test_a_stream_that_never_transitions_after_commit_expires_the_budget() -> (
-    None
-):
-    entry_id = "entry-1"
-    queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _BEFORE}),
-        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}),
-        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}),
-    )
-
-    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
-
-    assert result is None
+async def set_up_entry(hass: HomeAssistant, **kwargs: Any) -> MockConfigEntry:
+    entry = MockConfigEntry(domain=DOMAIN, data={"host": "old"}, **kwargs)
+    entry.add_to_hass(hass)
+    if entry.disabled_by is None:
+        await hass.config_entries.async_setup(entry.entry_id)
+    return entry
 
 
-@pytest.mark.asyncio
-async def test_no_modified_at_bump_within_the_commit_timeout_gives_up_early(
-    monkeypatch: pytest.MonkeyPatch,
+async def reconfigure(
+    hass: HomeAssistant, entry: ConfigEntry, host: str, *, reload: bool = True
 ) -> None:
-    """A resubmit of identical values never bumps `modified_at`.
+    """Submit the integration's reconfigure flow, as the user's submit does."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"host": host, "reload": reload}
+    )
+    assert result["reason"] == "reconfigure_successful"
 
-    The internal commit-visibility budget must cut the wait short instead of
-    stalling for the whole (much larger) caller-supplied timeout.
+
+@contextlib.asynccontextmanager
+async def reading(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    settled: Callable[[], Awaitable[Settled]],
+) -> AsyncIterator[asyncio.Future[Settled]]:
+    """The watch's wait, started with every fragment Core pushed already queued.
+
+    Core answers on one socket in the order it sent, so the reply to a command
+    sent now arrives after those fragments. The watch reads them without
+    waiting, and what is left of it is a wait only the clock ends.
     """
-    monkeypatch.setattr(
-        "ha_mcp.tools.config_entry_reload_watch._COMMIT_VISIBLE_TIMEOUT", 0.25
-    )
-    entry_id = "entry-1"
-    queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _BEFORE})
-    )
-
-    started = asyncio.get_running_loop().time()
-    result = await _observe_reload_settled(queue, entry_id, timeout=2.0)
-    elapsed = asyncio.get_running_loop().time() - started
-
-    assert result is None
-    assert elapsed < 1.0, f"waited {elapsed:.1f}s despite the short commit timeout"
+    await hass.async_block_till_done()
+    assert (await client.send_websocket_message({"type": "config_entries/get"}))[
+        "success"
+    ]
+    waiting = asyncio.ensure_future(settled())
+    try:
+        await hass.async_block_till_done()
+        yield waiting
+    finally:
+        waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
 
 
-@pytest.mark.parametrize(
-    "modified_at",
-    [
-        pytest.param(None, id="modified_at_missing"),
-        pytest.param("not-a-timestamp", id="modified_at_unparseable"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_a_baseline_with_no_usable_modified_at_returns_none(
-    modified_at: str | None,
+async def after(hass: HomeAssistant, seconds: float) -> None:
+    """Move Core's test clock ``seconds`` on, which fires the timers due by then."""
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=seconds))
+    await hass.async_block_till_done()
+
+
+@pytest.mark.usefixtures("entry_stream")
+async def test_a_reconfigure_whose_reload_loads_reports_loaded(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
 ) -> None:
-    """Without a comparable baseline nothing can be attributed to the commit.
+    entry = await set_up_entry(hass)
 
-    Followed by a stand-in commit and a settle fragment, so a parser that
-    wrongly accepted the baseline would return one of them instead of running
-    out of stream and reaching None by the other route.
-    """
-    entry_id = "entry-1"
-    fragment: dict[str, Any] = {"entry_id": entry_id, "state": "loaded"}
-    if modified_at is not None:
-        fragment["modified_at"] = modified_at
-    queue = _queue_of(
-        _frame(fragment),
-        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}),
-        _frame({"entry_id": entry_id, "state": "setup_retry"}),
-    )
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        await reconfigure(hass, entry, "new")
+        reloaded = await settled()
 
-    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
-
-    assert result is None
+    assert reloaded is not None
+    assert reloaded["state"] == "loaded"
 
 
-@pytest.mark.asyncio
-async def test_a_disabled_first_fragment_returns_immediately_without_waiting() -> None:
-    """A disabled entry is never reloaded, so no transition is ever coming."""
-    entry_id = "entry-1"
-    queue = _queue_of(
-        _frame(
-            {
-                "entry_id": entry_id,
-                "state": "not_loaded",
-                "modified_at": _BEFORE,
-                "disabled_by": "user",
-            }
+@pytest.mark.usefixtures("entry_stream")
+async def test_a_reconfigure_that_breaks_the_entry_reports_the_reloads_outcome(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
+) -> None:
+    """The commit still shows the pre-reload ``loaded``, and the reload passes
+    through ``unload_in_progress``, ``not_loaded`` and ``setup_in_progress``:
+    taking any of those for the outcome reports a broken entry as fine or
+    unverified."""
+    entry = await set_up_entry(hass)
+    entry_setup.error = ConfigEntryNotReady("host unreachable")
+
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        await reconfigure(hass, entry, "unreachable")
+        reloaded = await settled()
+
+    assert reloaded is not None
+    assert reloaded["state"] == "setup_retry"
+
+
+@pytest.mark.usefixtures("entry_stream")
+async def test_a_state_change_before_the_commit_is_not_the_reconfigures_outcome(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
+) -> None:
+    """An entry in ``setup_retry``, the state a user reconfigures to fix, can
+    reload on its own mid-flow; that outcome is not the reconfigure's."""
+    entry_setup.error = ConfigEntryNotReady("host unreachable")
+    entry = await set_up_entry(hass)
+
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        entry_setup.error = ConfigEntryError("auth rejected")
+        assert not await hass.config_entries.async_reload(entry.entry_id)
+        entry_setup.error = None
+        await reconfigure(hass, entry, "fixed")
+        reloaded = await settled()
+
+    assert reloaded is not None
+    assert reloaded["state"] == "loaded"
+
+
+@pytest.mark.usefixtures("entry_stream")
+async def test_another_entrys_reload_is_not_taken_for_the_reconfigured_ones(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
+) -> None:
+    """The stream carries every entry; the other one's later ``modified_at``
+    would pass for this entry's commit."""
+    entry = await set_up_entry(hass)
+    other = await set_up_entry(hass)
+
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        entry_setup.error = ConfigEntryError("auth rejected")
+        assert not await hass.config_entries.async_reload(other.entry_id)
+        entry_setup.error = None
+        await reconfigure(hass, entry, "new")
+        reloaded = await settled()
+
+    assert reloaded is not None
+    assert reloaded["entry_id"] == entry.entry_id
+    assert reloaded["state"] == "loaded"
+
+
+@pytest.mark.usefixtures("entry_stream")
+async def test_a_resubmit_that_changes_nothing_gives_up_at_the_commit_budget(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
+) -> None:
+    """Core skips the commit for identical values, so nothing is attributable,
+    and waiting out the whole settle budget would only delay that answer."""
+    entry = await set_up_entry(hass)
+
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        await reconfigure(hass, entry, "old")
+        async with reading(hass, core_client, settled) as waiting:
+            assert not waiting.done()
+            await after(hass, COMMIT_VISIBLE_TIMEOUT + 1)
+            assert waiting.done(), "still waiting after the commit budget"
+            assert waiting.result() is None
+
+
+@pytest.mark.usefixtures("entry_stream")
+async def test_a_commit_with_no_reload_after_it_reads_as_unobserved_once_the_budget_ends(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
+) -> None:
+    entry = await set_up_entry(hass)
+
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        await reconfigure(hass, entry, "new", reload=False)
+        async with reading(hass, core_client, settled) as waiting:
+            await after(hass, COMMIT_VISIBLE_TIMEOUT + 1)
+            assert not waiting.done(), "gave up before the settle budget"
+            await after(hass, RELOAD_SETTLE_TIMEOUT + 1)
+            assert waiting.done(), "still waiting after the settle budget"
+            assert waiting.result() is None
+
+
+@pytest.mark.usefixtures("entry_stream")
+async def test_a_disabled_entry_reads_as_unobserved_without_waiting(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
+) -> None:
+    """Core never reloads a disabled entry, so no transition is coming."""
+    entry = await set_up_entry(hass, disabled_by=ConfigEntryDisabler.USER)
+
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        await reconfigure(hass, entry, "new")
+        async with reading(hass, core_client, settled) as waiting:
+            assert waiting.done(), "waited for a reload Core never runs"
+            assert waiting.result() is None
+
+
+@pytest.mark.usefixtures("entry_stream")
+async def test_an_entry_disabled_after_the_commit_settles_without_waiting(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
+) -> None:
+    """A disabled entry stays ``not_loaded``; waiting for it to load would
+    stall the reconfigure's answer for the whole settle budget."""
+    entry = await set_up_entry(hass)
+
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        await reconfigure(hass, entry, "new", reload=False)
+        await hass.config_entries.async_set_disabled_by(
+            entry.entry_id, ConfigEntryDisabler.USER
         )
-    )
+        async with reading(hass, core_client, settled) as waiting:
+            assert waiting.done(), "waited for the entry to load"
+            reloaded = waiting.result()
 
-    started = asyncio.get_running_loop().time()
-    result = await _observe_reload_settled(queue, entry_id, timeout=30.0)
-    elapsed = asyncio.get_running_loop().time() - started
-
-    assert result is None
-    assert elapsed < 1.0, f"waited {elapsed:.1f}s for a reload that never comes"
+    assert reloaded is not None
+    assert reloaded["disabled_by"] == "user"
 
 
-@pytest.mark.asyncio
-async def test_fragments_for_a_different_entry_id_are_ignored() -> None:
-    """A subscription frame is process-wide; another entry's transition is noise."""
-    entry_id = "entry-1"
-    final_fragment = {"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}
-    queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _BEFORE}),
-        _frame({"entry_id": "entry-other", "state": "loaded", "modified_at": _AFTER}),
-        _frame(
-            {"entry_id": "entry-other", "state": "not_loaded", "modified_at": _AFTER}
-        ),
-        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _AFTER}),
-        _frame(final_fragment),
-    )
-
-    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
-
-    assert result == final_fragment
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("before", "after"),
-    [
-        pytest.param(1786953600.0, 1786953605.0, id="epoch_float_as_ha_sends"),
-        pytest.param(1786953600, 1786953605, id="epoch_int"),
-        pytest.param(
-            "2026-08-16T10:00:00+00:00", "2026-08-16T10:00:05+00:00", id="iso_tolerance"
-        ),
-    ],
-)
-async def test_the_commit_gate_reads_the_shape_home_assistant_actually_sends(
-    before: object, after: object
+@pytest.mark.usefixtures("entry_stream")
+async def test_a_connection_lost_after_the_subscribe_reads_as_unobserved_not_an_error(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
 ) -> None:
-    """`as_json_fragment` emits `modified_at.timestamp()`, a JSON number.
+    """Core has committed the change by then; a stream failure must not hide it."""
+    entry = await set_up_entry(hass)
 
-    A str-only parser rejects every real fragment, so the baseline is never
-    established and every reconfigure is reported unverified.
-    """
-    entry = {"entry_id": "e1", "state": "loaded", "modified_at": before}
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    for frag in (
-        dict(entry),
-        {**entry, "modified_at": after},
-        {**entry, "modified_at": after, "state": "setup_in_progress"},
-        {**entry, "modified_at": after, "state": "setup_retry"},
-    ):
-        queue.put_nowait({"event": [{"type": "updated", "entry": frag}]})
-
-    settled = await _observe_reload_settled(queue, "e1", timeout=0.5)
-
-    assert settled is not None, "the commit gate rejected the real fragment shape"
-    assert settled["state"] == "setup_retry"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "raw", [None, True, [], {}, "not-a-timestamp"], ids=lambda v: repr(v)[:14]
-)
-async def test_an_unusable_modified_at_degrades_rather_than_guessing(
-    raw: object,
-) -> None:
-    """Nothing can be attributed to the commit, so unverified is the honest answer.
-
-    The stand-in commit and settle fragments behind the bad baseline are what
-    make this bite: with a single fragment a parser that wrongly ACCEPTS the
-    baseline also returns None, just from running out of stream.
-    """
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    for frag in (
-        {"entry_id": "e1", "state": "loaded", "modified_at": raw},
-        # Would be read as the commit by a parser that accepted the baseline.
-        {"entry_id": "e1", "state": "loaded", "modified_at": _AFTER},
-        # And this would then settle it. Post-commit fragments are not
-        # re-checked for modified_at, so it needs none.
-        {"entry_id": "e1", "state": "setup_retry"},
-    ):
-        queue.put_nowait({"event": [{"type": "updated", "entry": frag}]})
-
-    assert await _observe_reload_settled(queue, "e1", timeout=0.25) is None
-
-
-@pytest.mark.asyncio
-async def test_watch_entry_reload_never_raises_and_always_unsubscribes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A stream that fails after the commit reads as unobserved, not an error,
-    and the subscription is released however the call ends."""
-    ws = MagicMock(release_subscription=AsyncMock())
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    monkeypatch.setattr(
-        config_entry_reload_watch,
-        "_subscribe_entry_changes",
-        AsyncMock(return_value=(ws, (7, queue))),
-    )
-    observe = AsyncMock(side_effect=RuntimeError("bad frame"))
-    monkeypatch.setattr(config_entry_reload_watch, "_observe_reload_settled", observe)
-
-    async with watch_entry_reload(MagicMock(), "e1") as settled:
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        abort_transport(await pooled_socket(core_client))
+        await reconfigure(hass, entry, "new")
         assert await settled() is None
-    observe.assert_awaited_once_with(queue, "e1")
-    ws.release_subscription.assert_awaited_once_with(7)
 
-    async def failed_submit() -> None:
-        async with watch_entry_reload(MagicMock(), "e1"):
+
+@pytest.mark.usefixtures("entry_stream")
+async def test_the_entry_subscription_is_released_however_the_submit_ends(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
+) -> None:
+    """An unreleased subscription stays open on the pooled socket and is
+    pushed every later entry change."""
+    entry = await set_up_entry(hass)
+
+    async def failing_submit() -> None:
+        async with watch_entry_reload(core_client, entry.entry_id):
             raise ValueError("the submit failed")
 
-    with pytest.raises(ValueError):
-        await failed_submit()
-    assert ws.release_subscription.await_count == 2
+    with received(hass, "config_entries/subscribe", "unsubscribe_events") as seen:
+        async with watch_entry_reload(core_client, entry.entry_id):
+            await reconfigure(hass, entry, "new")
+        with pytest.raises(ValueError, match="the submit failed"):
+            await failing_submit()
+
+    subscribed = [message["id"] for message in seen["config_entries/subscribe"]]
+    assert len(subscribed) == 2
+    assert [m["subscription"] for m in seen["unsubscribe_events"]] == subscribed
 
 
-@pytest.mark.asyncio
-async def test_watch_entry_reload_without_a_stream_reads_as_unobserved(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_without_the_entry_stream_the_reload_reads_as_unobserved(
+    hass: HomeAssistant, core_client: HomeAssistantClient, entry_setup: EntrySetup
 ) -> None:
-    monkeypatch.setattr(
-        config_entry_reload_watch,
-        "_subscribe_entry_changes",
-        AsyncMock(return_value=None),
-    )
-    async with watch_entry_reload(MagicMock(), "e1") as settled:
+    """Core without ``config`` refuses ``config_entries/subscribe``; the
+    reconfigure still goes through."""
+    entry = await set_up_entry(hass)
+
+    async with watch_entry_reload(core_client, entry.entry_id) as settled:
+        await reconfigure(hass, entry, "new")
         assert await settled() is None

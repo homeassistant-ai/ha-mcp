@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ha_mcp.tools.smart_search import SmartSearchTools
-from ha_mcp.tools.tools_search import register_search_tools
+from ha_mcp.tools.tools_search import SearchTools, register_search_tools
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
@@ -34,6 +34,22 @@ def _build_ha_search(client: Any) -> Any:
     return registered["ha_search"]
 
 
+def _visibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: VisibilityConfig
+) -> None:
+    """Store ``config`` where the visibility resolver loads its config from."""
+    save_visibility_config(tmp_path, config)
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+
 def _setup_visibility_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+
+def search_tools_on(
+    client: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> SearchTools:
+    """The search tools on ``client``, with entity visibility turned off."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    return SearchTools(client, SmartSearchTools(client=client))

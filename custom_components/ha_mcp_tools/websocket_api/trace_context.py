@@ -27,7 +27,6 @@ from homeassistant.helpers.json import ExtendedJSONEncoder
 
 from .seam import PreSerializedResult
 
-WS_TRACE_CONTEXT = "ha_mcp_tools/trace_context"
 CAPABILITIES = ("trace_context",)
 
 _TRACE_RESTORE_LOCK = "ha_mcp_tools_trace_restore_lock"

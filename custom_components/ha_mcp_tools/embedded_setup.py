@@ -286,7 +286,7 @@ def _dedup_hosts(primary: str | None, extra: list[str] | None) -> list[str]:
     return ordered
 
 
-def _cloud_remote_url(hass: HomeAssistant) -> str | None:
+def cloud_remote_url(hass: HomeAssistant) -> str | None:
     """The Nabu Casa remote URL, when the cloud integration is set up + logged in."""
     try:
         from homeassistant.components.cloud import (
@@ -355,7 +355,7 @@ def build_connect_urls(
         # external URL leads the list (any reverse proxy, not just Nabu Casa).
         urls.append(f"{external}/api/webhook/{webhook_id}")
 
-    if webhook_id and (cloud_base := _cloud_remote_url(hass)):
+    if webhook_id and (cloud_base := cloud_remote_url(hass)):
         urls.append(f"{cloud_base}/api/webhook/{webhook_id}")
 
     local_base, local_host = _resolve_local_url(hass)
@@ -593,7 +593,7 @@ async def _async_check_component_compat(
     (``MIN_COMPONENT_VERSION``). Each component release pins the server it was
     built with, so only a pip-spec override can install a server that expects
     a newer component. When it does, surface a WARNING repair issue pointing
-    at the HACS component update; clear it once the component is new enough.
+    at the component update; clear it once the component is new enough.
 
     Advisory only — it must never block or fail server startup, so an
     unexpected error is logged (visible, not silent) and swallowed rather than
@@ -632,8 +632,8 @@ async def _async_check_component_compat(
     if outdated:
         _LOGGER.warning(
             "The installed ha-mcp server requires the HA-MCP integration %s or "
-            "newer, but %s is running; update the integration via HACS (the "
-            "Marketplace on Home Assistant 2026.11+).",
+            "newer, but %s is running; update the integration via the "
+            "Marketplace.",
             required,
             own,
         )

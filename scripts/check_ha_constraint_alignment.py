@@ -42,8 +42,8 @@ collision with an image-shipped transitive package empirically.
 
 Scope limit worth knowing: rules 1-2 read ``[project.dependencies]`` only;
 rule 3 covers the transitive packages HA pins exactly, for the image's Core
-only. A transitive package HA pins loosely, and every package at the HACS
-floor, is the no-stomp guard's job, which diffs the real install against the
+only. A transitive package HA pins loosely, and every package at the
+hacs.json minimum, is the no-stomp guard's job, which diffs the real install against the
 real image.
 
 Usage:
@@ -70,13 +70,14 @@ from packaging.utils import NormalizedName, canonicalize_name
 from packaging.version import Version
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_CONSTRAINTS_URL = (
-    "https://raw.githubusercontent.com/home-assistant/core/"
-    "{version}/homeassistant/package_constraints.txt"
+_CORE_FILE_URL = (
+    "https://raw.githubusercontent.com/home-assistant/core/{version}/{path}"
 )
-# Worst-case fetch cost is bounded well inside the CI job's own timeout, so
-# a slow-but-not-dead network still reaches the distinct unreachable exit
-# instead of being killed by the runner (which would read as an infra flake).
+_CONSTRAINTS_PATH = "homeassistant/package_constraints.txt"
+# Worst-case cost of one fetch (about 40 s) is bounded well inside the CI
+# job's own timeout, so a slow-but-not-dead network still reaches the distinct
+# unreachable exit instead of being killed by the runner (which would read as
+# an infra flake). A caller that fetches several files multiplies it.
 _FETCH_ATTEMPTS = 3
 _FETCH_TIMEOUT_SECONDS = 10
 _FETCH_BACKOFF_SECONDS = 3
@@ -272,19 +273,19 @@ def dev_group_core_version(pyproject_text: str) -> str:
     raise SystemExit("ERROR: the dev group does not pin homeassistant==<version>")
 
 
-def _fetch_constraints(ha_version: str) -> str | None:
-    """Fetch HA's constraints file, retrying transient failures.
+def fetch_core_file(ha_version: str, path: str = _CONSTRAINTS_PATH) -> str | None:
+    """Fetch ``path`` from HA core at the ``ha_version`` tag, retrying transient failures.
 
-    Returns None after three failed attempts; the caller then exits
+    Returns None after three failed attempts; the constraints check then exits
     :data:`EXIT_CONSTRAINTS_UNREACHABLE`, the one code CI fails open on —
     distinct from a real violation (1) and from every other exit 2 in this
     script, so a network blip is never mistaken for drift and a permanent
-    error is never mistaken for a blip.
+    error is never mistaken for a blip. The integration pin sync returns 1.
 
-    A 4xx is permanent, not transient: it means the constraints file moved
-    or the version ref does not exist. Those exit 1 immediately.
+    A 4xx is permanent, not transient: it means the file moved or the
+    version ref does not exist. Those exit 1 immediately.
     """
-    url = _CONSTRAINTS_URL.format(version=ha_version)
+    url = _CORE_FILE_URL.format(version=ha_version, path=path)
     last_error: Exception | None = None
     for attempt in range(_FETCH_ATTEMPTS):
         try:
@@ -294,10 +295,10 @@ def _fetch_constraints(ha_version: str) -> str | None:
                 payload: bytes = response.read()
             return payload.decode("utf-8")
         except urllib.error.HTTPError as err:
-            # Most 4xx are PERMANENT — a moved/renamed constraints file or a
-            # ref that does not exist. Retrying cannot fix those, and
-            # returning the network sentinel would let CI's fail-open branch
-            # swallow them forever. Fall through to the caller's hard failure.
+            # Most 4xx are PERMANENT — a moved/renamed file or a ref that
+            # does not exist. Retrying cannot fix those, and returning the
+            # network sentinel would let CI's fail-open branch swallow them
+            # forever, so exit 1 here.
             #
             # 408/429 are the exceptions: raw.githubusercontent rate-limits
             # shared CI runners, and treating that as permanent would fail
@@ -305,9 +306,8 @@ def _fetch_constraints(ha_version: str) -> str | None:
             # exists to avoid. They stay on the retry-then-sentinel path.
             if 400 <= err.code < 500 and err.code not in _TRANSIENT_HTTP_CODES:
                 print(
-                    f"ERROR: {url} returned HTTP {err.code} — the constraints "
-                    "file moved or the version ref does not exist; this check "
-                    "cannot fail open on it",
+                    f"ERROR: {url} returned HTTP {err.code} — the file moved "
+                    "or the version ref does not exist",
                     file=sys.stderr,
                 )
                 raise SystemExit(1) from err
@@ -353,7 +353,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _run_sync_lock() -> int:
     pyproject = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    constraints_text = _fetch_constraints(dev_group_core_version(pyproject))
+    constraints_text = fetch_core_file(dev_group_core_version(pyproject))
     if constraints_text is None:
         return EXIT_CONSTRAINTS_UNREACHABLE
     return sync_lock(_REPO_ROOT / "uv.lock", parse_requirement_lines(constraints_text))
@@ -397,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         origin = str(args.constraints_file)
     else:
-        constraints_text = _fetch_constraints(args.ha_version)
+        constraints_text = fetch_core_file(args.ha_version)
         origin = f"HA core {args.ha_version}"
         if constraints_text is None:
             return EXIT_CONSTRAINTS_UNREACHABLE

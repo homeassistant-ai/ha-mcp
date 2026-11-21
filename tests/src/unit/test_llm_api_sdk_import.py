@@ -1,25 +1,30 @@
-"""The LLM API's executor warm-up loads what the MCP SDK imports lazily.
-
-The SDK (2.x in Home Assistant 2026.11) imports jsonschema on the first tool
-call that validates an output schema, and that import scans and reads its
-metaschema files: Home Assistant reports it as a blocking call in the event
-loop unless the warm-up already did it on the executor.
-"""
+"""The LLM API warms the SDK's lazy jsonschema import off Core's event loop."""
 
 from __future__ import annotations
 
+import threading
+
 import pytest
+from homeassistant.core import HomeAssistant
 
 from custom_components.ha_mcp_tools import llm_api
 
 
-def test_warm_up_imports_jsonschema_off_the_loop(
+async def test_warm_up_imports_jsonschema_off_the_loop(
+    hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    imported: list[str] = []
-    monkeypatch.setattr(llm_api.importlib, "import_module", imported.append)
-    monkeypatch.setattr(llm_api, "_schema_converter", lambda: None)
+    imported: list[tuple[str, int]] = []
+    import_module = llm_api.importlib.import_module
+    loop_thread = threading.get_ident()
 
-    llm_api._import_mcp_sdk()
+    def record_import(name: str, package: str | None = None):
+        imported.append((name, threading.get_ident()))
+        return import_module(name, package)
 
-    assert "jsonschema" in imported
+    monkeypatch.setattr(llm_api.importlib, "import_module", record_import)
+
+    assert await llm_api.async_probe_mcp_sdk(hass)
+    jsonschema_threads = [thread for name, thread in imported if name == "jsonschema"]
+    assert jsonschema_threads
+    assert all(thread != loop_thread for thread in jsonschema_threads)

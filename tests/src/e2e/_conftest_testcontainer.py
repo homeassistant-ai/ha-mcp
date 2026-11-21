@@ -15,12 +15,13 @@ from testcontainers.core.container import DockerContainer
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_runtime
-from haos_runtime import inject_hacs_token
+from marketplace_token import inject_marketplace_token
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from test_constants import HA_TEST_IMAGE
 
+from ..recorder_seed import session_recorder_seed
 from ._conftest_embedded import (
     _EMBEDDED_DOMAIN,
     _EMBEDDED_WEBHOOK_ID,
@@ -42,9 +43,7 @@ from ._conftest_readiness import (
 )
 from ._conftest_seed import (
     _collect_manifest_requirements,
-    _ensure_hacs_frontend,
     _install_custom_component,
-    _refresh_recorder_timestamps,
     _seed_legacy_yaml_backups,
     _seed_non_yaml_package_file,
     _seed_yaml_package_scene,
@@ -185,23 +184,27 @@ def _prepare_testcontainer_config(
     if not initial_state_path.exists():
         pytest.fail(f"Initial test state not found at {initial_state_path}")
 
-    # Ensure HACS frontend is downloaded (if HACS is present)
-    _ensure_hacs_frontend(initial_state_path)
-
     # Copy all files from initial_test_state
     shutil.copytree(initial_state_path, config_path, dirs_exist_ok=True)
 
-    # Inject GITHUB_TOKEN into HACS config entry if available.
-    # Without a valid token HACS disables itself, causing flaky test skips.
-    # In CI the automatic GITHUB_TOKEN provides sufficient read access.
+    # Connect the Marketplace to GitHub with GITHUB_TOKEN when available:
+    # without a token it refuses custom repositories, and its GitHub calls
+    # share the unauthenticated rate limit of every hosted runner. In CI the
+    # automatic GITHUB_TOKEN provides sufficient read access.
     github_token = os.environ.get("GITHUB_TOKEN")
     if github_token:
         storage_file = config_path / ".storage" / "core.config_entries"
-        if storage_file.exists():
-            ce_data = json.loads(storage_file.read_text())
-            if inject_hacs_token(ce_data, github_token):
-                logger.info("Injected GITHUB_TOKEN into HACS config entry")
+        ce_data = json.loads(storage_file.read_text()) if storage_file.exists() else {}
+        if inject_marketplace_token(ce_data, github_token):
             storage_file.write_text(json.dumps(ce_data, indent=2))
+            logger.info("Injected GITHUB_TOKEN into the Marketplace config entry")
+        else:
+            logger.warning(
+                "No marketplace config entry in %s — token not injected; "
+                "the Marketplace stays unauthenticated (GitHub rate-limit "
+                "flakes possible)",
+                storage_file,
+            )
 
     # Install custom components from repo source
     repo_root = Path(__file__).parent.parent.parent.parent
@@ -256,13 +259,7 @@ def _prepare_testcontainer_config(
     # registers in the registry yet 404s on the config API. Same pre-boot reason.
     _seed_yaml_package_scene(config_path)
 
-    # Shift the pre-baked recorder timestamps forward so the seeded rows
-    # look "recent" to history queries with a 24h window. The recorder DB in
-    # initial_test_state is baked offline (see scripts/bake_pagination_seed.py)
-    # and its rows have whatever timestamps were captured at bake time. Without
-    # this shift, the pagination tests in test_history.py/test_logbook.py would
-    # silently skip again the moment the seed gets more than 24h old.
-    _refresh_recorder_timestamps(config_path / "home-assistant_v2.db")
+    shutil.copyfile(session_recorder_seed(), config_path / "home-assistant_v2.db")
     local_blueprint = _copy_local_blueprint_to_www(config_path)
 
     # Ensure proper permissions for Home Assistant

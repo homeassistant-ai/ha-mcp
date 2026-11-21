@@ -31,32 +31,13 @@ from typing import Any
 import probatio
 import pytest
 
+from custom_components.ha_mcp_tools import llm_api
+
 from ._registered_tools import all_registered_tools
 
-_EXCLUSIVE_KEYWORDS = ("exclusiveMinimum", "exclusiveMaximum")
-
-# Keys under which a dictionary is keyed by author-chosen names, and keys whose
-# value is instance data or an opaque OpenAPI object rather than a subschema. A
-# key spelled like a bound in one of those places is a name or a value, not a
-# bound, and a walk that reads it as one would fail a valid tool schema. These
-# mirror the sets in ``custom_components/ha_mcp_tools/llm_api.py``, which has
-# to make the same distinction to avoid rewriting the same data; they are
-# repeated rather than imported so the guard over the server's own tools does
-# not depend on the component being importable.
-_NAME_MAPS = frozenset(
-    {
-        "properties",
-        "patternProperties",
-        "$defs",
-        "definitions",
-        "dependentSchemas",
-        "dependentRequired",
-        "dependencies",
-    }
-)
-_NOT_SUBSCHEMAS = frozenset(
-    {"default", "const", "enum", "examples", "example", "discriminator"}
-)
+# The guard reads the component's own keyword tables, so the two draw the
+# same lines.
+_EXCLUSIVE_KEYWORDS = tuple(exclusive for exclusive, *_ in llm_api.EXCLUSIVE_BOUNDS)
 
 # Registered only while dev mode is on; the walk must reach them too.
 _DEV_TOOLS = ("ha_dev_manage_server", "ha_dev_manage_settings")
@@ -99,12 +80,12 @@ def _exclusive_bounds(node: Any, path: str) -> list[str]:
             f"{path}: {keyword}" for keyword in _EXCLUSIVE_KEYWORDS if keyword in node
         )
         for key, value in node.items():
-            # OpenAPI ``x-`` extensions hold vendor data the component copies
-            # through untouched (llm_api._is_opaque_key), so a bound-like key
-            # inside one is not a bound this guard should reject either.
-            if key in _NOT_SUBSCHEMAS or key.startswith("x-"):
+            # The component copies instance data and opaque objects (OpenAPI
+            # ``x-`` extensions among them) through untouched, so a bound-like
+            # key inside one is not a bound this guard should reject either.
+            if key in llm_api.INSTANCE_VALUES or llm_api.is_opaque_key(key):
                 continue
-            if key in _NAME_MAPS and isinstance(value, dict):
+            if key in llm_api.SCHEMA_MAPS and isinstance(value, dict):
                 for name, sub in value.items():
                     found.extend(_exclusive_bounds(sub, f"{path}.{key}.{name}"))
                 continue
@@ -137,6 +118,16 @@ def test_the_walk_does_not_report_extension_data() -> None:
     }
 
     assert _exclusive_bounds(schema, "root") == []
+
+
+def test_a_property_named_like_an_extension_is_still_checked() -> None:
+    """``x-`` is opaque only as a keyword; a property of that name is a subschema."""
+    named = {
+        "type": "object",
+        "properties": {"x-limit": {"type": "number", "exclusiveMinimum": 0}},
+    }
+
+    assert _exclusive_bounds(named, "r") == ["r.properties.x-limit: exclusiveMinimum"]
 
 
 def test_the_walk_does_not_report_names_or_instance_data() -> None:

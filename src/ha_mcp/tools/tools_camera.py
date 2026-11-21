@@ -131,10 +131,15 @@ class CameraTools:
                 )
             )
         if response.status_code >= 400:
+            offline = (
+                ". The camera may be offline or temporarily unavailable"
+                if response.status_code >= 500 and noun == "camera"
+                else ""
+            )
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to retrieve {noun} image: HTTP {response.status_code}",
+                    f"Failed to retrieve {noun} image: HTTP {response.status_code}{offline}",
                     context={"entity_id": entity_id},
                 )
             )
@@ -150,13 +155,6 @@ class CameraTools:
                 context={"entity_id": entity_id},
             )
         )
-
-    @classmethod
-    def _check_response(cls, response: Any, entity_id: str) -> None:
-        """Validate a camera-proxy HTTP response, raising a structured ToolError."""
-        cls._check_status(response, entity_id)
-        if not response.content:
-            cls._raise_empty(entity_id)
 
     async def _fetch_image_entity(self, entity_id: str) -> tuple[bytes, str]:
         """Fetch an image entity's bytes through HA's image proxy, size-bounded.
@@ -340,7 +338,7 @@ class CameraTools:
             response = await self._client.httpx_client.get(
                 endpoint, params=params or None
             )
-            self._check_response(response, entity_id)
+            self._check_status(response, entity_id)
             # Sample the clock the moment HA handed us the bytes; the zone
             # is resolved separately so a slow timezone lookup only delays
             # the label, never the timestamp.

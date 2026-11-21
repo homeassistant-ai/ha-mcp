@@ -406,214 +406,19 @@ def is_haos_backend_selected() -> bool:
     return bool(raw and Path(raw).exists())
 
 
-def _execute_recorder_sql(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> Any:
-    """Run ``sql``; return the fetched row, or None if the table/column is absent."""
-    import sqlite3
-
-    try:
-        return conn.execute(sql, params).fetchone()
-    except sqlite3.OperationalError as exc:
-        msg = str(exc).lower()
-        if "no such table" in msg or "no such column" in msg:
-            return None
-        raise
-
-
-def _prepare_recorder_connection(conn: Any, db_local: Path) -> None:
-    """Checkpoint any preexisting WAL and switch the connection to DELETE mode."""
-    # The bake's seed DB is in WAL journal mode. Our copy-in only
-    # ships the .db file (not -wal / -shm) into the qcow2, so any
-    # pending WAL frames written during our UPDATE would land in
-    # the workdir alongside the .db and never reach HAOS — HA Core
-    # then sees a .db whose page tree is mid-transaction, raises
-    # ``sqlite3.DatabaseError: database disk image is malformed``,
-    # and renames the seed to ``.corrupt.<ts>`` before booting with
-    # an empty fresh DB. (Captured in PR #1361 diagnostics: see
-    # /supervisor/homeassistant/home-assistant_v2.db.corrupt.*.)
-    #
-    # Fix: checkpoint any preexisting WAL into the main file, then
-    # switch this connection to DELETE mode so our UPDATEs write
-    # straight to .db with no journal artefacts. End state on disk:
-    # one self-contained .db file. HA Core will switch it back to
-    # WAL on first boot — its preferred mode.
-    #
-    # Both PRAGMAs return rows we MUST inspect: a busy WAL
-    # checkpoint or a refused mode switch silently leaves the
-    # same corruption the comment above describes.
-    ckpt_row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-    # Result shape: (busy, log_pages, checkpointed_pages). busy=0
-    # means all frames were merged into the main DB.
-    if ckpt_row is not None and ckpt_row[0] not in (0, None):
-        raise RuntimeError(
-            f"wal_checkpoint(TRUNCATE) reported busy={ckpt_row[0]} on "
-            f"{db_local}; another connection is holding WAL frames. "
-            f"Aborting refresh — copy-in would still produce a "
-            f"WAL/SHM-mismatched DB inside the qcow2."
-        )
-    mode_row = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
-    if mode_row is None or mode_row[0] != "delete":
-        raise RuntimeError(
-            f"Failed to switch {db_local} to DELETE journal mode "
-            f"(got {mode_row!r}); subsequent UPDATEs would write WAL "
-            f"frames that the qcow2 copy-in won't include."
-        )
-
-
-def _apply_recorder_offset(
-    conn: Any, timestamp_columns: dict[str, tuple[str, ...]], offset: float
-) -> None:
-    """Shift every recorder timestamp column by ``offset`` seconds, then commit."""
-    for table, cols in timestamp_columns.items():
-        for col in cols:
-            _execute_recorder_sql(
-                conn,
-                f"UPDATE {table} SET {col} = {col} + ? WHERE {col} IS NOT NULL",
-                (offset,),
-            )
-    conn.commit()
-
-
-def _shift_recorder_timestamps(db_local: Path, target_age_seconds: float) -> bool:
-    """Shift ``db_local``'s recorder timestamps so the newest lands recently.
-
-    Returns True if a shift was applied (the DB must be copied back into the
-    qcow2), or False if the timestamps were already recent enough to skip.
-    """
-    import sqlite3
-
-    # Same logic as _conftest_seed._refresh_recorder_timestamps. Kept inline
-    # rather than importing because conftest pulls in heavy dev deps
-    # (docker, testcontainers) that the HAOS-only paths don't need.
-    TIMESTAMP_COLUMNS = {
-        "states": ("last_updated_ts", "last_changed_ts", "last_reported_ts"),
-        "events": ("time_fired_ts",),
-        "statistics": ("start_ts", "created_ts"),
-        "statistics_short_term": ("start_ts", "created_ts"),
-    }
-    conn = sqlite3.connect(str(db_local))
-    try:
-        _prepare_recorder_connection(conn, db_local)
-        newest = 0.0
-        matched_columns = 0
-        for table, cols in TIMESTAMP_COLUMNS.items():
-            for col in cols:
-                row = _execute_recorder_sql(conn, f"SELECT MAX({col}) FROM {table}")
-                if row is None:
-                    continue
-                matched_columns += 1
-                if row[0] is not None and isinstance(row[0], (int, float)):
-                    newest = max(newest, float(row[0]))
-
-        # Schema drift guard: if HAOS bumps the recorder schema and renames
-        # every column in TIMESTAMP_COLUMNS, the loop above silently
-        # `continue`s through all of them and newest stays 0. Without this
-        # check, history pagination tests would mysteriously fail with "no
-        # data" instead of pointing at the schema bump. Mirrors the
-        # testcontainer _refresh_recorder_timestamps "raise vs no-op"
-        # discipline.
-        if matched_columns == 0:
-            raise RuntimeError(
-                f"Recorder DB at {db_local} matched zero TIMESTAMP_COLUMNS "
-                f"entries — recorder schema may have drifted; update "
-                f"TIMESTAMP_COLUMNS to match the new column names."
-            )
-        if newest <= 0:
-            raise RuntimeError(
-                f"Recorder DB at {db_local} has no numeric timestamps in "
-                f"any of the {matched_columns} matched columns — the bake "
-                f"may have produced an empty DB; re-run "
-                f"`uv run python scripts/bake_pagination_seed.py`."
-            )
-
-        target = time.time() - target_age_seconds
-        offset = target - newest
-        if offset <= 0:
-            LOG.info(
-                "Recorder timestamps already recent (newest=%.0f, "
-                "target=%.0f); no shift needed",
-                newest,
-                target,
-            )
-            return False
-
-        _apply_recorder_offset(conn, TIMESTAMP_COLUMNS, offset)
-        LOG.info("Shifted recorder timestamps by %+.0fs", offset)
-        return True
-    finally:
-        conn.close()
-
-
-def refresh_recorder_in_qcow2(
-    image_path: Path, *, target_age_seconds: float = 300.0
-) -> None:
-    """Shift recorder timestamps inside the baked qcow2 to look ``recent``.
-
-    The image cache key is content-hashed, so a cache hit re-uses an image
-    whose ``home-assistant_v2.db`` timestamps are frozen at bake time —
-    once that exceeds the ~24h window history queries use, every history
-    pagination test silently regresses. This helper extracts the DB from
-    the qcow2, runs the same uniform timestamp shift the testcontainer
-    path does (``_conftest_seed._refresh_recorder_timestamps``), and copies the
-    file back in place. Done once per pytest session before QEMU boots.
-
-    Uses guestfish (libguestfs) for both copy-out and copy-in; sqlite3
-    stdlib for the shift itself. ~30s wall-clock overhead per session.
-    """
+def stage_recorder_seed_in_qcow2(image_path: Path, seed_db: Path) -> None:
+    """Put ``seed_db`` into the qcow2 as Core's recorder database, before boot."""
+    import shutil
     import tempfile
 
-    workdir = Path(tempfile.mkdtemp(prefix="haos-ts-refresh-"))
+    workdir = Path(tempfile.mkdtemp(prefix="haos-recorder-seed-"))
     db_local = workdir / "home-assistant_v2.db"
     try:
-        # copy-out the recorder DB from the qcow2's hassos-data partition.
-        subprocess.run(
-            [
-                "guestfish",
-                "--ro",
-                "-a",
-                str(image_path),
-                "run",
-                ":",
-                "mount",
-                "/dev/sda8",
-                "/",
-                ":",
-                "copy-out",
-                "/supervisor/homeassistant/home-assistant_v2.db",
-                str(workdir),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-
-        if not _shift_recorder_timestamps(db_local, target_age_seconds):
-            return
-
-        # copy-in the shifted DB, and PURGE any stale ``-wal`` / ``-shm``
-        # sidecars in the qcow2. Two-part fix: the PRAGMA block above
-        # handles the workdir DB (no WAL frames leaving our process); this
-        # block handles the qcow2 side.
-        #
-        # The bake (build_image.py) boots HA Core to bootstrap state — Core
-        # writes the recorder DB in WAL mode and leaves
-        # ``home-assistant_v2.db``, ``home-assistant_v2.db-wal``, and
-        # ``home-assistant_v2.db-shm`` in the supervisor data dir. Our
-        # copy-out only fetches the ``.db``, so when we copy the edited
-        # ``.db`` back, the old ``-wal`` / ``-shm`` from bake are still
-        # there — referencing page numbers from the pre-edit ``.db`` that
-        # no longer exist. On boot HA Core opens ``.db`` + ``-wal``
-        # together, sqlite finds the page-tree inconsistent, and raises
-        # ``sqlite3.DatabaseError: database disk image is malformed``
-        # (PR #1361 diagnostics: ha-core-runtime.log captured this exact
-        # message, plus ``home-assistant_v2.db-wal.corrupt.<ts>`` proving
-        # a WAL file was present). The seed is then renamed to
-        # ``.corrupt.<ts>`` and HA boots with a fresh empty DB — losing
-        # all the pre-baked history rows.
-        #
-        # --rw so guestfish opens the qcow2 for write; the file's
-        # owner/perms inside the qcow2 are preserved by libguestfs when
-        # overwriting an existing path.
+        # copy-in keeps the source's basename.
+        shutil.copyfile(seed_db, db_local)
+        # The bake leaves Core's -wal / -shm beside its own database. A stale
+        # WAL next to a different .db makes Core mark the database corrupt
+        # and boot with an empty one, so both sidecars are removed.
         try:
             subprocess.run(
                 [
@@ -642,147 +447,16 @@ def refresh_recorder_in_qcow2(
                 text=True,
                 timeout=180,
             )
-        except subprocess.CalledProcessError, subprocess.TimeoutExpired:
-            # Partial-write recovery hint: the previous copy-out + sqlite
-            # mutate succeeded but the write-back is gone, so the qcow2's
-            # recorder DB is whatever the bake left there. Subsequent runs
-            # against this cached image will repeat the same shift on the
-            # original timestamps — safe but slow. If the recorder DB
-            # appears corrupt downstream, delete the image and let the
-            # next CI run rebuild.
+        except subprocess.CalledProcessError as err:
             LOG.error(
-                "guestfish copy-in failed for %s; cached qcow2 may need "
-                "a manual rebuild (delete /tmp/haos-test-image.qcow2 + "
-                "the matching cache key, then re-run)",
-                image_path,
+                "guestfish recorder seed copy-in failed (exit %s)\n"
+                "stdout:\n%s\nstderr:\n%s",
+                err.returncode,
+                err.stdout,
+                err.stderr,
             )
             raise
-        LOG.info("Refreshed recorder DB in %s", image_path)
-    finally:
-        import shutil
-
-        shutil.rmtree(workdir, ignore_errors=True)
-
-
-def inject_hacs_token(config_entries_doc: dict[str, Any], token: str) -> bool:
-    """Set ``token`` as the HACS config entry's GitHub auth token.
-
-    Mutates ``config_entries_doc`` (a parsed ``.storage/core.config_entries``
-    document) in place, replacing the ``hacs`` entry's ``data`` with
-    ``{"token": token}`` — the same shape HACS' own config flow persists
-    after device-flow auth. Returns True if a ``hacs`` entry was found and
-    patched, False if the document has none (doc left untouched).
-    """
-    for entry in config_entries_doc.get("data", {}).get("entries", []):
-        if entry.get("domain") == "hacs":
-            entry["data"] = {"token": token}
-            return True
-    return False
-
-
-def inject_hacs_token_in_qcow2(image_path: Path) -> None:
-    """Authenticate HACS inside the qcow2 with the CI GitHub token.
-
-    The baked HACS config entry carries no token, so HACS calls the GitHub
-    API unauthenticated — 60 requests/hour per IP, shared across GitHub-
-    hosted runners. When that budget is exhausted every HACS repository add
-    fails ("<Integration ...> GitHub Ratelimit error" in the HA core log)
-    until the hourly window resets, which no in-test wait or rerun can
-    outlast — the long-standing source of the HACS-install e2e flake. The
-    testcontainer path already injects GITHUB_TOKEN into the seeded entry
-    (see conftest's container setup); this brings the HAOS backend to
-    parity by editing the config entry inside the per-worker qcow2 before
-    boot. GITHUB_TOKEN gets 1,000 requests/hour scoped per repository, so
-    the shared-IP limit stops applying.
-
-    Token lifecycle is safe by construction: the workflow saves the image
-    cache BEFORE the test step runs, and xdist workers boot per-run
-    overlays, so the cached base image never carries a token (which would
-    be expired next run anyway — GITHUB_TOKEN dies with the job).
-
-    No-op with a log line when GITHUB_TOKEN is unset (local runs). A
-    guestfish failure degrades LOUDLY to a warning instead of failing the
-    session: the suite then runs exactly as it did before this helper
-    existed (unauthenticated HACS, rate-limit flakes possible).
-    """
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if not token:
-        LOG.info(
-            "GITHUB_TOKEN not set — HACS in %s stays unauthenticated "
-            "(GitHub rate-limit flakes possible)",
-            image_path,
-        )
-        return
-
-    import shutil
-    import tempfile
-
-    storage_path = "/supervisor/homeassistant/.storage/core.config_entries"
-    workdir = Path(tempfile.mkdtemp(prefix="haos-hacs-token-"))
-    try:
-        try:
-            subprocess.run(
-                [
-                    "guestfish",
-                    "--ro",
-                    "-a",
-                    str(image_path),
-                    "run",
-                    ":",
-                    "mount",
-                    "/dev/sda8",
-                    "/",
-                    ":",
-                    "copy-out",
-                    storage_path,
-                    str(workdir),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            local = workdir / "core.config_entries"
-            doc = json.loads(local.read_text(encoding="utf-8"))
-            if not inject_hacs_token(doc, token):
-                LOG.warning(
-                    "No hacs config entry in %s — token not injected; HACS "
-                    "stays unauthenticated (GitHub rate-limit flakes possible)",
-                    image_path,
-                )
-                return
-            local.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-            subprocess.run(
-                [
-                    "guestfish",
-                    "--rw",
-                    "-a",
-                    str(image_path),
-                    "run",
-                    ":",
-                    "mount",
-                    "/dev/sda8",
-                    "/",
-                    ":",
-                    "copy-in",
-                    str(local),
-                    "/supervisor/homeassistant/.storage/",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            LOG.info("Injected GITHUB_TOKEN into HACS config entry in %s", image_path)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            stderr = (getattr(exc, "stderr", "") or "").strip()
-            LOG.warning(
-                "HACS token injection failed for %s (%s%s) — HACS stays "
-                "unauthenticated (GitHub rate-limit flakes possible)",
-                image_path,
-                type(exc).__name__,
-                f": {stderr[-300:]}" if stderr else "",
-            )
+        LOG.info("Staged recorder seed in %s", image_path)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -826,13 +500,14 @@ def remove_tools_entry_in_qcow2(image_path: Path) -> None:
     ``ha_mcp_tools`` services are unavailable when the user never added the
     "HA-MCP File & YAML Tools" entry. On HAOS that entry is baked into the
     image, so it is removed here — a pre-boot offline qcow2 edit on the
-    per-worker overlay, the same mechanism as the recorder / HACS-token
+    per-worker overlay, the same mechanism as the recorder / Marketplace-token
     refreshers and for the same reason: HA Core owns ``.storage`` once it
     boots. The component files and the staged (disabled) in-process server
     entry are deliberately left alone, so the ``haos_embedded`` lane still
     gets its server-entry-only topology.
 
-    Unlike the best-effort HACS-token injection above, every failure RAISES:
+    Unlike the best-effort Marketplace-token injection in ``marketplace_token``,
+    every failure RAISES:
     a silent no-op would leave the tools entry in place and the whole lane
     would then re-test the ordinary topology while reporting green.
     """
@@ -1019,7 +694,7 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path, admin_token: str) -> 
     pointing at it — so when the HAOS embedded-server test enables the entry, the
     in-process server installs from the PR's own source (checkout fidelity for
     the ``src/ha_mcp`` embedded-mode routing under test) rather than PyPI. Runs
-    once per session before ``boot_haos_qemu``, like the recorder / HACS-token
+    once per session before ``boot_haos_qemu``, like the recorder / Marketplace-token
     qcow2 refreshers.
 
     Best-effort by design: on the external HAOS lane the baked entry stays
@@ -1299,11 +974,11 @@ def stage_embedded_server_feature_flags_in_qcow2(
 
     Delivered pre-boot via guestfish (mkdir-p the data dir + copy-in the file),
     the same offline-qcow2 mechanism as ``stage_embedded_server_wheel_in_qcow2``
-    and the recorder / HACS-token refreshers — deterministic (present before HA
+    and the recorder / Marketplace-token refreshers — deterministic (present before HA
     boots and before the entry is enabled) with no post-boot service-availability
     or ordering dependency, which is why it's preferred over calling the baked
     ``ha_mcp_tools`` write_file service after boot. The integration's
-    ``_prepare_config_dir`` does ``os.makedirs(..., exist_ok=True)``, so a
+    ``prepare_config_dir`` does ``os.makedirs(..., exist_ok=True)``, so a
     pre-created dir + file is picked up rather than clobbered (proven on the
     container embedded lane, which pre-seeds the identical files).
 
@@ -1482,9 +1157,8 @@ def get_home_assistant_http_config(
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if not isinstance(result, dict):
-        raise RuntimeError(f"http/config returned a non-object result: {result!r}")
-    return result
+    config: dict[str, Any] = result
+    return config
 
 
 def configure_home_assistant_http(
@@ -1508,11 +1182,8 @@ def configure_home_assistant_http(
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if not isinstance(result, dict) or not isinstance(result.get("restart"), bool):
-        raise RuntimeError(
-            f"http/config/configure returned an invalid result: {result!r}"
-        )
-    return result["restart"]
+    restart: bool = result["restart"]
+    return restart
 
 
 def promote_home_assistant_http_config(
@@ -1523,17 +1194,13 @@ def promote_home_assistant_http_config(
     verify_ssl: bool = True,
 ) -> None:
     """Promote Core's live pending HTTP config to the stable slot."""
-    result = _home_assistant_ws_command(
+    _home_assistant_ws_command(
         base_url,
         token,
         {"type": "http/config/promote"},
         timeout=timeout,
         verify_ssl=verify_ssl,
     )
-    if result is not None:
-        raise RuntimeError(
-            f"http/config/promote returned an unexpected result: {result!r}"
-        )
 
 
 def enable_config_entry(
@@ -2015,7 +1682,7 @@ def _is_transient_link_error(err: BaseException) -> bool:
     return isinstance(err, (*_addon_link_transient_leaves(), asyncio.CancelledError))
 
 
-def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
+def probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
     """Make one MCP call that needs Home Assistant; raise if it does not work.
 
     ``budget`` bounds this single attempt. Without it the attempt inherits
@@ -2101,7 +1768,7 @@ def wait_for_addon_ha_link_ready(
             break
         attempts += 1
         try:
-            _probe_addon_ha_link(addon_mcp_url, min(remaining, _ADDON_HA_LINK_PROBE_S))
+            probe_addon_ha_link(addon_mcp_url, min(remaining, _ADDON_HA_LINK_PROBE_S))
         except transient as e:
             if not _is_transient_link_error(e):
                 raise
@@ -2520,7 +2187,7 @@ def _wait_supervisor_update_done(
     head. ``/store/reload`` and ``/addons/{slug}/update`` are both
     SUPERVISOR_UPDATED-guarded and error ("supervisor needs to be updated
     first" / "No update available", #1594) if they fire while need_update is
-    still True. Mirror ``build_image._wait_supervisor_ready``: wait until
+    still True. Mirror ``build_image.wait_supervisor_ready``: wait until
     update_available is false (and a version_latest is present, so a pre-fetch
     latest=None does not read as a false clear).
 

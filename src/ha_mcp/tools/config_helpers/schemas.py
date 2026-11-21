@@ -10,7 +10,7 @@ __all__ = [
     "SIMPLE_HELPER_TYPES",
     "StorageHelperType",
     "_HELPER_SKILL_FILES",
-    "_SIMPLE_CONFIG_KEYS_DESCRIPTION",
+    "SIMPLE_CONFIG_KEYS_DESCRIPTION",
     "HelperResponse",
     "_attach_helper_skill",
     "_helper_response",
@@ -123,7 +123,7 @@ def _helper_response(
 # What the `config` description says about SIMPLE helpers' keys until Core's
 # own field list replaces it (``ComponentHelperSchemaTransform``, when the
 # component serves it). No field is named here: Core's schema is the list.
-_SIMPLE_CONFIG_KEYS_DESCRIPTION = (
+SIMPLE_CONFIG_KEYS_DESCRIPTION = (
     "the fields of the type's own Home Assistant schema, under its names; "
     "Home Assistant validates them and its error names any mistake. With the "
     "ha_mcp_tools component installed, ha_config_list_helpers(helper_type, "

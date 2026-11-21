@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-87-blue" alt="87 Tools">
+    <img src="https://img.shields.io/badge/tools-86-blue" alt="86 Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -33,19 +33,19 @@
 
 ## 🚀 Get Started
 
-The recommended way to run ha-mcp is the **HA-MCP integration**. It installs into Home Assistant through HACS (the built-in Marketplace on Home Assistant 2026.11+), runs the full server **in-process**, and works on **every** Home Assistant installation type — Home Assistant OS, Supervised, Container, and Core — with full feature parity. It is the easiest setup in every case: setup asks for an administrator access token and how clients may connect.
+The recommended way to run ha-mcp is the **HA-MCP integration**. It installs into Home Assistant through the built-in Marketplace, runs the full server **in-process**, and works on **every** Home Assistant installation type — Home Assistant OS, Supervised, Container, and Core — with full feature parity. It is the easiest setup in every case: setup asks for an administrator access token and how clients may connect.
 
-**Add it to Home Assistant via HACS or, on Home Assistant 2026.11+, the Marketplace (the preferred install):**
+**Add it to Home Assistant via the Marketplace (the preferred install):**
 
-[![Add HA-MCP to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
+[![Open HA-MCP in the Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
 
 **Quick start:**
 
-> The setup below is for version 9.0.0 (October 28, 2026) and later; earlier versions show a shorter setup form without the administrator account step.
+> Only the current stable Home Assistant release is officially supported. Older releases down to 2026.11.0, the technical floor, may or may not run but are not officially supported. A beta release may be supported, but that is not guaranteed; where it is, a fallback keeps current stable working.
 
-1. Install the **HA-MCP integration** (requires **Home Assistant 2026.8.0 or newer**; see [compatibility details](docs/in-process-server.md#requirements)). On **Home Assistant 2026.8–2026.10**, open HACS, search for **HA-MCP**, then **Download**.
-   On **Home Assistant 2026.11 or newer**, open **Settings → Marketplace**, accept its first-run warning, and search for **HA-MCP**, then **Install**. HA-MCP is in the default catalog, so installing it and receiving its updates do not require connecting GitHub or adding a custom repository. The badge above also opens its catalog page.
-   Already installed from the earlier `homeassistant-ai/ha-mcp-integration` repository? It keeps receiving the same releases. On the Marketplace, keep GitHub connected for its background checks on that custom repository.
+1. Install the **HA-MCP integration** (requires **Home Assistant 2026.11.0 or newer**; see [compatibility details](docs/in-process-server.md#requirements)).
+   Open **Settings → Marketplace**, accept its first-run warning, and search for **HA-MCP**, then **Install**. HA-MCP is in the default catalog, so installing it and receiving its updates do not require connecting GitHub or adding a custom repository. The badge above also opens its catalog page.
+   Already installed from the earlier `homeassistant-ai/ha-mcp-integration` repository? It keeps receiving the same releases. Keep GitHub connected in the Marketplace for its background checks on that custom repository.
    Older installed releases may still appear as **HA-MCP Custom Component**; searching for **HA-MCP** matches both names.
 2. **Restart Home Assistant.**
 3. Decide which administrator account the server acts as. Either create a long-lived access token on your own account (your profile → **Security** → **Long-lived access tokens** → **Create token**; it works from anywhere if it leaks, and the server's changes show under your name), or, safer, create an account just for HA-MCP under **Settings → People → Add person** with **Allow login**, **Local access only** and **Administrator** on. Never use your own login for the second option.
@@ -59,7 +59,7 @@ The recommended way to run ha-mcp is the **HA-MCP integration**. It installs int
 - **Local only?** Leave remote access disabled at setup (or turn off **Remote access via webhook** in the entry options) — no webhook is registered at all, while the direct port and sidebar panel keep working.
 - **Settings panel:** while the server runs, an admin-only **HA-MCP** panel appears in the Home Assistant sidebar for managing tools, feature flags, backups, and themes.
 - **Optional authentication:** set **Authentication mode** to `ha_auth` to require a Home Assistant account sign-in instead of using the secret URL as the credential.
-- **Manual install (no HACS or Marketplace):** copy `custom_components/ha_mcp_tools/` from this repository into your Home Assistant `config/custom_components/` directory, then restart and add the integration as above.
+- **Manual install (no Marketplace):** copy `custom_components/ha_mcp_tools/` from this repository into your Home Assistant `config/custom_components/` directory, then restart and add the integration as above.
 
 The component's second entry type, the **File & YAML services entry** (**HA-MCP File & YAML Tools**), is only needed if you enable ha-mcp's opt-in file and YAML editing tools (feature flags, off by default) — skip it otherwise; you can add it later at any time. It works with any server type (in-process, app, Docker, or stdio).
 
@@ -226,7 +226,7 @@ If the original entry has been deleted, restore recreates the helper and reports
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (87 tools)</b></summary>
+<summary><b>Complete Tool List (86 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -242,7 +242,7 @@ If the original entry has been deleted, restore recreates the helper and reports
 | **Developer** | `ha_dev_manage_server`, `ha_dev_manage_settings` |
 | **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_set_device` |
 | **Energy** | `ha_manage_energy_prefs` |
-| **Entity Registry** | `ha_get_entity_exposure`, `ha_get_entity`, `ha_remove_entity`, `ha_set_entity` |
+| **Entity Registry** | `ha_get_entity`, `ha_remove_entity`, `ha_set_entity` |
 | **Files** | `ha_delete_file` *(beta)*, `ha_list_files` *(beta)*, `ha_read_file` *(beta)*, `ha_write_file` *(beta)* |
 | **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
 | **HACS** | `ha_get_hacs_info`, `ha_manage_hacs` |
@@ -262,6 +262,10 @@ If the original entry has been deleted, restore recreates the helper and reports
 
 <!-- TOOLS_TABLE_END -->
 </details>
+
+When calling a service with `ha_call_service`, pass its domain and service name
+separately, for example `domain="light"` and `service="turn_on"`. Use the exact
+lowercase names returned by `ha_list_services`, including any hyphens.
 
 Z-Wave configuration values can be read through `ha_manage_radio` with
 `action="get_config_params"` or `action="get_config_param"`, even when their
@@ -285,7 +289,7 @@ ha-mcp is a standalone server built for **configuring, building, and debugging**
 | Build & edit dashboards | No | Yes |
 | Debug automations from traces, read history & logs | No | Yes |
 | Manage helpers, areas, zones, labels, groups | No | Yes |
-| Backups, apps, HACS, device & entity registry | No | Yes |
+| Backups, apps, Marketplace, device & entity registry | No | Yes |
 
 **Rule of thumb:** Use the built-in integration for voice-style control of devices you have already exposed; use ha-mcp when you want an AI assistant that can also build and maintain your Home Assistant setup.
 
@@ -307,15 +311,17 @@ The **HA-MCP integration** also powers a set of privileged tools that standard H
 
 Template helper edit backups and restores also require the component, using either its Server entry or File & YAML Tools entry. These five tools return an error with installation instructions if the component is missing.
 
+A server that runs outside Home Assistant (the app, Docker or pip) needs the component of its own release for these tools. After a server update, update HA-MCP in the Marketplace and restart Home Assistant; until then they return an error that says so. The in-process server always runs the release its component ships with.
+
 These tools also require beta feature flags. See **[Beta Features](docs/beta.md)** for how to enable them — including the `ENABLE_BETA_FEATURES` master flag, which must be on before the filesystem/YAML sub-flags take effect.
 
 ### Install
 
 Install the **HA-MCP File & YAML Tools** entry from the same **HA-MCP integration**:
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
+[![Open your Home Assistant instance and open a repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
 
-Requires **Home Assistant 2026.8.0 or newer** through HACS or the Marketplace; see [compatibility details](docs/in-process-server.md#requirements) for manual installs. On Home Assistant 2026.8–2026.10: open **HACS**, search for **HA-MCP**, and **Download**. On 2026.11 or newer: open **Marketplace**, accept the first-run warning, search for **HA-MCP**, and **Install**. The main repository is in the default catalog for both. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
+Requires **Home Assistant 2026.11.0 or newer**; see [compatibility details](docs/in-process-server.md#requirements) for manual installs. Open **Marketplace**, accept the first-run warning, search for **HA-MCP**, and **Install**. The main repository is in the default catalog. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
 
 After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP**, and add the **HA-MCP File & YAML Tools** entry.
 
@@ -341,7 +347,7 @@ Skills can still be installed manually for clients that prefer local skill files
 
 ## 🔍 Tool Discovery for AI Agents
 
-By default, the full tool catalog (~87 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (claude.ai, Claude Desktop, Claude Code) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
+By default, the full tool catalog (~86 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (claude.ai, Claude Desktop, Claude Code) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
 
 For setups *without* deferred tool support — models like Claude Haiku, Gemini, OpenAI-compatible local models and smaller open-weights models, or clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI) — listing the full tool catalog up front adds a lot of idle context and can overwhelm smaller models. To address that, the server ships with a **search-based discovery mode** built on top of FastMCP's BM25 search transform.
 
@@ -376,7 +382,7 @@ A `ha_manage_*` tool combines several operations, so it is reachable from more t
 ### When to enable
 
 - **Claude Haiku, OpenAI-compatible local models, Gemini, or any model without native deferred tool support** — large idle-context savings. The same applies to clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI, even when running Claude Sonnet/Opus).
-- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 87.
+- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 86.
 - **Cost-sensitive deployments** — fewer idle tokens per turn.
 
 Leave it off in clients with deferred tool loading (claude.ai, Claude Desktop, Claude Code); the full catalog has no idle cost there, direct calls skip the search step, and the client's built-in tool search is the better choice — there is no benefit to running ha-mcp's on top of it. Whether tools are deferred depends on the client and model combination: the same model can behave differently per client — GitHub Copilot CLI running Claude Sonnet/Opus inlines the full catalog and still benefits from tool search here. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.

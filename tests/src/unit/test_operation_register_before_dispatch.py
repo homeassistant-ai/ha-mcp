@@ -7,21 +7,19 @@ finds a matching pending operation instead of being silently dropped. A dispatch
 that then RAISES must flip the just-registered operation to FAILED so a later,
 unrelated event for the same entity cannot spuriously complete it.
 
-The service call goes through the server's own client to a real ``hass``; the
-service handler stands in for the entity, and the ``state_changed`` the listener
-would deliver is applied from inside it, while the dispatch is in flight.
+The service call goes through the server's own client to a real ``hass`` and
+Core's ``light`` integration to a light device (``_switched_states``). The
+``state_changed`` events Core fires are handed to the operation manager as they
+fire, which is what the server's listener does, so each confirming state is
+Core's own.
 """
 
-from collections.abc import Iterator
-from unittest.mock import AsyncMock
-
 import pytest
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.const import EVENT_STATE_CHANGED
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools import device_control
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.utils.operation_manager import (
     OperationStatus,
@@ -29,37 +27,38 @@ from ha_mcp.utils.operation_manager import (
     update_pending_operations,
 )
 
+from ._operations import operations_without_listener as operations_without_listener
+from ._switched_states import set_up_devices
 
-@pytest.fixture(autouse=True)
-def _clear_operations(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    # The state_changed listener is this server's own service; the tests
-    # deliver its event themselves.
-    monkeypatch.setattr(
-        device_control, "start_websocket_listener", AsyncMock(return_value=False)
-    )
-    get_operation_manager().operations.clear()
-    yield
-    get_operation_manager().operations.clear()
+
+def _fed_to_operations(hass: HomeAssistant) -> list[str]:
+    """Hand each ``state_changed`` Core fires to the operation manager as it
+    fires, as the server's own listener does; the ids it completed."""
+    completed: list[str] = []
+
+    @callback
+    def _on_change(event: Event[EventStateChangedData]) -> None:
+        state = event.data["new_state"]
+        if state is not None:
+            completed.extend(
+                update_pending_operations(state.entity_id, dict(state.as_dict()))
+            )
+
+    hass.bus.async_listen(EVENT_STATE_CHANGED, _on_change)
+    return completed
 
 
 @pytest.mark.asyncio
 async def test_state_change_arriving_during_dispatch_is_not_dropped(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """A state_changed processed the instant call_service returns still completes
-    the operation — proving the op was registered before the dispatch."""
+    """A state_changed processed while call_service is still out completes the
+    operation, which proves the op was registered before the dispatch."""
     manager = get_operation_manager()
-    seen: dict[str, list[str]] = {"completed": []}
-
-    async def _fire_event_then_return(call: ServiceCall) -> None:
-        # The real race: the entity's state_changed lands (and the listener
-        # processes it) WHILE the dispatch call is in flight, before it returns
-        # to control_device_smart. Pre-fix, no op exists yet → dropped.
-        seen["completed"] = update_pending_operations(
-            "light.kitchen", {"state": "on", "attributes": {}}
-        )
-
-    hass.services.async_register("light", "turn_on", _fire_event_then_return)
+    await set_up_devices(hass, {"light.kitchen": "off"})
+    # The light turns on, and Core fires its state_changed, before the service
+    # call returns to control_device_smart.
+    completed = _fed_to_operations(hass)
 
     tools = DeviceControlTools(client=core_client)
     result = await tools.control_device_smart(
@@ -67,8 +66,7 @@ async def test_state_change_arriving_during_dispatch_is_not_dropped(
     )
 
     op_id = result["operation_id"]
-    # The event fired mid-dispatch matched the already-registered op.
-    assert op_id in seen["completed"]
+    assert op_id in completed
     assert manager.operations[op_id].status == OperationStatus.COMPLETED
 
 
@@ -95,7 +93,10 @@ async def test_dispatch_failure_marks_operation_failed(
     assert len(ops) == 1
     assert ops[0].status == OperationStatus.FAILED
     # A later, unrelated state event for the same entity must NOT complete it.
-    update_pending_operations("light.kitchen", {"state": "on", "attributes": {}})
+    completed = _fed_to_operations(hass)
+    hass.states.async_set("light.kitchen", "on")
+    await hass.async_block_till_done()
+    assert completed == []
     assert ops[0].status == OperationStatus.FAILED
 
 
@@ -108,14 +109,11 @@ async def test_landed_write_completed_mid_dispatch_is_not_downgraded(
     for an unrelated reason, ``fail_pending_operation`` must NOT downgrade the terminal
     COMPLETED status to FAILED and misreport a landed write."""
     manager = get_operation_manager()
-
-    async def _complete_then_raise(call: ServiceCall) -> None:
-        # The confirming event lands and completes the op WHILE the dispatch is in
-        # flight (the write reached HA); THEN the call raises for an unrelated reason.
-        update_pending_operations("light.kitchen", {"state": "on", "attributes": {}})
-        raise HomeAssistantError("post-landing failure")
-
-    hass.services.async_register("light", "turn_on", _complete_then_raise)
+    devices = await set_up_devices(hass, {"light.kitchen": "off"})
+    # The light turns on, so Core's state_changed completes the op while the
+    # dispatch is in flight; THEN the device fails the call.
+    devices.behaviour["light.kitchen"] = "fail_after"
+    completed = _fed_to_operations(hass)
 
     tools = DeviceControlTools(client=core_client)
     with pytest.raises(ToolError):
@@ -123,7 +121,11 @@ async def test_landed_write_completed_mid_dispatch_is_not_downgraded(
             entity_id="light.kitchen", action="on", validate_first=False
         )
 
+    light = hass.states.get("light.kitchen")
+    assert light is not None
+    assert light.state == "on"
     ops = list(manager.operations.values())
     assert len(ops) == 1
+    assert completed == [ops[0].operation_id]
     # The op completed mid-dispatch and MUST stay COMPLETED (not downgraded to FAILED).
     assert ops[0].status == OperationStatus.COMPLETED

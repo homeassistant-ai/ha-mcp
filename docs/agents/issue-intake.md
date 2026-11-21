@@ -94,7 +94,7 @@ sweep fails on does not stop it: the run handles the others, then goes red and
 names each issue that still failed when it tried to close or clear it. Admission waits for the gate, so a labeled issue is still
 documented.
 
-An issue transferred in from another repository (the HACS mirror files against
+An issue transferred in from another repository (the distribution mirror files against
 its own forms) is never labeled by the gate, so the sweep closes it only after
 a maintainer labels it by hand: if it arrives without a report or a reason, the
 gate posts one notice asking for it, so the reporter continues here instead of

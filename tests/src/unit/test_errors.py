@@ -192,12 +192,6 @@ class TestCreateAuthError:
         assert response["success"] is False
         assert response["error"]["code"] == "AUTH_INVALID_TOKEN"
 
-    def test_expired_token_error(self):
-        """Expired auth error should have AUTH_EXPIRED code."""
-        response = create_auth_error("Token expired", expired=True)
-
-        assert response["error"]["code"] == "AUTH_EXPIRED"
-
     def test_invalid_token_suggestions_non_addon(self, monkeypatch):
         """Off the add-on, an invalid token keeps the token-centric defaults
         (the long-lived-token advice)."""
@@ -236,16 +230,6 @@ class TestCreateAuthError:
         assert "HA-MCP Server" in joined
         assert "Replace the administrator access token" in joined
         assert "HOMEASSISTANT_TOKEN" not in joined
-        assert "Supervisor" not in joined
-
-    def test_expired_token_unaffected_by_addon(self, monkeypatch):
-        """Expired errors keep their own defaults even on the add-on — the
-        swap targets invalid-token only."""
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
-        response = create_auth_error("Token expired", expired=True)
-
-        assert response["error"]["code"] == "AUTH_EXPIRED"
-        joined = " ".join(response["error"].get("suggestions", []))
         assert "Supervisor" not in joined
 
 

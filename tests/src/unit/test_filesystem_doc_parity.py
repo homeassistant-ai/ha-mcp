@@ -31,6 +31,8 @@ def _load_const_standalone():
     spec = importlib.util.spec_from_file_location(
         "_ha_mcp_tools_const_parity", _COMPONENT_DIR / "const.py"
     )
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

@@ -10,7 +10,8 @@ from ...utils.device_registry_semantics import (
     build_device_registry_snapshot,
     effective_entity_area_id,
 )
-from ...visibility.resolver import load_hidden_set
+from ...visibility.resolver import core_device_list_reply, load_hidden_set
+from ..component_registries import registry_list_reply
 from ..helpers import exception_to_structured_error
 from ._base import _SearchBase
 from ._config import _simplify_states_summary
@@ -26,9 +27,9 @@ class SystemOverviewMixin(_SearchBase):
         states = await self.client.get_states()
         optional_results = await asyncio.gather(
             self.client.get_services(),
-            self.client.send_websocket_message({"type": "config/area_registry/list"}),
+            registry_list_reply(self.client, "area"),
             self.client.send_websocket_message({"type": "config/entity_registry/list"}),
-            self.client.send_websocket_message({"type": "config/device_registry/list"}),
+            core_device_list_reply(self.client),
             return_exceptions=True,
         )
         return [states, *optional_results]

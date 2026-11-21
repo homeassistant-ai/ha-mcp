@@ -45,8 +45,8 @@ from .resource_codec import (
     _is_preview_of,
     _looks_like_preview,
     _process_resource_list,
-    _summarize_resources,
     content_sha256,
+    summarize_resources,
 )
 from .resource_patch import (
     MAX_EDITS,
@@ -90,7 +90,7 @@ _LEGACY_MIGRATION_HINT = (
 # as a Lovelace module, creating orphaned, unreachable HA entities (see #1072).
 # Map: top-level key → the ha-mcp tool that creates that kind of config without
 # YAML (None where only YAML configuration can).
-_HA_CONFIG_YAML_MARKERS: dict[str, str | None] = {
+HA_CONFIG_YAML_MARKERS: dict[str, str | None] = {
     "automation": "ha_config_set_automation",
     "script": "ha_config_set_script",
     "scene": "ha_config_set_scene",
@@ -144,7 +144,7 @@ def _detect_ha_config_yaml(content: str) -> str | None:
         break
     if not first_line:
         return None
-    for domain in _HA_CONFIG_YAML_MARKERS:
+    for domain in HA_CONFIG_YAML_MARKERS:
         prefix = f"{domain}:"
         if first_line == prefix:
             # Block-form `automation:` exactly — unambiguous.
@@ -226,7 +226,7 @@ class ResourceTools:
         - List with full content: ha_config_list_dashboard_resources(include_content=True)
         - Verify an edit by hash: ha_config_list_dashboard_resources(include_hash=True)
 
-        Home Assistant 2026.6+ exposes resource management in the UI by default;
+        Home Assistant exposes resource management in the UI by default;
         API access works regardless of UI availability.
         """
         try:
@@ -242,7 +242,7 @@ class ResourceTools:
             else:
                 resources = []
 
-            by_type_counts, inline_count, decoded_by_index = _summarize_resources(
+            by_type_counts, inline_count, decoded_by_index = summarize_resources(
                 resources, offset, offset + limit
             )
 
@@ -369,12 +369,13 @@ class ResourceTools:
           a file and use url='/local/...' on such a deployment. (HA itself ships
           no CSP.)
         - url: External resource URL — /local/... (/config/www/; Marketplace
-          cards: /local/community/...), /hacsfiles/... (HACS cards) or
-          https://... (CDN). Supports all types: 'module', 'js', 'css', 'html'.
+          cards: /local/community/...), /hacsfiles/... (the older path
+          for the same folder) or https://... (CDN). Supports all types:
+          'module', 'js', 'css', 'html'.
 
         EXAMPLES:
         - Inline: ha_config_set_dashboard_resource(content="class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);", resource_type="module")
-        - Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.
+        - Store cards need no call: in storage mode the Marketplace registers the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.
         - Update: ha_config_set_dashboard_resource(url="/local/my-card-v2.js", resource_type="module", resource_id="abc123")
         - Patch: ha_config_set_dashboard_resource(resource_id="abc123", edits=[{"old": "color: red", "new": "color: blue"}], config_hash="<_config_hash from the list>")
 
@@ -460,7 +461,7 @@ class ResourceTools:
         self, detected_yaml: str, resource_type: str
     ) -> NoReturn:
         """Raise the structured error for HA-config YAML misrouted as inline resource content."""
-        right_tool = _HA_CONFIG_YAML_MARKERS[detected_yaml]
+        right_tool = HA_CONFIG_YAML_MARKERS[detected_yaml]
         if right_tool:
             first = f"For `{detected_yaml}:` configuration, use {right_tool} instead"
         else:

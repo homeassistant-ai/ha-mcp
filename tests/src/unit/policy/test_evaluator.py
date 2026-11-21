@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from ha_mcp.policy.evaluator import (
@@ -9,7 +11,7 @@ from ha_mcp.policy.evaluator import (
     match_rule,
     normalize_stringified_containers,
 )
-from ha_mcp.policy.model import Policy, Predicate, Rule
+from ha_mcp.policy.model import Policy, Predicate, PredicateOp, Rule
 
 
 # --- iter_path_values ---
@@ -83,13 +85,14 @@ class TestMatchPredicate:
     def test_missing_path_never_matches_except_exists(self):
         # Use op-appropriate values so the Predicate field_validator doesn't
         # reject at construction; we're testing the matcher's missing-path branch.
-        for op, value in [
+        cases: list[tuple[PredicateOp, Any]] = [
             ("eq", "anything"),
             ("in", ["anything"]),
             ("regex", "anything"),
             ("contains", "anything"),
             ("gt", 1),
-        ]:
+        ]
+        for op, value in cases:
             p = Predicate(path="args.x", op=op, value=value)
             assert match_predicate(p, {}) is False
 
@@ -596,7 +599,7 @@ class TestBulkSelectorFailSafe:
         """Documents the exact bypass a raw ``evaluate()`` call is vulnerable to.
 
         This is what ``evaluate()`` sees BEFORE ``PolicyMiddleware`` applies
-        ``normalize_stringified_containers`` (see test_middleware.py's
+        ``normalize_stringified_containers`` (see test_middleware_gating.py's
         end-to-end coverage) -- a client that sends ``selector`` as a JSON
         string (Claude Desktop stdio does this; see
         ``tools/coercion.py``'s ``JSON_STRING_COERCION``) makes

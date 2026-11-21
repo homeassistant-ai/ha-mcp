@@ -2,14 +2,12 @@
 
 Two repositories carry the ``ha_mcp_tools`` component: the main repository,
 which the default catalog lists, and the distribution mirror earlier installs
-came from. Both extract to ``custom_components/ha_mcp_tools``. The
-Marketplace (Home Assistant 2026.11+) refuses to install a repository whose
-integration another installed repository owns. HACS never checked, so a
-download of the second repository on Home Assistant 2026.10 or older left both
-records claiming the directory, and after the 2026.11 upgrade the Marketplace
-refuses to update either (#2993). The server's own install guidance names the
-main repository, so a download of either repository goes to the one that is
-installed.
+came from. Both extract to ``custom_components/ha_mcp_tools``, and the
+Marketplace refuses to install a repository whose integration another
+installed repository owns. Installs from before the Marketplace can hold both
+records, and the Marketplace then refuses to update either (#2993). The
+server's own install guidance names the main repository, so a download of
+either repository goes to the one that is installed.
 """
 
 from __future__ import annotations
@@ -18,17 +16,21 @@ import logging
 import re
 from typing import Any
 
-from ..client.rest_client import HomeAssistantCommandError, HomeAssistantCommandTimeout
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from ..hacs_auto_refresh import CANDIDATE_REPO_FULL_NAMES
-from .hacs_backend import StoreApi, is_owned_directory_refusal
+from .hacs_backend import LIST, is_owned_directory_refusal
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
 
 MAIN_REPOSITORY = "homeassistant-ai/ha-mcp"
 MIRROR_REPOSITORY = "homeassistant-ai/ha-mcp-integration"
-# The stores use the GitHub repository id, fixed for a repository's lifetime.
+# The Marketplace uses the GitHub repository id, fixed for a repository's lifetime.
 OWN_REPOSITORY_IDS = {"1056618941": MAIN_REPOSITORY, "1289599380": MIRROR_REPOSITORY}
 
 # The two repositories tag releases alike, but not development builds:
@@ -67,34 +69,36 @@ def _own_name(repo: dict[str, Any]) -> str | None:
     return None
 
 
-async def installed_own_records(
-    ws_client: Any, api: StoreApi
-) -> list[dict[str, Any]] | None:
-    """The store's records for ha-mcp's own repositories that are installed,
-    or None when the store could not be asked."""
+async def installed_own_records(ws_client: Any) -> list[dict[str, Any]] | None:
+    """The Marketplace's records for ha-mcp's own repositories that are
+    installed, or None when it could not be asked."""
     try:
-        response = await ws_client.send_command(api.command("list"))
+        response = await ws_client.send_command(LIST)
     except HomeAssistantCommandError, HomeAssistantCommandTimeout:
-        logger.debug("Could not list the store's repositories", exc_info=True)
+        logger.debug("Could not list the Marketplace's repositories", exc_info=True)
         return None
-    listed = response.get("result") if isinstance(response, dict) else None
-    repos = [dict(r) for r in (listed or []) if isinstance(r, dict)]
+    repos = [dict(r) for r in response.get("result") or [] if isinstance(r, dict)]
     return [r for r in repos if _own_name(r) and r.get("installed")]
 
 
 async def ownership_refusal_records(
-    ws_client: Any, api: StoreApi, err: HomeAssistantCommandError
+    ws_client: Any, err: HomeAssistantCommandError
 ) -> list[str] | None:
-    """For a store refusal, the installed own records' names, so the refusal
-    can be explained; None for any other error, with no store call."""
+    """For a Marketplace refusal, the installed own records' names, so the
+    refusal can be explained; None for any other error, with no store call."""
     if not is_owned_directory_refusal(err):
         return None
-    records = await installed_own_records(ws_client, api)
+    try:
+        records = await installed_own_records(ws_client)
+    except HomeAssistantConnectionError:
+        # Core's refusal goes to the caller without the records, not this error.
+        logger.debug("Lost the connection listing the records", exc_info=True)
+        return None
     return [str(r.get("full_name")) for r in records or []]
 
 
 async def route_own_repository_download(
-    ws_client: Any, api: StoreApi, repository_id: str, version: str | None
+    ws_client: Any, repository_id: str, version: str | None
 ) -> tuple[str, str | None, str | None]:
     """Return the repository and version to download, and a note when rerouted.
 
@@ -103,38 +107,18 @@ async def route_own_repository_download(
     own, the installed one wins: a request for the other repository is
     rerouted to it, so the mirror keeps updating from the mirror and the main
     repository from the catalog, and a development ref is renamed the way the
-    target tags it. With two installed records the store decides: the
-    Marketplace refuses the download itself and that refusal is explained
-    where it is raised; HACS still downloads, with a warning.
+    target tags it. With two installed records the Marketplace refuses the
+    download itself, and that refusal is explained where it is raised.
     """
     wanted = repository_id.strip().lower()
     wanted = OWN_REPOSITORY_IDS.get(wanted, wanted)
     if wanted not in {n.lower() for n in CANDIDATE_REPO_FULL_NAMES}:
         return repository_id, version, None
 
-    installed = await installed_own_records(ws_client, api)
-    if installed is None:
-        # The download itself reports the store's trouble, with its own context
-        return repository_id, version, None
-    if len(installed) > 1:
-        if api.is_marketplace:
-            # The Marketplace refuses this download itself; raise_store_error
-            # explains the refusal with the way out.
-            return repository_id, version, None
-        names = " and ".join(str(r.get("full_name")) for r in installed)
-        # HACS never checked ownership, so the download still works there and
-        # is the way to bring in the release whose repair keeps one listing.
-        note = (
-            f"{names} are both installed and both claim "
-            "custom_components/ha_mcp_tools. HACS still updates either, but the "
-            "Marketplace in Home Assistant 2026.11 will refuse to. After this "
-            "download restart Home Assistant and run the repair under Settings > "
-            f"System > Repairs, which keeps {MAIN_REPOSITORY}. If no repair "
-            "appears, the installed release predates it: update to a current "
-            "release or follow the manual route in the FAQ."
-        )
-        return repository_id, version, note
-    if not installed or _own_name(installed[0]) == wanted:
+    installed = await installed_own_records(ws_client)
+    # An unanswered list is the download's to report; two installed records
+    # are the Marketplace's to refuse.
+    if not installed or len(installed) > 1 or _own_name(installed[0]) == wanted:
         return repository_id, version, None
     owner = str(installed[0].get("full_name"))
     if version and not _tagged_alike(version):

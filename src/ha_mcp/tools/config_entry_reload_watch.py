@@ -25,13 +25,13 @@ _TRANSIENT_RECONFIGURE_STATES = frozenset(
 )
 
 #: Wall-clock budget for observing the post-commit reload settle.
-_RELOAD_SETTLE_TIMEOUT = 20.0
+RELOAD_SETTLE_TIMEOUT = 20.0
 _ENTRY_SUBSCRIBE_TIMEOUT = 10.0
 #: Budget for everything before the commit is visible — the baseline fragment
 #: and then the ``modified_at`` bump. A resubmit of identical values never
 #: bumps it, and stalling the full settle budget for that only delays an
 #: unverified answer.
-_COMMIT_VISIBLE_TIMEOUT = 5.0
+COMMIT_VISIBLE_TIMEOUT = 5.0
 WS_CONFIG_ENTRIES_SUBSCRIBE = "config_entries/subscribe"
 
 
@@ -146,7 +146,7 @@ def _is_post_commit(entry: dict[str, Any], baseline: float) -> bool:
 
 
 async def _observe_reload_settled(
-    queue: Any, entry_id: str, *, timeout: float = _RELOAD_SETTLE_TIMEOUT
+    queue: Any, entry_id: str, *, timeout: float = RELOAD_SETTLE_TIMEOUT
 ) -> dict[str, Any] | None:
     """Consume entry-change events until the POST-COMMIT reload settles.
 
@@ -169,12 +169,12 @@ async def _observe_reload_settled(
 
     Resubmitting identical values is the deliberate gap: ``async_update_entry``
     returns early on ``not changed``, so nothing bumps ``modified_at`` and
-    nothing is attributable. Give up once ``_COMMIT_VISIBLE_TIMEOUT`` passes
+    nothing is attributable. Give up once ``COMMIT_VISIBLE_TIMEOUT`` passes
     rather than stalling the whole settle budget for no answer.
     """
     loop = asyncio.get_running_loop()
     reader = _EntryFragmentReader(queue, entry_id)
-    commit_deadline = loop.time() + min(_COMMIT_VISIBLE_TIMEOUT, timeout)
+    commit_deadline = loop.time() + min(COMMIT_VISIBLE_TIMEOUT, timeout)
     settle_deadline = loop.time() + timeout
 
     first = await reader.next(commit_deadline)
@@ -227,7 +227,10 @@ async def watch_entry_reload(
         if subscription is None:
             return None
         try:
-            return await _observe_reload_settled(subscription[1][1], entry_id)
+            # Named here, not left to the default, so it is read at each wait.
+            return await _observe_reload_settled(
+                subscription[1][1], entry_id, timeout=RELOAD_SETTLE_TIMEOUT
+            )
         except Exception as err:  # noqa: BLE001
             logger.warning("Entry-change stream failed after commit (%r)", err)
             return None

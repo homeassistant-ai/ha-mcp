@@ -17,16 +17,16 @@ import html
 
 import pytest
 
-from .test_settings_ui_js_behavior import _probe
-from .test_settings_ui_policy_and_conditions import (
+from ._settings_ui_js_helpers import probe
+from ._settings_ui_policy_conditions import (
     FAILED_CHANGES,
     LIGHT,
     LOCK,
     RESTART,
-    _policy,
-    _run,
-    _saved_rules,
-    _two_conditions,
+    make_policy,
+    run,
+    saved_rules,
+    two_conditions,
 )
 
 
@@ -49,9 +49,9 @@ def test_allow_list_asks_before_a_change_that_approves_more(
 ) -> None:
     """The user declines every question, so a change that asks is not
     saved. Under a require-approval list nothing asks."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions(effect),
+        two_conditions(effect),
         """
           let asked = 0;
           window.confirm = () => { asked += 1; return false; };
@@ -61,8 +61,8 @@ def test_allow_list_asks_before_a_change_that_approves_more(
           document.body.setAttribute('data-asked', String(asked));
         """,
     )
-    assert _probe(result, "asked") == ("1" if asks else "0")
-    assert len(_saved_rules(result)) == (0 if asks else 1)
+    assert probe(result, "asked") == ("1" if asks else "0")
+    assert len(saved_rules(result)) == (0 if asks else 1)
 
 
 @pytest.mark.parametrize(
@@ -80,9 +80,9 @@ def test_a_condition_that_can_never_match_is_not_saved(
     """``domain eq lock AND domain eq light`` never matches, so in a
     require-approval list it is a gate that never fires. The save is
     refused with the reason, not saved with a warning."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions(effect),
+        two_conditions(effect),
         """
           await click('.policy-and-predicate[data-idx="0"]');
           await fill('args.domain', '"light"');
@@ -90,8 +90,8 @@ def test_a_condition_that_can_never_match_is_not_saved(
           document.body.setAttribute('data-toast', region ? region.textContent : '');
         """,
     )
-    assert _saved_rules(result) == []
-    toast = html.unescape(_probe(result, "toast") or "")
+    assert saved_rules(result) == []
+    toast = html.unescape(probe(result, "toast") or "")
     assert "No single value of" in toast
     assert f'use "{advice}"' in toast
 
@@ -127,9 +127,9 @@ def test_tab_reload_waits_for_a_pending_card_save(settings_script: str) -> None:
     """A reload that read the policy before the save landed rebuilt the
     cards from the old policy; the next edit on the card then wrote the old
     conditions back."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         COUNT_JS
         + """
           activateTab('tool-security-policies');
@@ -138,15 +138,15 @@ def test_tab_reload_waits_for_a_pending_card_save(settings_script: str) -> None:
           document.body.setAttribute('data-reads', String(reads));
         """,
     )
-    assert _probe(result, "most") == "1"
+    assert probe(result, "most") == "1"
     # The save's read, then the reload's.
-    assert int(_probe(result, "reads") or 0) >= 2
+    assert int(probe(result, "reads") or 0) >= 2
 
 
 def test_global_save_waits_for_a_pending_card_save(settings_script: str) -> None:
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         COUNT_JS
         + """
           document.getElementById('policy-save-global-btn').click();
@@ -154,17 +154,17 @@ def test_global_save_waits_for_a_pending_card_save(settings_script: str) -> None
           document.body.setAttribute('data-most', String(most));
         """,
     )
-    assert _probe(result, "most") == "1"
-    assert len(_saved_rules(result)) == 2
+    assert probe(result, "most") == "1"
+    assert len(saved_rules(result)) == 2
 
 
 def test_pin_removal_waits_for_a_pending_card_save(settings_script: str) -> None:
     """Removing the PIN can switch event decisions off by saving the policy,
     which bumps its version: sent during a card save, the card save failed
     with a version conflict blamed on another tab."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         COUNT_JS
         + """
           document.getElementById('policy-clear-pin-btn').click();
@@ -172,16 +172,16 @@ def test_pin_removal_waits_for_a_pending_card_save(settings_script: str) -> None
           document.body.setAttribute('data-most', String(most));
         """,
     )
-    assert _probe(result, "most") == "1"
+    assert probe(result, "most") == "1"
     assert any(f["method"] == "DELETE" for f in result.fetches)
 
 
 def test_a_save_on_another_card_waits_for_a_pending_one(settings_script: str) -> None:
     """The queue is shared by every card: a save on one card waits for a
     pending save on another."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         COUNT_JS
         + """
           const minutes = document.querySelector(
@@ -192,16 +192,16 @@ def test_a_save_on_another_card_waits_for_a_pending_one(settings_script: str) ->
           document.body.setAttribute('data-most', String(most));
         """,
     )
-    assert _probe(result, "most") == "1"
-    saved = _saved_rules(result)
+    assert probe(result, "most") == "1"
+    saved = saved_rules(result)
     assert len(saved) == 2
     assert {**RESTART, "remember_minutes": 9} in saved[1]
 
 
 def test_a_failed_write_does_not_stop_the_next_one(settings_script: str) -> None:
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         """
           policyWriteOnce(async () => { throw new Error('boom'); }).catch(() => {});
           const minutes = document.querySelector('.policy-rule-card .policy-remember-minutes');
@@ -210,7 +210,7 @@ def test_a_failed_write_does_not_stop_the_next_one(settings_script: str) -> None
           await sleep(800);
         """,
     )
-    saved = _saved_rules(result)
+    saved = saved_rules(result)
     assert len(saved) == 1
     assert {"tool_name": "ha_call_service", "when": [LOCK], "remember_minutes": 7} in (
         saved[0]
@@ -220,9 +220,9 @@ def test_a_failed_write_does_not_stop_the_next_one(settings_script: str) -> None
 def test_remember_change_on_a_rebuilt_card_is_reported(settings_script: str) -> None:
     """The cards were rebuilt from the server before the remember save went
     out: it is not sent from the old card, and the user is told."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         """
           const minutes = document.querySelector('.policy-rule-card .policy-remember-minutes');
           minutes.value = '7';
@@ -233,9 +233,9 @@ def test_remember_change_on_a_rebuilt_card_is_reported(settings_script: str) -> 
           document.body.setAttribute('data-toast', region ? region.textContent : '');
         """,
     )
-    assert _saved_rules(result) == []
+    assert saved_rules(result) == []
     assert "reloaded before this change was saved" in (
-        html.unescape(_probe(result, "toast") or "")
+        html.unescape(probe(result, "toast") or "")
     )
 
 
@@ -277,9 +277,9 @@ TOOLS_FETCHES = {
 def test_tools_tab_gate_waits_for_a_pending_card_save(settings_script: str) -> None:
     """Sent during a card save, the gate switch failed with a version
     conflict blamed on another tab and rolled back."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         COUNT_JS
         + """
           const box = document.querySelector('input[name="tool:ha_get_state:gated"]');
@@ -290,8 +290,8 @@ def test_tools_tab_gate_waits_for_a_pending_card_save(settings_script: str) -> N
         """,
         fetches=TOOLS_FETCHES,
     )
-    assert _probe(result, "most") == "1"
-    assert len(_saved_rules(result)) == 2
+    assert probe(result, "most") == "1"
+    assert len(saved_rules(result)) == 2
     assert not result.alerts
 
 
@@ -300,9 +300,9 @@ def test_remember_change_after_a_gate_switch_is_reported(
 ) -> None:
     """The gate switch changed the tool's rules on the server; a remember save
     still queued from the card would write the card's old rules back."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         """
           const minutes = document.querySelector('.policy-rule-card .policy-remember-minutes');
           minutes.value = '7';
@@ -313,9 +313,9 @@ def test_remember_change_after_a_gate_switch_is_reported(
           document.body.setAttribute('data-toast', region ? region.textContent : '');
         """,
     )
-    assert len(_saved_rules(result)) == 1
+    assert len(saved_rules(result)) == 1
     assert "reloaded before this change was saved" in (
-        html.unescape(_probe(result, "toast") or "")
+        html.unescape(probe(result, "toast") or "")
     )
 
 
@@ -324,9 +324,9 @@ def test_remember_change_on_a_removed_tool_is_dropped_quietly(
 ) -> None:
     """After "Remove from policy" the pending remember save has nothing to
     save, and telling the user to make the change again would be wrong."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         """
           // The server no longer lists the tool once its removal is saved.
           const realFetch = window.fetch;
@@ -350,8 +350,8 @@ def test_remember_change_on_a_removed_tool_is_dropped_quietly(
           document.body.setAttribute('data-toast', region ? region.textContent : '');
         """,
     )
-    assert _saved_rules(result) == [[RESTART]]
-    assert "reloaded before" not in html.unescape(_probe(result, "toast") or "")
+    assert saved_rules(result) == [[RESTART]]
+    assert "reloaded before" not in html.unescape(probe(result, "toast") or "")
 
 
 def test_remember_save_status_shows_on_the_current_card(
@@ -360,9 +360,9 @@ def test_remember_save_status_shows_on_the_current_card(
     """A condition save re-renders the card while the remember save waits
     behind it; the remember save's status must reach the card on the page,
     not the one it replaced."""
-    result = _run(
+    result = run(
         settings_script,
-        _two_conditions("require_approval"),
+        two_conditions("require_approval"),
         COUNT_JS
         + """
           const minutes = document.querySelector('.policy-rule-card .policy-remember-minutes');
@@ -373,8 +373,8 @@ def test_remember_save_status_shows_on_the_current_card(
             '.policy-rule-card[data-tool="ha_call_service"] .policy-save-status').textContent);
         """,
     )
-    assert len(_saved_rules(result)) == 2
-    assert _probe(result, "status") == "Saved."
+    assert len(saved_rules(result)) == 2
+    assert probe(result, "status") == "Saved."
 
 
 def test_conditions_that_never_match_can_be_removed_one_at_a_time(
@@ -384,14 +384,14 @@ def test_conditions_that_never_match_can_be_removed_one_at_a_time(
     one keeps the other unchanged, and that save must not be refused for it."""
     dead_a = [LIGHT, LOCK]
     dead_b = [LIGHT, {**LIGHT, "op": "neq"}]
-    policy = _policy(
+    policy = make_policy(
         "require_approval",
         [
             {"tool_name": "ha_call_service", "when": dead_a, "remember_minutes": 0},
             {"tool_name": "ha_call_service", "when": dead_b, "remember_minutes": 0},
         ],
     )
-    result = _run(
+    result = run(
         settings_script,
         policy,
         """
@@ -399,7 +399,7 @@ def test_conditions_that_never_match_can_be_removed_one_at_a_time(
           await sleep(200);
         """,
     )
-    assert _saved_rules(result) == [
+    assert saved_rules(result) == [
         [
             {"tool_name": "ha_call_service", "when": dead_b, "remember_minutes": 0},
             RESTART,
@@ -413,9 +413,9 @@ def test_a_failed_write_nobody_awaits_is_not_swallowed(settings_script: str) -> 
     unhandledrejection handler, which the harness reports by failing the
     run, rather than vanish inside the queue."""
     with pytest.raises(Exception, match="queued-boom"):
-        _run(
+        run(
             settings_script,
-            _two_conditions("require_approval"),
+            two_conditions("require_approval"),
             """
               policyWriteOnce(async () => { throw new Error('queued-boom'); });
               await sleep(200);

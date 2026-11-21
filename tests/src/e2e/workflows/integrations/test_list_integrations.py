@@ -408,9 +408,7 @@ class TestIntegrationFiltering:
         options flow (#2987) and warns instead of passing ``{}`` off as real.
 
         The test creates its own entry with known options: a Times of the
-        Day helper keeps its times in options. The seeded HACS entry used to
-        serve, but Home Assistant 2026.11 hands it to the Marketplace, which
-        has no options at all.
+        Day helper keeps its times in options.
         """
         logger.info("Testing ha_get_integration with include_options=True...")
 

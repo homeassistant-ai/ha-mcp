@@ -29,6 +29,8 @@ from ha_mcp.tools.component_config_reads import (
     fetch_entity_lookup_via_component,
 )
 
+from ._core_setup import with_config_component
+
 KEY = "storage_key"
 Domain = Literal["scene", "script"]
 
@@ -53,7 +55,12 @@ class PollClock:
 
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> PollClock:
-    """Advance polling time without sleeping or changing the event loop clock."""
+    """Advance polling time without sleeping or changing the event loop clock.
+
+    The budget runs out on this clock alone. The real-time cap around the
+    loop is lifted, so Core taking longer to answer a lookup than the budget
+    allows cannot end the poll early; the stalled-lookup test keeps the cap.
+    """
     clock = PollClock()
     monkeypatch.setattr(
         registration, "time", SimpleNamespace(monotonic=clock.monotonic)
@@ -61,7 +68,9 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> PollClock:
     monkeypatch.setattr(
         registration,
         "asyncio",
-        SimpleNamespace(sleep=clock.sleep, timeout=asyncio.timeout),
+        SimpleNamespace(
+            sleep=clock.sleep, timeout=lambda _delay: asyncio.timeout(None)
+        ),
     )
     return clock
 
@@ -84,8 +93,7 @@ async def legacy_client(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> HomeAssistantClient:
     """No component: the lookup reads Core's entity registry commands."""
-    assert await async_setup_component(hass, "config", {})
-    return core_client
+    return await with_config_component(hass, core_client)
 
 
 def _platform(domain: Domain) -> str:

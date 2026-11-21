@@ -3,15 +3,9 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from packaging.version import InvalidVersion, Version
-
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
+from .entity_registry_reads import NotInRegistry
 from .helpers import clearable_value, raise_tool_error
-
-# Home Assistant release that reads an empty entity-name override as "use the
-# device name" (home-assistant/core#181576). Older Cores store "" but render
-# the default name, so the switch would silently do the opposite there.
-USE_DEVICE_NAME_MIN_CORE = (2026, 10)
 
 
 def reject_name_with_use_device_name(
@@ -32,11 +26,6 @@ def reject_name_with_use_device_name(
         )
 
 
-def uses_device_name(entry: dict[str, Any]) -> bool:
-    """An empty name override follows the device name; without a device there is nothing to follow."""
-    return entry.get("name") == "" and bool(entry.get("device_id"))
-
-
 def reject_use_device_name_without_device(
     entity_id: str, entry: dict[str, Any]
 ) -> None:
@@ -55,55 +44,50 @@ def reject_use_device_name_without_device(
 
 async def ensure_use_device_name_allowed(
     use_device_name: bool | None,
-    client: Any,
     entity_id: str,
     fetch_entity: Callable[[str], Awaitable[dict[str, Any]]],
-) -> None:
-    """use_device_name=True needs a 2026.10 Core and an entity with a device."""
+) -> dict[str, Any] | None:
+    """use_device_name=True needs an entity with a device.
+
+    Returns the entry it read for use_device_name=True (the main-entity
+    write is built from it), else None.
+    """
     if not use_device_name:
-        return
-    await ensure_use_device_name_supported(client)
+        return None
     try:
         current = await fetch_entity(entity_id)
-    except ValueError as e:
+    except NotInRegistry:
         raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Entity not found: {e}",
-                context={"entity_id": entity_id},
-                suggestions=["Use ha_search() to find valid entity IDs"],
+            create_entity_not_found_error(
+                entity_id, details=f"{entity_id} has no entity registry entry."
             )
         )
     reject_use_device_name_without_device(entity_id, current)
+    return current
 
 
-async def ensure_use_device_name_supported(client: Any) -> None:
-    """Refuse use_device_name=True on a Core older than 2026.10."""
-    config = await client.get_config()
-    raw = str(config.get("version", ""))
-    try:
-        release = Version(raw).release[:2]
-    except InvalidVersion:
-        release = None
-    if release is not None and tuple(release) >= USE_DEVICE_NAME_MIN_CORE:
-        return
-    detail = (
-        f"this Core reports {raw} and would show the default name instead"
-        if release is not None
-        else f"this Core's version {raw!r} could not be parsed, so support "
-        "cannot be confirmed"
-    )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"use_device_name needs Home Assistant 2026.10 or newer; {detail}",
-            context={"ha_version": raw},
-            suggestions=[
-                "Upgrade Home Assistant to 2026.10 or newer",
-                "Pass name='<device name>' to set the device's name as a fixed custom name",
-            ],
-        )
-    )
+def is_main_entity(entry: dict[str, Any]) -> bool:
+    """An entity with no name of its own is the main entity of its device."""
+    own_name = entry.get("name")
+    if own_name is None:
+        own_name = entry.get("original_name")
+    return not own_name
+
+
+def main_entity_fields(entry: dict[str, Any]) -> dict[str, Any]:
+    """What the entity dialog's "Main entity of the device" switch writes.
+
+    The main entity gets its unchanged name back, as the dialog sends it, so
+    Core changes nothing and returns the entry. Otherwise "" overrides an
+    integration name (None is enough without one) and the entity leaves its
+    own area for the device's.
+    """
+    if is_main_entity(entry):
+        return {"name": entry.get("name")}
+    fields: dict[str, Any] = {"name": "" if entry.get("original_name") else None}
+    if entry.get("area_id"):
+        fields["area_id"] = None
+    return fields
 
 
 def build_name_visibility_fields(
@@ -114,8 +98,12 @@ def build_name_visibility_fields(
     icon: str | None,
     device_class: str | None,
     use_device_name: bool | None = None,
+    entry: dict[str, Any] | None = None,
 ) -> None:
-    """Add basic positioning/appearance fields to the update message."""
+    """Add basic positioning/appearance fields to the update message.
+
+    ``entry`` is the current registry entry, read for use_device_name=True.
+    """
     if area_id is not None:
         area_id = clearable_value(area_id, "area_id")
         message["area_id"] = area_id
@@ -124,11 +112,22 @@ def build_name_visibility_fields(
         name = clearable_value(name, "name")
         message["name"] = name
         updates_made.append(f"name='{name}'" if name else "name cleared")
-    if use_device_name is not None:
-        message["name"] = "" if use_device_name else None
+    if use_device_name is False:
+        message["name"] = None
+        updates_made.append("name cleared")
+    elif use_device_name:
+        assert entry is not None  # read by ensure_use_device_name_allowed
+        already_main = is_main_entity(entry)
+        fields = main_entity_fields(entry)
+        # An explicit area_id goes to Core, which refuses it on a main entity
+        if area_id is not None:
+            fields.pop("area_id", None)
+        message.update(fields)
         updates_made.append(
-            "name follows device" if use_device_name else "name cleared"
+            "already the main entity" if already_main else "main entity of the device"
         )
+        if "area_id" in fields:
+            updates_made.append("area cleared: follows the device's area")
     if icon is not None:
         icon = clearable_value(icon, "icon")
         message["icon"] = icon

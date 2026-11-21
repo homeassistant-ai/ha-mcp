@@ -23,7 +23,7 @@ env:
   PYTHON_VERSION: "3.14"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.11.1"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.11.2"
   # Disable Testcontainers' Ryuk reaper: it has been reported to leave
   # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
   # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
@@ -41,13 +41,15 @@ jobs:
   # user-facing markdown counts as code. On non-PR events (manual dispatch)
   # always run. Consumed by e2e-validation's `if:` below — a job-level skip
   # reports Success to a required check (a workflow path-skip would not).
-  # The HACS component shares the server's version and pins the server build
-  # it runs (#2427). semantic-release stamps all four places in each release
+  # The component shares the server's version and pins the server build
+  # it runs (#2427). semantic-release stamps all five places in each release
   # commit (pyproject's project.version, the manifest's version and ha-mcp pin,
-  # const.py's COMPONENT_VERSION); this fails a PR that edits
-  # one of them by hand, which would ship a component reporting a version, or
-  # pinning a server, other than the release it is part of. The job keeps its
-  # old name so a branch rule requiring it stays satisfied.
+  # const.py's COMPONENT_VERSION, tools_filesystem.py's MIN_COMPONENT_VERSION).
+  # This gate fails a PR that moves one of the component's three away from
+  # pyproject's version, which would ship a component reporting a version, or
+  # pinning a server, other than the release it is part of; the floor is held
+  # by tests/src/unit/test_component_floor.py, not here. The job keeps its old
+  # name so a branch rule requiring it stays satisfied.
   component-version-gate:
     name: Component Version Gate
     runs-on: ubuntu-latest
@@ -159,7 +161,7 @@ jobs:
     # variants: it always runs, passes when the suite was skipped (docs/website)
     # or every variant succeeded, and fails if any variant failed.
     name: E2E Validation Gate
-    needs: [changes, e2e-validation, e2e-validation-no-component, e2e-validation-embedded, e2e-validation-embedded-server-only, e2e-validation-update-path]
+    needs: [changes, e2e-validation, e2e-validation-embedded, e2e-validation-update-path]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -181,25 +183,20 @@ jobs:
             exit 0
           fi
           container_result="${{ needs.e2e-validation.result }}"
-          no_component_result="${{ needs.e2e-validation-no-component.result }}"
           embedded_result="${{ needs.e2e-validation-embedded.result }}"
-          server_only_result="${{ needs.e2e-validation-embedded-server-only.result }}"
           update_path_result="${{ needs.e2e-validation-update-path.result }}"
           echo "e2e-validation result: $container_result"
-          echo "e2e-validation-no-component result: $no_component_result"
           echo "e2e-validation-embedded result: $embedded_result"
-          echo "e2e-validation-embedded-server-only result: $server_only_result"
           echo "e2e-validation-update-path result: $update_path_result"
-          # The container-backend matrix, the component-absent container lane,
-          # the in-process MCP server lane, the server-entry-only embedded lane,
-          # AND the update-path lane must all pass. Any one failing wedges the
-          # required gate.
-          if [ "$container_result" != "success" ] || [ "$no_component_result" != "success" ] || [ "$embedded_result" != "success" ] || [ "$server_only_result" != "success" ] || [ "$update_path_result" != "success" ]; then
+          # The container matrix (whose x64 row covers both tool-entry states),
+          # the embedded matrix and the update-path lane must all pass. Any one
+          # failing wedges the required gate.
+          if [ "$container_result" != "success" ] || [ "$embedded_result" != "success" ] || [ "$update_path_result" != "success" ]; then
             # `skipped` here is NOT the docs-only skip (that exited 0 above): the
             # lanes never started, e.g. the run was cancelled.
-            case "$container_result$no_component_result$embedded_result$server_only_result$update_path_result" in
-              *skipped*) echo "::error::E2E Validation lanes did not start (results: container=$container_result, no-component=$no_component_result, embedded=$embedded_result, embedded-server-only=$server_only_result, update-path=$update_path_result) — the run may have been cancelled." ;;
-              *) echo "::error::E2E Validation did not succeed (container=$container_result, no-component=$no_component_result, embedded=$embedded_result, embedded-server-only=$server_only_result, update-path=$update_path_result)." ;;
+            case "$container_result$embedded_result$update_path_result" in
+              *skipped*) echo "::error::E2E Validation lanes did not start (results: container=$container_result, embedded=$embedded_result, update-path=$update_path_result) — the run may have been cancelled." ;;
+              *) echo "::error::E2E Validation did not succeed (container=$container_result, embedded=$embedded_result, update-path=$update_path_result)." ;;
             esac
             exit 1
           fi
@@ -227,8 +224,7 @@ jobs:
   # of noisy downstream reds: read the FIRST red step, not the last.
   #
   # ORDER IS LOAD-BEARING: HACS and Hassfest validate the checkout as
-  # committed (minus the vendored fixtures, removed just for Hassfest below),
-  # so they run before ANY step that executes PR-controlled code — `uv sync`
+  # committed, so they run before ANY step that executes PR-controlled code — `uv sync`
   # builds this project via its PR-supplied PEP 517 backend, and the
   # lock/constraint/lint steps run PR-supplied config and scripts. This guards
   # against accidental or inconspicuous tree mutation ahead of the validators
@@ -271,30 +267,9 @@ jobs:
       with:
         category: integration
 
-    # Drop vendored third-party fixtures (e.g. the upstream HACS integration
-    # used as an e2e fixture) so hassfest only validates integrations this repo
-    # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
-    # Restored right after Hassfest so the later checks see the tracked tree
-    # again (a fresh CI checkout holds nothing untracked here).
-    - name: Remove vendored test fixtures
-      if: success() || failure()
-      run: rm -rf tests/initial_test_state
-
     - name: Hassfest
       if: success() || failure()
       uses: home-assistant/actions/hassfest@86d4564712fa02543c808e3a693dd04f9d3f8361 # master
-
-    - name: Restore vendored test fixtures
-      # The restore must be verified: the fixture tree holds 59 tracked .py
-      # files that ast-grep and the changed-files format check walk, so a
-      # silently failed restore would stamp green checks on a reduced file set.
-      if: success() || failure()
-      run: |
-        git checkout HEAD -- tests/initial_test_state
-        if ! git diff --quiet HEAD -- tests/initial_test_state; then
-          echo "::error::tests/initial_test_state was not fully restored; the lint steps below would silently skip its files"
-          exit 1
-        fi
 
     - name: Install uv
       # Pinned, not "latest": the folded jobs got uv from the Renovate-pinned
@@ -322,7 +297,7 @@ jobs:
       # where HA pins a shared dependency exactly, ha-mcp must admit the pin;
       # where HA is loose, ha-mcp must not pin exactly (an exact pin forces
       # pip to replace the image-shipped copy in place — the torn-install
-      # window). Check the current E2E image AND the HACS minimum: a Core
+      # window). Check the current E2E image AND the hacs.json minimum: a Core
       # image update must not silently strand users on the supported floor.
       # For the image's Core, uv.lock must also hold Core's exact pin for every
       # runtime package, so the Docker/app images and the embedded install run
@@ -396,6 +371,14 @@ jobs:
         echo "$changed_py" | sed 's/^/  /'
         echo "$changed_py" | xargs uv run ruff format --check
 
+    - name: Check private names reached through strings
+      if: success() || failure()
+      run: uv run python scripts/private_test_access.py
+
+    - name: Check decisions by the wording of an error
+      if: success() || failure()
+      run: uv run python scripts/error_wording.py
+
     - name: Run ast-grep
       if: success() || failure()
       run: uv run ast-grep scan
@@ -411,8 +394,7 @@ jobs:
         uv run mypy homeassistant-addon-webhook-proxy/ || status=1
         uv run mypy homeassistant-addon-webhook-proxy-dev/ || status=1
         # The unit and app tests, against Core's real types (tests/AGENTS.md).
-        # The script runs mypy and keeps the list of exempt modules exact.
-        uv run python scripts/mypy_tests_exact.py || status=1
+        uv run mypy tests/src/unit/ tests/addon/ || status=1
         exit "$status"
 
     # The ratchet scripts only lower their baselines, but the baselines are
@@ -446,6 +428,8 @@ jobs:
         uv run python scripts/duplicate_code_ratchet.py --base "$base_sha" || status=1
         # No test is exempted from the real-Core checks (tests/AGENTS.md).
         uv run python scripts/stand_in_lists_ratchet.py --base "$base_sha" || status=1
+        # No public name exists only for the tests (tests/AGENTS.md).
+        uv run python scripts/test_only_public_names.py || status=1
         exit "$status"
 
   # Anchors the docs-site accessibility work (#1574/#1595): astro check (types
@@ -491,11 +475,17 @@ jobs:
 
   # Fast unit tests (no Docker, no HA instance needed)
   unit-tests:
-    name: Unit Tests
+    name: Unit Tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each runner takes its share of the unit suite, chosen by test id
+        # (tests/src/unit/_shards.py). The required check is the gate below.
+        shard: ["1/2", "2/2"]
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.13.9-python3.14-trixie-slim
     # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
     # subprocesses — including a full stdio server session — costing tens
     # of seconds on a slow runner. 8 → 10 after #2360: pytest alone is ~3.6
@@ -510,9 +500,9 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /var/cache/apt/archives
-        key: apt-trixie-git-jq-v1
+        key: apt-trixie-git-jq-gpp-v1
 
-    - name: Install git and jq for workflow contract tests
+    - name: Install git, jq and g++
       run: |
         # Keep cached .debs after install so the cache stays warm for
         # future runs (default Debian behaviour deletes them).
@@ -520,7 +510,9 @@ jobs:
         echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
           > /etc/apt/apt.conf.d/keep-downloaded
         apt-get update -qq
-        apt-get install -y -qq git jq >/dev/null
+        # git and jq for the workflow contract tests; g++ builds the cloud
+        # integration's pymicro-vad and pyspeex-noise, which ship no 3.14 wheel.
+        apt-get install -y -qq git jq g++ >/dev/null
 
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
@@ -547,9 +539,12 @@ jobs:
     - name: Run unit tests
       # xdist's `auto` counts physical cores (2 on the hosted runner);
       # `logical` uses all 4 CPUs.
+      env:
+        UNIT_TEST_SHARD: ${{ matrix.shard }}
       run: uv run pytest tests/src/unit/ -n logical --tb=short -v
 
     - name: Run BAT runner tests
+      if: matrix.shard == '1/2'
       # The tests of the UAT/BAT tooling need no Docker and no model.
       # test_stories.py runs the stories themselves against a live Home
       # Assistant and an AI agent, so it stays out.
@@ -582,6 +577,7 @@ jobs:
         fi
 
     - name: Run add-on structure tests
+      if: matrix.shard == '1/2'
       # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
       # the backup-filename-safe name guard, #1707) — previously these ran
       # nowhere in CI. Excludes test_addon_startup.py, which spins up real
@@ -591,6 +587,7 @@ jobs:
         --ignore=tests/addon/test_addon_startup.py
 
     - name: Check app tests left no local state
+      if: matrix.shard == '1/2'
       run: |
         if [ -e tests/testing_config ]; then
           find tests/testing_config
@@ -598,18 +595,41 @@ jobs:
           exit 1
         fi
 
-  # The unit and app (add-on) suites against the current beta Core, the same
+  unit-tests-gate:
+    # The required "Unit Tests" check. The suite runs as a matrix, whose runners
+    # report as "Unit Tests (1/2)" and "Unit Tests (2/2)", so this job carries
+    # the name branch protection requires and passes only when every runner did.
+    name: Unit Tests
+    needs: unit-tests
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every unit test runner to pass
+        env:
+          RESULT: ${{ needs.unit-tests.result }}
+        run: |
+          echo "unit-tests result: $RESULT"
+          [ "$RESULT" = "success" ]
+
+  # The unit suite, on two runners, and the app (add-on) suite, on the first
+  # of them, against the current beta Core, the same
   # beta e2e-beta-tests.yml resolves, but on every pull request: these suites
   # take minutes, unlike the post-merge E2E beta lanes. Not a required check,
   # so a beta Core change reports here without blocking a merge. While beta
   # equals the dev group's Core pin, which Unit Tests just ran, every step
   # after the resolver is skipped (a manual dispatch always runs).
   unit-tests-beta:
-    name: Unit Tests (beta Core)
+    name: Unit Tests (beta Core, ${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same split as the stable unit job above.
+        shard: ["1/2", "2/2"]
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.13.9-python3.14-trixie-slim
     timeout-minutes: 15
 
     steps:
@@ -617,15 +637,15 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /var/cache/apt/archives
-        key: apt-trixie-git-jq-v1
+        key: apt-trixie-git-jq-gpp-v1
 
-    - name: Install git and jq for workflow contract tests
+    - name: Install git, jq and g++
       run: |
         rm -f /etc/apt/apt.conf.d/docker-clean
         echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
           > /etc/apt/apt.conf.d/keep-downloaded
         apt-get update -qq
-        apt-get install -y -qq git jq >/dev/null
+        apt-get install -y -qq git jq g++ >/dev/null
 
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
@@ -698,10 +718,12 @@ jobs:
     # would quietly test the stable Core again.
     - name: Run unit tests on the beta Core
       if: github.event_name == 'workflow_dispatch' || steps.beta.outputs.superfluous != 'true'
+      env:
+        UNIT_TEST_SHARD: ${{ matrix.shard }}
       run: uv run --no-sync pytest tests/src/unit/ -n logical --tb=short -q -rf
 
     - name: Run app tests on the beta Core
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.shard == '1/2' }}
       run: >-
         uv run --no-sync pytest tests/addon/ -n logical --tb=short -q -rf
         --ignore=tests/addon/test_addon_startup.py
@@ -718,11 +740,11 @@ jobs:
     # if they diverge, the gate demands success from a lane that never ran.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: ${{ matrix.os }}
-    # 20 (was 15): headroom for the in-process-server e2e test that runs on
-    # THIS lane (workflows/embedded/test_embedded_server.py) - its first
-    # bring-up pip-installs the wheel's dependency tree inside the test's HA
-    # container. Not about the separate e2e-validation-embedded job.
-    timeout-minutes: 20
+    # 25: the x64 row adds a live component install and Core restart per
+    # worker, and the in-process-server test (workflows/embedded/
+    # test_embedded_server.py) pip-installs the wheel's dependency tree inside
+    # its HA container on first bring-up.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -732,8 +754,10 @@ jobs:
         include:
           - os: ubuntu-latest
             pytest_workers: 3
+            combine_topologies: '1'
           - os: ubuntu-24.04-arm
             pytest_workers: 4
+            combine_topologies: '0'
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -793,108 +817,17 @@ jobs:
       run: |
         echo "🚀 Running full E2E test suite with ${{ matrix.pytest_workers }} workers..."
         cd tests
+        # The combined x64 row audits both tool-entry states: --maxfail=0
+        # overrides pyproject.toml's --maxfail=3 so it reports every failure.
         uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
+          ${{ matrix.combine_topologies == '1' && '--maxfail=0' || '' }} \
           --tb=short \
           -v
         echo "✅ Full E2E test suite passed"
       env:
-        HAMCP_ENV_FILE: "tests/.env.test"
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Container backend with the ha_mcp_tools component ABSENT (#2292): the same
-  # full E2E suite, but the component's "File & YAML Tools" config entry is
-  # never created (E2E_NO_TOOLS_ENTRY=1). This is the app (add-on) / Docker / PyPI user
-  # who never installed the component from HACS — the majority install, and the
-  # one every component-present lane hides, because the e2e fixtures set the component up
-  # everywhere. Every component-backed capability must therefore either fall
-  # back to a server-side path or fail with an actionable "install the
-  # component" error; a raw service-not-found is the bug this lane catches. One
-  # ubuntu-latest lane, not the arch matrix: the topology is what is under test,
-  # and both architectures already run the component-present suite above.
-  e2e-validation-no-component:
-    name: E2E Validation (no component)
-    needs: changes
-    # A skipped job reports Success, so a docs/website-only PR doesn't wedge the
-    # gate waiting on this lane (mirrors e2e-validation).
-    # Skipping requires a classifier that succeeded and said `false` out loud;
-    # anything else (a failed classifier leaves `run` empty) runs this lane.
-    # Keep this predicate equivalent to the skip branch in e2e-validation-gate:
-    # if they diverge, the gate demands success from a lane that never ran.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      with:
-        persist-credentials: false
-        submodules: true
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-      with:
-        cache-binary: true
-
-    - name: Install uv
-      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-      with:
-        # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.7"
-
-    - name: Set up Python
-      run: uv python install ${{ env.PYTHON_VERSION }}
-
-    - name: Install dependencies
-      run: uv sync --all-extras --dev
-
-    - name: Cache HA Docker image
-      id: cache-ha-image
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: /tmp/ha-image.tar
-        key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
-
-    - name: Load cached HA image
-      if: steps.cache-ha-image.outputs.cache-hit == 'true'
-      run: docker load -i /tmp/ha-image.tar
-
-    - name: Pull HA image (GHCR → Docker Hub fallback)
-      if: steps.cache-ha-image.outputs.cache-hit != 'true'
-      run: |
-        HA_VERSION="${HA_IMAGE_GHCR##*:}"
-        HA_IMAGE_DOCKERHUB="homeassistant/home-assistant:${HA_VERSION}"
-        for registry in "$HA_IMAGE_GHCR" "$HA_IMAGE_DOCKERHUB"; do
-          echo "Trying $registry..."
-          if docker pull "$registry"; then
-            if [ "$registry" != "$HA_IMAGE_GHCR" ]; then
-              docker tag "$registry" "$HA_IMAGE_GHCR"
-            fi
-            docker save "$HA_IMAGE_GHCR" -o /tmp/ha-image.tar
-            echo "Pulled and cached from $registry"
-            exit 0
-          fi
-          echo "Failed to pull from $registry, trying next..."
-          sleep 15
-        done
-        echo "All registries failed" && exit 1
-
-    - name: Run full E2E test suite (no component)
-      run: |
-        echo "🚀 Running full E2E test suite without the ha_mcp_tools component with 3 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
-        cd tests
-        uv run pytest src/e2e/ \
-          -n3 \
-          --dist loadscope \
-          --tb=short \
-          -v \
-          --maxfail=0
-        echo "✅ Full E2E test suite (no component) passed"
-      env:
-        E2E_NO_TOOLS_ENTRY: "1"
+        E2E_COMBINE_TOPOLOGIES: ${{ matrix.combine_topologies }}
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -921,7 +854,9 @@ jobs:
     # if they diverge, the gate demands success from a lane that never ran.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # 30: per-worker wheel build and fastmcp preinstall, plus the x64 row's
+    # tools-entry install and Core restart.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -931,8 +866,10 @@ jobs:
         include:
           - os: ubuntu-latest
             pytest_workers: 2
+            combine_topologies: '1'
           - os: ubuntu-24.04-arm
             pytest_workers: 3
+            combine_topologies: '0'
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -992,110 +929,18 @@ jobs:
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
         cd tests
+        # The combined x64 row audits both tool-entry states: --maxfail=0
+        # overrides pyproject.toml's --maxfail=3 so it reports every failure.
         uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
+          ${{ matrix.combine_topologies == '1' && '--maxfail=0' || '' }} \
           --tb=short \
           -v
         echo "✅ Full E2E test suite (embedded backend) passed"
       env:
         E2E_BACKEND: "embedded"
-        HAMCP_ENV_FILE: "tests/.env.test"
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Embedded backend with ONLY the server entry (#2292): the exact topology the
-  # issue reports. The in-process MCP server entry is present — the WS command
-  # surface rides that entry (#2289/#2291), so search and the other
-  # command-backed reads keep working — while the component's "File & YAML
-  # Tools" entry stays absent (E2E_NO_TOOLS_ENTRY=1), so the filesystem/YAML
-  # services are not registered. The two entries belong to the same component
-  # and every other lane creates both, which is exactly why this split is
-  # invisible until a user hits it. One ubuntu-latest lane at -n2, matching the
-  # per-worker wheel build + in-container preinstall cost of the embedded matrix
-  # above.
-  e2e-validation-embedded-server-only:
-    name: E2E Validation (embedded, server entry only)
-    needs: changes
-    # A skipped job reports Success, so a docs/website-only PR doesn't wedge the
-    # gate waiting on this lane (mirrors e2e-validation).
-    # Skipping requires a classifier that succeeded and said `false` out loud;
-    # anything else (a failed classifier leaves `run` empty) runs this lane.
-    # Keep this predicate equivalent to the skip branch in e2e-validation-gate:
-    # if they diverge, the gate demands success from a lane that never ran.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      with:
-        persist-credentials: false
-        submodules: true
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-      with:
-        cache-binary: true
-
-    - name: Install uv
-      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-      with:
-        # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.7"
-
-    - name: Set up Python
-      run: uv python install ${{ env.PYTHON_VERSION }}
-
-    - name: Install dependencies
-      run: uv sync --all-extras --dev
-
-    - name: Cache HA Docker image
-      id: cache-ha-image
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: /tmp/ha-image.tar
-        key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
-
-    - name: Load cached HA image
-      if: steps.cache-ha-image.outputs.cache-hit == 'true'
-      run: docker load -i /tmp/ha-image.tar
-
-    - name: Pull HA image (GHCR → Docker Hub fallback)
-      if: steps.cache-ha-image.outputs.cache-hit != 'true'
-      run: |
-        HA_VERSION="${HA_IMAGE_GHCR##*:}"
-        HA_IMAGE_DOCKERHUB="homeassistant/home-assistant:${HA_VERSION}"
-        for registry in "$HA_IMAGE_GHCR" "$HA_IMAGE_DOCKERHUB"; do
-          echo "Trying $registry..."
-          if docker pull "$registry"; then
-            if [ "$registry" != "$HA_IMAGE_GHCR" ]; then
-              docker tag "$registry" "$HA_IMAGE_GHCR"
-            fi
-            docker save "$HA_IMAGE_GHCR" -o /tmp/ha-image.tar
-            echo "Pulled and cached from $registry"
-            exit 0
-          fi
-          echo "Failed to pull from $registry, trying next..."
-          sleep 15
-        done
-        echo "All registries failed" && exit 1
-
-    - name: Run full E2E test suite (embedded backend, server entry only)
-      run: |
-        echo "🚀 Running full E2E suite through the in-process MCP server with only the server entry (no tools entry) with 2 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
-        cd tests
-        uv run pytest src/e2e/ \
-          -n2 \
-          --dist loadscope \
-          --tb=short \
-          -v \
-          --maxfail=0
-        echo "✅ Full E2E test suite (embedded backend, server entry only) passed"
-      env:
-        E2E_BACKEND: "embedded"
-        E2E_NO_TOOLS_ENTRY: "1"
+        E2E_COMBINE_TOPOLOGIES: ${{ matrix.combine_topologies }}
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

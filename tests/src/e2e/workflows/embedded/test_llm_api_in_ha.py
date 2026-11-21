@@ -23,7 +23,7 @@ server rather than booting one of their own.
 
 NOTE (skip-ceiling coupling): both tests are marker-gated, so each adds a
 collection-time skip on every lane it does not run on. That consumes
-``_SKIP_CEILING_PER_LANE`` budget in
+``SKIP_CEILING_PER_LANE`` budget in
 tests/src/e2e/basic/test_backend_dispatch_smoke.py — see that module's
 docstring; the ceilings were bumped when these landed.
 """
@@ -84,7 +84,7 @@ def test_llm_api_schemas_survive_core_reemission_container(
 
     The session backend of this lane IS the in-process server, so the probe
     talks to the same server the rest of the suite drives — through the
-    component's own ``_mcp_session``, with Home Assistant's own interpreter,
+    component's own ``mcp_session``, with Home Assistant's own interpreter,
     converter and probatio.
     """
     info = ha_container_with_fresh_config

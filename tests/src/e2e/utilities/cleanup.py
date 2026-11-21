@@ -347,7 +347,7 @@ async def _cleanup_domain_test_entities(
 
 async def cleanup_test_entities_by_name(
     mcp_client, name_patterns: list[str]
-) -> dict[str, int]:
+) -> dict[str, dict[str, int]]:
     """
     Clean up entities matching test name patterns.
 
@@ -371,7 +371,7 @@ async def cleanup_test_entities_by_name(
         "input_select",
         "input_text",
     ]
-    results = {}
+    results: dict[str, dict[str, int]] = {}
 
     for domain in domains_to_check:
         found_count, cleaned_count = await _cleanup_domain_test_entities(

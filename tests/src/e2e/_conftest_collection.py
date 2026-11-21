@@ -19,11 +19,9 @@ from haos_runtime import (
     is_haos_stdio_mode,
 )
 
-from ._conftest_embedded import (
-    _is_embedded_backend_selected,
-    _is_no_tools_entry_selected,
-)
-from .utilities.topology import component_surface_available
+from ._conftest_embedded import _is_embedded_backend_selected
+from ._conftest_topology import order_topologies
+from .utilities.topology import component_surface_available, item_tools_entry_absent
 
 _SESSION_LOOP = pytest.mark.asyncio(loop_scope="session")
 
@@ -251,7 +249,6 @@ def pytest_collection_modifyitems(session, config, items):
     skip_beta_haos_only = pytest.mark.skip(
         reason="beta HAOS image expectations are not configured"
     )
-    no_tools_entry = _is_no_tools_entry_selected()
     skip_requires_tools_entry = pytest.mark.skip(
         reason="File & YAML Tools entry not installed in this lane "
         "(E2E_NO_TOOLS_ENTRY=1; #2292)"
@@ -260,7 +257,6 @@ def pytest_collection_modifyitems(session, config, items):
         reason="no-tools lane required (set E2E_NO_TOOLS_ENTRY=1); only that "
         "lane runs without the File & YAML Tools config entry"
     )
-    component_surface = component_surface_available()
     skip_requires_component_surface = pytest.mark.skip(
         reason="no active ha_mcp_tools config entry on this lane "
         "(E2E_NO_TOOLS_ENTRY=1 on a lane without the in-process server)"
@@ -274,6 +270,8 @@ def pytest_collection_modifyitems(session, config, items):
         "backend already enables the entry and drives the in-process server)"
     )
     for item in items:
+        no_tools_entry = item_tools_entry_absent(item)
+        component_surface = component_surface_available(no_tools_entry=no_tools_entry)
         if "haos_only" in str(item.fspath):
             item.add_marker(pytest.mark.haos_only)
         keywords = item.keywords
@@ -342,6 +340,7 @@ def pytest_collection_modifyitems(session, config, items):
         if "not_on_haos_embedded" in keywords and haos_embedded:
             item.add_marker(skip_not_on_haos_embedded)
     _move_haos_tls_items_last(items)
+    order_topologies(items)
 
 
 def pytest_runtest_logreport(report):

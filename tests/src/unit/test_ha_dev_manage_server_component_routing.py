@@ -5,531 +5,225 @@ In EMBEDDED mode the tool prefers the component's one-hop direct write
 (``ha_mcp_tools/server_entry_update`` → ``async_update_entry``) over the
 options-flow start+submit round-trip. These pin the routing contract:
 
-* capability present → the component write is used, its scheduled reply is mapped,
-  the legacy ``submit_options_flow_step`` is NEVER called, and the flow
-  ``find_server_config_entry`` opened is aborted;
-* capability absent → falls back to the legacy (deferred) options-flow submit;
-* the full component-error taxonomy (unknown_command invalidates caps; a command
-  error / a connection error / an establishment failure all fall back) routes to
-  the legacy submit — the write is idempotent, so a re-apply is safe;
-* NON-embedded mode never routes to the component write (the ``server_entry_update``
-  frame is never sent) and submits the options flow synchronously.
+* component present → the component write is used, its reply is mapped, and
+  no options flow is opened or submitted;
+* component absent → the legacy (deferred) options-flow submit;
+* ``unknown_command`` invalidates caps and a dropped connection falls back to
+  the legacy submit; the write is idempotent, so a re-apply is safe;
+* NON-embedded mode never routes to the component write and submits the
+  options flow synchronously.
+
+The tool runs on the server's own client against a real ``hass``: the server
+entry is a real config entry, its options flow the component's own.
 """
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-from unittest.mock import AsyncMock, patch
+from collections.abc import Iterator
+from contextlib import contextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+from ha_mcp.tools import tools_dev
+
+from ._client_spies import sent_commands
+from ._component_frames import drop_connection_on, frames, pooled
+from ._core_setup import with_config_component
+from ._server_update import (
+    EMBEDDED_TARGET,
+    PIP_SPEC,
+    SERVER_URL,
+    applied,
+    server_entry,
+    update_source,
 )
-from ha_mcp.tools import component_api, tools_dev
-from ha_mcp.tools.tools_dev import DevTools
 
-from ._component_routing_helpers import patch_ws, patch_ws_establish_failure
-
-_CAPS_FULL = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["server_entry", "server_entry_update"],
-    "limits": {},
-}
-_CAPS_READ_ONLY = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["server_entry"],
-    "limits": {},
-}
-
-_SERVER_FLOW = {
-    "flow_id": "flow-srv1",
-    "type": "form",
-    "data_schema": [
-        {"name": "channel", "default": "stable"},
-        {"name": "pip_spec", "description": {"suggested_value": None}},
-        {"name": "server_url", "description": {"suggested_value": "http://ha:8123"}},
-    ],
-}
-
-_SERVER_ENTRY_RESULT = {"entry_id": "srv1", "pip_spec": None}
-
-
-def _update_ws(
-    *,
-    caps: dict[str, Any],
-    update_result: dict[str, Any] | None = None,
-    update_exc: Exception | None = None,
-) -> AsyncMock:
-    """WS mock serving info + server_entry + (optionally) server_entry_update."""
-    ws = AsyncMock()
-
-    async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
-        if command_type == "ha_mcp_tools/info":
-            return {"success": True, "result": caps}
-        if command_type == "ha_mcp_tools/server_entry":
-            return {"success": True, "result": dict(_SERVER_ENTRY_RESULT)}
-        if command_type == "ha_mcp_tools/server_entry_update":
-            if update_exc is not None:
-                raise update_exc
-            return {"success": True, "result": update_result}
-        raise AssertionError(f"unexpected command {command_type!r}")
-
-    ws.send_command = AsyncMock(side_effect=_send)
-    return ws
-
-
-def _update_frame_kwargs(ws: AsyncMock) -> dict[str, Any]:
-    """The kwargs delivered on the single ``server_entry_update`` frame.
-
-    The delta reaches the wire as ``send_command`` KWARGS (the security-relevant
-    channel/pip_spec fields), so the routing tests inspect ``.kwargs`` — not just
-    that the command TYPE reached ``.args[0]`` — to catch a dropped / wrong-keyed
-    field.
-    """
-    calls = [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/server_entry_update"
-    ]
-    assert len(calls) == 1
-    return calls[0].kwargs
-
-
-class UpdateClient:
-    """Credentialed client: options-flow surface + the legacy config_entries bridge.
-
-    ``config_entries`` is what ``config_entries/get`` returns for the legacy
-    ``find_server_config_entry`` fallback. Empty by default: the component
-    ``server_entry`` read short-circuits find in the component-served tests, so the
-    legacy probe is never reached. A test drives find DOWN the legacy path by
-    supplying the server entry here — e.g. the establishment-failure case, where the
-    SHARED ``tools_dev.get_websocket_client`` is broken for BOTH the component read
-    and the write, so find must locate the entry through this bridge (which rides
-    ``send_websocket_message``, a different transport that stays up).
-    """
-
-    def __init__(self, config_entries: list[dict[str, Any]] | None = None) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self._config_entries = list(config_entries or [])
-        self.start_options_flow_calls: list[str] = []
-        self.abort_options_flow_calls: list[str] = []
-        self.submit_calls: list[tuple[str, dict[str, Any]]] = []
-        self.config_entries_get_calls = 0
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        if msg.get("type") == "config_entries/get":
-            self.config_entries_get_calls += 1
-            return {"success": True, "result": list(self._config_entries)}
-        raise AssertionError(f"unexpected ws message {msg!r}")
-
-    async def start_options_flow(self, entry_id: str) -> dict[str, Any]:
-        self.start_options_flow_calls.append(entry_id)
-        return dict(_SERVER_FLOW)
-
-    async def abort_options_flow(self, flow_id: str) -> dict[str, Any]:
-        self.abort_options_flow_calls.append(flow_id)
-        return {}
-
-    async def submit_options_flow_step(
-        self, flow_id: str, user_input: dict[str, Any]
-    ) -> dict[str, Any]:
-        self.submit_calls.append((flow_id, dict(user_input)))
-        return {"type": "create_entry"}
-
-
-async def _drain_background_tasks() -> None:
-    tasks = list(tools_dev._BACKGROUND_TASKS)
-    if not tasks:
-        return
-    done, pending = await asyncio.wait(tasks)
-    assert not pending
-    for task in done:
-        task.result()
+_RESTART_NOTE = (
+    "The in-process server will reinstall and restart now; this "
+    "connection will drop. Reconnect in 1-5 minutes and verify with "
+    "ha_dev_manage_server('info')."
+)
 
 
 @pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-
-
-@pytest.fixture(autouse=True)
-def _embedded_env(monkeypatch: Any) -> Any:
-    """Default to embedded mode with a zero flush delay; individual tests may
-    clear the env to exercise the non-embedded path."""
+def _embedded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Embedded mode by default; a test clears it for the non-embedded path."""
     monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
-    yield
 
 
-@pytest.mark.asyncio
-async def test_embedded_capability_present_routes_to_component_write() -> None:
-    """capability present → component direct write; scheduled reply mapped; the
-    legacy submit is never called; and find_server_config_entry never runs, so NO
-    options flow is opened (the fast path is not gated behind the flow-open it
-    bypasses)."""
-    ws = _update_ws(
-        caps=_CAPS_FULL,
-        update_result={
-            "scheduled": True,
-            "entry_id": "srv1",
-            "applying": {"pip_spec": "ha-mcp==2.0.0"},
-            "previous": {"pip_spec": None},
-        },
-    )
-    client = UpdateClient()
+@pytest.fixture
+async def client(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """The server's client with the component; ``config`` serves the flows."""
+    return await with_config_component(hass, component_core_client)
 
-    with patch_ws(ws, tools_dev):
-        result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
+
+@pytest.fixture
+async def socket(client: HomeAssistantClient) -> HomeAssistantWebSocketClient:
+    return await pooled(client)
+
+
+@contextmanager
+def _flow_calls(client: HomeAssistantClient) -> Iterator[tuple[AsyncMock, AsyncMock]]:
+    """Spies on the options-flow open and submit; Core still answers."""
+    with (
+        patch.object(
+            client, "start_options_flow", wraps=client.start_options_flow
+        ) as opened,
+        patch.object(
+            client, "submit_options_flow_step", wraps=client.submit_options_flow_step
+        ) as submitted,
+    ):
+        yield opened, submitted
+
+
+async def test_embedded_component_present_routes_to_component_write(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+) -> None:
+    """Component present → its direct write; the reply is mapped; the legacy
+    submit never runs and find_server_config_entry never runs, so NO options
+    flow is opened (the fast path is not gated behind the flow-open it
+    bypasses). The frame goes out on the pooled socket keyed by the client's
+    own ``verify_ssl``, so a ``verify_ssl=False`` client never shares a
+    default-verification connection."""
+    entry = server_entry(hass, pip_spec="")
+
+    with _flow_calls(client) as (opened, submitted), sent_commands(socket) as sent:
+        result = await update_source(client, PIP_SPEC)
 
     data = result["data"]
     assert data["scheduled"] is True
-    assert data["entry_id"] == "srv1"
-    assert data["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
-    assert data["previous"] == {"pip_spec": None}
-    assert data["note"] == (
-        "The in-process server will reinstall and restart now; this "
-        "connection will drop. Reconnect in 1-5 minutes and verify with "
-        "ha_dev_manage_server('info')."
-    )
-    # Preserves the #1929 target field on the component path (embedded phrasing).
-    assert data["target"] == "this server (the embedded ha_mcp_tools in-process entry)"
-    # The component write was used; the legacy options-flow submit was NOT.
-    assert client.submit_calls == []
-    # find_server_config_entry never ran on the component-served path, so NO options
-    # flow was opened (nor aborted) — the fast path bypasses the flow-open entirely.
-    assert client.start_options_flow_calls == []
-    assert client.abort_options_flow_calls == []
-    # The server_entry_update frame carried EXACTLY the channel delta as kwargs.
-    assert _update_frame_kwargs(ws) == {"pip_spec": "ha-mcp==2.0.0"}
+    assert data["entry_id"] == entry.entry_id
+    assert data["applying"] == {"pip_spec": PIP_SPEC}
+    assert data["previous"] == {"pip_spec": ""}
+    assert data["note"] == _RESTART_NOTE
+    # Preserves the #1929 target field on the component path.
+    assert data["target"] == EMBEDDED_TARGET
+    opened.assert_not_awaited()
+    submitted.assert_not_awaited()
+    assert hass.config_entries.options.async_progress() == []
+    # The frame carried EXACTLY the pip_spec delta.
+    assert frames(sent, tools_dev.WS_SERVER_ENTRY_UPDATE) == [{"pip_spec": PIP_SPEC}]
+    await applied(entry, PIP_SPEC)
 
 
-@pytest.mark.asyncio
-async def test_embedded_unchanged_reply_maps_without_submit() -> None:
+async def test_embedded_unchanged_reply_maps_without_submit(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
     """A no-op component reply (unchanged) maps to scheduled:false/unchanged and
     still bypasses the legacy submit."""
-    ws = _update_ws(
-        caps=_CAPS_FULL,
-        update_result={
-            "scheduled": False,
-            "unchanged": True,
-            "entry_id": "srv1",
-            "applying": {"pip_spec": ""},
-            "previous": {"pip_spec": None},
-        },
-    )
-    client = UpdateClient()
+    server_entry(hass, pip_spec="")
 
-    with patch_ws(ws, tools_dev):
-        result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec=""
-        )
+    with _flow_calls(client) as (_, submitted):
+        result = await update_source(client, "")
 
     data = result["data"]
     assert data["scheduled"] is False
     assert data["unchanged"] is True
-    assert data["previous"] == {"pip_spec": None}
+    assert data["previous"] == {"pip_spec": ""}
     assert data["note"] == (
         "No change: the requested pip_spec already matches the "
         "current in-process server source."
     )
-    assert client.submit_calls == []
+    submitted.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_embedded_pip_spec_delta_delivers_pip_spec_kwargs() -> None:
-    """A pip_spec-only update sends EXACTLY {"pip_spec": ...} on the frame (the
-    security-relevant field is neither dropped nor mis-keyed) and maps the scheduled
-    reply — note text and the embedded target preserved."""
-    ws = _update_ws(
-        caps=_CAPS_FULL,
-        update_result={
-            "scheduled": True,
-            "entry_id": "srv1",
-            "applying": {"pip_spec": "ha-mcp==2.0.0"},
-            "previous": {"pip_spec": None},
-        },
-    )
-    client = UpdateClient()
-
-    with patch_ws(ws, tools_dev):
-        result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
-
-    assert _update_frame_kwargs(ws) == {"pip_spec": "ha-mcp==2.0.0"}
-    data = result["data"]
-    assert data["scheduled"] is True
-    assert data["applying"] == {"pip_spec": "ha-mcp==2.0.0"}
-    assert data["target"] == "this server (the embedded ha_mcp_tools in-process entry)"
-    assert data["note"] == (
-        "The in-process server will reinstall and restart now; this "
-        "connection will drop. Reconnect in 1-5 minutes and verify with "
-        "ha_dev_manage_server('info')."
-    )
-    assert client.submit_calls == []
-
-
-@pytest.mark.asyncio
-async def test_component_write_succeeds_when_find_would_raise(
-    monkeypatch: Any,
+async def test_embedded_component_absent_falls_back_to_options_flow(
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """The component route runs BEFORE find_server_config_entry, so a legacy find
-    that would raise (a slow/broken options flow) is never even reached on the fast
-    path — the component write still succeeds."""
-    ws = _update_ws(
-        caps=_CAPS_FULL,
-        update_result={
-            "scheduled": True,
-            "entry_id": "srv1",
-            "applying": {"pip_spec": "ha-mcp==2.0.0"},
-            "previous": {"pip_spec": None},
-        },
-    )
-    client = UpdateClient()
+    """No component → the legacy (deferred) options-flow submit, resending the
+    preserved server_url override alongside the pip_spec change."""
+    assert await async_setup_component(hass, "config", {})
+    entry = server_entry(hass, pip_spec="", server_url=SERVER_URL)
+    socket = await pooled(core_client)
 
-    async def _boom(_client: Any) -> Any:
-        raise AssertionError("find_server_config_entry must not run on the fast path")
-
-    monkeypatch.setattr(tools_dev, "find_server_config_entry", _boom)
-
-    with patch_ws(ws, tools_dev):
-        result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
-
-    assert result["data"]["scheduled"] is True
-    assert result["data"]["entry_id"] == "srv1"
-    assert client.submit_calls == []
-    assert client.start_options_flow_calls == []
-
-
-@pytest.mark.asyncio
-async def test_component_write_threads_verify_ssl_into_get_websocket_client() -> None:
-    """The direct-write frame's ``get_websocket_client`` receives the client's
-    ``verify_ssl``, so a ``verify_ssl=False`` client never establishes (or keys) a
-    default-verification pooled socket. A regression dropping the kwarg fails here.
-
-    The write resolves its WS through ``tools_dev.get_websocket_client`` while the caps
-    probe resolves through ``component_api.get_websocket_client`` — patched with
-    SEPARATE factories so the write factory's single call can be pinned to the exact
-    kwargs delivered."""
-    ws = _update_ws(
-        caps=_CAPS_FULL,
-        update_result={
-            "scheduled": True,
-            "entry_id": "srv1",
-            "applying": {"pip_spec": "ha-mcp==2.0.0"},
-            "previous": {"pip_spec": None},
-        },
-    )
-    client = UpdateClient()
-    client.verify_ssl = False
-
-    caps_factory = AsyncMock(return_value=ws)
-    write_factory = AsyncMock(return_value=ws)
-    with (
-        patch.object(component_api, "get_websocket_client", caps_factory),
-        patch.object(tools_dev, "get_websocket_client", write_factory),
-    ):
-        result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
-
-    assert result["data"]["scheduled"] is True
-    # The write frame resolved its WS with the client's verify_ssl (=False), passed
-    # as an explicit kwarg — not omitted.
-    assert write_factory.call_count == 1
-    assert write_factory.call_args.kwargs["verify_ssl"] is False
-
-
-@pytest.mark.asyncio
-async def test_embedded_capability_absent_falls_back_to_options_flow() -> None:
-    """No server_entry_update capability → legacy (deferred) options-flow submit,
-    resending the preserved server_url override alongside the channel change."""
-    ws = _update_ws(caps=_CAPS_READ_ONLY)
-    client = UpdateClient()
-
-    with patch_ws(ws, tools_dev):
-        result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
+    with _flow_calls(core_client) as (_, submitted), sent_commands(socket) as sent:
+        result = await update_source(core_client, PIP_SPEC)
         assert result["data"]["scheduled"] is True
-        assert client.submit_calls == []  # deferred, not yet run
-        await _drain_background_tasks()
+        submitted.assert_not_awaited()  # deferred, not yet run
+        await applied(entry, PIP_SPEC)
 
-    assert len(client.submit_calls) == 1
-    flow_id, user_input = client.submit_calls[0]
-    assert flow_id == "flow-srv1"
-    assert user_input == {"server_url": "http://ha:8123", "pip_spec": "ha-mcp==2.0.0"}
-    # The component write frame was never sent (capability absent).
-    sent = [c.args[0] for c in ws.send_command.call_args_list]
-    assert "ha_mcp_tools/server_entry_update" not in sent
+    submitted.assert_awaited_once()
+    assert submitted.await_args is not None
+    assert submitted.await_args.args[1]["server_url"] == SERVER_URL
+    assert entry.options["server_url"] == SERVER_URL
+    assert frames(sent, tools_dev.WS_SERVER_ENTRY_UPDATE) == []
 
 
-@pytest.mark.asyncio
 async def test_embedded_unknown_command_invalidates_caps_and_falls_back(
-    monkeypatch: Any,
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """server_entry_update advertised but returns unknown_command → invalidate the
-    cached caps and fall back to the legacy submit.
-
-    The invalidation is asserted via a spy on ``invalidate_caps`` (which delegates to
-    the real one), NOT the end-state cache: with the component write now tried BEFORE
-    the legacy find, the fallback's own ``find_server_config_entry`` legitimately
-    RE-probes ``info`` and re-populates the cache within the SAME call (with the
-    current-real caps — the desirable behaviour), so a post-call cache-empty check
-    would be a false negative.
-    """
-    ws = _update_ws(
-        caps=_CAPS_FULL,
-        update_exc=HomeAssistantCommandError("gone", "unknown_command"),
+    """``server_entry_update`` advertised but answered ``unknown_command`` (Core's
+    answer for a command it never registered, as from a component predating
+    it) → invalidate the cached caps and fall back to the legacy submit."""
+    entry = server_entry(hass, pip_spec="")
+    monkeypatch.setattr(
+        tools_dev, "WS_SERVER_ENTRY_UPDATE", "ha_mcp_tools/server_entry_update_retired"
     )
-    client = UpdateClient()
+    invalidated = MagicMock(wraps=tools_dev.invalidate_caps)
+    monkeypatch.setattr(tools_dev, "invalidate_caps", invalidated)
 
-    invalidated: list[Any] = []
-    real_invalidate = tools_dev.invalidate_caps
+    with _flow_calls(client) as (_, submitted):
+        await update_source(client, PIP_SPEC)
+        await applied(entry, PIP_SPEC)
 
-    def _spy(c: Any) -> None:
-        invalidated.append(c)
-        real_invalidate(c)
-
-    monkeypatch.setattr(tools_dev, "invalidate_caps", _spy)
-
-    with patch_ws(ws, tools_dev):
-        await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
-        await _drain_background_tasks()
-
-    assert len(client.submit_calls) == 1
-    assert invalidated == [client]
+    submitted.assert_awaited_once()
+    invalidated.assert_called_once_with(client)
 
 
-@pytest.mark.asyncio
-async def test_embedded_command_error_falls_back_without_invalidating() -> None:
-    """A non-unknown_command error (timeout) falls back to the legacy submit
-    WITHOUT invalidating the still-advertised capability."""
-    ws = _update_ws(caps=_CAPS_FULL, update_exc=HomeAssistantCommandTimeout("slow"))
-    client = UpdateClient()
+async def test_embedded_connection_drop_falls_back(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The connection dropping on the ``server_entry_update`` frame falls back
+    to the legacy submit (the write is idempotent, so a re-apply is safe) and
+    keeps the capability: a lost answer is not a downgrade."""
+    entry = server_entry(hass, pip_spec="")
+    drop_connection_on(hass, tools_dev.WS_SERVER_ENTRY_UPDATE, socket)
+    invalidated = MagicMock(wraps=tools_dev.invalidate_caps)
+    monkeypatch.setattr(tools_dev, "invalidate_caps", invalidated)
 
-    with patch_ws(ws, tools_dev):
-        await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
-        await _drain_background_tasks()
+    with _flow_calls(client) as (_, submitted):
+        await update_source(client, PIP_SPEC)
+        await applied(entry, PIP_SPEC)
 
-    assert len(client.submit_calls) == 1
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_embedded_connection_error_falls_back() -> None:
-    """A WS connection error on the server_entry_update frame falls back to the
-    legacy submit (the write is idempotent, so a re-apply is safe)."""
-    ws = _update_ws(caps=_CAPS_FULL, update_exc=HomeAssistantConnectionError("down"))
-    client = UpdateClient()
-
-    with patch_ws(ws, tools_dev):
-        await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
-        await _drain_background_tasks()
-
-    assert len(client.submit_calls) == 1
-    assert client in component_api._CAPS_CACHE
+    submitted.assert_awaited_once()
+    invalidated.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_embedded_malformed_reply_falls_back() -> None:
-    """A component reply that is neither scheduled nor unchanged (shape drift) is
-    treated as unusable and falls back to the legacy submit."""
-    ws = _update_ws(caps=_CAPS_FULL, update_result={"entry_id": "srv1"})
-    client = UpdateClient()
-
-    with patch_ws(ws, tools_dev):
-        await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
-        await _drain_background_tasks()
-
-    assert len(client.submit_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_embedded_establishment_failure_falls_back() -> None:
-    """A failed establish (``HomeAssistantConnectionError``) in
-    get_websocket_client falls back to the legacy submit.
-
-    ``patch_ws_establish_failure`` breaks the SHARED ``tools_dev.get_websocket_client``
-    for BOTH the component ``server_entry`` read AND the write frame (one binding
-    serves both), exactly as a real broken pooled socket would. So
-    ``find_server_config_entry``'s component read fails over to the legacy
-    ``config_entries/get`` bridge — which rides ``send_websocket_message``, a
-    different transport that stays up — and locates the entry there; THEN the write
-    frame's establishment fails and the tool falls back to the legacy options-flow
-    submit. The caps probe (``component_api``'s binding) still succeeds, so the write
-    route is attempted and its establishment failure is what triggers the fallback.
-    """
-    caps_ws = _update_ws(caps=_CAPS_FULL)
-    client = UpdateClient(config_entries=[{"entry_id": "srv1"}])
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        tools_dev,
-        HomeAssistantConnectionError("Failed to connect to HA WebSocket"),
-    ):
-        await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
-        await _drain_background_tasks()
-
-    assert len(client.submit_calls) == 1
-    # find used the legacy config_entries/get bridge (the pooled read socket was
-    # down), not the in-process component server_entry read.
-    assert client.config_entries_get_calls == 1
-
-
-@pytest.mark.asyncio
 async def test_non_embedded_never_routes_to_component_write(
-    monkeypatch: Any,
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    socket: HomeAssistantWebSocketClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """NON-embedded mode submits the options flow SYNCHRONOUSLY and never sends the
-    server_entry_update frame, even though the capability is advertised."""
+    """NON-embedded mode submits the options flow SYNCHRONOUSLY and never sends
+    the server_entry_update frame, though the component offers it."""
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
-    ws = _update_ws(
-        caps=_CAPS_FULL,
-        update_result={"scheduled": True, "entry_id": "srv1"},
-    )
-    client = UpdateClient()
+    entry = server_entry(hass, pip_spec="", server_url=SERVER_URL)
 
-    with patch_ws(ws, tools_dev):
-        result = await DevTools(client).ha_dev_manage_server(
-            action="update_source", pip_spec="ha-mcp==2.0.0"
-        )
+    with _flow_calls(client) as (_, submitted), sent_commands(socket) as sent:
+        result = await update_source(client, PIP_SPEC)
 
-    # Synchronous legacy submit (non-embedded returns "applied", not "scheduled").
     # "applied" reports only what the CALLER asked to change. The preserved
     # overrides are resent to avoid wiping them, not requested, and the
-    # component's options form carries oauth_client_secret among them — so
+    # component's options form carries oauth_client_secret among them, so
     # echoing the whole payload handed a credential back to the client
     # (Codex review, #2256).
-    assert result["data"]["applied"] == {"pip_spec": "ha-mcp==2.0.0"}
-    assert len(client.submit_calls) == 1
+    assert result["data"]["applied"] == {"pip_spec": PIP_SPEC}
+    submitted.assert_awaited_once()
     # ...while the SUBMISSION still carries the preserved override, or the
     # update would clear it.
-    assert client.submit_calls[0][1]["server_url"] == "http://ha:8123"
-    sent = [c.args[0] for c in ws.send_command.call_args_list]
-    assert "ha_mcp_tools/server_entry_update" not in sent
+    assert entry.options["pip_spec"] == PIP_SPEC
+    assert entry.options["server_url"] == SERVER_URL
+    assert frames(sent, tools_dev.WS_SERVER_ENTRY_UPDATE) == []

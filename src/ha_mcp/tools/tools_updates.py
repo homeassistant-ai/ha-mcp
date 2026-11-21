@@ -16,6 +16,7 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
+from ..client.exceptions import http_failure_status
 from ..client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
@@ -915,12 +916,7 @@ class UpdateTools:
         entity_ids: list[str] | str | None,
     ) -> NoReturn:
         """Map a failure to a structured tool error; always raises."""
-        error_msg = str(e)
-        if (
-            action == "get"
-            and entity_ids
-            and ("404" in error_msg or "not found" in error_msg.lower())
-        ):
+        if action == "get" and entity_ids and http_failure_status(e) == 404:
             eid = entity_ids if isinstance(entity_ids, str) else entity_ids[0]
             raise_tool_error(
                 create_error_response(
@@ -979,7 +975,7 @@ class UpdateTools:
             JSON_STRING_COERCION,
             Field(
                 description="For install: apply every pending update in these categories ('addons',"
-                " 'hacs', 'devices', 'other'). As with the HA 'Update all' button, "
+                " 'hacs' (Marketplace repositories), 'devices', 'other'). As with the HA 'Update all' button, "
                 "core/os/supervisor are excluded (target those individually via "
                 "entity_ids) and skipped updates are never included.",
                 default=None,
@@ -1023,8 +1019,8 @@ class UpdateTools:
     ) -> dict[str, Any]:
         """Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore).
 
-        Covers Core, OS, supervisor, apps (add-ons), device firmware, and HACS
-        update entities, plus the Repairs issues in Settings > System > Repairs.
+        Covers Core, OS, supervisor, apps (add-ons), device firmware, and
+        Marketplace update entities, plus the Repairs issues in Settings > System > Repairs.
         Repairs are listed by ha_get_overview (not here); pass their domain and
         issue_id to 'ignore_repair' / 'unignore_repair'. In Read Only Mode the
         read actions ('list', 'get') stay available; write actions are blocked.

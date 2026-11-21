@@ -1,36 +1,41 @@
-"""The in-HA LLM-API probe's host-side halves, pinned without a lane (#2361).
+"""The in-HA LLM-API probe, pinned without a lane (#2361).
 
-The probe source runs only inside a Home Assistant interpreter on the embedded
-lanes, and the test that consumes its report reads it through string keys the
-source writes. A brace slip in the source or a misspelled key degrades to a
-green lane that proves nothing, so the source is compiled here, its pure
-helpers are exercised, and the report parser and the pass/fail decision are
-table-tested.
+On the embedded lanes the probe source runs inside Home Assistant's
+interpreter, and the test that consumes its report reads it through string
+keys the source writes. A brace slip in the source or a misspelled key degrades
+to a green lane that proves nothing, so the source is compiled here, run the
+way the lanes run it (its own interpreter, with Core and the component
+importable, against a loopback MCP server listing the tools under test), and
+the report parser and the pass/fail decision are table-tested.
 """
 
 from __future__ import annotations
 
 import ast
+import asyncio
 import inspect
+import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-_E2E_UTILITIES = Path(__file__).resolve().parents[1] / "e2e" / "utilities"
-if str(_E2E_UTILITIES) not in sys.path:
-    sys.path.insert(0, str(_E2E_UTILITIES))
-
-import llm_api_probe  # noqa: E402
-from llm_api_probe import (  # noqa: E402
+from custom_components.ha_mcp_tools import llm_api
+from tests.src.e2e.utilities.llm_api_probe import (
     LLM_API_SCHEMA_PROBE,
     MIN_TOOL_COUNT,
-    PROBE_HELPERS_SOURCE,
     PROBE_SENTINEL,
     assert_report_clean,
     parse_probe_report,
 )
+
+from ._llm_api_server import SECRET_PATH, ServedTool, serve
+
+# The directory ``custom_components`` is imported from, as ``/config`` is in the
+# Home Assistant container.
+_COMPONENT_ROOT = Path(llm_api.__file__).resolve().parents[2]
 
 
 def _clean_report(**overrides: Any) -> dict[str, Any]:
@@ -54,15 +59,29 @@ def _clean_report(**overrides: Any) -> dict[str, Any]:
     return report
 
 
-def _helpers() -> dict[str, Any]:
-    namespace: dict[str, Any] = {}
-    exec(PROBE_HELPERS_SOURCE, namespace)
-    return namespace
+async def _probe(tool: ServedTool) -> dict[str, Any]:
+    """Run the probe against a server listing ``tool``; its report."""
+    async with serve([tool]) as server:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            LLM_API_SCHEMA_PROBE,
+            f"http://127.0.0.1:{server.port}{SECRET_PATH}",
+            env={**os.environ, "PYTHONPATH": str(_COMPONENT_ROOT)},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+    assert process.returncode == 0, stderr.decode()
+    report = parse_probe_report(stdout.decode())
+    assert report["tool_count"] == 1
+    assert report["conversion_failures"] == []
+    return report
 
 
 def _written_report_keys() -> set[str]:
     """Keys of the ``report.update({...})`` literal the runner writes."""
-    tree = ast.parse(llm_api_probe._PROBE_RUNNER_SOURCE)
+    tree = ast.parse(LLM_API_SCHEMA_PROBE)
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
@@ -72,7 +91,9 @@ def _written_report_keys() -> set[str]:
             and isinstance(node.args[0], ast.Dict)
         ):
             return {
-                key.value for key in node.args[0].keys if isinstance(key, ast.Constant)
+                key.value
+                for key in node.args[0].keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
             }
     raise AssertionError("no report.update({...}) literal found in the probe runner")
 
@@ -88,6 +109,7 @@ def _read_report_keys() -> set[str]:
             and node.func.attr == "get"
             and node.args
             and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
         ):
             keys.add(node.args[0].value)
         elif (
@@ -116,67 +138,70 @@ class TestProbeSource:
         assert read <= written, f"read but never written: {sorted(read - written)}"
         assert written <= read, f"written but never read: {sorted(written - read)}"
 
-    def test_the_helpers_compile_and_load_standalone(self) -> None:
-        helpers = _helpers()
-        assert callable(helpers["_boolean_exclusive_bounds"])
 
-    def test_the_walk_skips_instance_data_and_extensions(self) -> None:
-        """Mirrors the component: data under default/enum/x- is not a bound."""
-        helpers = _helpers()
-        schema = {
-            "type": "object",
-            "properties": {
-                "n": {"type": "number", "default": {"exclusiveMinimum": True}}
-            },
-            "enum": [{"exclusiveMaximum": True}],
-            "x-ui": {"exclusiveMinimum": True, "type": "integer"},
-        }
+@pytest.mark.usefixtures("socket_enabled")
+class TestTheProbeRun:
+    async def test_instance_data_and_extensions_are_not_read_as_schema(self) -> None:
+        """Mirrors the component: data under enum/default/x- is neither a bound
+        nor a parameter type, so neither flag is raised for it."""
+        report = await _probe(
+            ServedTool(
+                "ha_opaque",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        # Core re-emits an enum as given.
+                        "mode": {
+                            "type": "string",
+                            "enum": [{"exclusiveMaximum": True}],
+                        },
+                        "hint": {"type": "string", "x-hint": {"type": "integer"}},
+                        "kind": {"type": "string", "default": {"type": "integer"}},
+                    },
+                },
+            )
+        )
 
-        assert helpers["_boolean_exclusive_bounds"](schema) is False
-        assert helpers["_count_integer_nodes"](schema) == 0
+        assert report["boolean_exclusive"] == []
+        assert report["integer_lost"] == []
 
-    def test_the_walk_reports_a_real_draft4_bound(self) -> None:
-        helpers = _helpers()
-        schema = {
-            "type": "object",
-            "properties": {
-                "budget": {
-                    "anyOf": [
-                        {"type": "number", "minimum": 0, "exclusiveMinimum": True},
-                        {"type": "null"},
-                    ]
-                }
-            },
-        }
+    async def test_an_integer_type_the_conversion_loses_is_reported(self) -> None:
+        """Core's converter drops a ``$ref``; the nullable integer it pointed at
+        is a parameter type the model no longer sees."""
+        report = await _probe(
+            ServedTool(
+                "ha_ref",
+                input_schema={
+                    "type": "object",
+                    "properties": {"count": {"$ref": "#/$defs/Count"}},
+                    "$defs": {"Count": {"type": ["integer", "null"]}},
+                },
+            )
+        )
 
-        assert helpers["_boolean_exclusive_bounds"](schema) is True
+        assert report["integer_lost"] == ["ha_ref"]
 
-    def test_integer_nodes_are_counted_in_subschemas_only(self) -> None:
-        helpers = _helpers()
-        schema = {
-            "type": "object",
-            "properties": {
-                "a": {"type": "integer"},
-                "b": {"type": ["integer", "null"], "x-hint": {"type": "integer"}},
-            },
-        }
+    async def test_an_invalid_schema_is_named_by_its_first_line_and_frame(
+        self,
+    ) -> None:
+        """A remote interpreter hands back one line per failure: the error's
+        first line and where it was raised, never a multi-line traceback."""
+        report = await _probe(
+            ServedTool(
+                "ha_bad_length",
+                input_schema={
+                    "type": "object",
+                    "properties": {"name": {"type": "string", "minLength": -1}},
+                },
+            )
+        )
 
-        assert helpers["_count_integer_nodes"](schema) == 2
-
-    def test_short_names_the_innermost_frame(self) -> None:
-        helpers = _helpers()
-
-        def boom() -> None:
-            raise ValueError("first line\nsecond line")
-
-        try:
-            boom()
-        except ValueError as err:
-            text = helpers["_short"](err)
-
-        assert text.startswith("ValueError: first line at ")
-        assert text.endswith(" in boom")
-        assert "second line" not in text
+        [failure] = report["draft2020_invalid"]
+        assert re.fullmatch(
+            r"ha_bad_length: SchemaError: -1 is less than the minimum of 0"
+            r" at \S+\.py:\d+ in \w+",
+            failure,
+        ), failure
 
 
 class TestParseProbeReport:

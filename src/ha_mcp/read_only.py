@@ -121,10 +121,8 @@ def _backup_write(args: dict[str, Any]) -> str | None:
     return f"scope={scope!r}, action={action!r}"
 
 
-# Add-on parameters that, when present, mean the call mutates add-on
-# configuration (so the read-only middleware must block it). Module-level
-# so the schema-drift guard test (test_read_only.py) can pin an
-# independent manifest against it — see item 10b / ha_manage_app.
+# ha_manage_app parameters that, set to anything but None, make the call an
+# app (add-on) configuration change, which the read-only middleware blocks.
 _ADDON_CONFIG_WRITE_PARAMS = ("options", "network", "boot", "auto_update", "watchdog")
 
 
@@ -255,7 +253,7 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 # cache is only listable here; ha_manage_radio's 'ping' probe, 'cluster_read'
 # 'list_datasets', 'get_config_params' and 'get_config_param' have no pure-read
 # duplicate elsewhere, while its
-# 'diagnostics'/'network_status' reads mirror ha_get_device /
+# 'diagnostics'/'network_status' reads overlap ha_get_device /
 # ha_get_system_health but stay reachable here mid-management;
 # ha_manage_security_policy's policy read is duplicated only by the
 # dev-mode-only ha_dev_manage_settings('get_policy')). Everything

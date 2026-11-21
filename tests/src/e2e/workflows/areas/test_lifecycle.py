@@ -12,7 +12,6 @@ This test suite validates:
 
 import logging
 import uuid
-from typing import Any
 
 import pytest
 
@@ -812,70 +811,57 @@ class TestAreaFloorIntegration:
             "ha_remove_area_or_floor", {"kind": "floor", "id": floor_id}
         )
 
-    async def test_home_topology_sort_order(self, mcp_client, cleanup_tracker):
+    async def test_floor_order_follows_core_reorder(self, mcp_client, cleanup_tracker):
         """
-        Test: Create floors with level=[-1, 0, None, 2] -> ha_list_floors_areas ->
-              Verify sort order: -1 first, 2 last, 0 and None adjacent
-              (both map to sort key 0 via `level or 0`; stable sort preserves
-              insertion order within the tie).
+        Test: Create floors with level=[-1, 0, 2] -> reorder them against the
+              level order with ha_set_area_or_floor(order=...) ->
+              ha_list_floors_areas lists them in the order set, not by level.
         """
-        prefix = generate_unique_name("test_topo_sort")
-        logger.info(
-            f"Testing topology sort order with levels [-1, 0, None, 2]: {prefix}"
-        )
-
-        levels = [-1, 0, None, 2]
-        floor_ids_by_level: dict[str, Any] = {}
+        prefix = generate_unique_name("test_floor_order")
+        levels = [-1, 0, 2]
+        created: list[str] = []
         for lvl in levels:
-            payload: dict[str, Any] = {"kind": "floor", "name": f"{prefix}_lvl_{lvl}"}
-            if lvl is not None:
-                payload["level"] = lvl
-            floor_result = await mcp_client.call_tool("ha_set_area_or_floor", payload)
+            floor_result = await mcp_client.call_tool(
+                "ha_set_area_or_floor",
+                {"kind": "floor", "name": f"{prefix}_lvl_{lvl}", "level": lvl},
+            )
             floor_data = parse_mcp_result(floor_result)
             assert floor_data.get("success"), (
                 f"Failed to create floor level={lvl}: {floor_data}"
             )
-            fid = floor_data.get("floor_id")
-            cleanup_tracker.track("floor", fid)
-            floor_ids_by_level[str(lvl)] = fid
+            created.append(floor_data["floor_id"])
+            cleanup_tracker.track("floor", created[-1])
 
-        topo_result = await mcp_client.call_tool("ha_list_floors_areas", {})
-        topo_data = parse_mcp_result(topo_result)
-        assert topo_data.get("success"), f"Topology call failed: {topo_data}"
-
-        # Extract only our floors in the order returned by the tool
-        our_ids = set(floor_ids_by_level.values())
-        returned_order = [
-            f for f in topo_data["floors"] if f.get("floor_id") in our_ids
+        # Core refuses a list that misses an existing floor id: keep the others
+        # as they are and put ours last, highest level first.
+        listed = parse_mcp_result(
+            await mcp_client.call_tool("ha_list_floors_areas", {})
+        )
+        others = [
+            f["floor_id"] for f in listed["floors"] if f["floor_id"] not in created
         ]
-        assert len(returned_order) == 4, (
-            f"Expected 4 floors, got {len(returned_order)}: {returned_order}"
+        new_order = list(reversed(created))
+        reorder = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_set_area_or_floor",
+                {"kind": "floor", "order": others + new_order},
+            )
+        )
+        assert reorder.get("success"), f"Reorder failed: {reorder}"
+        # The reply names Core's own listing before and after the reorder.
+        assert [i for i in reorder["previous_order"] if i in created] == created
+        assert [i for i in reorder["order"] if i in created] == new_order
+
+        listed = parse_mcp_result(
+            await mcp_client.call_tool("ha_list_floors_areas", {})
+        )
+        returned = [f["floor_id"] for f in listed["floors"] if f["floor_id"] in created]
+        assert returned == new_order, (
+            f"Floors should follow the order Core was given, got {returned}, "
+            f"expected {new_order}"
         )
 
-        # Sort key in the implementation is `level or 0`, so:
-        #   -1 -> -1, 0 -> 0, None -> 0, 2 -> 2
-        # Position 0 must be level=-1, position 3 must be level=2.
-        # Positions 1 and 2 are the 0/None tie — either order is valid.
-        assert returned_order[0].get("floor_id") == floor_ids_by_level["-1"], (
-            f"First floor should be level=-1, got: {returned_order[0]}"
-        )
-        assert returned_order[3].get("floor_id") == floor_ids_by_level["2"], (
-            f"Last floor should be level=2, got: {returned_order[3]}"
-        )
-
-        middle_ids = {
-            returned_order[1].get("floor_id"),
-            returned_order[2].get("floor_id"),
-        }
-        expected_middle = {floor_ids_by_level["0"], floor_ids_by_level["None"]}
-        assert middle_ids == expected_middle, (
-            f"Middle positions should contain level=0 and level=None floors, "
-            f"got: {middle_ids} vs expected {expected_middle}"
-        )
-
-        logger.info("Verified sort order: -1 first, 2 last, 0/None tied in middle")
-
-        for fid in floor_ids_by_level.values():
+        for fid in created:
             await mcp_client.call_tool(
                 "ha_remove_area_or_floor", {"kind": "floor", "id": fid}
             )
@@ -1077,9 +1063,9 @@ class TestAreaFloorDestructiveNegativeInputs:
 
     Methodology: source-verified against tools_areas.py. The consolidated tool
     routes to the respective registry delete WebSocket (config/area_registry/delete
-    or config/floor_registry/delete) based on the `kind` argument. When the
-    registry returns a failure result, raise_tool_error is invoked with
-    ErrorCode.SERVICE_CALL_FAILED.
+    or config/floor_registry/delete) based on the `kind` argument. When Core
+    answers that the id does not exist, the tool raises RESOURCE_NOT_FOUND and
+    keeps Core's code as ha_error_code.
     """
 
     async def test_remove_area_nonexistent(self, mcp_client):
@@ -1096,8 +1082,8 @@ class TestAreaFloorDestructiveNegativeInputs:
         assert not data.get("success"), (
             f"Expected failure for nonexistent area, got success=True: {data}"
         )
-        assert data["error"]["code"] == "SERVICE_CALL_FAILED", (
-            f"Expected error code SERVICE_CALL_FAILED, got: {data.get('error')}"
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            f"Expected error code RESOURCE_NOT_FOUND, got: {data.get('error')}"
         )
         error_msg = str(data.get("error", "")).lower()
         assert "doesn't exist" in error_msg or "not found" in error_msg, (
@@ -1118,8 +1104,8 @@ class TestAreaFloorDestructiveNegativeInputs:
         assert not data.get("success"), (
             f"Expected failure for nonexistent floor, got success=True: {data}"
         )
-        assert data["error"]["code"] == "SERVICE_CALL_FAILED", (
-            f"Expected error code SERVICE_CALL_FAILED, got: {data.get('error')}"
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            f"Expected error code RESOURCE_NOT_FOUND, got: {data.get('error')}"
         )
         error_msg = str(data.get("error", "")).lower()
         assert "doesn't exist" in error_msg or "not found" in error_msg, (

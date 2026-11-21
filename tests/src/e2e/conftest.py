@@ -80,6 +80,14 @@ from ._conftest_testcontainer import (
     _reset_ha_in_process_caches,
     _wait_for_testcontainer_ready,
 )
+from ._conftest_topology import (
+    e2e_topology as e2e_topology,
+)
+from ._conftest_topology import (
+    pytest_configure,  # noqa: F401 (pytest hook)
+    pytest_generate_tests,  # noqa: F401 (pytest hook)
+    pytest_xdist_make_scheduler,  # noqa: F401 (pytest hook)
+)
 
 # Import test utilities
 from .utilities.assertions import parse_mcp_result
@@ -113,8 +121,11 @@ def _blueprint_http_server():
     assets_dir = Path(__file__).parent.parent.parent / "assets" / "blueprints"
     assets_dir.mkdir(parents=True, exist_ok=True)
 
-    handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(assets_dir))
-    handler.log_message = lambda *args: None  # type: ignore[method-assign]
+    class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    handler = partial(_QuietHandler, directory=str(assets_dir))
     srv = http.server.HTTPServer(("0.0.0.0", 0), handler)
     port = srv.server_address[1]
     t = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -380,6 +391,7 @@ def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR09
 @pytest.fixture(scope="session")
 async def ha_client(
     ha_container_with_fresh_config,
+    e2e_topology,
 ) -> AsyncGenerator[HomeAssistantClient]:
     """Create Home Assistant client connected to the container or HAOS QEMU."""
     container_info = ha_container_with_fresh_config
@@ -409,6 +421,7 @@ async def ha_client(
 @pytest.fixture(scope="session")
 async def mcp_server(
     ha_container_with_fresh_config,
+    e2e_topology,
 ) -> AsyncGenerator[HomeAssistantSmartMCPServer | None]:
     """Create MCP server instance connected to the container or HAOS QEMU.
 
@@ -451,12 +464,12 @@ async def mcp_server(
     )
 
     yield server
-    # Server cleanup handled by server.close()
+    await client.close()
 
 
 @pytest.fixture(scope="session")
 async def mcp_client(
-    ha_container_with_fresh_config, mcp_server, haos_stdio_config_dir
+    ha_container_with_fresh_config, mcp_server, haos_stdio_config_dir, e2e_topology
 ) -> AsyncGenerator[Client]:
     """Create FastMCP client — in-memory for in-process server, HTTP otherwise.
 

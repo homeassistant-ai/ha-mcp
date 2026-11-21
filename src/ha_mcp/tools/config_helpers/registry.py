@@ -4,10 +4,15 @@ import asyncio
 import logging
 from typing import Any
 
-from ...client.rest_client import HomeAssistantAPIError, HomeAssistantAuthError
+from ...client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ...errors import ErrorCode, create_auth_error, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_api import COMPONENT_INSTALL_HINT, ask_component
+from ..component_registries import fetch_registries_via_component
 from ..component_registry_lookup import fetch_entities_for_config_entry_via_component
 from ..config_write_helpers import apply_entity_category
 from ..helpers import exception_to_structured_error, raise_tool_error
@@ -214,6 +219,38 @@ def _registry_checks(
     return checks
 
 
+# check kind -> (registry kind the component reads, its key in the component's reply)
+_COMPONENT_REGISTRIES = {
+    "area": ("area", "areas"),
+    "labels": ("label", "labels"),
+    "category": ("category", "categories"),
+    "floor": ("floor", "floors"),
+}
+
+
+async def _lookups_via_component(
+    client: Any, checks: list[tuple[str, str, Any, dict[str, Any]]]
+) -> list[tuple[bool, list[dict[str, Any]], Exception | None, str | None]] | None:
+    """Answer every check from one read by the component, in ``checks`` order.
+
+    None when the component cannot be asked, refuses, times out, loses its
+    connection or answers in another shape: the caller sends Core's list
+    commands then.
+    """
+    reply = await fetch_registries_via_component(
+        client,
+        list(dict.fromkeys(_COMPONENT_REGISTRIES[kind][0] for kind, *_ in checks)),
+        category_scopes=[scope for kind, scope, *_ in checks if kind == "category"],
+    )
+    if reply is None:
+        return None
+    results: list[tuple[bool, list[dict[str, Any]], Exception | None, str | None]] = []
+    for kind, scope, *_ in checks:
+        rows = reply[_COMPONENT_REGISTRIES[kind][1]]
+        results.append((True, rows[scope] if kind == "category" else rows, None, None))
+    return results
+
+
 # HA WS error codes that mean the caller's credentials were rejected —
 # preserved by the client's failure envelope (rest_client keeps ``e.code``).
 _AUTH_WS_ERROR_CODES = frozenset({"unauthorized"})
@@ -310,8 +347,10 @@ async def validate_registry_ids(
     so the caller gets a clear error with the available IDs to choose from.
 
     ``categories`` maps a category SCOPE ("helpers", "automation", "script",
-    "scene") to the category_id being assigned in that scope; each distinct
-    scope is a separate registry lookup. Every lookup runs concurrently.
+    "scene") to the category_id being assigned in that scope. With the
+    ``ha_mcp_tools`` component one read answers every check; without it each
+    registry, and each distinct scope, is one of Core's list commands, sent
+    concurrently.
 
     Skips:
       - None values (caller did not pass — no change to apply). Inside
@@ -329,15 +368,21 @@ async def validate_registry_ids(
     if not checks:
         return
 
-    results = await asyncio.gather(
-        *(_ws_registry_lookup(client, message) for *_, message in checks)
-    )
+    results = await _lookups_via_component(client, checks)
+    if results is None:
+        results = await asyncio.gather(
+            *(_ws_registry_lookup(client, message) for *_, message in checks)
+        )
     for (kind, scope, value, _), (ok, items, exc, error_code) in zip(
         checks, results, strict=True
     ):
         _apply_registry_check(
             kind, scope, value, ok, items, exc, error_code, fail_closed
         )
+
+
+class _NameCheckSkipped(Exception):
+    """A name check's read got no answer from Home Assistant."""
 
 
 async def _find_collision_in_flow_helpers(
@@ -348,10 +393,21 @@ async def _find_collision_in_flow_helpers(
         result = await client.send_websocket_message(
             {"type": "config_entries/get", "domain": helper_type}
         )
-    except HomeAssistantAPIError, ConnectionError, TimeoutError:
+    except (
+        HomeAssistantAPIError,
+        HomeAssistantConnectionError,
+        ConnectionError,
+        TimeoutError,
+    ) as exc:
+        # A refused token is no outage: creating would only log in and fail again.
+        if isinstance(exc.__cause__, HomeAssistantAuthError):
+            raise
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
-        return None
+        logger.warning(
+            "config_entries/get failed; skipped the %s name check: %r", helper_type, exc
+        )
+        raise _NameCheckSkipped from exc
     entries = result.get("result", []) if isinstance(result, dict) else result
     if not isinstance(entries, list):
         return None
@@ -364,41 +420,16 @@ async def _find_collision_in_flow_helpers(
     return None
 
 
-def _flatten_helper_list_result(result: Any) -> list[Any]:
-    """Flatten a {type}/list WS response into a flat list of helper dicts.
+def _flatten_helper_list_result(result: dict[str, Any]) -> list[Any]:
+    """The records of a ``{type}/list`` reply; a refused reply has none.
 
-    Handles the person/list shape ({"storage": [...], "config": [...]}) and
-    the standard list shape ([...]). An unrecognised shape yields an empty
-    list, which downstream is indistinguishable from a helper type that has no
-    entries, so it is logged rather than dropped in silence.
+    person/list answers ``{"storage": [...], "config": [...]}`` (UI-created and
+    YAML persons); every other type answers the list itself.
     """
-    if isinstance(result, dict):
-        inner = result.get("result", [])
-        if isinstance(inner, dict):
-            items: list[Any] = []
-            matched = False
-            for key in ("storage", "config"):
-                sub = inner.get(key)
-                if isinstance(sub, list):
-                    matched = True
-                    items.extend(sub)
-            if not matched:
-                logger.warning(
-                    "Helper listing has neither a 'storage' nor a 'config' list "
-                    "(keys: %s); treating it as empty",
-                    sorted(inner),
-                )
-            return items
-        if isinstance(inner, list):
-            return inner
-    if isinstance(result, list):
-        return result
-    logger.warning(
-        "Cannot flatten a helper listing: expected a list or a storage/config "
-        "split, got %s; treating it as empty",
-        type(result).__name__,
-    )
-    return []
+    inner = result.get("result", [])
+    if isinstance(inner, dict):
+        return [*inner["storage"], *inner["config"]]
+    return list(inner)
 
 
 async def _find_collision_in_simple_helpers(
@@ -408,10 +439,19 @@ async def _find_collision_in_simple_helpers(
     Core's ``{type}/list``."""
     try:
         result = await client.send_websocket_message({"type": f"{helper_type}/list"})
-    except HomeAssistantAPIError, ConnectionError, TimeoutError:
+    except (
+        HomeAssistantAPIError,
+        HomeAssistantConnectionError,
+        ConnectionError,
+        TimeoutError,
+    ) as exc:
+        # A refused token is no outage: creating would only log in and fail again.
+        if isinstance(exc.__cause__, HomeAssistantAuthError):
+            raise
         # Connectivity issue — fail open so a transient outage doesn't block legit creates;
         # HA will auto-suffix duplicates on its own.
-        return None
+        logger.warning("%s/list failed; skipped the name check: %r", helper_type, exc)
+        raise _NameCheckSkipped from exc
     for item in _flatten_helper_list_result(result):
         if not isinstance(item, dict):
             continue
@@ -512,6 +552,12 @@ _NEAR_DUPLICATES_UNCHECKED = (
     "helper numbered (..._2). " + COMPONENT_INSTALL_HINT
 )
 
+NAME_CHECK_SKIPPED_WARNING = (
+    "No duplicate check ran: Home Assistant did not answer the helper list, so a "
+    "helper with this name may already exist, and Home Assistant numbers a new "
+    "one with the same name (..._2)."
+)
+
 
 async def _check_name_collision(
     client: Any,
@@ -528,7 +574,9 @@ async def _check_name_collision(
     Which names collide is Core's rule (its ``slugify``), so the component
     answers with Core's own function. Without the component only a helper
     with exactly this name or id is found, and Core numbers a near-duplicate:
-    the returned warning says so, for the caller's response.
+    the returned warning says so, for the caller's response. A lookup Home
+    Assistant does not answer lets the create go ahead with a warning that no
+    check ran.
 
     Empty / missing / whitespace-only `name` is left to Core's name check.
     """
@@ -543,11 +591,17 @@ async def _check_name_collision(
         existing_id = named["ids"][0] if named["ids"] else None
         slug = named.get("slug")
         not_stored = existing_id in (named.get("not_stored") or [])
-    # ha_config_set_helper checked the type: not storage means a helper flow.
-    elif helper_type not in SIMPLE_HELPER_TYPES:
-        existing_id = await _find_collision_in_flow_helpers(client, helper_type, name)
     else:
-        existing_id = await _find_collision_in_simple_helpers(client, helper_type, name)
+        # ha_config_set_helper checked the type: not storage means a helper flow.
+        find = (
+            _find_collision_in_simple_helpers
+            if helper_type in SIMPLE_HELPER_TYPES
+            else _find_collision_in_flow_helpers
+        )
+        try:
+            existing_id = await find(client, helper_type, name)
+        except _NameCheckSkipped:
+            return NAME_CHECK_SKIPPED_WARNING
 
     if existing_id is None:
         return unchecked

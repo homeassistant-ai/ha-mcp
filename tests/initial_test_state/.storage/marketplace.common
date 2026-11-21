@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "minor_version": 1,
+  "key": "marketplace.common",
+  "data": {
+    "archived_repositories": [],
+    "renamed_repositories": {},
+    "ignored_repositories": [],
+    "custom_repositories": []
+  }
+}

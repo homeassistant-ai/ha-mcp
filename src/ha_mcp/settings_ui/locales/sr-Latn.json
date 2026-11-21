@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Putanja sačuvanih alata",
     "advanced.code_mode_saved_tools_path.help": "JSON datoteka koja se koristi za očuvanje prilagođenih alata između ponovnih pokretanja.",
     "advanced.extra_yaml_write_keys.label": "Dodatni ključevi za pisanje u YAML",
-    "advanced.extra_yaml_write_keys.help": "Dodatni ključevi najvišeg nivoa koje ha_config_set_yaml može da upisuje pored ugrađenih, za integracije zasnovane na YAML-u na ovoj instalaciji (npr. alert2). Unesite jedan ključ po redu ili odvojite ključeve zarezima. Ključevi koji ponovo definišu sopstvenu granicu poverenja Home Assistant-a nikada se ne mogu dodati i ignorišu se. Zahteva prilagođenu komponentu 1.2.4 ili noviju.",
+    "advanced.extra_yaml_write_keys.help": "Dodatni ključevi najvišeg nivoa koje ha_config_set_yaml može da upisuje pored ugrađenih, za YAML-first integracije na ovoj instalaciji (npr. alert2). Unesite jedan ključ po liniji ili odvojite ključeve zarezima. Ključevi koji redefinišu sopstvenu granicu poverenja Home Assistant-a se nikada ne mogu dodati i biće ignorisani.",
     "advanced.redact_app_option_keys.label": "Dodatni ključevi opcija aplikacije za cenzurisanje",
     "advanced.redact_app_option_keys.help": "Nazivi opcija aplikacije (add-on) koje treba sakriti poput polja za lozinku, za aplikacije čija šema čuva tajnu kao običan tekst (na primer backup_password). Odvojite nazive zarezima ili novim redovima. Naziv se primenjuje na svaku aplikaciju; napišite app_slug:name da biste ga ograničili na jednu aplikaciju. Imenovanje grupe opcija obuhvata svaku opciju u njoj. Koristi se samo dok je opcija Redact Secrets uključena. Podrazumevano prazno.",
     "advanced.sidecar_pin_port.label": "Port sidecar-a korisničkog interfejsa podešavanja",
@@ -727,11 +727,7 @@
     },
     "ha_get_entity": {
       "title": "Preuzmi entitet",
-      "description": "Preuzmite informacije iz registra entiteta za jedan ili više entiteta."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Preuzmi izloženost entiteta",
-      "description": "Preuzmite postavke izloženosti entiteta - izlistajte sve ili preuzmite postavke za određeni entitet."
+      "description": "Dobijanje unosa iz registra entiteta, ili bez entiteta podešavanja registra i izloženih entiteta."
     },
     "ha_get_hacs_info": {
       "title": "Preuzmi HACS informacije",
@@ -762,8 +758,8 @@
       "description": "Preuzmite trenutni status, stanje i atribute jednog ili više entiteta (svetla, prekidači, senzori, klima, roletne, brave, fa"
     },
     "ha_get_system_health": {
-      "title": "Preuzmi zdravlje sistema (uklj. ZHA/Z-Wave/dijagnostiku integracija)",
-      "description": "Preuzmite zdravlje Home Assistant sistema, uključujući Zigbee (ZHA), Z-Wave JS i izveštaje o dijagnostici po integracijama."
+      "title": "Preuzmi zdravlje sistema (uklj. ZHA/Z-Wave/Thread/Matter mreže)",
+      "description": "Preuzmi zdravlje Home Assistant sistema, uključujući Zigbee (ZHA), Z-Wave JS, Thread i Matter mreže."
     },
     "ha_get_todo": {
       "title": "Preuzmi obaveze",
@@ -779,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Izlistaj spratove i oblasti",
-      "description": "Izlistajte spratove sortirane po nivou u rastućem redosledu, svaki sa svojim pridruženim oblastima, plus oblasti bez sprata."
+      "description": "Prikazuje spratove redosledom kojim ih Home Assistant čuva, svaki sa ugnježdenim dodeljenim oblastima, kao i oblasti bez sprata."
     },
     "ha_list_services": {
       "title": "Izlistaj dostupne usluge",
@@ -874,8 +870,8 @@
       "description": "Pretražite entitete (svetla, senzore, prekidače, klimatizaciju itd.) po imenu, domenu ili oblasti — KAO I unutar automatizacija/skripti"
     },
     "ha_set_area_or_floor": {
-      "title": "Kreirajte ili ažurirajte oblast ili sprat",
-      "description": "Kreirajte ili ažurirajte Home Assistant oblast ili sprat."
+      "title": "Kreiranje, ažuriranje ili promena redosleda oblasti ili spratova",
+      "description": "Kreirajte, ažurirajte ili promenite redosled oblasti ili spratova u sistemu Home Assistant."
     },
     "ha_set_device": {
       "title": "Podesite uređaj",
@@ -883,7 +879,7 @@
     },
     "ha_set_entity": {
       "title": "Podesite entitet",
-      "description": "Ažurirajte svojstva entiteta u registru entiteta."
+      "description": "Ažuriranje unosa u registru entiteta, ili bez entity_id podešavanja za ceo registar."
     },
     "ha_set_integration": {
       "title": "Podesite integraciju",

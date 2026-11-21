@@ -247,13 +247,11 @@ def _raise_save_failure(domain: str, path: str, response: dict[str, Any]) -> NoR
     Core answers with three codes: ``already_exists`` when the path is taken
     and ``allow_override`` was not sent, ``invalid_format`` when the YAML is
     not a valid blueprint for the domain, and ``unknown_error`` for a
-    filesystem failure. The message text is matched as well, so a core that
-    sends a bare string still classifies.
+    filesystem failure.
     """
     message = error_text(response, "Failed to save blueprint")
     code = error_code(response)
-    lowered = message.lower()
-    if code == "already_exists" or "already exists" in lowered:
+    if code == "already_exists":
         mapped = ErrorCode.RESOURCE_ALREADY_EXISTS
         suggestions = [
             (
@@ -262,7 +260,7 @@ def _raise_save_failure(domain: str, path: str, response: dict[str, Any]) -> NoR
             ),
             "Or save under a different path to keep both",
         ]
-    elif code == "invalid_format" or "invalid" in lowered:
+    elif code == "invalid_format":
         mapped = ErrorCode.VALIDATION_FAILED
         suggestions = [
             (
@@ -394,12 +392,6 @@ def _raise_import_failure(url: str, response: dict[str, Any]) -> NoReturn:
         "Ensure Home Assistant has internet access",
         "Try importing from a different source (GitHub, Community, direct URL)",
     ]
-    if "already exists" in error_msg.lower():
-        suggestions.insert(
-            0,
-            'Blueprint already exists - use ha_manage_blueprints(action="list") '
-            "to see installed blueprints",
-        )
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
@@ -428,7 +420,7 @@ def _raise_import_save_failure(
     # Reachable despite the early exists check: a race between
     # import and save, or an installed file that failed to load
     # (core reports exists=false for those)
-    already_exists = "already exists" in save_error.lower()
+    already_exists = error_code(response) == "already_exists"
     if already_exists:
         suggestions.insert(
             0,

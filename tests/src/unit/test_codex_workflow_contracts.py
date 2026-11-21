@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -30,9 +31,9 @@ def bash():
             "Git Bash is required; never use the Windows WSL launcher"
         )
         return str(executable)
-    executable = shutil.which("bash")
-    assert executable
-    return executable
+    found = shutil.which("bash")
+    assert found
+    return found
 
 
 def shell(script, directory, **env):
@@ -178,7 +179,7 @@ def test_collects_late_replies_or_rejects_incomplete_context(tmp_path, failure):
             }
         }
     ]
-    later_pages = [
+    later_pages: list[Any] = [
         {
             "data": {
                 "node": {

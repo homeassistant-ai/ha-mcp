@@ -15,11 +15,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 
 
-def _workflow(path: Path) -> dict[str, Any]:
+def _workflow(path: Path) -> dict[Any, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def _triggers(data: dict[str, Any]) -> set[str]:
+def _triggers(data: dict[Any, Any]) -> set[str]:
     on_node = data.get(True) or data.get("on") or {}
     if isinstance(on_node, str):
         return {on_node}
@@ -340,7 +340,7 @@ def test_dev_release_tag_cleanup_uses_authenticated_github_api() -> None:
 
 
 def test_the_dev_release_tags_the_component_stamped_for_its_build() -> None:
-    # HACS installs a pre-release from the commit its tag names (#2763), so that
+    # The Marketplace installs a pre-release from the commit its tag names (#2763), so that
     # commit must pin the ha-mcp-dev build the release installs, not master's
     # stable pin.
     job = _workflow(_WORKFLOW_DIR / "publish-dev.yml")["jobs"]["create-prerelease"]

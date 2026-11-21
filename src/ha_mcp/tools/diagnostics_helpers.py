@@ -107,8 +107,7 @@ async def _fetch_raw_diagnostics(
             )
             logger.warning("Diagnostics fetch API error: %s", e)
     except HomeAssistantConnectionError as e:
-        msg = str(e)
-        if "timeout" in msg.lower():
+        if e.timed_out:
             result["error"] = (
                 f"Diagnostics fetch timed out after {timeout_seconds:.1f}s "
                 "(ZHA dumps on large networks can exceed this; the integration "

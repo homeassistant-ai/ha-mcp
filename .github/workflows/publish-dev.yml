@@ -73,7 +73,7 @@ jobs:
           echo "Dev version: $DEV_VERSION (sha: $SHORT_SHA)"
           echo "$DEV_VERSION" > dev-version.txt
 
-      # The mirror sync pins the HACS pre-release to exactly this build, so it
+      # The mirror sync pins the component pre-release to exactly this build, so it
       # reads the number from here rather than recomputing it.
       - name: Hand the dev version to the mirror sync
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -146,7 +146,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -174,7 +174,7 @@ jobs:
 
   create-prerelease:
     name: Create GitHub pre-release
-    # HACS installs this tag, and Home Assistant then installs its pin from
+    # The Marketplace installs this tag, and Home Assistant then installs its pin from
     # PyPI: only master's build is the dev pre-release (a branch dispatch
     # computes master's number), and only once PyPI serves it.
     needs: [prepare, publish-pypi-dev]
@@ -190,7 +190,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # HACS installs a pre-release from the commit its tag names, so that
+      # The Marketplace installs a pre-release from the commit its tag names, so that
       # commit must carry the component stamped with this build's version and
       # its ha-mcp-dev pin (#2763). The stamp goes on a commit of its own that
       # only the tag references; master is untouched.

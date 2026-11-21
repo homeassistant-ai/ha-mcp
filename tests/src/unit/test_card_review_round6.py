@@ -1,277 +1,287 @@
-"""Regressions reported by Patch76 and reproduced on embedded HA 2026.10."""
+"""Regressions reported by Patch76 and reproduced on embedded HA 2026.10.
+
+The card index runs on the installed frontend, the index build on a real
+``hass``, and custom cards through their real QuickJS sandbox.
+"""
+
+from __future__ import annotations
 
 import asyncio
+import os
+from contextlib import ExitStack
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
-from .test_card_definitions import _definitions, cc, cd
-
-
-def test_open_object_struct_keeps_editor_threshold_fields():
-    import quickjs
-
-    engine = quickjs.Function("engine", cd._ENGINE_JS)
-    engine(
-        "struct",
-        {
-            "src": "return {schema: {severity: {type: 'object'}}}",
-            "bindings": {},
-            "key": "gauge",
-        },
-    )
-    types = engine("field_types", {"key": "gauge"})["value"]
-    fields = [
-        {
-            "name": "severity",
-            "schema": [{"name": "green"}, {"name": "yellow"}, {"name": "red"}],
-        }
-    ]
-    assert cd._stored_fields(fields, types) == fields
+from ._card_definitions_core import (
+    CardIndex,
+    assert_described_without_a_form,
+    cc,
+    cd,
+    constrained_core,
+)
+from ._card_definitions_core import card_index as card_index
+from ._card_definitions_core import custom_cards as custom_cards
+from ._card_definitions_core import definitions as definitions
+from ._card_definitions_core import fresh_card_state as fresh_card_state
 
 
-def test_alarm_form_can_describe_options_without_selected_states():
-    import quickjs
-
-    engine = quickjs.Function("engine", cd._ENGINE_JS)
-    result = engine(
-        "schema",
-        {
-            "src": "return (localize, stateObj, states) => [{name: 'states', selector: {select: {options: ['armed_home'].map(s => ({value: s, disabled: !states.includes(s)}))}}}]",
-            "bindings": {},
-        },
-    )
-    assert (
-        result["value"][0]["selector"]["select"]["options"][0]["value"] == "armed_home"
+def _card_source(tag: str, *members: str) -> str:
+    """A custom card element ``tag`` whose class body is ``members``."""
+    name = tag.replace("-", "_")
+    body = "\n".join(members)
+    return (
+        f"class {name} extends HTMLElement {{\n{body}\n}}\n"
+        f"customElements.define({tag!r}, {name});\n"
     )
 
 
-def test_form_defaults_are_not_overridden_by_empty_selected_options():
-    import quickjs
-
-    engine = quickjs.Function("engine", cd._ENGINE_JS)
-    result = engine(
-        "schema",
-        {
-            "src": "return (localize, entity, icon = 'mdi:link') => [{name: 'icon', selector: {icon: {placeholder: icon}}}]",
-            "bindings": {},
-        },
-    )
-    assert result["value"][0]["selector"]["icon"]["placeholder"] == "mdi:link"
+def _write_card(path: Path, source: str) -> Path:
+    path.write_text(source, encoding="utf-8")
+    return path
 
 
-@pytest.mark.asyncio
+def _custom_warnings(
+    definitions: cd.CardDefinitions, custom_cards: cc.CustomCards, tags: list[str]
+) -> list[str]:
+    """What a dashboard save says about one custom card per tag."""
+    cards = [{"type": f"custom:{tag}", "entities": 5} for tag in tags]
+    return definitions.validate({"views": [{"cards": cards}]}, custom_cards)
+
+
 @pytest.mark.parametrize("failure", ["runtime", "index"])
-async def test_failed_initialization_retries_after_cooldown(monkeypatch, failure):
-    definitions = object()
-    runtime = AsyncMock(
-        side_effect=[False, True] if failure == "runtime" else [True, True]
-    )
-    hass = MagicMock()
-    hass.async_create_background_task = lambda coro, name: asyncio.create_task(coro)
-    hass.async_add_executor_job = AsyncMock(
-        side_effect=[None, definitions] if failure == "index" else [definitions]
-    )
-    monkeypatch.setattr(cd, "_definitions", None)
-    monkeypatch.setattr(cd, "_build_task", None)
-    monkeypatch.setattr(cd, "_build_failed_at", None)
-    monkeypatch.setattr(cd, "async_ensure_runtime", runtime)
-    assert await cd.async_get_definitions(hass) is None
-    assert await cd.async_get_definitions(hass) is None
-    runtime.assert_awaited_once()
-    monkeypatch.setattr(
-        cd, "_build_failed_at", cd.time.monotonic() - cd._BUILD_RETRY_SECONDS - 1
-    )
-    assert await asyncio.gather(
+async def test_failed_initialization_retries_after_cooldown(
+    hass: HomeAssistant,
+    card_index: CardIndex,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    """A card index that failed to start is not rebuilt on every request; once
+    the cooldown ends, concurrent callers share one new build."""
+    with ExitStack() as failing:
+        if failure == "runtime":
+            # Home Assistant pins another QuickJS provider: the real check refuses.
+            failing.enter_context(
+                constrained_core(monkeypatch, tmp_path, "quickjs-ng==0.0.0\n")
+            )
+        else:
+            card_index.frontend.without_cards()
+
+        assert await cd.async_get_definitions(hass) is None
+        assert await cd.async_get_definitions(hass) is None
+        card_index.runtime.assert_awaited_once()
+
+    card_index.frontend.readable()
+    monkeypatch.setattr(cd, "BUILD_RETRY_SECONDS", 0)
+    first, second = await asyncio.gather(
         cd.async_get_definitions(hass), cd.async_get_definitions(hass)
-    ) == [definitions, definitions]
-    assert runtime.await_count == 2
-    assert await cd.async_get_definitions(hass) is definitions
+    )
+
+    assert first is not None
+    assert second is first
+    assert card_index.runtime.await_count == 2
+    assert await cd.async_get_definitions(hass) is first
+    assert card_index.runtime.await_count == 2
 
 
-def test_missing_builtin_form_has_no_field_coverage_claim():
-    definitions = _definitions({"alert"}, {"alert": None})
-    definitions._strings = {}
-    definitions._editor_body = MagicMock(return_value="")
-    result = definitions.describe("alert")
-    assert result["fields"] is None
-    assert "field_coverage" not in result and "note" not in result
+_BROKEN_EDITORS = {
+    "throws": "static getConfigElement() { throw new Error('editor unavailable'); }",
+    "never_returns": "static getConfigElement() { while (true) {} }",
+}
 
 
-@pytest.fixture
-def broken_editor_bundle():
-    dom = """
-      globalThis.__linkedom = {
-        HTMLElement: class HTMLElement {},
-        parseHTML: function () { return {
-          document: {}, customElements: {define: function () {}}
-        }; }
-      };
-    """
-    source = """
-      class Card extends HTMLElement {
-        setConfig(c) {if (!c.entity) throw new Error('needs an entity');}
-        static getConfigElement() {throw new Error('editor unavailable');}
-      }
-      customElements.define('test-card', Card);
-    """
-    bundle = cc._Bundle(dom, source)
-    yield bundle
-    bundle.close()
+@pytest.fixture(params=sorted(_BROKEN_EDITORS))
+def broken_editor_card(
+    request: pytest.FixtureRequest, tmp_path: Path, custom_cards: cc.CustomCards
+) -> str:
+    """The tag of a loaded custom card whose editor cannot be prepared."""
+    path = _write_card(
+        tmp_path / "test-card.js",
+        _card_source(
+            "test-card",
+            "setConfig(c) {if (!c.entity) throw new Error('needs an entity');}",
+            _BROKEN_EDITORS[request.param],
+        ),
+    )
+    custom_cards.refresh([path])
+    return "test-card"
 
 
-@pytest.mark.parametrize("failure", ["throws", "times_out"])
 def test_editor_failure_does_not_hide_card_verdict(
-    broken_editor_bundle, monkeypatch, failure
-):
-    bundle = broken_editor_bundle
-    if failure == "times_out":
-        monkeypatch.setattr(
-            bundle, "_prepare_tag", MagicMock(side_effect=TimeoutError("editor budget"))
-        )
+    custom_cards: cc.CustomCards, broken_editor_card: str
+) -> None:
     expected = [{"source": "card", "message": "needs an entity"}]
-    assert bundle.check("test-card", {}) == expected
-    assert bundle.check("test-card", {}) == expected
-    assert bundle.check("test-card", {"entity": "light.test"}) == []
+
+    assert custom_cards.check(broken_editor_card, {}) == expected
+    assert custom_cards.check(broken_editor_card, {}) == expected
+    assert custom_cards.check(broken_editor_card, {"entity": "light.test"}) == []
 
 
-def test_missing_custom_form_has_no_field_coverage_claim(broken_editor_bundle):
-    custom = cc.CustomCards("unused")
-    custom._owner = MagicMock(return_value=broken_editor_bundle)
-    result = custom.describe("test-card")
-    assert result["fields"] is None
-    assert "field_coverage" not in result and "note" not in result
+def test_missing_custom_form_has_no_field_coverage_claim(
+    custom_cards: cc.CustomCards, broken_editor_card: str
+) -> None:
+    assert_described_without_a_form(custom_cards.describe(broken_editor_card))
 
 
-def test_looping_editor_cannot_consume_later_cards_budget():
-    dom = "globalThis.__linkedom = {HTMLElement: class {}, parseHTML: () => ({document: {}, customElements: {define() {}}})};"
-    source = """
-      class Card extends HTMLElement {
-        setConfig() {throw new Error('card verdict');}
-        static getConfigElement() {return {setConfig() {while (true) {}}};}
-      }
-      customElements.define('looping-editor-card', Card);
-    """
-    bundle = cc._Bundle(dom, source)
-    limits: list[float] = []
-    context_call = bundle._context_call
+def test_looping_editor_cannot_consume_later_cards_budget(
+    tmp_path: Path, custom_cards: cc.CustomCards
+) -> None:
+    """A looping editor is cut off at its own short budget, so a card checked
+    afterwards that needs longer than that still gets its full time."""
+    source = _card_source(
+        "looping-editor-card",
+        "setConfig() {throw new Error('card verdict');}",
+        "static getConfigElement() {return {setConfig() {while (true) {}}};}",
+    ) + _card_source(
+        "slow-card",
+        "setConfig() {const t = Date.now(); while (Date.now() - t < 1000) {}"
+        " throw new Error('slow verdict');}",
+    )
+    custom_cards.refresh([_write_card(tmp_path / "cards.js", source)])
+    looping = [{"source": "card", "message": "card verdict"}]
 
-    def record_limits(method: str, *args: Any) -> Any:
-        if method == "set_time_limit":
-            limits.append(args[0])
-        return context_call(method, *args)
+    assert custom_cards.check("looping-editor-card", {}) == looping
+    assert custom_cards.check("slow-card", {}) == [
+        {"source": "card", "message": "slow verdict"}
+    ]
+    assert custom_cards.check("looping-editor-card", {}) == looping
 
-    bundle._context_call = record_limits  # type: ignore[method-assign]
-    try:
-        assert bundle.check("looping-editor-card", {}) == [
-            {"source": "card", "message": "card verdict"}
-        ]
-        # The looping editor (preparing it included) runs under its own short
-        # budget, and the card budget is restored afterwards, so later cards keep
-        # theirs.
-        assert cc._EDITOR_SECONDS in limits
-        assert min(limits) < cc._CALL_SECONDS
-        assert all(
-            limit <= cc._EDITOR_SECONDS for limit in limits if limit != cc._CALL_SECONDS
+
+@pytest.mark.usefixtures("fresh_card_state")
+def test_looping_editors_do_not_exhaust_the_custom_save_budget(
+    tmp_path: Path, custom_cards: cc.CustomCards, definitions: cd.CardDefinitions
+) -> None:
+    """One editor that never returns cannot use up the time a save gives all
+    its custom cards: every card is still checked."""
+    tags = ["a-loop-card", "b-loop-card", "c-loop-card"]
+    source = "".join(
+        _card_source(
+            tag,
+            "setConfig() {throw new Error('card verdict');}",
+            "static getConfigElement() {while (true) {}}",
         )
-        assert limits[-1] == cc._CALL_SECONDS
-        assert bundle.check("looping-editor-card", {}) == [
-            {"source": "card", "message": "card verdict"}
-        ]
-    finally:
-        bundle.close()
+        for tag in tags
+    )
+    custom_cards.refresh([_write_card(tmp_path / "cards.js", source)])
+
+    warnings = _custom_warnings(definitions, custom_cards, tags)
+
+    assert warnings == [
+        f"views[0].cards[{i}] (custom:{tag}): card verdict"
+        for i, tag in enumerate(tags)
+    ]
 
 
-def test_synchronous_editor_form_does_not_drain_unrelated_timers():
-    dom = "globalThis.__linkedom = {HTMLElement: class {}, parseHTML: () => ({document: {}, customElements: {define() {}}})};"
-    source = """
-      class Card extends HTMLElement {
-        static getConfigForm() {return {schema: [{name: 'entity', selector: {entity: {}}}]};}
-        static getConfigElement() {return {setConfig() {}};}
-      }
-      customElements.define('sync-editor-card', Card);
-    """
-    bundle = cc._Bundle(dom, source)
-    try:
-        bundle._settle = MagicMock(side_effect=TimeoutError("unrelated timer"))
-        assert bundle.form("sync-editor-card") == [
-            {"name": "entity", "selector": {"entity": {}}}
-        ]
-        bundle._settle.assert_not_called()
-    finally:
-        bundle.close()
+def test_synchronous_editor_form_does_not_drain_unrelated_timers(
+    tmp_path: Path, custom_cards: cc.CustomCards
+) -> None:
+    """The editor of a card whose form is ready at once is not waited on, so a
+    timer some other code scheduled (here one that never finishes) does not
+    make the form unavailable."""
+    source = _card_source(
+        "sync-editor-card",
+        "static getConfigForm() {return {schema: [{name: 'entity', selector: {entity: {}}}]};}",
+        "static getConfigElement() {setTimeout(() => {while (true) {}});"
+        " return {setConfig() {}};}",
+    )
+    custom_cards.refresh([_write_card(tmp_path / "card.js", source)])
+
+    described = custom_cards.describe("sync-editor-card")
+
+    assert described is not None
+    assert described["fields"] == [{"name": "entity", "selector": {"entity": {}}}]
 
 
+@pytest.mark.usefixtures("fresh_card_state")
 @pytest.mark.parametrize(
     "body",
     [
-        "throw new TypeError('entity must be a string')",
-        "config.entities.map(x => x)",
-        "this.attachInternals()",
+        pytest.param("throw new TypeError('entity must be a string')", id="thrown"),
+        pytest.param("c.entities.map(x => x)", id="not a function"),
+        pytest.param("this.attachInternals()", id="browser api"),
     ],
 )
-def test_type_errors_are_inconclusive_instead_of_silently_discarded(body):
-    dom = "globalThis.__linkedom = {HTMLElement: class {}, parseHTML: () => ({document: {}, customElements: {define() {}}})};"
-    source = (
-        "class Card extends HTMLElement {setConfig(config) {"
-        + body
-        + "}} customElements.define('type-error-card', Card);"
-    )
-    bundle = cc._Bundle(dom, source)
-    try:
-        result = bundle.check("type-error-card", {"entities": 5})
-        assert len(result) == 1 and result[0]["source"] == "inspection"
-        assert result[0]["message"].startswith("TypeError: ")
-        warning = cd._explain_message(
-            "type-error-card", result[0]["message"], inconclusive=True
-        )
-        assert (
-            "check inconclusive" in warning
-            and "does not establish invalid configuration" in warning
-        )
-        if body.startswith("throw"):
-            assert "entity must be a string" in warning
-    finally:
-        bundle.close()
+def test_type_errors_are_inconclusive_instead_of_silently_discarded(
+    tmp_path: Path,
+    custom_cards: cc.CustomCards,
+    definitions: cd.CardDefinitions,
+    body: str,
+) -> None:
+    source = _card_source("type-error-card", f"setConfig(c) {{{body}}}")
+    custom_cards.refresh([_write_card(tmp_path / "card.js", source)])
 
+    [warning] = _custom_warnings(definitions, custom_cards, ["type-error-card"])
 
-@pytest.mark.parametrize("source", [b";" * 65, ("é" * 33).encode()])
-def test_source_growth_after_stat_is_bounded_before_runtime_creation(
-    tmp_path, monkeypatch, source
-):
-    path = tmp_path / "growing-card.js"
-    path.write_bytes(b";")
-    earlier_size = path.stat().st_size
-    path.write_bytes(source)
-    monkeypatch.setattr(cc, "_MAX_SOURCE_BYTES", 64)
-    runtime = MagicMock()
-    monkeypatch.setattr(cc, "_Bundle", runtime)
-    cards = cc.CustomCards("unused")
-    assert cards._load(path, earlier_size) is None
-    assert cards._skipped[path] == "source size limit"
-    runtime.assert_not_called()
-
-
-def test_one_editor_cannot_reserve_the_entire_custom_save_budget(monkeypatch):
-    bundle = object.__new__(cc._Bundle)
-    bundle._prepared = set()
-    bundle._context_call = MagicMock()
-    bundle.engine = MagicMock(return_value={"value": True})
-    bundle._settle = MagicMock()
-    bundle._prepare_tag("slow-editor")
-    first_limit = bundle._context_call.call_args_list[0].args[1]
-    assert first_limit < cd._CUSTOM_WAIT_SECONDS / 2
+    assert warning.startswith("views[0].cards[0] (custom:type-error-card): ")
+    assert "configuration check inconclusive (TypeError: " in warning
+    assert "does not establish invalid configuration" in warning
+    if body.startswith("throw"):
+        assert "entity must be a string" in warning
 
 
 @pytest.mark.parametrize(
-    "card_type,key,other",
+    ("grown", "reason"),
     [
+        pytest.param(b";" * 65, "source size limit", id="one byte over"),
+        pytest.param(
+            ("é" * 33).encode(), "source size limit", id="over in bytes, not characters"
+        ),
+        pytest.param(b";" * 64, None, id="exactly at the limit"),
+    ],
+)
+def test_source_growth_after_stat_is_bounded_before_runtime_creation(
+    tmp_path: Path,
+    custom_cards: cc.CustomCards,
+    monkeypatch: pytest.MonkeyPatch,
+    grown: bytes,
+    reason: str | None,
+) -> None:
+    """A file that grows between being measured and being read is still held
+    to the size limit; one that stays within it loads."""
+    path = tmp_path / "growing-card.js"
+    path.write_bytes(b";")
+    monkeypatch.setattr(cc, "MAX_SOURCE_BYTES", 64)
+    measured = Path.stat
+
+    def stat_then_grow(self: Path, **kwargs: Any) -> os.stat_result:
+        result = measured(self, **kwargs)
+        if self == path:
+            path.write_bytes(grown)
+        return result
+
+    with monkeypatch.context() as racing:
+        racing.setattr(Path, "stat", stat_then_grow)
+        custom_cards.refresh([path])
+
+    skipped = [{"resource": str(path), "reason": reason}] if reason else []
+    assert custom_cards.status() == {
+        "state": "partial" if reason else "ready",
+        "resources": skipped,
+    }
+
+
+@pytest.mark.parametrize(
+    ("card_type", "key", "other"),
+    [
+        # Options the installed frontend's editor does not list, beside a similar
+        # one it does: the frontend's ``show_camera`` and ``item_tap_action``.
         ("area", "show_name", "show_camera"),
         ("todo-list", "tap_action", "item_tap_action"),
     ],
 )
-def test_advice_does_not_rename_options_with_different_semantics(card_type, key, other):
-    definitions = _definitions({card_type}, {card_type: [other]})
-    warning = definitions._explain(card_type, {"path": [key], "type": "never"})
-    assert warning == f"'{key}' is not listed in the {card_type} editor schema"
+def test_advice_does_not_rename_options_with_different_semantics(
+    definitions: cd.CardDefinitions, card_type: str, key: str, other: str
+) -> None:
+    """An option the editor does not list is reported as not listed, even when
+    the editor lists a similarly named option that means something else."""
+    cards = [{"type": card_type, key: "x"}, {"type": card_type, other: "x"}]
+
+    warnings = definitions.validate({"views": [{"cards": cards}]})
+
+    assert [w for w in warnings if "not listed" in w] == [
+        f"views[0].cards[0] ({card_type}): editor schema advisory; runtime "
+        f"support may differ: '{key}' is not listed in the {card_type} editor schema"
+    ]

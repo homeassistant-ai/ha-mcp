@@ -161,7 +161,7 @@ async def test_disabled_guard_does_not_resolve_default_storage(
     def unexpected_resolution() -> Path:
         pytest.fail("Disabled coordination must not probe default storage")
 
-    monkeypatch.setattr(bm, "_resolve_default_dir", unexpected_resolution)
+    monkeypatch.setattr(bm, "resolve_default_dir", unexpected_resolution)
     settings = _settings(ENABLE_AUTO_BACKUP=False)
     manager = get_backup_manager(core_client, settings)
     async with manager.config_entry_write_guard("entry"):

@@ -278,7 +278,7 @@ _OLD_DEV_TAGS = ["v2.2.3-dev.423", "v9.0.0-dev.996", "v9.0.0-dev.997"]
 
 class TestMirrorReleaseOnTag:
     def test_keeps_as_many_dev_pre_releases_as_the_main_repository(self) -> None:
-        # Past HACS's 30-release window a stable release behind the dev
+        # Past the Marketplace's 30-release window a stable release behind the dev
         # builds is no longer seen, so the mirror prunes like publish-dev.yml.
         prune = _release_on_tag_step("Keep the newest five dev pre-releases")
         retire = _release_on_tag_step("Retire superseded dev pre-releases")
@@ -421,7 +421,7 @@ class TestDevVersionScript:
     ) -> None:
         # A push build whose checkout finds master already advanced must not
         # take the next push's number: PyPI keeps the first upload, so the
-        # newer build would be dropped while the HACS pre-release pinned it.
+        # newer build would be dropped while the component pre-release pinned it.
         repo = tmp_path / "repo"
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()

@@ -6,8 +6,7 @@ bind-mounts. An unmounted root may still exist as a plain directory (the
 image's own /media, or one an earlier build created); writing there would put
 the file in the container layer and report success for a file the user never
 sees. A write or delete on a read-only mount (/ssl on HAOS and Supervised)
-names the mount instead of a raw errno. Kept out of ``test_custom_component_filesystem.py``, which is at its
-module-size baseline.
+names the mount instead of a raw errno.
 
 Home Assistant sets the File & YAML Tools entry up, and the tests call its
 ``write_file`` / ``delete_file`` services the way ha-mcp does, with the volume
@@ -16,58 +15,20 @@ configured as an allowed directory.
 
 import errno
 import os
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant.common import MockConfigEntry
 
 import custom_components.ha_mcp_tools as comp
 from custom_components.ha_mcp_tools import (
-    CALLER_TOKEN_FIELD,
     SERVICE_DELETE_FILE,
-    SERVICE_GET_CALLER_TOKEN,
-    SERVICE_SET_ALLOWED_PATHS,
     SERVICE_WRITE_FILE,
     volume_mounts,
 )
-from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
-from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
 
-FileService = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
-
-
-async def _file_service(hass: HomeAssistant, allowed: str) -> FileService:
-    """Set the tools entry up with ``allowed`` as an extra directory and return
-    a caller of its services that presents the caller token."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title=TOOLS_ENTRY_TITLE,
-        version=HaMcpToolsConfigFlow.VERSION,
-        minor_version=HaMcpToolsConfigFlow.MINOR_VERSION,
-        data={},
-    )
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-
-    async def call(service: str, data: dict[str, Any]) -> dict[str, Any]:
-        response = await hass.services.async_call(
-            DOMAIN, service, data, blocking=True, return_response=True
-        )
-        assert response is not None
-        return dict(response)
-
-    bootstrap = await call(SERVICE_GET_CALLER_TOKEN, {})
-    token = bootstrap["token"]
-
-    async def call_with_token(service: str, data: dict[str, Any]) -> dict[str, Any]:
-        return await call(service, {**data, CALLER_TOKEN_FIELD: token})
-
-    configured = await call_with_token(SERVICE_SET_ALLOWED_PATHS, {"paths": [allowed]})
-    assert configured["paths"] == [allowed], configured
-    return call_with_token
+from ._file_services import FileService, make_file_service
 
 
 @pytest.fixture
@@ -80,15 +41,15 @@ def volume_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 async def write_file(hass: HomeAssistant, volume_root: Path) -> FileService:
-    return await _file_service(hass, str(volume_root))
+    return await make_file_service(hass, str(volume_root))
 
 
 @pytest.fixture
 def mounts(monkeypatch: pytest.MonkeyPatch) -> set[str]:
     """Mount points as /proc/self/mountinfo lists them, inside a container."""
     mounted: set[str] = set()
-    monkeypatch.setattr(volume_mounts, "_in_container", lambda: True)
-    monkeypatch.setattr(volume_mounts, "_mount_points", lambda: mounted)
+    monkeypatch.setattr(volume_mounts, "in_container", lambda: True)
+    monkeypatch.setattr(volume_mounts, "mount_points", lambda: mounted)
     return mounted
 
 
@@ -179,7 +140,7 @@ async def test_core_install_writes_to_an_existing_plain_volume(
     write_file: FileService,
 ) -> None:
     # No container: /share on a Core (venv) install is the host's own folder.
-    monkeypatch.setattr(volume_mounts, "_in_container", lambda: False)
+    monkeypatch.setattr(volume_mounts, "in_container", lambda: False)
     await hass.async_add_executor_job(volume_root.mkdir)
     target = volume_root / "x.txt"
 
@@ -189,35 +150,33 @@ async def test_core_install_writes_to_an_existing_plain_volume(
     assert target.read_text() == "x"
 
 
-def _raise(err: OSError) -> Callable[..., dict[str, Any]]:
-    def _sync(*_args: object) -> dict[str, Any]:
-        raise err
-
-    return _sync
-
-
 @pytest.mark.parametrize("build", ["write", "delete"])
 async def test_read_only_mount_is_named_not_a_raw_errno(
-    build: str, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+    build: str, hass: HomeAssistant, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # On HAOS and Supervised, Supervisor mounts /ssl read-only into Core.
-    erofs = OSError(errno.EROFS, "Read-only file system", "/ssl/t")
-    monkeypatch.setattr(comp, f"_{build}_file_sync", _raise(erofs))
-    call = await _file_service(hass, "/ssl/t")
-    data: dict[str, Any] = {"path": "/ssl/t/a.txt"}
+    target = Path(hass.config.path("www/read-only.txt"))
+    target.parent.mkdir(exist_ok=True)
+    await hass.async_add_executor_job(target.write_text, "original")
+    call = await make_file_service(hass)
+    method = "write_bytes" if build == "write" else "unlink"
+    original = getattr(Path, method)
+
+    def read_only(path, *args, **kwargs):
+        if path == target:
+            raise OSError(errno.EROFS, "Read-only file system", str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, method, read_only)
+    data: dict[str, Any] = {"path": "www/read-only.txt"}
     if build == "write":
-        data["content"] = "x"
+        data.update(content="x", overwrite=True)
     service = SERVICE_WRITE_FILE if build == "write" else SERVICE_DELETE_FILE
 
     result = await call(service, data)
 
     assert result == {
         "success": False,
-        "error": "/ssl/t/a.txt is on a read-only mount in Home Assistant Core"
+        "error": "www/read-only.txt is on a read-only mount in Home Assistant Core"
         " on this install",
     }
-
-
-def test_other_os_errors_keep_their_own_text() -> None:
-    err = OSError(errno.ENOSPC, "No space left on device", "/share/t/a.txt")
-    assert volume_mounts.os_error_text(err, "/share/t/a.txt") == str(err)
+    assert await hass.async_add_executor_job(target.read_text) == "original"

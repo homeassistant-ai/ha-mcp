@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Ścieżka zapisanych narzędzi",
     "advanced.code_mode_saved_tools_path.help": "Plik JSON używany do trwałego zachowania niestandardowych narzędzi między ponownymi uruchomieniami.",
     "advanced.extra_yaml_write_keys.label": "Dodatkowe klucze zapisu YAML",
-    "advanced.extra_yaml_write_keys.help": "Dodatkowe klucze najwyższego poziomu, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na plikach YAML w tej instalacji (np. alert2). Wpisz jeden klucz w linii lub oddziel klucze przecinkami. Klucze redefiniujące własną granicę zaufania Home Assistant nigdy nie mogą zostać dodane i są ignorowane. Wymaga niestandardowego komponentu 1.2.4 lub nowszego.",
+    "advanced.extra_yaml_write_keys.help": "Dodatkowe klucze najwyższego poziomu, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na YAML w tej instalacji (np. alert2). Wprowadź jeden klucz w linii lub oddziel klucze przecinkami. Klucze, które redefiniują własną granicę zaufania Home Assistant, nigdy nie mogą zostać dodane i są ignorowane.",
     "advanced.redact_app_option_keys.label": "Dodatkowe klucze opcji aplikacji do ukrycia",
     "advanced.redact_app_option_keys.help": "Nazwy opcji aplikacji (dodatku) do ukrycia, tak jak pola haseł, dla aplikacji, których schemat przechowuje sekret jako zwykły tekst (na przykład backup_password). Rozdziel nazwy przecinkami lub nowymi liniami. Nazwa dotyczy każdej aplikacji; wpisz app_slug:name, aby ograniczyć ją do jednej aplikacji. Podanie nazwy grupy opcji obejmuje każdą opcję w niej zawartą. Używane tylko wtedy, gdy funkcja ukrywania sekretów jest włączona. Domyślnie puste.",
     "advanced.sidecar_pin_port.label": "Port sidecar interfejsu ustawień",
@@ -727,11 +727,7 @@
     },
     "ha_get_entity": {
       "title": "Pobierz encję",
-      "description": "Pobierz informacje z rejestru encji dla jednej lub więcej encji."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Pobierz ekspozycję encji",
-      "description": "Pobierz ustawienia ekspozycji encji - wyświetl wszystkie lub pobierz ustawienia dla konkretnej encji."
+      "description": "Pobiera wpisy rejestru encji lub, bez podania encji, ustawienia rejestru i udostępnione encje."
     },
     "ha_get_hacs_info": {
       "title": "Pobierz informacje HACS",
@@ -762,8 +758,8 @@
       "description": "Pobierz bieżący status, stan i atrybuty jednej lub więcej encji (świateł, przełączników, czujników, klimatyzacji, osłon, zamków, fa"
     },
     "ha_get_system_health": {
-      "title": "Pobierz kondycję systemu (w tym diagnostykę ZHA/Z-Wave/integracji)",
-      "description": "Pobierz kondycję systemu Home Assistant, w tym Zigbee (ZHA), Z-Wave JS oraz zrzuty diagnostyczne dla poszczególnych integracji."
+      "title": "Pobierz stan systemu (w tym sieci ZHA / Z-Wave / Thread / Matter)",
+      "description": "Pobiera stan systemu Home Assistant, w tym sieci Zigbee (ZHA), Z-Wave JS, Thread i Matter."
     },
     "ha_get_todo": {
       "title": "Pobierz listę zadań",
@@ -779,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Wyświetl piętra i obszary",
-      "description": "Wyświetl piętra posortowane rosnąco według poziomu, każde z zagnieżdżonymi przypisanymi obszarami, plus obszary bez przypisanego piętra."
+      "description": "Wyświetl listę pięter w kolejności utrzymywanej przez Home Assistant, każde z przypisanymi do niego obszarami oraz obszary bez przypisanego piętra."
     },
     "ha_list_services": {
       "title": "Wyświetl dostępne usługi",
@@ -874,8 +870,8 @@
       "description": "Szukaj encji (świateł, czujników, przełączników, klimatyzacji itp.) według nazwy, domeny lub obszaru — ORAZ wewnątrz automatyzacji/skryptów"
     },
     "ha_set_area_or_floor": {
-      "title": "Utwórz lub zaktualizuj obszar lub piętro",
-      "description": "Utwórz lub zaktualizuj obszar lub piętro Home Assistant."
+      "title": "Tworzenie, aktualizacja lub zmiana kolejności obszarów lub pięter",
+      "description": "Twórz, aktualizuj lub zmieniaj kolejność obszarów lub pięter w Home Assistant."
     },
     "ha_set_device": {
       "title": "Ustaw urządzenie",
@@ -883,7 +879,7 @@
     },
     "ha_set_entity": {
       "title": "Ustaw encję",
-      "description": "Zaktualizuj właściwości encji w rejestrze encji."
+      "description": "Aktualizuje wpisy rejestru encji lub, bez podania entity_id, ustawienia globalne rejestru."
     },
     "ha_set_integration": {
       "title": "Ustaw integrację",

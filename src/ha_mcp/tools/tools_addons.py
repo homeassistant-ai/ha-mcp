@@ -30,11 +30,16 @@ from ..client.rest_client import (
     HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
-    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..client.transport_errors import is_ssl_error
+from ..error_wording import (
+    has_command_failed_prefix,
+    supervisor_invalid_options,
+    supervisor_job_collision,
+    supervisor_unserved_endpoint,
+)
 from ..errors import (
     ErrorCode,
     create_error_response,
@@ -55,6 +60,7 @@ from ..utils.python_sandbox import (
 from .addon_connection_hints import (
     add_supervisor_error_suggestions,
     addon_connection_failure_suggestions,
+    supervisor_error_parts,
 )
 from .coercion import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 from .helpers import (
@@ -66,6 +72,15 @@ from .helpers import (
 from .tool_hints import read_only_hints, write_hints
 
 logger = logging.getLogger(__name__)
+
+# Supervisor's StoreManager maps both official repository URLs to "core".
+_CORE_REPOSITORY_SOURCES = frozenset(
+    {
+        "core",
+        "https://github.com/home-assistant/apps",
+        "https://github.com/home-assistant/addons",
+    }
+)
 
 # Maximum response size to return from app (add-on) API calls (50 KB)
 _MAX_RESPONSE_SIZE = 50 * 1024
@@ -203,13 +218,12 @@ def _summarize_ws_messages(
 def _apply_response_transform(response: Any, expr: str) -> Any:
     """Run a sandboxed ``python_transform`` expression against ``response``.
 
-    Exposes the value to the expression as ``response``. Supports both
-    in-place mutation and reassignment (``response = [...]``). Raises
-    ToolError with VALIDATION_FAILED on sandbox errors so the agent gets
-    a structured code it can react to.
+    Exposes the value to the expression as ``response``; in-place mutation and
+    reassignment (``response = [...]``) both work. A sandbox error is raised
+    as a ToolError with VALIDATION_FAILED, a code the agent can react to.
     """
     try:
-        return safe_execute_expression(expr, {"response": response}, "response")
+        result = safe_execute_expression(expr, {"response": response}, "response")
     except PythonSandboxError as e:
         message, suggestions = format_sandbox_error(e, expr, variable_name="response")
         raise_tool_error(
@@ -220,6 +234,7 @@ def _apply_response_transform(response: Any, expr: str) -> Any:
                 suggestions=suggestions,
             )
         )
+    return result
 
 
 def _merge_options(base: dict, override: dict) -> dict:
@@ -238,17 +253,11 @@ def _merge_options(base: dict, override: dict) -> dict:
     return merged
 
 
-# Supervisor's per-job-group rejection, matched case-insensitively, plus the
-# bounded window and backoff used to ride it out. See _supervisor_api_call.
-# The "for job group" tail is load-bearing: JobGroup.acquire raises
-# "Another job is running for job group <name>" for the transient per-app
-# collision, while the job-level JobConcurrency.REJECT path raises a bare
-# "Another job is running" for long operations (OS update, data-disk wipe)
-# that must NOT be retried on this schedule.
-_JOB_COLLISION_MARKER = "another job is running for job group"
+# The bounded window and backoff used to ride out Supervisor's per-job-group
+# rejection (``error_wording.supervisor_job_collision``). See _supervisor_api_call.
 _JOB_COLLISION_RETRY_WINDOW = 60.0
-_JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
-_JOB_COLLISION_RETRY_MAX_DELAY = 5.0
+JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
+JOB_COLLISION_RETRY_MAX_DELAY = 5.0
 # Matches Supervisor's canonical app slug grammar. A whole-segment "." or
 # ".." also matches that grammar, but is not a valid identifier here because
 # an HTTP client can normalize it as path traversal.
@@ -293,7 +302,7 @@ def _supervisor_rest_failure(
             result["_response_data"] = response_data
         return result
 
-    if not error_text.lower().startswith("command failed:"):
+    if not has_command_failed_prefix(error_text):
         result["error"] = f"Command failed: {error_text}"
     return result
 
@@ -458,8 +467,7 @@ async def _supervisor_api_call_via_core(
     except HomeAssistantConnectionError as exc:
         if verb in {"GET", "HEAD"}:
             raise
-        # send_websocket_message re-raises a command timeout as the cause.
-        timed_out = isinstance(exc.__cause__, HomeAssistantCommandTimeout)
+        timed_out = exc.timed_out
         code = ErrorCode.TIMEOUT_OPERATION if timed_out else ErrorCode.CONNECTION_FAILED
         _raise_supervisor_write_outcome_unknown(
             code,
@@ -469,11 +477,13 @@ async def _supervisor_api_call_via_core(
             verb,
         )
 
+    # Core collapses every Supervisor exception to unknown_error. A blank
+    # exception is indistinguishable from a lost write acknowledgement.
     if (
         verb not in {"GET", "HEAD"}
         and result.get("success") is False
         and result.get("error_code") == "unknown_error"
-        and str(result.get("error", "")).strip().casefold() == "command failed:"
+        and result.get("empty_error_message") is True
     ):
         _raise_supervisor_write_outcome_unknown(
             ErrorCode.SERVICE_CALL_FAILED,
@@ -557,9 +567,23 @@ async def _supervisor_api_call_once(
     return _normalize_supervisor_rest_response(response, endpoint, method)
 
 
+def _generic_supervisor_refusal(result: dict[str, Any]) -> bool:
+    """Return whether Supervisor gave no native error key or Core discarded it."""
+    if result.get("error_code") == "unknown_error":
+        return True
+    payload = result.get("_response_data")
+    return (
+        result.get("_status_code") == 400
+        and isinstance(payload, dict)
+        and payload.get("result") == "error"
+        and not payload.get("error_key")
+    )
+
+
 def _raise_supervisor_api_failure(
     result: dict[str, Any],
     endpoint: str,
+    method: str,
 ) -> NoReturn:
     """Raise the structured exception represented by a non-retryable result."""
     # Both transports land here, and both carry Supervisor's own text: the
@@ -570,6 +594,28 @@ def _raise_supervisor_api_failure(
     )
     status_code = result.get("_status_code")
     response_data = result.get("_response_data")
+    key = response_data.get("error_key") if isinstance(response_data, dict) else None
+    if (
+        method == "POST"
+        and endpoint == "/store/repositories"
+        and status_code == 409
+        and key == "store_repository_already_added_error"
+    ):
+        raise_tool_error(
+            create_error_response(ErrorCode.RESOURCE_ALREADY_EXISTS, error_text)
+        )
+    if method == "POST" and (
+        options := re.fullmatch(r"/addons/([^/]+)/options", endpoint)
+    ):
+        # The bridge strips AppConfigurationInvalidError's key.
+        reason = error_text.removeprefix("Command failed: ")
+        if (status_code == 400 and key == "app_configuration_invalid_error") or (
+            _generic_supervisor_refusal(result)
+            and supervisor_invalid_options(reason, options[1])
+        ):
+            raise_tool_error(
+                create_error_response(ErrorCode.VALIDATION_FAILED, error_text)
+            )
     if status_code == 401:
         raise_tool_error(
             create_error_response(
@@ -582,7 +628,7 @@ def _raise_supervisor_api_failure(
                 ],
             )
         )
-    if status_code == 404:
+    if status_code == 404 or supervisor_unserved_endpoint(result):
         raise HomeAssistantAPIError(
             error_text,
             status_code=404,
@@ -604,11 +650,10 @@ def _raise_supervisor_api_failure(
                 ],
             )
         )
-    if isinstance(status_code, int) and not error_text.lower().startswith(
-        "command failed:"
-    ):
+    if isinstance(status_code, int) and not has_command_failed_prefix(error_text):
         error_text = f"Command failed: {error_text}"
-    raise HomeAssistantCommandError(error_text)
+    result["error_code"] = result.get("error_code") or key  # Supervisor's own key
+    raise HomeAssistantCommandError.from_reply(result, error_text)
 
 
 def _supervisor_result_mapping(
@@ -690,7 +735,7 @@ async def _supervisor_api_call(
         # proxy rejects app-originated ``supervisor/api`` commands.
         # Both transports feed the common retry and error-normalization path:
         # direct 4xx/5xx responses retain status metadata, while WebSocket
-        # failures are classified from the returned message.
+        # failures carry Core's code, with Supervisor's own text behind it.
         #
         # Supervisor serialises jobs per app job group and rejects a
         # state-changing call while a still-settling job (a watchdog restart,
@@ -701,7 +746,7 @@ async def _supervisor_api_call(
         # the final retry and total elapsed time may extend past that window.
         # Any other failure raises immediately.
         deadline = time.monotonic() + _JOB_COLLISION_RETRY_WINDOW
-        delay = _JOB_COLLISION_RETRY_INITIAL_DELAY
+        delay = JOB_COLLISION_RETRY_INITIAL_DELAY
         attempts = 0
         while True:
             attempts += 1
@@ -723,10 +768,14 @@ async def _supervisor_api_call(
             error_text = str(
                 result.get("error", f"Supervisor API call failed: {endpoint}")
             )
-            if _JOB_COLLISION_MARKER not in error_text.lower():
-                _raise_supervisor_api_failure(result, endpoint)
+            # JobGroupExecutionLimitExceeded has no error_key. A specific
+            # refusal (including authentication) always wins over the wording.
+            if not _generic_supervisor_refusal(result) or not supervisor_job_collision(
+                error_text
+            ):
+                _raise_supervisor_api_failure(result, endpoint, method.upper())
 
-            # The marker test runs on the raw text; everything below reports
+            # The collision test runs on the raw text; everything below reports
             # it, so bind the size once the classification is settled.
             error_text = _bounded_supervisor_text(error_text)
 
@@ -772,7 +821,7 @@ async def _supervisor_api_call(
                 error_text,
             )
             await asyncio.sleep(min(delay, remaining))
-            delay = min(delay * 2, _JOB_COLLISION_RETRY_MAX_DELAY)
+            delay = min(delay * 2, JOB_COLLISION_RETRY_MAX_DELAY)
 
     except ToolError:
         raise
@@ -1334,7 +1383,7 @@ def _tls_verification_failure_suggestions() -> list[str]:
     ]
 
 
-def _build_addon_http_client(
+def build_addon_http_client(
     client: HomeAssistantClient, timeout: int, slug: str
 ) -> httpx.AsyncClient:
     """Build the proxy's HTTP client, honoring the HA verify setting.
@@ -2111,7 +2160,7 @@ def _addon_config_for_http_hint(addon: dict[str, Any]) -> dict[str, Any]:
     """Return the app settings that can explain direct-access failures."""
     return {
         "options": addon.get("options"),
-        "ports": addon.get("network") or addon.get("ports") or None,
+        "ports": addon.get("network") or None,
         "host_network": addon.get("host_network"),
         "ingress_port": addon.get("ingress_port"),
     }
@@ -2187,11 +2236,11 @@ def _add_http_error_hints(
                 else:
                     result["suggestion"] = _direct_port_rejection_suggestion()
             else:
-                ports_dict = addon.get("network") or addon.get("ports") or {}
+                ports_dict = addon.get("network") or {}
                 unmapped = sorted(k for k, v in ports_dict.items() if v is None)
-                example_proto = unmapped[0] if unmapped else ""
-                example_port = example_proto.split("/", 1)[0] if example_proto else ""
-                if unmapped and example_port.isdigit():
+                if unmapped:
+                    example_proto = unmapped[0]
+                    example_port = example_proto.split("/", 1)[0]
                     addon_label = addon.get("name") or slug_val
                     result["suggestion"] = (
                         f"Map {example_proto} to a host port in the HA UI "
@@ -2316,7 +2365,7 @@ async def _call_addon_api(
     else:
         request_content = None
 
-    addon_http_client = _build_addon_http_client(client, timeout, slug)
+    addon_http_client = build_addon_http_client(client, timeout, slug)
     try:
         async with addon_http_client as http_client:
             response = await http_client.request(
@@ -2699,7 +2748,7 @@ class AddOnTools:
                 timeout=self._CHECK_UPDATES_TIMEOUT,
             )
         except ToolError as error:
-            self._raise_check_updates_error(error)
+            await self._raise_check_updates_error(error)
         after = await self._snapshot_store_or_warn(warnings, "after")
 
         # Only a pair of real readings can be compared, and only a real
@@ -2770,7 +2819,7 @@ class AddOnTools:
         try:
             return await self._store_latest_versions()
         except ToolError as error:
-            detail = AddOnTools._supervisor_error_text(str(error))
+            _, _, detail = supervisor_error_parts(error)
             logger.warning(
                 "Could not read the app (add-on) store %s the reload: %s",
                 when,
@@ -2783,30 +2832,23 @@ class AddOnTools:
             )
             return None
 
-    @staticmethod
-    def _raise_check_updates_error(error: ToolError) -> NoReturn:
-        """Re-raise a failed store reload with guidance for its known causes."""
-        detail = AddOnTools._supervisor_error_text(str(error))
-        # Supervisor's own wording for this refusal (jobs/decorator.py):
-        # "'<job>' blocked from execution, supervisor needs to be updated
-        # first". Matching on "supervisor" + "update" anywhere would relabel
-        # unrelated app-update failures with this guidance.
-        if "needs to be updated first" in detail.lower():
-            # Built outside the list: an implicit concatenation inside a list
-            # literal reads as a missing comma (py/implicit-string-concatenation-in-list).
-            retry_suggestion = (
-                "Update Supervisor first, then retry "
-                "ha_manage_app(action='check_updates')"
-            )
+    async def _raise_check_updates_error(self, error: ToolError) -> NoReturn:
+        """Add current Supervisor update guidance to a failed reload."""
+        code, outcome, detail = supervisor_error_parts(error)
+        if code != ErrorCode.SERVICE_CALL_FAILED.value or outcome == "unknown":
+            raise error
+        try:
+            info = await _supervisor_api_call(self._client, "/supervisor/info")
+        except ToolError:
+            raise error from None
+        if info["result"].get("update_available") is True:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    "Supervisor refused to reload the app (add-on) store "
-                    "because Supervisor itself has a pending update.",
+                    "Store reload failed. Supervisor reports it has a pending update.",
                     details=detail,
                     suggestions=[
-                        retry_suggestion,
-                        "Check Supervisor status with ha_get_system_health",
+                        "Update Supervisor, then retry ha_manage_app(action='check_updates')"
                     ],
                 )
             )
@@ -2847,7 +2889,7 @@ class AddOnTools:
                 self._client, endpoint, method=method, data=data, timeout=timeout
             )
         except ToolError as error:
-            return self._repo_noop_or_raise(key, repository, error)
+            return await self._repo_noop_or_raise(key, repository, error)
         return {
             "success": True,
             "action": key,
@@ -2855,102 +2897,53 @@ class AddOnTools:
             "message": f"Repository {repository} {key} completed.",
         }
 
-    def _repo_noop_or_raise(
+    async def _repo_noop_or_raise(
         self, key: str, repository: str, error: ToolError
     ) -> dict[str, Any]:
-        """Reclassify an idempotent no-op failure as success, else raise.
-
-        Logs the reclassification so a failure that gets demoted to a success
-        is never invisible."""
-        error_text = str(error)
-        if self._structured_error_outcome(error_text) == "unknown":
+        """Only report an idempotent no-op after a definite refusal."""
+        error_code, outcome, detail = supervisor_error_parts(error)
+        if outcome == "unknown":
             raise error
-        error_code = self._structured_error_code(error_text)
-        noop_codes = {None, ErrorCode.SERVICE_CALL_FAILED.value}
+        if (
+            key == "add_repository"
+            and error_code == ErrorCode.RESOURCE_ALREADY_EXISTS.value
+        ):
+            return self._repo_noop_result(key, repository, "already registered")
+        noop_codes = {ErrorCode.SERVICE_CALL_FAILED.value}
         if key == "remove_repository":
             noop_codes.add(ErrorCode.RESOURCE_NOT_FOUND.value)
         if error_code not in noop_codes:
             raise error
 
-        noop = self._repo_noop_verb(key, self._supervisor_error_text(error_text))
-        if noop:
-            logger.info(
-                "Treating %s of repository %r as an idempotent no-op (%s).",
-                key,
-                repository,
-                noop,
+        # Core's supervisor/api strips Supervisor's error_key and HTTP status.
+        # Read back the exact repository identity before reporting a no-op.
+        try:
+            store = await _supervisor_api_call(self._client, "/store")
+        except ToolError:
+            logger.warning("Could not read the store back after %s", key, exc_info=True)
+            store = {}
+        repos = store.get("result", {}).get("repositories")
+        field = "source" if key == "add_repository" else "slug"
+        if isinstance(repos, list) and all(
+            isinstance(row, dict) and isinstance(row.get(field), str) for row in repos
+        ):
+            identities = (
+                _CORE_REPOSITORY_SOURCES
+                if field == "source" and repository in _CORE_REPOSITORY_SOURCES
+                else {repository}
             )
-            return self._repo_noop_result(key, repository, noop)
+            present = any(row[field] in identities for row in repos)
+            if present == (key == "add_repository"):
+                verb = "already registered" if present else "not registered"
+                return self._repo_noop_result(key, repository, verb)
         if error_code != ErrorCode.SERVICE_CALL_FAILED.value:
             raise error
-        self._raise_repo_action_error(key, repository, error_text)
+        self._raise_repo_action_error(key, repository, detail)
         raise AssertionError("unreachable: _raise_repo_action_error always raises")
 
     @staticmethod
-    def _structured_error_code(error_text: str) -> str | None:
-        """Return the code from a serialized structured ToolError."""
-        try:
-            payload = json.loads(error_text)
-        except ValueError, TypeError:
-            return None
-        err = payload.get("error") if isinstance(payload, dict) else None
-        if not isinstance(err, dict):
-            return None
-        code = err.get("code")
-        return code if isinstance(code, str) else None
-
-    @staticmethod
-    def _structured_error_outcome(error_text: str) -> str | None:
-        """Return the write outcome from a serialized structured ToolError."""
-        try:
-            payload = json.loads(error_text)
-        except ValueError, TypeError:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        outcome = payload.get("outcome")
-        return outcome if isinstance(outcome, str) else None
-
-    @staticmethod
-    def _supervisor_error_text(error_text: str) -> str:
-        """Extract just the Supervisor-reported error from a serialized failure.
-
-        Structured failures may carry Supervisor text in ``details`` after
-        WebSocket/error normalization or directly in ``message`` for REST and
-        command failures. Return ``details`` first, falling back to ``message``
-        or the raw text, so idempotency matching considers only the real cause
-        rather than other serialized error metadata."""
-        try:
-            payload = json.loads(error_text)
-        except ValueError, TypeError:
-            return error_text
-        err = payload.get("error") if isinstance(payload, dict) else None
-        if isinstance(err, dict):
-            return str(err.get("details") or err.get("message") or error_text)
-        return error_text
-
-    @staticmethod
-    def _repo_noop_verb(key: str, error_text: str) -> str | None:
-        """Return a status word if a repo-action failure means the desired end
-        state already holds (an idempotent no-op), else None.
-
-        Scoped tightly so an unrelated failure that merely happens to mention
-        "not found" somewhere (a dependent app (add-on), a misrouted 404, a file
-        path) is NOT silently reclassified as success: the not-found phrasing
-        must be about a repository."""
-        text = error_text.lower()
-        if key == "add_repository" and "already in the store" in text:
-            return "already registered"
-        if (
-            key == "remove_repository"
-            and "repositor" in text
-            and ("not found" in text or "does not exist" in text)
-        ):
-            return "not registered"
-        return None
-
-    @staticmethod
     def _repo_noop_result(key: str, repository: str, verb: str) -> dict[str, Any]:
+        logger.info("Repository %s is a no-op: %r is %s.", key, repository, verb)
         return {
             "success": True,
             "action": key,

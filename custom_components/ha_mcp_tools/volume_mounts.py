@@ -14,12 +14,12 @@ PARENT_ERRORS = {
 }
 
 
-def _in_container() -> bool:
+def in_container() -> bool:
     """True when Core runs in a container (HAOS, Supervised, Container)."""
     return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
 
 
-def _mount_points() -> set[str]:
+def mount_points() -> set[str]:
     """Mount points from /proc/self/mountinfo, which also lists a bind mount
     from the same filesystem (``os.path.ismount`` only sees a device change).
     Empty where it can't be read."""
@@ -45,7 +45,7 @@ def on_mounted_volume(target: Path, root: str) -> bool:
     /media/music alone still counts. Outside a container (a Core install) the
     root is the host's own directory, so it only has to exist.
     """
-    if not _in_container():
+    if not in_container():
         return os.path.isdir(root)
     top = Path(os.path.realpath(root))
     probe = Path(os.path.realpath(target.parent))
@@ -53,7 +53,7 @@ def on_mounted_volume(target: Path, root: str) -> bool:
         probe = top
     while probe != top and not probe.exists():
         probe = probe.parent
-    mounts = _mount_points()
+    mounts = mount_points()
     while probe != top and not (str(probe) in mounts or os.path.ismount(probe)):
         probe = probe.parent
     return str(probe) in mounts or os.path.ismount(probe)

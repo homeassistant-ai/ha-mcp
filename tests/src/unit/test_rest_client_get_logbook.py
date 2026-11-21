@@ -60,7 +60,7 @@ async def test_a_dropped_connection_surfaces_instead_of_an_empty_logbook(
     """A client that gets no answer must not read as "no entries"."""
     monkeypatch.setattr(
         core_client,
-        "_request",
+        "guarded_request",
         AsyncMock(side_effect=HomeAssistantConnectionError("down")),
     )
 

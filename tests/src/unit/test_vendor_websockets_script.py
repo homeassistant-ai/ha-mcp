@@ -61,9 +61,6 @@ def sandbox(tmp_path, monkeypatch):
     (vendor_dir / "requirements.txt").write_text(
         f"websockets=={_VERSION}\n", encoding="utf-8"
     )
-    monkeypatch.setattr(vendor, "_VENDOR_DIR", vendor_dir)
-    monkeypatch.setattr(vendor, "_PIN_FILE", vendor_dir / "requirements.txt")
-    monkeypatch.setattr(vendor, "_TARGET", target)
 
     def install(payload: bytes) -> None:
         class _Response(io.BytesIO):
@@ -85,7 +82,7 @@ class TestHappyPath:
         target, install = sandbox
         install(_sdist())
 
-        assert vendor.main() == 0
+        assert vendor.main(target.parent) == 0
 
         assert (target / "__init__.py").is_file()
         assert (target / "asyncio" / "client.py").is_file()
@@ -103,7 +100,7 @@ class TestHappyPath:
         target, install = sandbox
         install(_sdist())
 
-        assert vendor.main() == 0
+        assert vendor.main(target.parent) == 0
 
         assert not (target / "speedups.c").exists()
         assert not (target / "speedups.pyi").exists()
@@ -111,12 +108,12 @@ class TestHappyPath:
     def test_a_resync_replaces_the_previous_tree(self, sandbox):
         target, install = sandbox
         install(_sdist())
-        assert vendor.main() == 0
+        assert vendor.main(target.parent) == 0
         stale = target / "gone_next_time.py"
         stale.write_text("# left over from an older release\n", encoding="utf-8")
 
         install(_sdist())
-        assert vendor.main() == 0
+        assert vendor.main(target.parent) == 0
 
         assert not stale.exists(), "the swap must not merge into the old tree"
 
@@ -128,7 +125,7 @@ class TestFailurePaths:
         install(_sdist({f"{_PREFIX}/src/websockets/{_TRAVERSAL}": "pwned = 1\n"}))
 
         with pytest.raises(SystemExit):
-            vendor.main()
+            vendor.main(target.parent)
 
         # Assert on where the member would ACTUALLY land: the script strips
         # the prefix and joins the remainder onto the staging dir, so this
@@ -144,7 +141,7 @@ class TestFailurePaths:
         install(_sdist({f"{_PREFIX}/src/websockets/{_TRAVERSAL}": "pwned = 1\n"}))
 
         with pytest.raises(SystemExit):
-            vendor.main()
+            vendor.main(target.parent)
 
         staging = target.with_name(target.name + ".incoming")
         assert not staging.exists(), "staging tree left behind after a failure"
@@ -157,12 +154,12 @@ class TestFailurePaths:
         """The live vendored package survives a failed re-sync intact."""
         target, install = sandbox
         install(_sdist())
-        assert vendor.main() == 0
+        assert vendor.main(target.parent) == 0
         before = vendor.manifest_lines(target)
 
         install(_sdist({f"{_PREFIX}/src/websockets/../../../evil.py": "pwned = 1\n"}))
         with pytest.raises(SystemExit):
-            vendor.main()
+            vendor.main(target.parent)
 
         assert vendor.manifest_lines(target) == before
 
@@ -175,7 +172,7 @@ class TestFailurePaths:
         """
         target, install = sandbox
         install(_sdist())
-        assert vendor.main() == 0
+        assert vendor.main(target.parent) == 0
         before = vendor.manifest_lines(target)
 
         real_rename = Path.rename
@@ -190,7 +187,7 @@ class TestFailurePaths:
         monkeypatch.setattr(Path, "rename", failing_promotion)
         install(_sdist())
         with pytest.raises(OSError):
-            vendor.main()
+            vendor.main(target.parent)
 
         assert target.is_dir(), "the previous vendored tree was not restored"
         assert vendor.manifest_lines(target) == before
@@ -202,12 +199,13 @@ class TestFailurePaths:
         install(_tarball({f"{_PREFIX}/LICENSE": "BSD-3\n"}))
 
         with pytest.raises(SystemExit):
-            vendor.main()
+            vendor.main(target.parent)
 
     def test_missing_pin_is_refused(self, sandbox):
-        # The fixture is requested for its monkeypatching of _PIN_FILE, not
-        # for its value.
-        vendor._PIN_FILE.write_text("# no pin here\n", encoding="utf-8")
+        target, _install = sandbox
+        (target.parent / "requirements.txt").write_text(
+            "# no pin here\n", encoding="utf-8"
+        )
 
-        with pytest.raises(SystemExit):
-            vendor.read_pin()
+        with pytest.raises(SystemExit, match="no 'websockets==<version>' pin"):
+            vendor.main(target.parent)

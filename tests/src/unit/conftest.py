@@ -9,7 +9,9 @@ variables every unit test starts with.
 
 from __future__ import annotations
 
-import asyncio
+import concurrent.futures
+import importlib
+import logging
 import os
 import shutil
 import sys
@@ -17,22 +19,17 @@ import tempfile
 import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.typing import WebSocketGenerator
 
-if TYPE_CHECKING:
-    from ha_mcp.tools.component_api import ComponentCaps
-
 # Core's own test plugin: the ``hass`` fixture, ``MockConfigEntry`` and its
 # socket/thread/task checks. pyproject.toml blocks its entry point so the E2E
 # tree never loads it. Nothing above imports Home Assistant: the plugin patches
 # Core's JSON and time helpers before Core is first imported.
-# ``_core_client`` holds the ``core_client`` fixtures, in a module of its own
-# so the private-access check this file is listed for applies to them.
+# ``_core_client`` holds the native client fixtures shared by the unit tests.
 pytest_plugins = [
     "pytest_homeassistant.plugins",
     "tests.core_stand_in_guard",
@@ -42,25 +39,7 @@ pytest_plugins = [
 
 # quickjs starts its shared worker thread on import; importing it here starts
 # that thread before any test, so Core's leftover-thread check never sees it.
-import quickjs  # noqa: E402
-
-
-@pytest.fixture
-def logbook_component_caps() -> Iterator[ComponentCaps]:
-    """Pretend the component advertises ``logbook_events`` (transport tests)."""
-    from ha_mcp.tools.component_api import ComponentCaps
-
-    caps = ComponentCaps(
-        schema_version=1,
-        component_version="2.2.3",
-        capabilities=frozenset({"logbook_events"}),
-        limits={},
-    )
-    with patch(
-        "ha_mcp.tools.log_sources_logbook.get_component_caps",
-        AsyncMock(return_value=caps),
-    ):
-        yield caps
+importlib.import_module("quickjs")
 
 
 _ISOLATION_VARS = ("HA_MCP_CONFIG_DIR", "HA_MCP_DISABLE_SETTINGS_UI")
@@ -83,6 +62,10 @@ def pytest_configure(config: pytest.Config) -> None:
     _PREVIOUS_ENV.update({name: os.environ.get(name) for name in _ISOLATION_VARS})
     os.environ["HA_MCP_CONFIG_DIR"] = _SESSION_DATA_DIR
     os.environ["HA_MCP_DISABLE_SETTINGS_UI"] = "1"
+    # Core's test plugin turns DEBUG on for a verbose run only; a quiet run
+    # would then skip each ``logger.debug`` call and what a captured record
+    # keeps alive.
+    logging.getLogger().setLevel(logging.DEBUG)
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
@@ -93,13 +76,30 @@ def pytest_collection_finish(session: pytest.Session) -> None:
             os.environ[name] = value
 
 
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Keep this runner's share of the suite (``UNIT_TEST_SHARD``, set in CI)."""
+    shard = os.environ.get("UNIT_TEST_SHARD")
+    if not shard:
+        return
+    from ._shards import in_shard
+
+    kept: list[pytest.Item] = []
+    dropped: list[pytest.Item] = []
+    for item in items:
+        (kept if in_shard(item.nodeid, shard) else dropped).append(item)
+    config.hook.pytest_deselected(items=dropped)
+    items[:] = kept
+
+
 def pytest_unconfigure(config: pytest.Config) -> None:
     if _SESSION_DATA_DIR:
         shutil.rmtree(_SESSION_DATA_DIR, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
-def _unit_test_env(tmp_path_factory, monkeypatch):
+def _unit_test_env(monkeypatch):
     """Set the environment every unit test starts from.
 
     - An empty ``HA_MCP_CONFIG_DIR`` per test. Without it, tests write tool
@@ -118,13 +118,13 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
       commits and tags. Details: *Git isolation* in ``tests/AGENTS.md``.
 
     The cached ``Settings`` is reset too, since it holds the values read for
-    the previous test. ``monkeypatch`` restores all of it after each test, so
+    the previous test, and so is what an entry point a test ran left behind. ``monkeypatch`` restores all of it after each test, so
     tests from other trees in the same session keep their own environment.
     A test that needs another value sets it with ``monkeypatch``.
     """
-    monkeypatch.setenv(
-        "HA_MCP_CONFIG_DIR", str(tmp_path_factory.mktemp("ha-mcp-config"))
-    )
+    # Not ``tmp_path_factory.mktemp``: pytest numbers a directory by listing
+    # every one it made so far, which gets slower with each test of the suite.
+    monkeypatch.setenv("HA_MCP_CONFIG_DIR", tempfile.mkdtemp(dir=_SESSION_DATA_DIR))
     monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
     monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
     monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
@@ -140,6 +140,15 @@ def _unit_test_env(tmp_path_factory, monkeypatch):
     yield
     get_data_dir.cache_clear()
     reset_global_settings()
+    # A test that ran an entry point leaves its server and settings mount behind.
+    # Only the modules loaded now: a test may still have stand-ins in their place.
+    for module, reset in (
+        ("ha_mcp.__main__", "reset_main_runtime"),
+        ("ha_mcp.settings_ui", "reset_http_settings_state"),
+    ):
+        clear = getattr(sys.modules.get(module), reset, None)
+        if clear is not None:
+            clear()
 
 
 @pytest.fixture
@@ -177,7 +186,7 @@ def _js_harness_started_before_tests(request: pytest.FixtureRequest) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _no_threads_left_by_the_test() -> Iterator[None]:
+def _no_threads_left_by_the_test(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Stop what a test started on its own, before Core's plugin checks threads.
 
     That is a replacement JS harness worker (when the test killed the shared
@@ -188,32 +197,54 @@ def _no_threads_left_by_the_test() -> Iterator[None]:
     """
     from . import _js_harness
 
-    worker = _js_harness._worker
+    worker = _js_harness.current_worker()
     threads_before = set(threading.enumerate())
-    engines: list[Any] = []
-    real_function = quickjs.Function
+    pools: list[concurrent.futures.ThreadPoolExecutor] = []
 
-    def recording_function(*args: Any, **kwargs: Any) -> Any:
-        engine = real_function(*args, **kwargs)
-        if kwargs.get("own_executor"):
-            engines.append(engine)
-        return engine
+    pool_type = concurrent.futures.ThreadPoolExecutor
+    original_init = pool_type.__init__
 
-    quickjs.Function = recording_function
+    def record_pool(
+        pool: concurrent.futures.ThreadPoolExecutor, *args: Any, **kwargs: Any
+    ) -> None:
+        original_init(pool, *args, **kwargs)
+        if str(kwargs.get("thread_name_prefix", "")).startswith("quickjs-worker"):
+            pools.append(pool)
+
+    monkeypatch.setattr(pool_type, "__init__", record_pool)
     try:
         yield
     finally:
-        quickjs.Function = real_function
-        for engine in engines:
-            engine._threadpool.shutdown(wait=True)
-        if _js_harness._worker is not worker:
-            _js_harness._stop_worker()
+        for pool in pools:
+            pool.shutdown(wait=True)
+        if _js_harness.current_worker() is not worker:
+            _js_harness.stop_worker()
         from ha_mcp.utils.usage_logger import shutdown_usage_logger
 
         shutdown_usage_logger()
         for thread in set(threading.enumerate()) - threads_before:
             if thread.name == "AnyIO worker thread":
                 thread.join(timeout=5)
+
+
+@pytest.fixture(autouse=True)
+def _logging_put_back() -> Iterator[None]:
+    """The CLI entry points (``main_oauth``, ``main_oidc``) reconfigure the root
+    logger and set the ``ha_mcp`` and ``fastmcp`` levels process-wide; a later
+    test on the same worker would lose its DEBUG records."""
+    root = logging.getLogger()
+    names = ("ha_mcp", "ha_mcp.auth", "ha_mcp.auth.provider", "fastmcp")
+    levels = {name: logging.getLogger(name).level for name in names}
+    root_level, root_handlers = root.level, root.handlers[:]
+    yield
+    # Only what a test changed: ``setLevel`` clears every logger's level cache.
+    if root.level != root_level:
+        root.setLevel(root_level)
+    if root.handlers != root_handlers:
+        root.handlers[:] = root_handlers
+    for name, level in levels.items():
+        if logging.getLogger(name).level != level:
+            logging.getLogger(name).setLevel(level)
 
 
 @pytest.fixture(autouse=True)
@@ -251,7 +282,7 @@ def _restore_fastmcp_host_origin_guard():
     """Restore fastmcp's Host/Origin guard env var + setting after each test.
 
     ``transport_security.ensure_host_origin_guard_default_off`` runs for real in
-    server-creation paths some unit tests exercise (e.g. via ``_create_server``)
+    server-creation paths some unit tests exercise (e.g. via ``create_server``)
     and writes ``os.environ`` and the fastmcp settings singleton directly, which
     ``monkeypatch`` cannot revert. Snapshot and restore both so those mutations do
     not leak across tests once fastmcp exposes the guard (>= 3.4.3).
@@ -273,55 +304,6 @@ def _restore_fastmcp_host_origin_guard():
         setattr(settings, attr, prev_setting)
 
 
-@pytest.fixture(autouse=True)
-def _core_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Answer the component's Core loader call with Core's built-in helper flows.
-
-    ``helpers_list`` and ``search`` ask ``homeassistant.loader`` for the helper
-    flows in their async pre-steps, which needs a set-up ``hass``. Tests that
-    hand the commands a fake ``hass`` get Core's own ``FLOWS["helper"]``, i.e.
-    no custom helper integrations. It does nothing until the component is
-    loaded. A test that needs custom helper integrations patches the name again.
-    """
-    mod = sys.modules.get("custom_components.ha_mcp_tools.websocket_api.flow_domains")
-    if mod is None:
-        return
-    from ._core_helper_flows import CORE_HELPER_FLOWS
-
-    monkeypatch.setattr(
-        mod, "async_get_config_flows", AsyncMock(return_value=set(CORE_HELPER_FLOWS))
-    )
-
-
-@pytest.fixture(autouse=True)
-def _server_helper_flows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Answer the server's ``flow_handlers?type=helper`` read with Core's list.
-
-    The helper tools read Core's helper flows at call time
-    (``helper_flows.helper_flow_types``) through the REST client, which unit
-    tests mock per test. This answers with Core's own ``FLOWS["helper"]`` and
-    starts every test with an empty per-client cache. A test that needs another
-    list patches ``_fetch_helper_flow_types`` again.
-    """
-    from ha_mcp.tools import helper_flows
-
-    from ._core_helper_flows import CORE_HELPER_FLOWS
-
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(return_value=CORE_HELPER_FLOWS),
-    )
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_core_helper_domains",
-        AsyncMock(return_value=CORE_HELPER_FLOWS),
-        raising=False,
-    )
-    helper_flows._CACHE.clear()
-    getattr(helper_flows, "_CORE_CACHE", {}).clear()
-
-
 @pytest.fixture
 def tool_search_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """Serve the search catalog on the main endpoint (``ENABLE_TOOL_SEARCH``)."""
@@ -330,61 +312,14 @@ def tool_search_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(get_global_settings(), "enable_tool_search", True)
 
 
-@pytest.fixture
-def mock_client():
-    """HomeAssistantClient with stubbed internals — no real network.
-
-    Mirror every instance attribute the real ``__init__`` sets, so a
-    `getattr` fallback in production code isn't needed to paper over a
-    test-fixture omission (and so future `__init__` attribute additions
-    that this fixture forgets to mirror fail loudly here instead of
-    silently no-op-ing).
-    """
-    # Imported here rather than at module scope: conftest imports run before
-    # ``pytest_configure`` redirects the config directory, so importing ha_mcp
-    # during collection creates ~/.ha-mcp and the CI "no local state" gate
-    # fails.
-    from ha_mcp.client.rest_client import HomeAssistantClient
-
-    with patch.object(HomeAssistantClient, "__init__", lambda self, **kwargs: None):
-        client = HomeAssistantClient()
-        client.base_url = "http://test.local:8123"
-        client.token = "test-token"
-        client.timeout = 30
-        client.verify_ssl = True
-        client.httpx_client = MagicMock()
-        client._supervised_detected = None
-        client._is_admin = True
-        client._admin_route_refused = False
-        client._admin_route_lock = asyncio.Lock()
-        return client
-
-
-@pytest.fixture
-def no_flow_outline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No component describes a flow's declared steps, for a test whose client
-    is a test double: a form then says only what its own step reports."""
-    from ha_mcp.tools.config_helpers import describe
-
-    monkeypatch.setattr(describe, "flow_outline", AsyncMock(return_value=None))
-    # The component is there; it has no declaration for the test's flow.
-    monkeypatch.setattr(describe, "component_serves", AsyncMock(return_value=True))
-
-
 @pytest.fixture(autouse=True)
-def opened_flows(
-    monkeypatch: pytest.MonkeyPatch,
-) -> dict[str, tuple[str, str | None]]:
-    """Start every test with no integration flow opened by this server.
+def _no_opened_flows() -> Iterator[None]:
+    """Every test starts and ends with no integration flow opened by this server."""
+    from ha_mcp.tools.integration_flow_steps import reset_opened_flows
 
-    A test that continues a flow by ``flow_id`` seeds it here, as
-    ``drive_flow`` would have when it opened the flow.
-    """
-    from ha_mcp.tools import integration_flow_steps
-
-    flows: dict[str, tuple[str, str | None]] = {}
-    monkeypatch.setattr(integration_flow_steps, "_opened_flows", flows)
-    return flows
+    reset_opened_flows()
+    yield
+    reset_opened_flows()
 
 
 @pytest.fixture

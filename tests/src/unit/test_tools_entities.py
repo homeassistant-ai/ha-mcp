@@ -1,2056 +1,744 @@
-"""Unit tests for entity management tools module."""
+"""ha_set_entity and ha_remove_entity on a real ``hass``.
 
-import json
-import logging
-from collections.abc import Callable
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+The registries, every reply and every refusal are Core's. A registry read
+Core cannot be made to refuse is one Core function raising Core's own
+exception; a dropped connection is the client getting no answer at all.
+"""
+
+from collections.abc import Mapping
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import category_registry as cr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools.tools_entities import register_entity_tools
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.tools.tools_entities import EntityTools
+
+from ._entity_registry_core import sent_types
+from ._tool_errors import error_body, error_of
+
+_UPDATE = "config/entity_registry/update"
+_GET = "config/entity_registry/get"
+_LABELS = "config/label_registry/list"
+_AREAS = "config/area_registry/list"
 
 
-def _registry_list(id_field, *ids):
-    """WS response for a registry-list preflight.
-
-    ``ha_set_entity`` validates referenced area / label / category IDs before
-    it touches the entity registry (issue #2159), so mocks for calls carrying
-    those parameters must answer the lookup first.
-    """
-    return {"success": True, "result": [{id_field: entry_id} for entry_id in ids]}
+@pytest.fixture
+async def tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> EntityTools:
+    """The entity tools on a ``hass`` that serves Core's registry commands."""
+    assert await async_setup_component(hass, "config", {})
+    return EntityTools(core_client)
 
 
-class TestHaSetEntityLabels:
-    """Test ha_set_entity labels parameter."""
+@pytest.fixture
+def labels(label_registry: lr.LabelRegistry) -> list[str]:
+    """Labels ``outdoor`` and ``smart`` in Core's label registry."""
+    return [label_registry.async_create(name).label_id for name in ("Outdoor", "Smart")]
 
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
 
-        def capture_add_tool(method):
-            fmcp = getattr(method, "__fastmcp__", None)
-            name = (fmcp.name if fmcp else None) or method.__name__
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def set_entity_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_set_entity function."""
-        register_entity_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_set_entity"]
-
-    @pytest.mark.asyncio
-    async def test_set_labels_list(self, mock_mcp, mock_client):
-        """Setting labels with a list should include labels in the registry update."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "outdoor", "smart"),
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "name": None,
-                            "original_name": "Test",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["outdoor", "smart"],
-                        }
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(entity_id="light.test", labels=["outdoor", "smart"])
-
-        assert result["success"] is True
-        assert "labels=['outdoor', 'smart']" in str(result["updates"])
-
-        # Verify WebSocket message includes labels
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["type"] == "config/entity_registry/update"
-        assert call_args["labels"] == ["outdoor", "smart"]
-
-    @pytest.mark.asyncio
-    async def test_set_labels_empty_list_clears(self, mock_mcp, mock_client):
-        """Setting labels to empty list should clear all labels."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_entry": {
-                        "entity_id": "light.test",
-                        "name": None,
-                        "original_name": "Test",
-                        "icon": None,
-                        "area_id": None,
-                        "disabled_by": None,
-                        "hidden_by": None,
-                        "aliases": [],
-                        "labels": [],
-                    }
-                },
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(entity_id="light.test", labels=[])
-
-        assert result["success"] is True
-
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["labels"] == []
-
-    @pytest.mark.asyncio
-    async def test_set_labels_json_string(self, mock_mcp, mock_client):
-        """Labels as JSON array string should be parsed."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "label1", "label2"),
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "name": None,
-                            "original_name": "Test",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["label1", "label2"],
-                        }
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(entity_id="light.test", labels='["label1", "label2"]')
-
-        assert result["success"] is True
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["labels"] == ["label1", "label2"]
-
-    @pytest.mark.asyncio
-    async def test_set_labels_invalid_returns_error(self, set_entity_tool):
-        """Invalid labels parameter should raise ToolError."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="light.test", labels="not_json{")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        error = error_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "labels" in error_msg.lower() or "invalid" in error_msg.lower()
-
-    @pytest.mark.asyncio
-    async def test_labels_none_not_included_in_message(self, mock_mcp, mock_client):
-        """When labels is None, it should not be included in WebSocket message."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_entry": {
-                        "entity_id": "light.test",
-                        "name": "New Name",
-                        "original_name": "Test",
-                        "icon": None,
-                        "area_id": None,
-                        "disabled_by": None,
-                        "hidden_by": None,
-                        "aliases": [],
-                        "labels": [],
-                    }
-                },
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        await tool(entity_id="light.test", name="New Name")
-
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert "labels" not in call_args
-
-    @pytest.mark.asyncio
-    async def test_invalid_area_id_rejected_before_registry_update(
-        self, set_entity_tool, mock_client
-    ):
-        """Unknown area IDs must not create dangling entity assignments."""
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": [{"area_id": "living_room"}],
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="light.test", area_id="extérieur nord")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert error_data["area_id"] == "extérieur nord"
-        assert mock_client.send_websocket_message.call_args_list == [
-            (({"type": "config/area_registry/list"},), {})
-        ]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "area_lookup",
-        [
-            {"success": False, "error": {"message": "registry unavailable"}},
-            HomeAssistantConnectionError("connection lost"),
-        ],
+def _entity(
+    registry: er.EntityRegistry, entity_id: str, **changes: Any
+) -> er.RegistryEntry:
+    """A registry entry for ``entity_id`` with ``changes`` applied."""
+    domain, object_id = entity_id.split(".")
+    entry = registry.async_get_or_create(
+        domain, "demo", object_id, suggested_object_id=object_id
     )
-    async def test_area_registry_lookup_failure_rejects_entity_update(
-        self, set_entity_tool, mock_client, area_lookup
-    ):
-        """Area assignment fails closed when its registry cannot be read."""
-        mock_client.send_websocket_message.side_effect = area_lookup
+    if changes:
+        entry = registry.async_update_entity(entry.entity_id, **changes)
+    return entry
 
+
+def _stored(registry: er.EntityRegistry, entity_id: str) -> er.RegistryEntry:
+    entry = registry.async_get(entity_id)
+    assert entry is not None
+    return entry
+
+
+def _aliases(registry: er.EntityRegistry, entity_id: str) -> list[str | None]:
+    """The stored aliases, with ``None`` for the entity's own name."""
+    return [
+        None if alias is er.COMPUTED_NAME else alias
+        for alias in _stored(registry, entity_id).aliases
+    ]
+
+
+@pytest.fixture
+def dropped(
+    monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
+) -> AsyncMock:
+    """Every WebSocket command gets no answer: the connection drops."""
+    monkeypatch.setattr(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+    )
+    return cast(AsyncMock, core_client.send_websocket_message)
+
+
+class TestLabels:
+    async def test_a_label_list_is_stored(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        _entity(entity_registry, "light.test")
+
+        result = await tools.ha_set_entity(entity_id="light.test", labels=labels)
+
+        assert result["success"] is True
+        assert f"labels={labels}" in result["updates"]
+        assert _stored(entity_registry, "light.test").labels == set(labels)
+
+    async def test_an_empty_label_list_clears_the_labels(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        _entity(entity_registry, "light.test", labels=set(labels))
+
+        await tools.ha_set_entity(entity_id="light.test", labels=[])
+
+        assert _stored(entity_registry, "light.test").labels == set()
+
+    async def test_a_json_array_of_labels_is_stored(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        _entity(entity_registry, "light.test")
+
+        await tools.ha_set_entity(entity_id="light.test", labels='["outdoor", "smart"]')
+
+        assert _stored(entity_registry, "light.test").labels == set(labels)
+
+    async def test_unparseable_labels_are_refused(
+        self, tools: EntityTools, sent: AsyncMock
+    ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="light.test", area_id="living_room")
+            await tools.ha_set_entity(entity_id="light.test", labels="not_json{")
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "CONNECTION_FAILED"
-        assert error_data["area_id"] == "living_room"
-        assert mock_client.send_websocket_message.call_args_list == [
-            (({"type": "config/area_registry/list"},), {})
-        ]
+        error = error_of(exc_info)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "labels" in error["message"]
+        sent.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_area_id_validated_once_per_call(self, set_entity_tool, mock_client):
-        """The preflight is a single lookup, not one per write path.
+    async def test_an_update_without_labels_keeps_the_labels(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        _entity(entity_registry, "light.test", labels=set(labels))
 
-        Validation lives at the tool entry so the bulk path is covered too;
-        a second per-entity lookup would multiply into N round-trips there.
-        """
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": [],
-        }
+        await tools.ha_set_entity(entity_id="light.test", name="New Name")
 
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="light.test", area_id="living_room")
+        stored = _stored(entity_registry, "light.test")
+        assert stored.name == "New Name"
+        assert stored.labels == set(labels)
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert mock_client.send_websocket_message.call_args_list == [
-            (({"type": "config/area_registry/list"},), {})
-        ]
+    async def test_add_keeps_the_labels_already_there(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        _entity(entity_registry, "light.test", labels={"outdoor"})
 
-    @pytest.mark.asyncio
+        await tools.ha_set_entity(
+            entity_id="light.test", labels=["smart"], label_operation="add"
+        )
+
+        assert _stored(entity_registry, "light.test").labels == set(labels)
+
+    async def test_remove_drops_only_the_named_labels(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        _entity(entity_registry, "light.test", labels=set(labels))
+
+        await tools.ha_set_entity(
+            entity_id="light.test", labels=["smart"], label_operation="remove"
+        )
+
+        assert _stored(entity_registry, "light.test").labels == {"outdoor"}
+
     @pytest.mark.parametrize("label_operation", ["set", "add"])
-    async def test_unknown_label_rejected(
-        self, set_entity_tool, mock_client, label_operation
-    ):
-        """Assigning a label that is not in the registry must not be persisted."""
-        label_lookup = _registry_list("label_id", "outdoor")
-        if label_operation == "add":
-            # "add" resolves the entity's current labels before the pre-write
-            # validation runs.
-            mock_client.send_websocket_message.side_effect = [
-                {"success": True, "result": {"labels": []}},
-                label_lookup,
-            ]
-            expected_calls = [
-                {"type": "config/entity_registry/get", "entity_id": "light.test"},
-                {"type": "config/label_registry/list"},
-            ]
-        else:
-            mock_client.send_websocket_message.side_effect = [label_lookup]
-            expected_calls = [{"type": "config/label_registry/list"}]
+    async def test_an_unknown_label_is_refused_before_the_write(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+        sent: AsyncMock,
+        label_operation: str,
+    ) -> None:
+        _entity(entity_registry, "light.test", labels={"outdoor"})
 
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(
+            await tools.ha_set_entity(
                 entity_id="light.test",
                 labels=["ghost_label"],
                 label_operation=label_operation,
             )
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert error_data["unknown_labels"] == ["ghost_label"]
-        assert [
-            c[0][0] for c in mock_client.send_websocket_message.call_args_list
-        ] == expected_calls
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["unknown_labels"] == ["ghost_label"]
+        assert _UPDATE not in sent_types(sent)
+        assert _stored(entity_registry, "light.test").labels == {"outdoor"}
 
-    @pytest.mark.asyncio
-    async def test_unknown_label_removal_still_allowed(
-        self, set_entity_tool, mock_client
-    ):
-        """Removing a dangling label is the cleanup path — it must not be blocked."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": {"labels": ["ghost_label", "outdoor"]}},
-            {
-                "success": True,
-                "result": {"entity_entry": {"entity_id": "light.test"}},
-            },
-        ]
+    async def test_a_dangling_label_can_still_be_removed(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+        sent: AsyncMock,
+    ) -> None:
+        """Removing a label that is gone from the label registry is the cleanup
+        path; checking it against that registry would block it."""
+        _entity(entity_registry, "light.test", labels={"ghost_label", "outdoor"})
 
-        result = await set_entity_tool(
-            entity_id="light.test",
-            labels=["ghost_label"],
-            label_operation="remove",
+        result = await tools.ha_set_entity(
+            entity_id="light.test", labels=["ghost_label"], label_operation="remove"
         )
 
         assert result["success"] is True
-        sent_types = [
-            call[0][0]["type"]
-            for call in mock_client.send_websocket_message.call_args_list
-        ]
-        assert "config/label_registry/list" not in sent_types
-        update_call = mock_client.send_websocket_message.call_args_list[1][0][0]
-        assert update_call["type"] == "config/entity_registry/update"
-        assert update_call["labels"] == ["outdoor"]
+        assert _LABELS not in sent_types(sent)
+        assert _stored(entity_registry, "light.test").labels == {"outdoor"}
 
-    @pytest.mark.asyncio
-    async def test_unknown_category_rejected(self, set_entity_tool, mock_client):
-        """A category is validated against its own scope's registry."""
-        mock_client.send_websocket_message.return_value = _registry_list(
-            "category_id", "lighting"
-        )
+
+class TestRegistryReferences:
+    async def test_an_unknown_area_is_refused_before_the_write(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        area_registry: ar.AreaRegistry,
+        sent: AsyncMock,
+    ) -> None:
+        """An unknown area id would be stored as a dangling assignment."""
+        area_registry.async_create("Living Room")
+        _entity(entity_registry, "light.test")
 
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(
-                entity_id="light.test",
-                categories={"automation": "ghost_category"},
+            await tools.ha_set_entity(entity_id="light.test", area_id="extérieur nord")
+
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["area_id"] == "extérieur nord"
+        assert sent_types(sent) == [_AREAS]
+        assert _stored(entity_registry, "light.test").area_id is None
+
+    async def test_an_area_is_checked_once_then_written(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        area_registry: ar.AreaRegistry,
+        sent: AsyncMock,
+    ) -> None:
+        area = area_registry.async_create("Living Room")
+        _entity(entity_registry, "light.test")
+
+        await tools.ha_set_entity(entity_id="light.test", area_id=area.id)
+
+        assert sent_types(sent) == [_AREAS, _UPDATE]
+        assert _stored(entity_registry, "light.test").area_id == area.id
+
+    async def test_an_unknown_category_is_refused_in_its_own_scope(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+        sent: AsyncMock,
+    ) -> None:
+        category_registry.async_create(scope="automation", name="Lighting")
+        _entity(entity_registry, "light.test")
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.test", categories={"automation": "ghost_category"}
             )
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert error_data["category"] == "ghost_category"
-        assert mock_client.send_websocket_message.call_args_list == [
-            (
-                (
-                    {
-                        "type": "config/category_registry/list",
-                        "scope": "automation",
-                    },
-                ),
-                {},
-            )
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["category"] == "ghost_category"
+        assert sent.call_args_list == [
+            call({"type": "config/category_registry/list", "scope": "automation"})
         ]
+        assert _stored(entity_registry, "light.test").categories == {}
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("kwargs", "lookup_type"),
+        ("registry", "method", "kwargs", "lookup"),
         [
-            ({"labels": ["outdoor"]}, "config/label_registry/list"),
+            (ar.AreaRegistry, "async_list_areas", {"area_id": "living_room"}, _AREAS),
+            (lr.LabelRegistry, "async_list_labels", {"labels": ["outdoor"]}, _LABELS),
             (
+                cr.CategoryRegistry,
+                "async_list_categories",
                 {"categories": {"automation": "lighting"}},
                 "config/category_registry/list",
             ),
         ],
+        ids=["area", "labels", "categories"],
     )
-    async def test_registry_lookup_failure_rejects_update(
-        self, set_entity_tool, mock_client, kwargs, lookup_type
-    ):
-        """Label and category assignment fail closed when the registry is unreadable."""
-        mock_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": {"message": "registry unavailable"},
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="light.test", **kwargs)
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "CONNECTION_FAILED"
-        sent_types = [
-            call[0][0]["type"]
-            for call in mock_client.send_websocket_message.call_args_list
-        ]
-        assert sent_types == [lookup_type]
-
-    @pytest.mark.asyncio
-    async def test_bulk_unknown_label_rejected_before_any_update(
-        self, set_entity_tool, mock_client
-    ):
-        """One entry-point preflight guards the bulk path — no entity is touched."""
-        mock_client.send_websocket_message.return_value = _registry_list(
-            "label_id", "outdoor"
+    async def test_an_unreadable_registry_refuses_the_write(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        monkeypatch: pytest.MonkeyPatch,
+        sent: AsyncMock,
+        registry: type,
+        method: str,
+        kwargs: dict[str, Any],
+        lookup: str,
+    ) -> None:
+        """Without the registry the reference cannot be checked, so nothing is
+        written rather than a possibly dangling one."""
+        _entity(entity_registry, "light.test")
+        monkeypatch.setattr(
+            registry,
+            method,
+            MagicMock(side_effect=HomeAssistantError("registry unavailable")),
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(
-                entity_id=["light.a", "light.b"], labels=["ghost_label"]
+            await tools.ha_set_entity(entity_id="light.test", **kwargs)
+
+        assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
+        assert sent_types(sent) == [lookup]
+
+    async def test_a_dropped_area_read_refuses_the_write(
+        self, tools: EntityTools, dropped: AsyncMock
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(entity_id="light.test", area_id="living_room")
+
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "CONNECTION_FAILED"
+        assert body["area_id"] == "living_room"
+        assert dropped.call_args_list == [call({"type": _AREAS})]
+
+
+class TestSingleEntityUpdate:
+    async def test_a_name_update_sends_only_the_registry_update(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        sent: AsyncMock,
+    ) -> None:
+        """No exposure write is sent when expose_to is not given."""
+        _entity(entity_registry, "light.test")
+
+        result = await tools.ha_set_entity(entity_id="light.test", name="New Name")
+
+        assert result["success"] is True
+        assert sent_types(sent) == [_UPDATE]
+
+    async def test_a_call_without_updates_is_refused(self, tools: EntityTools) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(entity_id="light.test")
+
+        assert "No updates specified" in error_of(exc_info)["message"]
+
+    async def test_expose_to_as_a_list_is_refused(self, tools: EntityTools) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.test", expose_to=["conversation"]
             )
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert mock_client.send_websocket_message.call_args_list == [
-            (({"type": "config/label_registry/list"},), {})
-        ]
+        assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
 
-
-class TestHaSetEntityExposeTo:
-    """Test ha_set_entity expose_to parameter."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            fmcp = getattr(method, "__fastmcp__", None)
-            name = (fmcp.name if fmcp else None) or method.__name__
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def set_entity_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_set_entity function."""
-        register_entity_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_set_entity"]
-
-    @pytest.mark.asyncio
-    async def test_expose_to_single_assistant(self, mock_mcp, mock_client):
-        """expose_to with single assistant should send expose message."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"exposed_entities": {}}}
-        )
-
-        # For expose-only calls, the tool also fetches entity state
-        entity_entry = {
-            "entity_id": "light.test",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": [],
-        }
-
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose call
-                {"success": True, "result": entity_entry},  # get entity call
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            expose_to={"conversation": True},
-        )
-
-        assert result["success"] is True
-        assert result["exposure"] == {"conversation": True}
-
-        # Verify the expose WebSocket message
-        first_call = mock_client.send_websocket_message.call_args_list[0][0][0]
-        assert first_call["type"] == "homeassistant/expose_entity"
-        assert first_call["assistants"] == ["conversation"]
-        assert first_call["entity_ids"] == ["light.test"]
-        assert first_call["should_expose"] is True
-
-    @pytest.mark.asyncio
-    async def test_expose_to_mixed_true_false(self, mock_mcp, mock_client):
-        """expose_to with mixed true/false should make separate API calls."""
-        entity_entry = {
-            "entity_id": "light.test",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": [],
-        }
-
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose=true call
-                {"success": True},  # expose=false call
-                {"success": True, "result": entity_entry},  # get entity call
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            expose_to={"conversation": True, "cloud.alexa": False},
-        )
-
-        assert result["success"] is True
-        assert result["exposure"] == {"conversation": True, "cloud.alexa": False}
-
-        # Should have made 3 calls: expose true, expose false, get entity
-        assert mock_client.send_websocket_message.call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_expose_hide_only_still_refetches(self, mock_mcp, mock_client):
-        """Hiding an entity (all should_expose=False) still refetches fresh state.
-
-        `succeeded` becomes a non-empty {assistant: False} dict — truthy, so
-        exposure_result is non-None — which is exactly why the post-exposure
-        refetch is unconditional. Guards against a future "only refetch if
-        something was exposed True" regression.
-        """
-        entity_entry = {
-            "entity_id": "light.test",
-            "options": {"conversation": {"should_expose": False}},
-        }
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose=false call
-                {"success": True, "result": entity_entry},  # refetch
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            expose_to={"conversation": False},
-        )
-
-        assert result["success"] is True
-        assert result["exposure"] == {"conversation": False}
-        # Refetch fired even though nothing was exposed True.
-        assert mock_client.send_websocket_message.call_count == 2
-        assert (
-            mock_client.send_websocket_message.call_args_list[1][0][0]["type"]
-            == "config/entity_registry/get"
-        )
-
-    @pytest.mark.asyncio
-    async def test_expose_to_invalid_assistant_rejected(self, set_entity_tool):
-        """Invalid assistant name in expose_to should raise ToolError."""
+    async def test_an_unknown_entity_is_cores_not_found_with_suggestions(
+        self, tools: EntityTools, labels: list[str]
+    ) -> None:
+        """The caller is told how to find a valid entity id."""
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(
-                entity_id="light.test",
-                expose_to={"invalid_assistant": True},
-            )
+            await tools.ha_set_entity(entity_id="light.nonexistent", labels=["outdoor"])
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        error = error_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert (
-            "invalid_assistant" in error_msg.lower() or "invalid" in error_msg.lower()
-        )
+        error = error_of(exc_info)
+        assert error["code"].endswith("_NOT_FOUND")
+        assert "Entity not found" in error["message"]
+        assert error.get("suggestion")
 
-    @pytest.mark.asyncio
-    async def test_expose_to_none_not_triggered(self, mock_mcp, mock_client):
-        """When expose_to is None, no exposure API call should be made."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_entry": {
-                        "entity_id": "light.test",
-                        "name": "New Name",
-                        "original_name": "Test",
-                        "icon": None,
-                        "area_id": None,
-                        "disabled_by": None,
-                        "hidden_by": None,
-                        "aliases": [],
-                        "labels": [],
-                    }
-                },
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
+    async def test_a_device_rename_without_a_device_is_a_warning_not_partial(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
+    ) -> None:
+        _entity(entity_registry, "light.test")
 
-        result = await tool(entity_id="light.test", name="New Name")
-
-        assert result["success"] is True
-        # Only 1 call (entity registry update), no exposure call
-        assert mock_client.send_websocket_message.call_count == 1
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["type"] == "config/entity_registry/update"
-
-
-class TestHaSetEntityCombined:
-    """Test ha_set_entity with combined registry + labels + expose_to updates."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            fmcp = getattr(method, "__fastmcp__", None)
-            name = (fmcp.name if fmcp else None) or method.__name__
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.mark.asyncio
-    async def test_combined_name_labels_expose(self, mock_mcp, mock_client):
-        """Combined name + labels + expose_to updates registry, exposes, then refetches."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "outdoor"),
-                # First call: entity registry update (name + labels), pre-exposure options
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "name": "My Light",
-                            "original_name": "Test",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["outdoor"],
-                            "options": {},
-                        }
-                    },
-                },
-                # Second call: expose entity
-                {"success": True},
-                # Third call: post-exposure refetch reflects the new exposure state
-                {
-                    "success": True,
-                    "result": {
-                        "entity_id": "light.test",
-                        "name": "My Light",
-                        "original_name": "Test",
-                        "icon": None,
-                        "area_id": None,
-                        "disabled_by": None,
-                        "hidden_by": None,
-                        "aliases": [],
-                        "labels": ["outdoor"],
-                        "options": {"conversation": {"should_expose": True}},
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            name="My Light",
-            labels=["outdoor"],
-            expose_to={"conversation": True},
-        )
-
-        assert result["success"] is True
-        assert result["entity_entry"]["name"] == "My Light"
-        assert result["entity_entry"]["labels"] == ["outdoor"]
-        assert result["exposure"] == {"conversation": True}
-        # Returned entity reflects the post-exposure refetch, not the pre-exposure snapshot
-        assert result["entity_entry"]["options"] == {
-            "conversation": {"should_expose": True}
-        }
-
-        # Verify the registry update carried name + labels (call 0 is the
-        # label-registry preflight)
-        first_call = mock_client.send_websocket_message.call_args_list[1][0][0]
-        assert first_call["type"] == "config/entity_registry/update"
-        assert first_call["name"] == "My Light"
-        assert first_call["labels"] == ["outdoor"]
-
-        # Verify the following call was expose
-        second_call = mock_client.send_websocket_message.call_args_list[2][0][0]
-        assert second_call["type"] == "homeassistant/expose_entity"
-
-        # Verify third call refetched current registry state after exposure
-        third_call = mock_client.send_websocket_message.call_args_list[3][0][0]
-        assert third_call["type"] == "config/entity_registry/get"
-        assert mock_client.send_websocket_message.call_count == 4
-
-    @pytest.mark.asyncio
-    async def test_expose_after_prior_phase_refetches_fresh_state(
-        self, mock_mcp, mock_client
-    ):
-        """Regression: when a prior phase already populated entity_entry, exposure
-        must still refetch so the returned entity reflects the new should_expose
-        values instead of the stale pre-exposure snapshot.
-        """
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                # Registry name update populates entity_entry pre-exposure
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "name": "Porch",
-                            "options": {"conversation": {"should_expose": False}},
-                        }
-                    },
-                },
-                # Exposure call succeeds
-                {"success": True},
-                # Post-exposure refetch shows the updated exposure
-                {
-                    "success": True,
-                    "result": {
-                        "entity_id": "light.test",
-                        "name": "Porch",
-                        "options": {"conversation": {"should_expose": True}},
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            name="Porch",
-            expose_to={"conversation": True},
-        )
-
-        # Without the post-exposure refetch this would carry the stale
-        # should_expose=False from the registry-update phase.
-        assert result["entity_entry"]["options"] == {
-            "conversation": {"should_expose": True}
-        }
-        assert mock_client.send_websocket_message.call_count == 3
-        assert (
-            mock_client.send_websocket_message.call_args_list[2][0][0]["type"]
-            == "config/entity_registry/get"
-        )
-
-    @pytest.mark.asyncio
-    async def test_expose_refetch_failure_keeps_snapshot_and_succeeds(
-        self, mock_mcp, mock_client, caplog
-    ):
-        """A failed cosmetic post-exposure refetch must NOT fail the whole call when a
-        prior phase already produced a snapshot. The exposure committed, so the tool
-        returns the (pre-exposure) entity and warns instead of raising ENTITY_NOT_FOUND.
-        """
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                # Registry name update -> pre-exposure snapshot
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "name": "Porch",
-                            "options": {"conversation": {"should_expose": False}},
-                        }
-                    },
-                },
-                # Exposure succeeds
-                {"success": True},
-                # Post-exposure refetch FAILS (transient WS error)
-                {"success": False, "error": {"message": "connection lost"}},
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with caplog.at_level(logging.WARNING):
-            result = await tool(
-                entity_id="light.test",
-                name="Porch",
-                expose_to={"conversation": True},
-            )
-
-        # Operation succeeded; exposure reported; entity falls back to the
-        # pre-exposure snapshot rather than raising.
-        assert result["success"] is True
-        assert result["exposure"] == {"conversation": True}
-        assert result["entity_entry"]["name"] == "Porch"
-        assert mock_client.send_websocket_message.call_count == 3
-        # The real WS error is surfaced in the warning, not swallowed.
-        assert "connection lost" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_expose_with_options_only_refetches_fresh_state(
-        self, mock_mcp, mock_client
-    ):
-        """options + expose_to (no registry field): the options phase populates
-        entity_entry pre-exposure, so exposure must still refetch fresh state.
-        """
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                # Options update (config/entity_registry/update with options_domain)
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "options": {
-                                "sensor": {"display_precision": 2},
-                                "conversation": {"should_expose": False},
-                            },
-                        }
-                    },
-                },
-                # Exposure succeeds
-                {"success": True},
-                # Post-exposure refetch reflects the new exposure
-                {
-                    "success": True,
-                    "result": {
-                        "entity_id": "light.test",
-                        "options": {
-                            "sensor": {"display_precision": 2},
-                            "conversation": {"should_expose": True},
-                        },
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            options={"sensor": {"display_precision": 2}},
-            expose_to={"conversation": True},
-        )
-
-        assert result["success"] is True
-        assert result["exposure"] == {"conversation": True}
-        assert (
-            result["entity_entry"]["options"]["conversation"]["should_expose"] is True
-        )
-        # No Phase-3 registry call (no main field): options-update, expose, refetch.
-        assert mock_client.send_websocket_message.call_count == 3
-        assert (
-            mock_client.send_websocket_message.call_args_list[0][0][0]["options_domain"]
-            == "sensor"
-        )
-        assert (
-            mock_client.send_websocket_message.call_args_list[2][0][0]["type"]
-            == "config/entity_registry/get"
-        )
-
-    @pytest.mark.asyncio
-    async def test_expose_with_device_rename_refetches_fresh_state(
-        self, mock_mcp, mock_client
-    ):
-        """new_device_name + expose_to (no registry field): the device-rename phase
-        fetches entity_entry (for the device_id) pre-exposure, so exposure must refetch.
-        """
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                # Device-id lookup (config/entity_registry/get) -> pre-exposure
-                {
-                    "success": True,
-                    "result": {
-                        "entity_id": "light.test",
-                        "device_id": "dev123",
-                        "options": {"conversation": {"should_expose": False}},
-                    },
-                },
-                # Device registry update succeeds
-                {"success": True},
-                # Exposure succeeds
-                {"success": True},
-                # Post-exposure refetch reflects the new exposure
-                {
-                    "success": True,
-                    "result": {
-                        "entity_id": "light.test",
-                        "device_id": "dev123",
-                        "options": {"conversation": {"should_expose": True}},
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            new_device_name="Living Room Lamp",
-            expose_to={"conversation": True},
-        )
-
-        assert result["success"] is True
-        assert result["exposure"] == {"conversation": True}
-        assert (
-            result["entity_entry"]["options"]["conversation"]["should_expose"] is True
-        )
-        # lookup-get, device-update, expose, refetch
-        assert mock_client.send_websocket_message.call_count == 4
-        assert (
-            mock_client.send_websocket_message.call_args_list[3][0][0]["type"]
-            == "config/entity_registry/get"
-        )
-
-    @pytest.mark.asyncio
-    async def test_no_updates_returns_error(self, mock_mcp, mock_client):
-        """Calling ha_set_entity with no parameters should raise ToolError."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(entity_id="light.test")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        error = error_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "No updates specified" in error_msg
-
-    @pytest.mark.asyncio
-    async def test_expose_failure_after_registry_success_raises_tool_error(
-        self, mock_mcp, mock_client
-    ):
-        """If registry update succeeds but expose fails, raise ToolError with partial context."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                # Registry update succeeds
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "name": "Updated",
-                            "original_name": "Test",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": [],
-                        }
-                    },
-                },
-                # Expose fails
-                {
-                    "success": False,
-                    "error": {"message": "Exposure not supported"},
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id="light.test",
-                name="Updated",
-                expose_to={"conversation": True},
-            )
-
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        assert result.get("partial") is True
-        assert "entity_entry" in result
-        assert result["entity_entry"]["name"] == "Updated"
-        assert "exposure_succeeded" in result
-        assert "exposure_failed" in result
-        assert result["exposure_failed"] == {"conversation": True}
-
-    @pytest.mark.asyncio
-    async def test_expose_only_failure_raises_tool_error_without_partial(
-        self, mock_mcp, mock_client
-    ):
-        """If only expose_to is set and it fails, raise ToolError without partial flag."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": {"message": "Exposure not supported"},
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id="light.test",
-                expose_to={"conversation": True},
-            )
-
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        assert "partial" not in result
-        assert result["exposure_succeeded"] == {}
-        assert result["exposure_failed"] == {"conversation": True}
-
-    @pytest.mark.asyncio
-    async def test_expose_mixed_partial_failure_raises_tool_error(
-        self, mock_mcp, mock_client
-    ):
-        """If first exposure group succeeds but second fails, raise ToolError with context."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose_true succeeds
-                {
-                    "success": False,
-                    "error": {"message": "Failed"},
-                },  # expose_false fails
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id="light.test",
-                expose_to={"conversation": True, "cloud.alexa": False},
-            )
-
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        assert result["exposure_succeeded"] == {"conversation": True}
-        assert result["exposure_failed"] == {"cloud.alexa": False}
-
-    @pytest.mark.asyncio
-    async def test_expose_only_entity_not_found_raises_tool_error(
-        self, mock_mcp, mock_client
-    ):
-        """If only expose_to is set and entity fetch fails, raise ToolError."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose call succeeds
-                {
-                    "success": False,
-                    "error": {"message": "Entity not found"},
-                },  # get entity fails
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id="light.nonexistent",
-                expose_to={"conversation": True},
-            )
-
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        assert "not found" in result["error"]["message"]
-        assert result["exposure_succeeded"] == {"conversation": True}
-
-    @pytest.mark.asyncio
-    async def test_expose_to_all_three_assistants(self, mock_mcp, mock_client):
-        """All 3 assistants in a single expose_to call should work."""
-        entity_entry = {
-            "entity_id": "light.test",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": [],
-        }
-
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose_true call
-                {"success": True},  # expose_false call
-                {"success": True, "result": entity_entry},  # get entity call
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            expose_to={
-                "conversation": True,
-                "cloud.alexa": True,
-                "cloud.google_assistant": False,
-            },
-        )
-
-        assert result["success"] is True
-        assert result["exposure"] == {
-            "conversation": True,
-            "cloud.alexa": True,
-            "cloud.google_assistant": False,
-        }
-
-    @pytest.mark.asyncio
-    async def test_expose_to_list_returns_error(self, mock_mcp, mock_client):
-        """Passing a list instead of dict for expose_to should raise ToolError."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id="light.test",
-                expose_to=["conversation"],
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_registry_failure_with_labels(self, mock_mcp, mock_client):
-        """Registry update failure when labels are included should raise ToolError."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "outdoor"),
-                {"success": False, "error": {"message": "Entity not found"}},
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id="light.nonexistent",
-                labels=["outdoor"],
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        error = error_data.get("error", {})
-        assert isinstance(error, dict)
-        assert "suggestions" in error or "suggestion" in error
-
-    @pytest.mark.asyncio
-    async def test_device_rename_lookup_failure_marks_partial(
-        self, mock_mcp, mock_client
-    ):
-        """Registry lookup failure during device rename must mark response partial.
-
-        The rename was effectively skipped, so ``partial: True`` tells the agent
-        the operation didn't fully complete, and no device_name echo is claimed.
-        """
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": {"message": "WS lookup transport failure"},
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            new_device_name="Living Room",
-        )
-
-        assert result["success"] is True
-        assert result.get("partial") is True
-        assert not any(u.startswith("device_name") for u in result["updates"])
-        device_rename = result["device_rename"]
-        assert device_rename.get("lookup_failed") is True
-        assert any(
-            "Entity registry lookup failed" in w
-            for w in device_rename.get("warnings", [])
-        )
-
-    @pytest.mark.asyncio
-    async def test_device_rename_no_device_does_not_mark_partial(
-        self, mock_mcp, mock_client
-    ):
-        """Entity with no associated device is a no-op, not a partial failure."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_id": "light.test",
-                    "device_id": None,
-                },
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            new_device_name="Living Room",
+        result = await tools.ha_set_entity(
+            entity_id="light.test", new_device_name="Living Room"
         )
 
         assert result["success"] is True
         assert "partial" not in result
-        device_rename = result["device_rename"]
-        assert device_rename.get("lookup_failed") is None
         assert any(
-            "no associated device" in w for w in device_rename.get("warnings", [])
+            "no associated device" in w for w in result["device_rename"]["warnings"]
         )
 
 
-class TestHaSetEntityLabelOperations:
-    """Test ha_set_entity label_operation parameter (add/remove)."""
+class TestBulk:
+    async def test_labels_are_stored_on_every_entity(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        ids = ["light.a", "light.b", "light.c"]
+        for entity_id in ids:
+            _entity(entity_registry, entity_id)
 
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            fmcp = getattr(method, "__fastmcp__", None)
-            name = (fmcp.name if fmcp else None) or method.__name__
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.mark.asyncio
-    async def test_label_add_operation(self, mock_mcp, mock_client):
-        """label_operation='add' should add to existing labels."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                # First call: get current entity (to fetch existing labels)
-                {
-                    "success": True,
-                    "result": {
-                        "entity_id": "light.test",
-                        "labels": ["existing_label"],
-                    },
-                },
-                # Second call: label-registry preflight for the added IDs
-                _registry_list("label_id", "existing_label", "new_label"),
-                # Third call: update entity with combined labels
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "name": None,
-                            "original_name": "Test",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["existing_label", "new_label"],
-                        }
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            labels=["new_label"],
-            label_operation="add",
-        )
+        result = await tools.ha_set_entity(entity_id=ids, labels=["outdoor"])
 
         assert result["success"] is True
-        # Verify the update call included both old and new labels
-        update_call = mock_client.send_websocket_message.call_args_list[2][0][0]
-        assert "existing_label" in update_call["labels"]
-        assert "new_label" in update_call["labels"]
-
-    @pytest.mark.asyncio
-    async def test_label_remove_operation(self, mock_mcp, mock_client):
-        """label_operation='remove' should remove specified labels."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                # First call: get current entity (to fetch existing labels)
-                {
-                    "success": True,
-                    "result": {
-                        "entity_id": "light.test",
-                        "labels": ["keep_label", "remove_label"],
-                    },
-                },
-                # Second call: update entity with remaining labels
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "name": None,
-                            "original_name": "Test",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["keep_label"],
-                        }
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            labels=["remove_label"],
-            label_operation="remove",
-        )
-
-        assert result["success"] is True
-        # Verify the update call excluded the removed label
-        update_call = mock_client.send_websocket_message.call_args_list[1][0][0]
-        assert "keep_label" in update_call["labels"]
-        assert "remove_label" not in update_call["labels"]
-
-    @pytest.mark.asyncio
-    async def test_label_add_no_duplicates(self, mock_mcp, mock_client):
-        """label_operation='add' should not create duplicates."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                # First call: get current entity
-                {
-                    "success": True,
-                    "result": {
-                        "entity_id": "light.test",
-                        "labels": ["label_a", "label_b"],
-                    },
-                },
-                # Second call: label-registry preflight for the added IDs
-                _registry_list("label_id", "label_a", "label_b", "label_c"),
-                # Third call: update entity
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.test",
-                            "name": None,
-                            "original_name": "Test",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["label_a", "label_b", "label_c"],
-                        }
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            labels=["label_b", "label_c"],  # label_b already exists
-            label_operation="add",
-        )
-
-        assert result["success"] is True
-        update_call = mock_client.send_websocket_message.call_args_list[2][0][0]
-        # Should have 3 unique labels, not 4
-        assert len(update_call["labels"]) == 3
-
-
-class TestHaSetEntityBulkOperations:
-    """Test ha_set_entity bulk operations with multiple entity_ids."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            fmcp = getattr(method, "__fastmcp__", None)
-            name = (fmcp.name if fmcp else None) or method.__name__
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.mark.asyncio
-    async def test_bulk_labels_set(self, mock_mcp, mock_client):
-        """Bulk operation should update labels on multiple entities."""
-        entity_entry = {
-            "entity_id": "light.test",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": ["outdoor"],
-        }
-        update_ack = {"success": True, "result": {"entity_entry": entity_entry}}
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=lambda message: (
-                _registry_list("label_id", "outdoor")
-                if message["type"] == "config/label_registry/list"
-                else update_ack
-            )
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id=["light.a", "light.b", "light.c"],
-            labels=["outdoor"],
-        )
-
-        assert result["success"] is True
-        assert result["total"] == 3
-        assert result["succeeded_count"] == 3
+        assert (result["total"], result["succeeded_count"]) == (3, 3)
         assert result["failed_count"] == 0
-        assert len(result["succeeded"]) == 3
+        for entity_id in ids:
+            assert _stored(entity_registry, entity_id).labels == {"outdoor"}
 
-    @pytest.mark.asyncio
-    async def test_bulk_expose_to(self, mock_mcp, mock_client):
-        """Bulk expose sends ONE expose_entity call with the full id list, then a
-        single get_entries refetch — not one expose + one get per entity."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # single batched expose call for [a, b]
-                {  # single get_entries refetch for [a, b]
-                    "success": True,
-                    "result": {
-                        "light.a": {
-                            "entity_id": "light.a",
-                            "options": {"conversation": {"should_expose": True}},
-                        },
-                        "light.b": {
-                            "entity_id": "light.b",
-                            "options": {"conversation": {"should_expose": True}},
-                        },
-                    },
-                },
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id=["light.a", "light.b"],
-            expose_to={"conversation": True},
-        )
-
-        assert result["success"] is True
-        assert result["succeeded_count"] == 2
-        # Exactly two WS calls: one batched expose + one batched refetch.
-        assert mock_client.send_websocket_message.call_count == 2
-        expose_call = mock_client.send_websocket_message.call_args_list[0][0][0]
-        assert expose_call["type"] == "homeassistant/expose_entity"
-        assert expose_call["entity_ids"] == ["light.a", "light.b"]
-        assert expose_call["should_expose"] is True
-        refetch_call = mock_client.send_websocket_message.call_args_list[1][0][0]
-        assert refetch_call["type"] == "config/entity_registry/get_entries"
-        assert refetch_call["entity_ids"] == ["light.a", "light.b"]
-        # entity_entry reflects the post-exposure refetch (options carry the
-        # new should_expose), formatted through the same shape as before.
-        entries = {e["entity_id"]: e for e in result["succeeded"]}
-        assert entries["light.a"]["entity_entry"]["options"] == {
-            "conversation": {"should_expose": True}
-        }
-
-    @pytest.mark.asyncio
-    async def test_bulk_rejects_single_entity_params(self, mock_mcp, mock_client):
-        """Bulk operation should reject single-entity parameters with ToolError."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
+    @pytest.mark.parametrize(
+        "single_entity_param",
+        [
+            {"name": "Test Name"},
+            {"device_class": "window"},
+            {"options": {"sensor": {"display_precision": 2}}},
+            {"use_entity_name_alias": False},
+        ],
+        ids=["name", "device_class", "options", "use_entity_name_alias"],
+    )
+    async def test_a_single_entity_parameter_is_refused(
+        self,
+        tools: EntityTools,
+        sent: AsyncMock,
+        single_entity_param: dict[str, Any],
+    ) -> None:
+        """A bulk update would drop it silently, so it is refused."""
         with pytest.raises(ToolError) as exc_info:
-            await tool(
+            await tools.ha_set_entity(
                 entity_id=["light.a", "light.b"],
-                name="Test Name",  # Single-entity param
                 labels=["outdoor"],
+                **single_entity_param,
             )
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        error = error_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "Single-entity parameters" in error_msg or "name" in error_msg
+        error = error_of(exc_info)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert next(iter(single_entity_param)) in error["message"]
+        sent.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_bulk_partial_failure(self, mock_mcp, mock_client):
-        """Bulk operation should report partial failures."""
-        entity_entry = {
-            "entity_id": "light.a",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": ["outdoor"],
-        }
+    async def test_an_entity_core_refuses_fails_alone(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        _entity(entity_registry, "light.a")
 
-        def send(message: dict[str, Any]) -> dict[str, Any]:
-            if message["type"] == "config/label_registry/list":
-                return _registry_list("label_id", "outdoor")
-            if message["entity_id"] == "light.a":
-                return {"success": True, "result": {"entity_entry": entity_entry}}
-            return {"success": False, "error": {"message": "Entity not found"}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=send)
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id=["light.a", "light.b"],
-            labels=["outdoor"],
+        result = await tools.ha_set_entity(
+            entity_id=["light.a", "light.b"], labels=["outdoor"]
         )
 
         assert result["success"] is False
         assert result["partial"] is True
-        assert result["succeeded_count"] == 1
-        assert result["failed_count"] == 1
-        assert len(result["succeeded"]) == 1
-        assert len(result["failed"]) == 1
+        assert [row["entity_id"] for row in result["succeeded"]] == ["light.a"]
+        assert [row["entity_id"] for row in result["failed"]] == ["light.b"]
+        assert _stored(entity_registry, "light.a").labels == {"outdoor"}
 
-    @pytest.mark.asyncio
-    async def test_bulk_empty_list_returns_error(self, mock_mcp, mock_client):
-        """Bulk operation with empty entity_id list should raise ToolError."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
+    async def test_an_empty_entity_list_is_refused(self, tools: EntityTools) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id=[],
-                labels=["outdoor"],
-            )
+            await tools.ha_set_entity(entity_id=[], labels=["outdoor"])
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        error = error_data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "empty" in error_msg.lower()
+        assert "empty" in error_of(exc_info)["message"].lower()
 
-    @pytest.mark.asyncio
-    async def test_bulk_label_add_operation(self, mock_mcp, mock_client):
-        """Bulk operation with label_operation='add' should work."""
+    async def test_add_keeps_each_entitys_own_labels(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        label_registry: lr.LabelRegistry,
+    ) -> None:
+        for name in ("Existing", "Other", "New Label"):
+            label_registry.async_create(name)
+        _entity(entity_registry, "light.a", labels={"existing"})
+        _entity(entity_registry, "light.b", labels={"other"})
 
-        def send(message: dict[str, Any]) -> dict[str, Any]:
-            if message["type"] == "config/label_registry/list":
-                return _registry_list("label_id", "new_label")
-            if message["type"] == "config/entity_registry/get":
-                labels = {"light.a": ["existing"], "light.b": ["other"]}
-                return {
-                    "success": True,
-                    "result": {"labels": labels[message["entity_id"]]},
-                }
-            return {"success": True, "result": {"entity_entry": dict(message)}}
-
-        mock_client.send_websocket_message = AsyncMock(side_effect=send)
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
+        result = await tools.ha_set_entity(
             entity_id=["light.a", "light.b"],
             labels=["new_label"],
             label_operation="add",
         )
 
-        assert result["success"] is True
         assert result["succeeded_count"] == 2
-        entries = {
-            entry["entity_id"]: entry["entity_entry"] for entry in result["succeeded"]
-        }
+        entries = {row["entity_id"]: row["entity_entry"] for row in result["succeeded"]}
         assert set(entries["light.a"]["labels"]) == {"existing", "new_label"}
         assert set(entries["light.b"]["labels"]) == {"other", "new_label"}
+        assert _stored(entity_registry, "light.b").labels == {"other", "new_label"}
 
-    @pytest.mark.asyncio
-    async def test_bulk_categories_set(self, mock_mcp, mock_client):
-        """Bulk operation should include categories in each per-entity registry update."""
-        entity_entry = {
-            "entity_id": "light.test",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": [],
-            "categories": {"automation": "cat_id"},
-        }
-        update_ack = {"success": True, "result": {"entity_entry": entity_entry}}
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=lambda message: (
-                _registry_list("category_id", "cat_id")
-                if message["type"] == "config/category_registry/list"
-                else update_ack
-            )
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
+    async def test_a_category_is_stored_on_every_entity(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+    ) -> None:
+        category = category_registry.async_create(scope="automation", name="Lights")
+        ids = ["light.a", "light.b"]
+        for entity_id in ids:
+            _entity(entity_registry, entity_id)
 
-        result = await tool(
-            entity_id=["light.a", "light.b"],
-            categories={"automation": "cat_id"},
+        result = await tools.ha_set_entity(
+            entity_id=ids, categories={"automation": category.category_id}
         )
 
-        assert result["success"] is True
         assert result["succeeded_count"] == 2
-        # Verify each per-entity WS message included categories
-        update_calls = [
-            call[0][0]
-            for call in mock_client.send_websocket_message.call_args_list
-            if call[0][0]["type"] == "config/entity_registry/update"
-        ]
-        assert len(update_calls) == 2
-        for ws_msg in update_calls:
-            assert ws_msg.get("categories") == {"automation": "cat_id"}
+        for entity_id in ids:
+            assert _stored(entity_registry, entity_id).categories == {
+                "automation": category.category_id
+            }
 
+    async def test_an_unknown_label_is_refused_before_any_entity_is_touched(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+        sent: AsyncMock,
+    ) -> None:
+        """One check at the entry guards the whole list."""
+        for entity_id in ("light.a", "light.b"):
+            _entity(entity_registry, entity_id)
 
-class TestHaSetEntityRegistryDisableGuardrail:
-    """Test that registry-disable (enabled=False) is blocked for automations and scripts."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            fmcp = getattr(method, "__fastmcp__", None)
-            name = (fmcp.name if fmcp else None) or method.__name__
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def set_entity_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_set_entity function."""
-        register_entity_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_set_entity"]
-
-    @pytest.mark.asyncio
-    async def test_disable_automation_blocked(self, set_entity_tool, mock_client):
-        """enabled=False on automation entity should raise ToolError."""
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="automation.test", enabled=False)
+            await tools.ha_set_entity(
+                entity_id=["light.a", "light.b"], labels=["ghost_label"]
+            )
+
+        assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert sent_types(sent) == [_LABELS]
+
+
+class TestDisableGuardrail:
+    async def test_disabling_an_automation_points_to_its_own_switch(
+        self, tools: EntityTools, sent: AsyncMock
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(entity_id="automation.test", enabled=False)
 
         error_text = str(exc_info.value)
-        assert "automation" in error_text.lower()
         assert (
             "ha_config_set_automation(entity_id='automation.test', enabled=False)"
             in error_text
         )
         assert "ha_call_service('automation', 'turn_off'" not in error_text
-        error_data = json.loads(error_text)
-        suggestions = error_data["error"].get("suggestions", [])
+        assert "re-enabled" not in error_text
+        assert "reloaded" not in error_text
+        suggestions = error_of(exc_info).get("suggestions", [])
         assert any(
             "ha_config_set_automation(entity_id=..., enabled=...)" in item
             for item in suggestions
         )
         assert not any("automation.turn_off" in item for item in suggestions)
-        # Ensure no WebSocket call was made
-        mock_client.send_websocket_message.assert_not_called()
+        sent.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_disable_script_blocked(self, set_entity_tool, mock_client):
-        """enabled=False on script entity should raise ToolError."""
+    async def test_disabling_a_script_says_no_switch_exists(
+        self, tools: EntityTools, sent: AsyncMock
+    ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="script.my_script", enabled=False)
+            await tools.ha_set_entity(entity_id="script.my_script", enabled=False)
 
         error_text = str(exc_info.value)
-        assert "script" in error_text.lower()
         assert (
             "ha_config_set_script(script_id='script.my_script', run='stop')"
             in error_text
         )
         assert "ha_call_service" not in error_text
+        assert "re-enabled" not in error_text
+        assert "reloaded" not in error_text
         assert "only to stop a currently running execution" in error_text
         assert "does not disable the script" in error_text
         assert "no script runtime enable/disable service" in error_text.lower()
-        error_data = json.loads(error_text)
-        suggestions = error_data["error"].get("suggestions", [])
+        suggestions = error_of(exc_info).get("suggestions", [])
         assert not any(
             "Registry-level hiding is not available" in item for item in suggestions
         )
         assert not any("retry" in item.lower() for item in suggestions)
-        mock_client.send_websocket_message.assert_not_called()
+        sent.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_disable_automation_single_element_list_blocked(
-        self, set_entity_tool, mock_client
-    ):
-        """enabled=False on single-element list ['automation.test'] should also be blocked."""
+    async def test_disabling_an_automation_in_a_one_item_list_is_refused(
+        self, tools: EntityTools, sent: AsyncMock
+    ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id=["automation.test"], enabled=False)
+            await tools.ha_set_entity(entity_id=["automation.test"], enabled=False)
 
-        error_text = str(exc_info.value)
-        assert "automation" in error_text.lower()
         assert (
             "ha_config_set_automation(entity_id='automation.test', enabled=False)"
-            in error_text
+            in str(exc_info.value)
         )
-        assert "ha_call_service('automation', 'turn_off'" not in error_text
-        mock_client.send_websocket_message.assert_not_called()
+        sent.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_enable_automation_allowed(self, set_entity_tool, mock_client):
-        """enabled=True on automation entity should be allowed (re-enabling is fine)."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_entry": {
-                        "entity_id": "automation.test",
-                        "name": None,
-                        "original_name": "Test",
-                        "icon": None,
-                        "area_id": None,
-                        "disabled_by": None,
-                        "hidden_by": None,
-                        "aliases": [],
-                        "labels": [],
-                    }
-                },
-            }
+    async def test_enabling_an_automation_is_written(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
+    ) -> None:
+        _entity(
+            entity_registry,
+            "automation.test",
+            disabled_by=er.RegistryEntryDisabler.USER,
         )
 
-        result = await set_entity_tool(entity_id="automation.test", enabled=True)
-        assert result["success"] is True
-
-    @pytest.mark.asyncio
-    async def test_disable_other_domain_allowed(self, set_entity_tool, mock_client):
-        """enabled=False on non-automation/script entities should still work."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_entry": {
-                        "entity_id": "sensor.temperature",
-                        "name": None,
-                        "original_name": "Temperature",
-                        "icon": None,
-                        "area_id": None,
-                        "disabled_by": "user",
-                        "hidden_by": None,
-                        "aliases": [],
-                        "labels": [],
-                    }
-                },
-            }
-        )
-
-        result = await set_entity_tool(entity_id="sensor.temperature", enabled=False)
-        assert result["success"] is True
-
-
-class TestHaRemoveEntity:
-    """Test ha_remove_entity tool."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            fmcp = getattr(method, "__fastmcp__", None)
-            name = (fmcp.name if fmcp else None) or method.__name__
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client."""
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def remove_entity_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_remove_entity function."""
-        register_entity_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_remove_entity"]
-
-    @pytest.mark.asyncio
-    async def test_remove_entity_success(self, remove_entity_tool, mock_client):
-        """Successfully removing an entity should return success with entity_id."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": None}
-        )
-        entity_id = "input_boolean.test_entity"
-
-        result = await remove_entity_tool(entity_id=entity_id)
+        result = await tools.ha_set_entity(entity_id="automation.test", enabled=True)
 
         assert result["success"] is True
-        assert result["entity_id"] == entity_id
+        assert _stored(entity_registry, "automation.test").disabled_by is None
 
-        # Verify correct WebSocket message type and payload
-        call_args = mock_client.send_websocket_message.call_args[0][0]
-        assert call_args["type"] == "config/entity_registry/remove"
-        assert call_args["entity_id"] == entity_id
+    async def test_disabling_another_domain_is_written(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
+    ) -> None:
+        _entity(entity_registry, "sensor.temperature")
 
-    @pytest.mark.asyncio
-    async def test_remove_entity_not_found(self, remove_entity_tool, mock_client):
-        """Core's not_found code is reported as ENTITY_NOT_FOUND, whatever its text."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": "Command failed: Entity missing",
-                "error_code": "not_found",
-            }
+        result = await tools.ha_set_entity(
+            entity_id="sensor.temperature", enabled=False
+        )
+
+        assert result["success"] is True
+        assert (
+            _stored(entity_registry, "sensor.temperature").disabled_by
+            is er.RegistryEntryDisabler.USER
+        )
+
+
+class TestRemoveEntity:
+    async def test_a_dropped_removal_is_a_connection_failure(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        dropped: AsyncMock,
+    ) -> None:
+        _entity(entity_registry, "sensor.test_entity")
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_entity(entity_id="sensor.test_entity")
+
+        assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
+        assert dropped.call_args == call(
+            {"type": "config/entity_registry/remove", "entity_id": "sensor.test_entity"}
+        )
+        assert entity_registry.async_get("sensor.test_entity") is not None
+
+    async def test_cores_refusal_text_reaches_the_caller(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _entity(entity_registry, "sensor.test_entity")
+        monkeypatch.setattr(
+            entity_registry,
+            "async_remove",
+            MagicMock(side_effect=HomeAssistantError("Permission denied")),
         )
 
         with pytest.raises(ToolError) as exc_info:
-            await remove_entity_tool(entity_id="sensor.definitely_not_real_12345")
+            await tools.ha_remove_entity(entity_id="sensor.test_entity")
 
-        assert json.loads(str(exc_info.value))["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert "permission denied" in error_of(exc_info)["message"].lower()
 
-    @pytest.mark.asyncio
-    async def test_remove_entity_exception(self, remove_entity_tool, mock_client):
-        """WebSocket connection failure should raise ToolError."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[{"success": True, "result": None}, Exception("conn failed")]
+
+class TestShowAsAndOptions:
+    async def test_device_class_is_the_show_as_field_not_an_option(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
+    ) -> None:
+        """The UI's Show As reads device_class; an option would not show."""
+        _entity(entity_registry, "binary_sensor.test")
+
+        result = await tools.ha_set_entity(
+            entity_id="binary_sensor.test", device_class="window"
         )
 
-        with pytest.raises(ToolError):
-            await remove_entity_tool(entity_id="sensor.test_entity")
+        stored = _stored(entity_registry, "binary_sensor.test")
+        assert stored.device_class == "window"
+        assert stored.options == {}
+        assert "device_class='window'" in result["updates"]
 
-    @pytest.mark.asyncio
-    async def test_remove_entity_general_failure(self, remove_entity_tool, mock_client):
-        """Generic failures should raise ToolError with SERVICE_CALL_FAILED message."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": "Permission denied"}
+    async def test_an_empty_device_class_clears_the_override(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
+    ) -> None:
+        _entity(entity_registry, "binary_sensor.test", device_class="door")
+
+        result = await tools.ha_set_entity(
+            entity_id="binary_sensor.test", device_class=""
         )
 
+        assert _stored(entity_registry, "binary_sensor.test").device_class is None
+        assert "device_class cleared" in result["updates"]
+
+    async def test_options_alone_leave_the_other_fields_as_they_are(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        sent: AsyncMock,
+    ) -> None:
+        _entity(entity_registry, "sensor.temp", device_class="temperature")
+
+        await tools.ha_set_entity(
+            entity_id="sensor.temp", options={"sensor": {"display_precision": 2}}
+        )
+
+        stored = _stored(entity_registry, "sensor.temp")
+        assert stored.options["sensor"] == {"display_precision": 2}
+        assert stored.device_class == "temperature"
+        assert sent_types(sent) == [_UPDATE]
+
+    async def test_options_for_two_domains_are_all_stored(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
+    ) -> None:
+        _entity(entity_registry, "sensor.temp")
+        options = {
+            "sensor": {"display_precision": 1},
+            "weather": {"forecast_type": "hourly"},
+        }
+
+        result = await tools.ha_set_entity(entity_id="sensor.temp", options=options)
+
+        stored = _stored(entity_registry, "sensor.temp")
+        assert {domain: stored.options[domain] for domain in options} == options
+        assert result["entity_entry"]["options"] == dict(stored.options)
+
+    async def test_a_refused_second_domain_says_what_was_written(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A caller retrying blindly would apply the first domain twice."""
+        _entity(entity_registry, "sensor.temp")
+        update_options = er.EntityRegistry.async_update_entity_options
+
+        def refuse_weather(
+            registry: er.EntityRegistry,
+            entity_id: str,
+            domain: str,
+            options: Mapping[str, Any] | None,
+        ) -> er.RegistryEntry:
+            if domain == "weather":
+                raise ValueError("Options refused")
+            return update_options(registry, entity_id, domain, options)
+
+        # Core answers a ValueError here with its invalid_info error.
+        monkeypatch.setattr(
+            er.EntityRegistry, "async_update_entity_options", refuse_weather
+        )
         with pytest.raises(ToolError) as exc_info:
-            await remove_entity_tool(entity_id="sensor.test_entity")
-
-        error_msg = str(exc_info.value).lower()
-        assert "permission denied" in error_msg
-
-
-class TestHaSetEntityShowAs:
-    """ha_set_entity device_class (Show As) and options parameter."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            fmcp = getattr(method, "__fastmcp__", None)
-            name = (fmcp.name if fmcp else None) or method.__name__
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    def _registry_response(self, **overrides):
-        entry = {
-            "entity_id": "binary_sensor.test",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": [],
-            "categories": {},
-            "device_class": None,
-            "original_device_class": None,
-            "options": {},
-        }
-        entry.update(overrides)
-        return {"success": True, "result": {"entity_entry": entry}}
-
-    @pytest.mark.asyncio
-    async def test_device_class_sets_top_level_field(self, mock_mcp, mock_client):
-        """device_class='window' must send top-level device_class on the WS update."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value=self._registry_response(device_class="window")
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(entity_id="binary_sensor.test", device_class="window")
-
-        assert result["success"] is True
-        ws_msg = mock_client.send_websocket_message.call_args[0][0]
-        assert ws_msg["type"] == "config/entity_registry/update"
-        assert ws_msg["device_class"] == "window"
-        # Show As must NOT be routed through options — that's a separate slot
-        # the UI does not read.
-        assert "options" not in ws_msg
-        assert "options_domain" not in ws_msg
-        assert "device_class='window'" in str(result["updates"])
-
-    @pytest.mark.asyncio
-    async def test_device_class_empty_string_clears(self, mock_mcp, mock_client):
-        """device_class='' clears the override (sends None) and surfaces 'cleared' in updates."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value=self._registry_response(device_class=None)
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(entity_id="binary_sensor.test", device_class="")
-
-        ws_msg = mock_client.send_websocket_message.call_args[0][0]
-        assert ws_msg["device_class"] is None
-        assert "device_class cleared" in str(result["updates"])
-
-    @pytest.mark.asyncio
-    async def test_options_single_domain_pairs_options_domain(
-        self, mock_mcp, mock_client
-    ):
-        """options={'sensor': {'display_precision': 2}} -> one WS call w/ options_domain=sensor."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value=self._registry_response(
-                options={"sensor": {"display_precision": 2}}
-            )
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        await tool(
-            entity_id="sensor.temp",
-            options={"sensor": {"display_precision": 2}},
-        )
-
-        assert mock_client.send_websocket_message.call_count == 1
-        ws_msg = mock_client.send_websocket_message.call_args[0][0]
-        # When options is the only param, the main registry update is skipped
-        # and the per-domain update carries exactly these keys — no spurious
-        # device_class=None or other accidental fields.
-        assert set(ws_msg.keys()) == {
-            "type",
-            "entity_id",
-            "options_domain",
-            "options",
-        }
-        assert ws_msg["options_domain"] == "sensor"
-        assert ws_msg["options"] == {"display_precision": 2}
-
-    @pytest.mark.asyncio
-    async def test_options_multi_domain_splits_into_separate_calls(
-        self, mock_mcp, mock_client
-    ):
-        """A multi-domain options dict must be split — HA schema requires one domain per call.
-
-        Uses side_effect so each call gets its own response, exercising the loop's
-        entity_entry reassignment from each per-domain response.
-        """
-        sensor_response = self._registry_response(
-            options={"sensor": {"display_precision": 1}}
-        )
-        weather_response = self._registry_response(
-            options={
-                "sensor": {"display_precision": 1},
-                "weather": {"forecast_type": "hourly"},
-            }
-        )
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[sensor_response, weather_response]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="sensor.temp",
-            options={
-                "sensor": {"display_precision": 1},
-                "weather": {"forecast_type": "hourly"},
-            },
-        )
-
-        calls = [c.args[0] for c in mock_client.send_websocket_message.call_args_list]
-        domains = [c["options_domain"] for c in calls]
-        assert domains == ["sensor", "weather"]  # insertion order preserved
-        for c in calls:
-            assert "options_domain" in c and "options" in c
-        # Final entity_entry reflects the LAST per-domain response (loop reassigns).
-        assert result["entity_entry"]["options"]["weather"] == {
-            "forecast_type": "hourly"
-        }
-        assert result["entity_entry"]["options"]["sensor"] == {"display_precision": 1}
-
-    @pytest.mark.asyncio
-    async def test_options_partial_failure_surfaces_partial_state(
-        self, mock_mcp, mock_client
-    ):
-        """If domain N+1 fails after 1..N succeeded, the error must report partial=True
-        and list which domains were already written. Otherwise callers retry blindly
-        and risk applying earlier changes twice or missing them entirely.
-        """
-        ok = self._registry_response(options={"sensor": {"display_precision": 1}})
-        fail = {"success": False, "error": {"message": "unsupported_domain"}}
-        mock_client.send_websocket_message = AsyncMock(side_effect=[ok, fail])
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
+            await tools.ha_set_entity(
                 entity_id="sensor.temp",
                 options={
                     "sensor": {"display_precision": 1},
@@ -2058,545 +746,170 @@ class TestHaSetEntityShowAs:
                 },
             )
 
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        body = error_body(exc_info)
         assert "weather" in body["error"]["message"]
-        assert "unsupported_domain" in body["error"]["message"]
-        # create_error_response merges `context` into the top-level response.
         assert body["options_domain"] == "weather"
         assert body["partial"] is True
         assert body["options_succeeded"] == {"sensor": {"display_precision": 1}}
+        stored = _stored(entity_registry, "sensor.temp")
+        assert stored.options["sensor"] == {"display_precision": 1}
+        assert "weather" not in stored.options
 
-    @pytest.mark.asyncio
-    async def test_options_invalid_shape_raises_validation_error(
-        self, mock_mcp, mock_client
-    ):
-        """options must be a dict mapping domain to sub-dict — list rejected,
-        and the error message names the actual type the caller passed."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
+    @pytest.mark.parametrize(
+        ("options", "named"),
+        [
+            (["not", "a", "dict"], "got list"),
+            ({"sensor": "not-a-dict"}, "str"),
+            ({}, "empty"),
+        ],
+        ids=["list", "inner-string", "empty"],
+    )
+    async def test_malformed_options_are_refused(
+        self, tools: EntityTools, sent: AsyncMock, options: Any, named: str
+    ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await tool(entity_id="sensor.temp", options=["not", "a", "dict"])
+            await tools.ha_set_entity(entity_id="sensor.temp", options=options)
 
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "got list" in body["error"]["message"]
+        error = error_of(exc_info)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert named in error["message"].lower()
+        sent.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_options_inner_value_must_be_dict(self, mock_mcp, mock_client):
-        """options={'sensor': 'not-a-dict'} must be rejected with a targeted message."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
+    async def test_device_class_and_options_are_both_stored(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
+    ) -> None:
+        _entity(entity_registry, "binary_sensor.test")
 
-        with pytest.raises(ToolError) as exc_info:
-            await tool(entity_id="sensor.temp", options={"sensor": "not-a-dict"})
-
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "sensor" in body["error"]["message"]
-        assert "str" in body["error"]["message"]
-
-    @pytest.mark.asyncio
-    async def test_options_empty_dict_rejected(self, mock_mcp, mock_client):
-        """options={} must be rejected at validation rather than falling through to
-        the generic 'No updates specified' error."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(entity_id="sensor.temp", options={})
-
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "empty" in body["error"]["message"].lower()
-
-    @pytest.mark.asyncio
-    async def test_bulk_rejects_device_class(self, mock_mcp, mock_client):
-        """device_class is single-entity-only — passing it with a list raises."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id=["binary_sensor.a", "binary_sensor.b"],
-                device_class="window",
-            )
-
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "device_class" in body["error"]["message"]
-
-    @pytest.mark.asyncio
-    async def test_bulk_rejects_options(self, mock_mcp, mock_client):
-        """options is single-entity-only — passing it with a list raises."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id=["sensor.a", "sensor.b"],
-                options={"sensor": {"display_precision": 2}},
-            )
-
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "options" in body["error"]["message"]
-
-    @pytest.mark.asyncio
-    async def test_options_first_call_failure_is_not_partial(
-        self, mock_mcp, mock_client
-    ):
-        """When the very first per-domain call fails (no prior registry update,
-        no prior succeeded domains), partial must be False and the message must
-        say 'Failed to update' — not 'Partially updated'. A regression that
-        flips this would silently turn clean failures into partial-success lies.
-        """
-        fail = {"success": False, "error": {"message": "unsupported_domain"}}
-        mock_client.send_websocket_message = AsyncMock(side_effect=[fail])
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id="sensor.temp",
-                options={"sensor": {"display_precision": 2}},
-            )
-
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert body["partial"] is False
-        assert body["options_succeeded"] == {}
-        assert body["error"]["message"].startswith("Failed to update options for")
-        assert "Partially" not in body["error"]["message"]
-        # entity_entry must NOT be present on a clean failure: the captured
-        # entity_entry is the empty stub {}, and surfacing it would be
-        # indistinguishable from "entity has nothing set". Mirrors the
-        # expose_to failure path which gates entity_entry on prior_mutation.
-        assert "entity_entry" not in body
-
-    @pytest.mark.asyncio
-    async def test_options_failure_with_empty_error_envelope_uses_fallback(
-        self, mock_mcp, mock_client
-    ):
-        """If HA returns success=False with no usable error key, the error
-        message must NOT degrade to literal "{}" — _extract_ws_error's fallback
-        string surfaces instead.
-        """
-        fail = {"success": False}  # no error key at all
-        mock_client.send_websocket_message = AsyncMock(side_effect=[fail])
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(
-                entity_id="sensor.temp",
-                options={"sensor": {"display_precision": 2}},
-            )
-
-        body = json.loads(str(exc_info.value))
-        msg = body["error"]["message"]
-        assert "no error detail returned by Home Assistant" in msg
-        # Critical: must NOT have rendered the empty dict literal.
-        assert ": {}" not in msg
-        assert "{}" not in msg.split(":", 1)[1]
-
-    @pytest.mark.asyncio
-    async def test_device_class_and_options_in_one_call(self, mock_mcp, mock_client):
-        """device_class and options together: one main registry update carries
-        device_class, then a separate per-domain WS call carries options. A
-        future refactor could short-circuit the options loop when the main
-        update already succeeded — this test catches that.
-        """
-        main_response = self._registry_response(device_class="window")
-        opts_response = self._registry_response(
-            device_class="window",
-            options={"binary_sensor": {}, "sensor": {"display_precision": 2}},
-        )
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[main_response, opts_response]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        await tool(
+        await tools.ha_set_entity(
             entity_id="binary_sensor.test",
             device_class="window",
             options={"sensor": {"display_precision": 2}},
         )
 
-        calls = [c.args[0] for c in mock_client.send_websocket_message.call_args_list]
-        assert len(calls) == 2
-        # Main update carries device_class but NOT options_domain
-        assert calls[0]["device_class"] == "window"
-        assert "options_domain" not in calls[0]
-        # Per-domain update carries options_domain and the right sub-dict
-        assert calls[1]["options_domain"] == "sensor"
-        assert calls[1]["options"] == {"display_precision": 2}
-        assert "device_class" not in calls[1]
+        stored = _stored(entity_registry, "binary_sensor.test")
+        assert stored.device_class == "window"
+        assert stored.options["sensor"] == {"display_precision": 2}
 
 
-class TestHaGetEntityRegistryOptions:
-    """ha_get_entity must surface device_class + options so agents can read state."""
+class TestAliases:
+    """Aliases keep the entity's own-name (``null``) entry (#2495)."""
 
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def capture_add_tool(method):
-            fmcp = getattr(method, "__fastmcp__", None)
-            name = (fmcp.name if fmcp else None) or method.__name__
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.mark.asyncio
-    async def test_get_entity_includes_device_class_and_options(
-        self, mock_mcp, mock_client
-    ):
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_id": "binary_sensor.test",
-                    "name": None,
-                    "original_name": "Test",
-                    "icon": None,
-                    "area_id": None,
-                    "disabled_by": None,
-                    "hidden_by": None,
-                    "aliases": [],
-                    "labels": [],
-                    "categories": {},
-                    "device_class": "window",
-                    "original_device_class": None,
-                    "options": {"sensor": {"display_precision": 2}},
-                    "platform": "template",
-                    "device_id": None,
-                    "unique_id": "abc",
-                },
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity"]
-
-        result = await tool(entity_id="binary_sensor.test")
-
-        entry = result["entity_entry"]
-        assert entry["device_class"] == "window"
-        assert entry["original_device_class"] is None
-        assert entry["options"] == {"sensor": {"display_precision": 2}}
-
-    @pytest.mark.asyncio
-    async def test_get_entity_surfaces_config_entry_id(self, mock_mcp, mock_client):
-        # Issue #1457: agents trying to read a UI-created template helper
-        # need the parent config entry id to call ha_get_integration. Before
-        # this change the field was dropped from the response, forcing them
-        # to fall back to a domain-list scan.
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_id": "sensor.weather_message",
-                    "name": None,
-                    "original_name": "Weather Message",
-                    "icon": None,
-                    "area_id": None,
-                    "disabled_by": None,
-                    "hidden_by": None,
-                    "aliases": [],
-                    "labels": [],
-                    "categories": {},
-                    "device_class": None,
-                    "original_device_class": None,
-                    "options": {},
-                    "platform": "template",
-                    "device_id": None,
-                    "config_entry_id": "01KB6B1Z1SA8B6AVAEMQ4FM8SD",
-                    "unique_id": "01KB6B1Z1SA8B6AVAEMQ4FM8SD",
-                },
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity"]
-
-        result = await tool(entity_id="sensor.weather_message")
-
-        entry = result["entity_entry"]
-        assert entry["config_entry_id"] == "01KB6B1Z1SA8B6AVAEMQ4FM8SD"
-        assert entry["platform"] == "template"
-
-    @pytest.mark.asyncio
-    async def test_config_entry_id_is_none_for_yaml_only_entity(
-        self, mock_mcp, mock_client
-    ):
-        # YAML-defined entities (e.g. legacy template platform) have no
-        # config entry — the field is surfaced as None rather than omitted
-        # so consumers can rely on a stable schema.
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_id": "sensor.legacy",
-                    "name": None,
-                    "original_name": "Legacy",
-                    "icon": None,
-                    "area_id": None,
-                    "disabled_by": None,
-                    "hidden_by": None,
-                    "aliases": [],
-                    "labels": [],
-                    "categories": {},
-                    "device_class": None,
-                    "original_device_class": None,
-                    "options": {},
-                    "platform": "sensor",
-                    "device_id": None,
-                    # No config_entry_id key in HA's response.
-                    "unique_id": None,
-                },
-            }
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_get_entity"]
-
-        result = await tool(entity_id="sensor.legacy")
-
-        assert result["entity_entry"]["config_entry_id"] is None
-
-
-class TestHaSetEntityAliases:
-    """ha_set_entity aliases keep HA's computed-name (``null``) entry (#2495)."""
-
-    @pytest.fixture
-    def set_entity_tool(self, mock_client: MagicMock) -> Callable[..., Any]:
-        mcp = MagicMock()
-        tools: dict[str, Any] = {}
-
-        def capture_add_tool(method: Callable[..., Any]) -> None:
-            fmcp = getattr(method, "__fastmcp__", None)
-            tools[(fmcp.name if fmcp else None) or method.__name__] = method
-
-        mcp.add_tool = capture_add_tool
-        register_entity_tools(mcp, mock_client)
-        tool: Callable[..., Any] = tools["ha_set_entity"]
-        return tool
-
-    @pytest.fixture
-    def mock_client(self) -> MagicMock:
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @staticmethod
-    def _update_call(mock_client: MagicMock) -> dict[str, Any]:
-        calls: list[dict[str, Any]] = [
-            c[0][0]
-            for c in mock_client.send_websocket_message.call_args_list
-            if c[0][0]["type"] == "config/entity_registry/update"
-        ]
-        assert len(calls) == 1
-        return calls[0]
-
-    @pytest.mark.asyncio
-    async def test_plain_list_keeps_existing_computed_name(
-        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    async def test_a_string_list_keeps_the_own_name(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        """Registry has [null]; a string-only list must not drop it."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": {"aliases": [None]}},
-            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
-        ]
+        _entity(entity_registry, "light.t", aliases=[er.COMPUTED_NAME])
 
-        result = await set_entity_tool(entity_id="light.t", aliases=["Maanlamp"])
+        result = await tools.ha_set_entity(entity_id="light.t", aliases=["Maanlamp"])
 
-        assert result["success"] is True
-        get_call = mock_client.send_websocket_message.call_args_list[0][0][0]
-        assert get_call == {
-            "type": "config/entity_registry/get",
-            "entity_id": "light.t",
-        }
-        assert self._update_call(mock_client)["aliases"] == [None, "Maanlamp"]
+        assert _aliases(entity_registry, "light.t") == [None, "Maanlamp"]
+        assert "entity-name alias kept" in result["updates"]
 
-    @pytest.mark.asyncio
-    async def test_plain_list_respects_disabled_computed_name(
-        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    async def test_a_string_list_leaves_the_own_name_off(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        """Registry has no null (switch off); the list is sent as given."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": {"aliases": ["old"]}},
-            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
-        ]
+        _entity(entity_registry, "light.t", aliases=["old"])
 
-        await set_entity_tool(entity_id="light.t", aliases=["new"])
+        await tools.ha_set_entity(entity_id="light.t", aliases=["new"])
 
-        assert self._update_call(mock_client)["aliases"] == ["new"]
+        assert _aliases(entity_registry, "light.t") == ["new"]
 
-    @pytest.mark.asyncio
-    async def test_empty_list_keeps_computed_name(
-        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    async def test_clearing_the_aliases_keeps_the_own_name(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        """Clearing aliases must not make the entity unaddressable by name."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": {"aliases": [None, "old"]}},
-            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
-        ]
+        """Otherwise the entity stops answering to its name in Assist."""
+        _entity(entity_registry, "light.t", aliases=[er.COMPUTED_NAME, "old"])
 
-        await set_entity_tool(entity_id="light.t", aliases=[])
+        await tools.ha_set_entity(entity_id="light.t", aliases=[])
 
-        assert self._update_call(mock_client)["aliases"] == [None]
+        assert _aliases(entity_registry, "light.t") == [None]
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "aliases",
         [[None, "Maanlamp"], '[null, "Maanlamp"]'],
         ids=["list", "json-string"],
     )
-    async def test_explicit_null_passes_through_without_lookup(
+    async def test_a_given_null_is_written_without_a_read(
         self,
-        set_entity_tool: Callable[..., Any],
-        mock_client: MagicMock,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        sent: AsyncMock,
         aliases: list[str | None] | str,
     ) -> None:
-        """Caller-provided null is authoritative: no registry read, sent verbatim."""
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": {"entity_entry": {"entity_id": "light.t"}},
-        }
+        _entity(entity_registry, "light.t", aliases=["old"])
 
-        result = await set_entity_tool(entity_id="light.t", aliases=aliases)
+        await tools.ha_set_entity(entity_id="light.t", aliases=aliases)
 
-        assert result["success"] is True
-        assert mock_client.send_websocket_message.call_count == 1
-        assert self._update_call(mock_client)["aliases"] == [None, "Maanlamp"]
+        assert sent_types(sent) == [_UPDATE]
+        assert _aliases(entity_registry, "light.t") == [None, "Maanlamp"]
 
-    @pytest.mark.asyncio
-    async def test_lookup_failure_is_reported(
-        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    async def test_a_refused_alias_read_writes_nothing(
+        self, tools: EntityTools, sent: AsyncMock
     ) -> None:
-        """A failed registry read must not fall through to a name-dropping write."""
-        mock_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": {"message": "boom"},
-        }
-
+        """Writing anyway could drop the entity's own name."""
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="light.t", aliases=["x"])
+            await tools.ha_set_entity(entity_id="light.t", aliases=["x"])
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "boom" in error_data["error"]["message"]
-        assert mock_client.send_websocket_message.call_count == 1
+        error = error_of(exc_info)
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert "Entity not found" in error["message"]
+        assert sent_types(sent) == [_GET]
 
-    @pytest.mark.asyncio
-    async def test_switch_off_strips_null_without_lookup(
-        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    @pytest.mark.parametrize(
+        ("switch", "expected", "note"),
+        [
+            (False, ["Maanlamp"], "entity-name alias off"),
+            (True, [None, "Maanlamp"], "entity-name alias on"),
+        ],
+        ids=["off", "on"],
+    )
+    async def test_the_switch_with_aliases_needs_no_read(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        sent: AsyncMock,
+        switch: bool,
+        expected: list[str | None],
+        note: str,
     ) -> None:
-        """use_entity_name_alias=False removes the own-name entry, even if passed."""
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": {"entity_entry": {"entity_id": "light.t"}},
-        }
+        """The switch decides the own-name entry, even one passed in aliases."""
+        _entity(entity_registry, "light.t")
+        given: list[str | None] = [None, "Maanlamp"] if not switch else ["Maanlamp"]
 
-        result = await set_entity_tool(
-            entity_id="light.t",
-            aliases=[None, "Maanlamp"],
-            use_entity_name_alias=False,
+        result = await tools.ha_set_entity(
+            entity_id="light.t", aliases=given, use_entity_name_alias=switch
         )
 
-        assert mock_client.send_websocket_message.call_count == 1
-        assert self._update_call(mock_client)["aliases"] == ["Maanlamp"]
-        assert "entity-name alias off" in result["updates"]
+        assert sent_types(sent) == [_UPDATE]
+        assert _aliases(entity_registry, "light.t") == expected
+        assert note in result["updates"]
 
-    @pytest.mark.asyncio
-    async def test_switch_on_adds_null_without_lookup(
-        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
-    ) -> None:
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": {"entity_entry": {"entity_id": "light.t"}},
-        }
-
-        result = await set_entity_tool(
-            entity_id="light.t", aliases=["Maanlamp"], use_entity_name_alias=True
-        )
-
-        assert mock_client.send_websocket_message.call_count == 1
-        assert self._update_call(mock_client)["aliases"] == [None, "Maanlamp"]
-        assert "entity-name alias on" in result["updates"]
-
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("switch", "expected"),
         [(False, ["old"]), (True, [None, "old"])],
         ids=["off", "on"],
     )
-    async def test_switch_alone_rewrites_current_aliases(
+    async def test_the_switch_alone_keeps_the_current_aliases(
         self,
-        set_entity_tool: Callable[..., Any],
-        mock_client: MagicMock,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
         switch: bool,
         expected: list[str | None],
     ) -> None:
-        """Without aliases, the switch reads the registry and keeps the strings."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": {"aliases": [None, "old"]}},
-            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
-        ]
+        _entity(entity_registry, "light.t", aliases=[er.COMPUTED_NAME, "old"])
 
-        result = await set_entity_tool(
+        result = await tools.ha_set_entity(
             entity_id="light.t", use_entity_name_alias=switch
         )
 
         assert result["success"] is True
-        assert self._update_call(mock_client)["aliases"] == expected
+        assert _aliases(entity_registry, "light.t") == expected
 
-    @pytest.mark.asyncio
-    async def test_kept_null_is_reported_in_updates(
-        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
-    ) -> None:
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": {"aliases": [None]}},
-            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
-        ]
-
-        result = await set_entity_tool(entity_id="light.t", aliases=["x"])
-
-        assert "entity-name alias kept" in result["updates"]
-
-    @pytest.mark.asyncio
-    async def test_switch_rejected_in_bulk(
-        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
-    ) -> None:
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(
-                entity_id=["light.a", "light.b"], use_entity_name_alias=False
-            )
-
-        body = json.loads(str(exc_info.value))
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "use_entity_name_alias" in body["error"]["message"]
-        mock_client.send_websocket_message.assert_not_called()
-
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("aliases", [[1, "x"], '["x", 2]', "not json"])
-    async def test_non_string_entries_rejected(
-        self,
-        set_entity_tool: Callable[..., Any],
-        mock_client: MagicMock,
-        aliases: list[Any] | str,
+    async def test_non_string_aliases_are_refused(
+        self, tools: EntityTools, sent: AsyncMock, aliases: list[Any] | str
     ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="light.t", aliases=aliases)
+            await tools.ha_set_entity(entity_id="light.t", aliases=aliases)
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        mock_client.send_websocket_message.assert_not_called()
+        assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+        sent.assert_not_called()

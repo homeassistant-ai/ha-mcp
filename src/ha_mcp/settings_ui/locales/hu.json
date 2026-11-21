@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Mentett eszközök útvonala",
     "advanced.code_mode_saved_tools_path.help": "JSON-fájl az egyéni eszközök újraindítások közötti megőrzéséhez.",
     "advanced.extra_yaml_write_keys.label": "További YAML-írási kulcsok",
-    "advanced.extra_yaml_write_keys.help": "További felső szintű kulcsok, amelyeket a ha_config_set_yaml a beépítetteken túlírhat ezen a telepítésen a YAML-alapú integrációkhoz (pl. alert2). Soronként egy kulcsot adjon meg, vagy vesszővel válassza el őket. Azokat a kulcsokat, amelyek újradefiniálják a Home Assistant saját bizalmi határát, nem lehet hozzáadni, a rendszer figyelmen kívül hagyja őket. 1.2.4-es vagy újabb egyéni komponens szükséges.",
+    "advanced.extra_yaml_write_keys.help": "További legfelső szintű kulcsok, amelyeket a ha_config_set_yaml a beépítettek mellett írhat az ezen a telepítésen futó, YAML-alapú integrációkhoz (pl. alert2). Soronként egy kulcsot adjon meg, vagy válassza el a kulcsokat vesszőkkel. Azok a kulcsok, amelyek újradefiniálják a Home Assistant saját megbízhatósági határát, soha nem adhatók hozzá, és a rendszer figyelmen kívül hagyja őket.",
     "advanced.redact_app_option_keys.label": "További elrejtendő alkalmazásbeállítási kulcsok",
     "advanced.redact_app_option_keys.help": "Alkalmazásbővítmény (add-on) beállításnevek, amelyeket jelszómezőkként kell elrejteni, olyan alkalmazásokhoz, amelyek sémája sima szövegként tárol titkokat (például backup_password). Vesszővel vagy új sorral válassza el a neveket. A név minden alkalmazásra érvényes; írja be az app_slug:name formátumot, ha egyetlen alkalmazásra szeretné korlátozni. Beállításcsoport megnevezése az abban lévő összes beállításra kiterjed. Csak a Titkok elrejtése (Redact Secrets) bekapcsolt állapotában használatos. Alapértelmezés szerint üres.",
     "advanced.sidecar_pin_port.label": "Beállítások felület sidecar portja",
@@ -727,11 +727,7 @@
     },
     "ha_get_entity": {
       "title": "Entitás lekérése",
-      "description": "Entitásregisztrációs információk lekérése egy vagy több entitáshoz."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Entitáskontextus/közzététel lekérése",
-      "description": "Entitások közzétételi beállításainak lekérése – az összes listázása vagy egy adott entitás beállításainak lekérése."
+      "description": "Entitás-regisztrációs bejegyzések lekérése, vagy entitás nélkül a regisztrációs beállítások és az elérhetővé tett entitások lekérése."
     },
     "ha_get_hacs_info": {
       "title": "HACS-információk lekérése",
@@ -762,8 +758,8 @@
       "description": "Egy vagy több entitás (lámpák, kapcsolók, szenzorok, klíma, árnyékolók, zárak stb.) aktuális státuszának, állapotának és attribútumainak lekérése"
     },
     "ha_get_system_health": {
-      "title": "Rendszerállapot lekérése (beleértve a ZHA/Z-Wave/integrációs diagnosztikát)",
-      "description": "Home Assistant rendszerállapot lekérése, beleértve a Zigbee (ZHA), Z-Wave JS és integrációnkénti diagnosztikai adatok kiürítését."
+      "title": "Rendszerállapot lekérése (beleértve a ZHA / Z-Wave / Thread / Matter hálózatokat is)",
+      "description": "A Home Assistant rendszerállapotának lekérése, beleértve a Zigbee (ZHA), Z-Wave JS, Thread és Matter hálózatokat is."
     },
     "ha_get_todo": {
       "title": "Teendő lekérése",
@@ -779,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Szintek és területek listázása",
-      "description": "Szintek listázása növekvő sorrendben, mindegyikbe ágyazva a hozzárendelt területekkel, plusz a szint nélküli területek."
+      "description": "Listázza a szinteket a Home Assistant által tárolt sorrendben, mindegyikbe beágyazva a hozzájuk rendelt területeket, valamint a szint nélküli területeket."
     },
     "ha_list_services": {
       "title": "Elérhető szolgáltatások listázása",
@@ -874,8 +870,8 @@
       "description": "Keresés entitások (lámpák, szenzorok, kapcsolók, klíma stb.) között név, tartomány vagy terület alapján – VALAMINT az automatizálásokon/szkripteken belül"
     },
     "ha_set_area_or_floor": {
-      "title": "Terület vagy szint létrehozása vagy frissítése",
-      "description": "Home Assistant terület vagy szint létrehozása vagy frissítése."
+      "title": "Területek vagy szintek létrehozása, frissítése vagy átrendezése",
+      "description": "Home Assistant területek vagy szintek létrehozása, frissítése vagy átrendezése."
     },
     "ha_set_device": {
       "title": "Eszköz beállítása",
@@ -883,7 +879,7 @@
     },
     "ha_set_entity": {
       "title": "Entitás beállítása",
-      "description": "Entitástulajdonságok frissítése az entitásregisztrációban."
+      "description": "Entitás-regisztrációs bejegyzések frissítése, vagy entity_id nélkül a regisztrációs szintű beállítások frissítése."
     },
     "ha_set_integration": {
       "title": "Integráció beállítása",

@@ -1,66 +1,137 @@
-"""Card definitions read from Home Assistant's frontend (#2632): the pure parts.
+"""Card definitions read from Home Assistant's frontend (#2632).
 
-The engine itself runs Home Assistant's frontend code; the E2E suite exercises
-it against a real frontend. These cover how the component finds that code and
-turns its verdicts into warnings.
+The component builds an index from the frontend Core serves (the installed
+``home-assistant-frontend``), checks a saved dashboard against it, and answers
+``dashboard_cards`` with a card's editor form. These run the index on that real
+frontend, the command and the describe tool on a real ``hass``, and custom
+cards through their real QuickJS sandbox.
 """
 
 from __future__ import annotations
 
 import asyncio
-import importlib
-import time
+import base64
+import hashlib
+import io
+import logging
+import tarfile
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools import dashboard_card_describe as describe_mod
-from ha_mcp.tools.component_api import ComponentCaps
+from ha_mcp.client.rest_client import HomeAssistantClient
 
-cd = importlib.import_module("custom_components.ha_mcp_tools.card_definitions")
-dcw = importlib.import_module("custom_components.ha_mcp_tools.dashboard_cards_ws")
+from ._card_definitions_core import (
+    CardIndex,
+    assert_described_without_a_form,
+    card_description,
+    card_file,
+    card_name,
+    cc,
+    cd,
+    counted_full_collections,
+    dcw,
+    describe_mod,
+    real_definitions,
+)
+from ._card_definitions_core import card_index as card_index
+from ._card_definitions_core import custom_cards as custom_cards
+from ._card_definitions_core import definitions as definitions
+from ._card_definitions_core import fresh_card_state as fresh_card_state
+from ._card_definitions_core import stalled_card_download as stalled_card_download
+
+__all__ = ["cc", "cd", "dcw", "describe_mod"]
+
+_PER_CARD = 16 * 1024 * 1024  # one sandbox's heap allowance in these tests
+_ADVISORY = "editor schema advisory; runtime support may differ"
+# A card type no frontend registers.
+_NO_SUCH_CARD = "no-such-card"
+# Built-in cards whose editor has no form.
+_CARDS_WITHOUT_A_FORM = (
+    "vertical-stack",
+    "horizontal-stack",
+    "entity-filter",
+    "shopping-list",
+)
 
 
-def _definitions(card_types: set[str], struct_keys: dict[str, Any]) -> Any:
-    """An instance with no frontend: no card type has a validator to run."""
-    definitions = object.__new__(cd.CardDefinitions)
-    definitions._card_types = card_types
-    definitions._struct_keys = struct_keys
-    return definitions
+def _paths(warnings: list[str]) -> list[str]:
+    return [warning.split(":")[0] for warning in warnings]
 
 
-def test_card_positions_cover_stacks_sections_and_conditional_cards() -> None:
+def _views(*cards: dict[str, Any]) -> dict[str, Any]:
+    return {"views": [{"cards": list(cards)}]}
+
+
+def _option_names(fields: list[dict[str, Any]]) -> list[str]:
+    """The config keys a described form stores: an unnamed or flattened group's
+    fields sit beside its siblings, a named group nests under its own key."""
+    names: list[str] = []
+    for field in fields:
+        children = field.get("schema")
+        if isinstance(children, list) and (
+            not field.get("name") or field.get("flatten")
+        ):
+            names.extend(_option_names(children))
+        elif field.get("name"):
+            names.append(field["name"])
+    return names
+
+
+# --- the index on the real frontend -------------------------------------------
+
+
+def test_every_card_position_is_checked_except_an_entity_filters_card(
+    definitions: cd.CardDefinitions,
+) -> None:
+    """A card in a stack, a section or a conditional is checked; an
+    entity-filter's ``card`` is not (its parent fills it in)."""
     config = {
         "views": [
             {
                 "cards": [
-                    {"type": "vertical-stack", "cards": [{"type": "tile"}]},
-                    {"type": "conditional", "card": {"type": "button"}},
-                    {"type": "entity-filter", "card": {"title": "rows"}},
+                    {"type": _NO_SUCH_CARD},
+                    {"type": "vertical-stack", "cards": [{"type": _NO_SUCH_CARD}]},
+                    {
+                        "type": "conditional",
+                        "conditions": [],
+                        "card": {"type": _NO_SUCH_CARD},
+                    },
+                    {
+                        "type": "entity-filter",
+                        "entities": [],
+                        "card": {"title": "rows"},
+                    },
                 ],
-                "sections": [{"cards": [{"type": "heading"}]}, "not a section"],
+                "sections": [{"cards": [{"type": _NO_SUCH_CARD}]}, "not a section"],
             },
             {"strategy": {"type": "original-states"}},
         ]
     }
-    assert [path for path, _ in cd._cards(config)] == [
+
+    assert _paths(definitions.validate(config)) == [
         "views[0].cards[0]",
-        "views[0].cards[0].cards[0]",
-        "views[0].cards[1]",
-        "views[0].cards[1].card",
-        "views[0].cards[2]",
+        "views[0].cards[1].cards[0]",
+        "views[0].cards[2].card",
         "views[0].sections[0].cards[0]",
     ]
 
 
-def test_missing_and_unknown_types_are_flagged() -> None:
-    definitions = _definitions({"tile"}, {"tile": None})
-    cards = [{"entity": "light.x"}, {"type": "tyle"}, {"type": "custom:x-card"}]
+def test_a_card_without_a_type_or_with_a_misspelt_one_is_flagged(
+    definitions: cd.CardDefinitions,
+) -> None:
+    cards: list[dict[str, Any]] = [
+        {"entity": "light.x"},
+        {"type": "tyle"},
+        {"type": "custom:x-card"},
+        {"type": "tile", "entity": "light.x"},
+    ]
 
-    warnings = definitions.validate({"views": [{"cards": cards}]})
+    warnings = definitions.validate(_views(*cards))
 
     assert warnings == [
         "views[0].cards[0]: no card type configured",
@@ -68,11 +139,13 @@ def test_missing_and_unknown_types_are_flagged() -> None:
     ]
 
 
-def test_header_and_custom_children_exclude_non_card_metadata() -> None:
+def test_header_and_a_custom_cards_children_are_checked_but_not_its_metadata(
+    definitions: cd.CardDefinitions,
+) -> None:
     config = {
         "views": [
             {
-                "header": {"card": {"type": "markdown"}},
+                "header": {"card": {"type": _NO_SUCH_CARD}},
                 "cards": [
                     {
                         "type": "custom:button-card",
@@ -83,7 +156,7 @@ def test_header_and_custom_children_exclude_non_card_metadata() -> None:
                                     "type": "custom:state-switch",
                                     "states": {
                                         "on": {
-                                            "type": "tile",
+                                            "type": "tyle",
                                             "features": [{"type": "light-brightness"}],
                                         },
                                     },
@@ -95,242 +168,329 @@ def test_header_and_custom_children_exclude_non_card_metadata() -> None:
             }
         ]
     }
-    cards = cd._cards(config)
-    assert [card["type"] for _, card in cards] == [
-        "markdown",
-        "custom:button-card",
-        "custom:state-switch",
-        "tile",
-    ]
-    assert cards[0][0] == "views[0].header.card"
-    assert cards[-1][0] == 'views[0].cards[0].custom_fields["nested"].card.states["on"]'
 
-
-def test_warnings_are_capped() -> None:
-    definitions = _definitions(set(), {})
-    cards = [{"type": f"t{i}"} for i in range(25)]
-
-    warnings = definitions.validate({"views": [{"cards": cards}]})
-
-    assert len(warnings) == 21
-    assert warnings[-1] == "...and 5 more card diagnostics"
-
-
-def test_unknown_key_names_the_closest_card_option() -> None:
-    definitions = _definitions({"tile"}, {"tile": ["type", "entity", "color"]})
-    never = {"type": "never", "message": "Expected a value of type `never`"}
-
-    assert (
-        definitions._explain("tile", {**never, "path": ["colour"]})
-        == "'colour' is not listed in the tile editor schema"
-    )
-    assert definitions._explain("tile", {**never, "path": ["card_mod"]}) is None
-    assert (
-        definitions._explain(
-            "tile",
-            {
-                "type": "enums",
-                "path": ["tap_action", "action"],
-                "message": 'At path: tap_action.action -- Expected one of `"none"`',
-            },
-        )
-        == 'tap_action.action: Expected one of `"none"`'
-    )
-
-
-def test_editor_registration_is_found_and_imports_resolve() -> None:
-    chunk = (
-        'V=(0,o.Cg)([(0,s.EM)("hui-tile-card-editor")],V);'
-        'e=document.createElement("hui-map-card-editor")'
-    )
-    assert [m.group(1) for m in cd._TAG_RE.finditer(chunk)] == ["hui-tile-card-editor"]
-    imports = "c=a(97400),_=(a(47551),a(20541)),m=a(80140)"
-    assert dict(cd._ALIAS_RE.findall(imports)) == {
-        "c": "97400",
-        "_": "20541",
-        "m": "80140",
-    }
-
-
-def test_entrypoint_dependencies_load_without_browser_startup(tmp_path) -> None:
-    """HA 2026.10 card structs import core-js helpers held in core/app bundles."""
-    frontend = tmp_path / "frontend_latest"
-    frontend.mkdir()
-    (frontend / "core.js").write_text(
-        'var e,t,r={7(e,t,r){r.d(t,{},{field:"entity"})}},cache={};'
-        'function start(){throw new Error("browser startup must not run")}'
-        "var url=import.meta.url;start();",
-        encoding="utf-8",
-    )
-    (frontend / "cards.js").write_text(
-        'export const __webpack_modules__={8(e){(0,e.EM)("hui-tile-card")},'
-        '9(e){(0,e.EM)("hui-entities-card")}};',
-        encoding="utf-8",
-    )
-    definitions = cd.CardDefinitions(tmp_path)
-    result = definitions._evaluate("schema", "var x=r(7);", "[{name:x.field}]")
-    assert result == [{"name": "entity"}]
-
-
-def test_failed_module_is_not_reused_as_partial_exports(tmp_path) -> None:
-    frontend = tmp_path / "frontend_latest"
-    frontend.mkdir()
-    (frontend / "chunk.js").write_text(
-        'export const __webpack_modules__={7(e,t){t.field="partial";'
-        'throw new Error("dependency unavailable")}};',
-        encoding="utf-8",
-    )
-    (frontend / "cards.js").write_text(
-        'export const __webpack_modules__={8(e){(0,e.EM)("hui-tile-card")},'
-        '9(e){(0,e.EM)("hui-entities-card")}};',
-        encoding="utf-8",
-    )
-    definitions = cd.CardDefinitions(tmp_path)
-    for _ in range(2):
-        with pytest.raises(ValueError, match="unresolved export"):
-            definitions._evaluate("struct", "var x=r(7);", "x.field")
-
-
-def test_local_definition_stops_at_the_top_level_comma() -> None:
-    body = 'var x=(0,l.Ik)({a:(0,l.vP)(["b,c",`d,${1}`]),e:f}),y=2;class V{}'
-
-    assert cd._local_definition(body, "x") == (
-        '(0,l.Ik)({a:(0,l.vP)(["b,c",`d,${1}`]),e:f})'
-    )
-    assert cd._local_definition(body, "y") == "2"
-    assert cd._local_definition(body, "z") is None
-
-
-def test_editor_forms_are_found_as_functions_or_constants() -> None:
-    body = (
-        'this._schema=(0,c.A)(e=>[{name:"entity"}]);'
-        'C=[{name:"title"}],x=1;render(){return `<ha-form .schema=${C}>`}'
-    )
-    assert cd._schema_expressions(body) == ['e=>[{name:"entity"}]', '[{name:"title"}]']
-
-
-@pytest.mark.asyncio
-async def test_card_warnings_never_fail_a_write(monkeypatch) -> None:
-    monkeypatch.setattr(
-        cd, "async_get_definitions", AsyncMock(side_effect=RuntimeError("boom"))
-    )
-    assert await cd.async_card_warnings(MagicMock(), {"views": []}) == []
-
-
-# --- server: ha_config_get_dashboard(describe=True) ------------------------
-
-
-def _caps(*names: str) -> ComponentCaps:
-    return ComponentCaps(1, "2.2.2", frozenset(names), {})
-
-
-@pytest.fixture
-def component(monkeypatch) -> AsyncMock:
-    ws = AsyncMock()
-    monkeypatch.setattr(
-        describe_mod,
-        "get_component_caps",
-        AsyncMock(return_value=_caps("dashboard_cards")),
-    )
-    monkeypatch.setattr(
-        describe_mod, "get_websocket_client", AsyncMock(return_value=ws)
-    )
-    return ws
-
-
-@pytest.mark.asyncio
-async def test_describe_compacts_the_editor_form(component: AsyncMock) -> None:
-    component.send_command.return_value = {
-        "result": {
-            "success": True,
-            "name": "Tile",
-            "description": "An entity at a glance.",
-            "fields": [
-                {"name": "entity", "selector": {"entity": {}}},
-                {
-                    "name": "content",
-                    "type": "expandable",
-                    "flatten": True,
-                    "schema": [
-                        {
-                            "name": "",
-                            "type": "grid",
-                            "schema": [
-                                {
-                                    "name": "color",
-                                    "selector": {"ui_color": {}},
-                                    "description": "Inactive state is not colored.",
-                                },
-                            ],
-                        },
-                        {"name": "", "type": "divider"},
-                    ],
-                },
-            ],
-        }
-    }
-    client = MagicMock(base_url="http://ha", token="t")
-
-    result = await describe_mod.describe_card_response(client, "tile")
-
-    component.send_command.assert_awaited_once_with(
-        describe_mod.WS_DASHBOARD_CARDS, card_type="tile"
-    )
-    assert result["fields"] == [
-        {"name": "entity", "type": "entity"},
-        {
-            "name": "color",
-            "type": "ui_color",
-            "description": "Inactive state is not colored.",
-        },
+    assert definitions.validate(config) == [
+        f"views[0].header.card: unknown card type '{_NO_SUCH_CARD}'",
+        'views[0].cards[0].custom_fields["nested"].card.states["on"]: '
+        + "unknown card type 'tyle'",
     ]
 
 
-@pytest.mark.asyncio
-async def test_describe_unknown_card_type_lists_the_real_ones(
-    component: AsyncMock,
+def test_warnings_are_capped_and_say_how_many_were_left_out(
+    definitions: cd.CardDefinitions,
 ) -> None:
-    component.send_command.return_value = {
-        "result": {
-            "success": False,
-            "error": "unknown_card_type",
-            "card_types": ["tile", "grid"],
-        }
-    }
+    few = definitions.validate(_views({"type": "a"}, {"type": "b"}))
+    many = definitions.validate(_views(*({"type": f"t{i}"} for i in range(25))))
+
+    assert len(few) == 2
+    left_out = 25 - (len(many) - 1)
+    assert 0 < left_out < 25
+    assert many[-1] == f"...and {left_out} more card diagnostics"
+
+
+def test_an_option_the_editor_does_not_list_is_flagged_but_card_mod_is_not(
+    definitions: cd.CardDefinitions,
+) -> None:
+    cards: list[dict[str, Any]] = [
+        {"type": "tile", "colour": "red"},
+        {"type": "tile", "card_mod": {"style": "x"}},
+        {"type": "tile", "tap_action": {"action": "bad"}},
+        {"type": "tile", "entity": "light.x"},
+    ]
+
+    warnings = definitions.validate(_views(*cards))
+
+    assert len(warnings) == 2
+    assert warnings[0] == (
+        f"views[0].cards[0] (tile): {_ADVISORY}: "
+        "'colour' is not listed in the tile editor schema"
+    )
+    assert warnings[1].startswith(
+        f"views[0].cards[2] (tile): {_ADVISORY}: tap_action.action: Expected one of"
+    )
+    assert '"bad"' in warnings[1]
+
+
+def test_card_types_carry_the_names_the_frontend_translates(
+    definitions: cd.CardDefinitions,
+) -> None:
+    listed = {card["type"]: card for card in definitions.card_types()}
+
+    for card_type in ("tile", "entities"):
+        assert listed[card_type]["name"] == card_name(card_type)
+        assert listed[card_type]["description"] == card_description(card_type)
+    # A card the frontend registers but never names is known, not listed.
+    assert "shopping-list" not in listed
+    assert definitions.validate(_views({"type": "shopping-list"})) == []
+
+
+def test_the_index_keeps_inherited_cards_but_excludes_dialogs(
+    definitions: cd.CardDefinitions,
+) -> None:
+    """A card with no translated name is a card when it implements, or inherits,
+    ``setConfig`` (``shopping-list``); a dialog registered under a ``hui-*-card``
+    tag is not one."""
+    cards: list[dict[str, Any]] = [
+        {"type": "horizontal-stack", "cards": []},
+        {"type": "dialog-edit"},
+        {"type": "shopping-list"},
+    ]
+
+    assert definitions.validate(_views(*cards)) == [
+        "views[0].cards[1]: unknown card type 'dialog-edit'"
+    ]
+
+
+@pytest.mark.parametrize("card_type", _CARDS_WITHOUT_A_FORM)
+def test_a_card_without_an_editor_form_lists_no_fields_and_claims_no_coverage(
+    definitions: cd.CardDefinitions, card_type: str
+) -> None:
+    assert_described_without_a_form(definitions.describe(card_type))
+
+
+def test_every_option_a_form_lists_is_accepted_and_an_unlisted_one_is_flagged(
+    definitions: cd.CardDefinitions,
+) -> None:
+    """A description that listed an editor-only option would have the caller write
+    a config the card rejects; the validator and the description agree for every
+    built-in card whose stored struct could be read."""
+    checked = []
+    for card in definitions.card_types():
+        card_type = card["type"]
+        described = definitions.describe(card_type)
+        assert described is not None
+        if described.get("field_coverage") != "partial":
+            continue
+        options = dict.fromkeys(_option_names(described["fields"]))
+        listed = definitions.validate(_views({"type": card_type, **options}))
+        unlisted = definitions.validate(_views({"type": card_type, "unlisted": 1}))
+        assert not [w for w in listed if "is not listed" in w], card_type
+        assert [w for w in unlisted if "'unlisted' is not listed" in w], card_type
+        checked.append(card_type)
+
+    assert {"tile", "entity", "area", "map"} <= set(checked)
+
+
+def test_describe_lists_the_stored_options_the_form_lacks_once(
+    definitions: cd.CardDefinitions,
+) -> None:
+    described = definitions.describe("tile")
+
+    assert described is not None
+    names = [field["name"] for field in described["fields"]]
+    assert len(names) == len(set(names))
+    assert {"vertical", "features"} <= set(names)
+    vertical = next(f for f in described["fields"] if f["name"] == "vertical")
+    assert vertical["type"] == "boolean"
+
+
+@pytest.mark.parametrize("card_type", ["entities", "glance"])
+def test_a_form_kept_in_a_module_constant_is_found(
+    definitions: cd.CardDefinitions, card_type: str
+) -> None:
+    """These cards' editors hand their form to ``ha-form`` as a constant, not
+    from a memoized function."""
+    described = definitions.describe(card_type)
+
+    assert described is not None
+    assert "title" in [field["name"] for field in described["fields"]]
+
+
+def test_a_threshold_group_the_form_nests_keeps_its_fields(
+    definitions: cd.CardDefinitions,
+) -> None:
+    described = definitions.describe("gauge")
+
+    assert described is not None
+    severity = next(f for f in described["fields"] if f["name"] == "severity")
+    assert [f["name"] for f in severity["schema"]] == ["green", "yellow", "red"]
+
+
+def test_a_form_that_needs_selected_options_still_describes(
+    definitions: cd.CardDefinitions,
+) -> None:
+    """The alarm panel's form reads which states are available; with none
+    selected it still lists its states."""
+    described = definitions.describe("alarm-panel")
+
+    assert described is not None
+    states = next(f for f in described["fields"] if f["name"] == "states")
+    assert states["selector"]["select"]["options"]
+
+
+# --- the index on a real hass ------------------------------------------------
+
+
+async def test_card_warnings_never_fail_a_write(
+    hass: HomeAssistant, card_index: CardIndex
+) -> None:
+    """The check is advice: a dashboard it cannot check still saves."""
+    unreadable = {"views": [{"cards": [{"type": "tile", "entity": object()}]}]}
+    flagged = {"views": [{"cards": [{"type": "tile", "colour": "red"}]}]}
+
+    assert await cd.async_card_warnings(hass, unreadable) == []
+    assert len(await cd.async_card_warnings(hass, flagged)) == 1
+
+
+async def test_first_use_shares_one_background_index_build(
+    hass: HomeAssistant, card_index: CardIndex
+) -> None:
+    card_index.frontend.hold()
+    assert await cd.async_get_definitions(hass, timeout=0.01) is None
+    assert await cd.async_get_definitions(hass, timeout=0.01) is None
+
+    card_index.frontend.release()
+    definitions = await cd.async_get_definitions(hass, timeout=10)
+
+    assert definitions is not None
+    assert await cd.async_get_definitions(hass) is definitions
+    assert card_index.frontend.calls == 1
+    card_index.runtime.assert_awaited_once()
+
+
+async def test_a_stuck_index_build_cannot_hold_a_saved_write(
+    hass: HomeAssistant, card_index: CardIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _views({"type": "tyle"})
+    card_index.frontend.hold()
+    with monkeypatch.context() as short_budget:
+        short_budget.setattr(cd, "CARD_WORK_SECONDS", 0.05)
+
+        warnings = await asyncio.wait_for(cd.async_card_warnings(hass, config), 2)
+
+    assert warnings == []
+    card_index.frontend.release()
+    assert await cd.async_get_definitions(hass, timeout=10) is not None
+    assert await cd.async_card_warnings(hass, config) == [
+        "views[0].cards[0]: unknown card type 'tyle'"
+    ]
+
+
+# --- server: ha_config_get_dashboard(describe=True) ---------------------------
+
+
+async def test_describe_compacts_the_editor_form(
+    card_index: CardIndex, component_core_client: HomeAssistantClient
+) -> None:
+    result = await describe_mod.describe_card_response(component_core_client, "tile")
+
+    assert result["name"] == card_name("tile")
+    assert result["description"] == card_description("tile")
+    fields = {field["name"]: field for field in result["fields"]}
+    assert fields["entity"] == {"name": "entity", "type": "entity"}
+    assert fields["color"]["type"] == "ui_color"
+    assert fields["color"]["description"]
+    # The form's flattened and unnamed groups are inlined, not listed.
+    assert not {"content", "interactions"} & set(fields)
+
+
+async def test_describe_unknown_card_type_lists_the_real_ones(
+    card_index: CardIndex, component_core_client: HomeAssistantClient
+) -> None:
     with pytest.raises(ToolError) as err:
-        await describe_mod.describe_card_response(MagicMock(), "tyle")
+        await describe_mod.describe_card_response(component_core_client, "tyle")
+
     assert "VALIDATION_INVALID_PARAMETER" in str(err.value)
-    assert "tile, grid" in str(err.value)
+    assert "tile" in str(err.value)
     assert "not a known card type" in str(err.value)
 
 
-@pytest.mark.asyncio
-async def test_describe_while_the_index_builds_says_retry(component: AsyncMock) -> None:
-    component.send_command.return_value = {
-        "result": {"success": False, "error": "definitions_loading"}
-    }
-    with pytest.raises(ToolError) as err:
-        await describe_mod.describe_card_response(MagicMock(), "tile")
+async def test_describe_while_the_index_builds_says_retry(
+    hass: HomeAssistant,
+    card_index: CardIndex,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first describe after a start outlasts the command wait: the caller
+    is told the index is building, not that the command timed out."""
+    card_index.frontend.hold()
+    with monkeypatch.context() as short_budget:
+        short_budget.setattr(cd, "CARD_WORK_SECONDS", 0.05)
+        with pytest.raises(ToolError) as err:
+            await describe_mod.describe_card_response(component_core_client, "tile")
     assert "still indexing" in str(err.value)
     assert "SERVICE_CALL_FAILED" in str(err.value)
 
+    card_index.frontend.release()
+    assert await cd.async_get_definitions(hass, timeout=10) is not None
+    described = await describe_mod.describe_card_response(component_core_client, "tile")
+    assert described["name"] == card_name("tile")
 
-@pytest.mark.asyncio
-async def test_describe_without_the_component_says_so(monkeypatch) -> None:
-    monkeypatch.setattr(
-        describe_mod, "get_component_caps", AsyncMock(return_value=_caps("search"))
-    )
+
+async def test_describe_with_an_unreadable_frontend_points_to_the_static_guide(
+    card_index: CardIndex, component_core_client: HomeAssistantClient
+) -> None:
+    card_index.frontend.unreadable()
+
     with pytest.raises(ToolError) as err:
-        await describe_mod.describe_card_response(MagicMock(), "tile")
+        await describe_mod.describe_card_response(component_core_client, "tile")
+
+    assert "card definitions are unavailable" in str(err.value)
+    assert "references/dashboard-cards.md" in str(err.value)
+
+
+async def test_describe_without_the_component_says_so(
+    core_client: HomeAssistantClient,
+) -> None:
+    with pytest.raises(ToolError) as err:
+        await describe_mod.describe_card_response(core_client, "tile")
+
     assert "COMPONENT_NOT_INSTALLED" in str(err.value)
 
 
-# --- custom cards ------------------------------------------------------------
+async def test_describe_timeout_reaches_the_caller_as_a_timeout(
+    hass: HomeAssistant,
+    card_index: CardIndex,
+    stalled_card_download: None,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the index loaded, a describe that outlasts its budget is a timeout
+    to retry, not an unavailable index."""
+    assert await cd.async_get_definitions(hass, timeout=10) is not None
+    monkeypatch.setattr(cd, "CARD_WORK_SECONDS", 0.05)
 
-cc = importlib.import_module("custom_components.ha_mcp_tools.custom_cards")
+    with pytest.raises(ToolError) as err:
+        await describe_mod.describe_card_response(component_core_client, None)
+
+    assert "TIMEOUT_OPERATION" in str(err.value)
 
 
-def test_resource_urls_map_to_files_inside_www(tmp_path) -> None:
+async def test_a_slow_custom_refresh_still_lists_the_builtin_cards(
+    card_index: CardIndex,
+    stalled_card_download: None,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cd, "CUSTOM_WAIT_SECONDS", 0.05)
+
+    result = await describe_mod.describe_card_response(component_core_client, None)
+
+    assert {"tile", "entities"} <= {card["type"] for card in result["card_types"]}
+    assert result["custom_status"]["state"] == "loading"
+
+
+async def test_describe_drops_stale_capabilities_after_unknown_command(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A downgraded component must not keep routing describe to a command Core
+    no longer registers."""
+    monkeypatch.delitem(hass.data["websocket_api"], cd.WS_DASHBOARD_CARDS)
+    invalidated = MagicMock(wraps=describe_mod.invalidate_caps)
+    monkeypatch.setattr(describe_mod, "invalidate_caps", invalidated)
+
+    with pytest.raises(ToolError):
+        await describe_mod.describe_card_response(component_core_client, "tile")
+
+    invalidated.assert_called_once_with(component_core_client)
+
+
+# --- custom cards ----------------------------------------------------------
+
+
+def test_resource_urls_map_to_files_inside_www(tmp_path: Path) -> None:
     www = tmp_path / "www"
     assert cc.resource_path(tmp_path, "/hacsfiles/mushroom/mushroom.js?hacstag=1") == (
         (www / "community" / "mushroom" / "mushroom.js").resolve()
@@ -348,9 +508,6 @@ def test_resource_urls_map_to_files_inside_www(tmp_path) -> None:
 
 
 def _tarball(worker: str) -> bytes:
-    import io
-    import tarfile
-
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         data = worker.encode()
@@ -360,10 +517,9 @@ def _tarball(worker: str) -> bytes:
     return buffer.getvalue()
 
 
-def test_linkedom_is_checked_and_made_a_scoped_script(monkeypatch) -> None:
-    import base64
-    import hashlib
-
+def test_linkedom_is_checked_and_made_a_scoped_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     tarball = _tarball(
         "export const shared = 1;\n"
         "function parseHTML() {}\nclass GlobalEvent {}\n"
@@ -383,277 +539,197 @@ def test_linkedom_is_checked_and_made_a_scoped_script(monkeypatch) -> None:
         cc.dom_script(tarball)
 
 
-def test_custom_card_messages_read_plainly() -> None:
+@pytest.mark.usefixtures("fresh_card_state")
+def test_custom_card_messages_read_plainly(
+    tmp_path: Path, custom_cards: cc.CustomCards, definitions: cd.CardDefinitions
+) -> None:
+    """A card throws what its ``setConfig`` is told to; the warning names the
+    option and leaves out the struct's framing."""
     never = "At path: colour -- Expected a value of type `never`, but received: `1`"
-    assert (
-        cd._explain_message("my-card", never) == "'colour' is not a my-card card option"
+    custom_cards.refresh(
+        [
+            card_file(
+                tmp_path / "my-card.js",
+                "my-card",
+                "if (c.fail) throw new Error(c.fail);",
+            )
+        ]
     )
-    assert cd._explain_message("my-card", never.replace("colour", "card_mod")) is None
-    assert (
-        cd._explain_message("my-card", "At path: size -- Expected a number")
-        == "size: Expected a number"
-    )
-    assert cd._explain_message("my-card", "value.series is missing") == (
-        "value.series is missing"
-    )
+    fails = [
+        never,
+        never.replace("colour", "card_mod"),
+        "At path: size -- Expected a number",
+        "value.series is missing",
+    ]
+    cards = [{"type": "custom:my-card", "fail": message} for message in fails]
+
+    warnings = definitions.validate(_views(*cards), custom_cards)
+
+    assert warnings == [
+        "views[0].cards[0] (custom:my-card): 'colour' is not a my-card card option",
+        "views[0].cards[2] (custom:my-card): size: Expected a number",
+        "views[0].cards[3] (custom:my-card): value.series is missing",
+    ]
 
 
-def test_custom_cards_report_their_own_problems_and_unknown_ones_none() -> None:
-    answers = {
-        "good-card": [],
-        "picky-card": [{"source": "card", "message": "picky-card needs an entity"}],
-    }
-    custom = MagicMock()
-    custom.check.side_effect = lambda tag, card: answers.get(tag)
-    definitions = _definitions(set(), {})
+@pytest.mark.usefixtures("fresh_card_state")
+def test_custom_cards_report_their_own_problems_and_unknown_ones_are_named(
+    tmp_path: Path, custom_cards: cc.CustomCards, definitions: cd.CardDefinitions
+) -> None:
+    custom_cards.refresh(
+        [
+            card_file(tmp_path / "good.js", "good-card"),
+            card_file(
+                tmp_path / "picky.js",
+                "picky-card",
+                "throw new Error('picky-card needs an entity');",
+            ),
+        ]
+    )
     cards = [
         {"type": "custom:good-card"},
         {"type": "custom:picky-card"},
         {"type": "custom:not-installed-card"},
     ]
 
-    warnings = definitions.validate({"views": [{"cards": cards}]}, custom)
+    warnings = definitions.validate(_views(*cards), custom_cards)
 
     assert warnings == [
-        "views[0].cards[1] (custom:picky-card): picky-card needs an entity"
+        "views[0].cards[1] (custom:picky-card): picky-card needs an entity",
+        "views[0].cards[2] (custom:not-installed-card): not found in dashboard "
+        + "resources; check the type spelling or whether it loads through extra "
+        + "JavaScript.",
     ]
 
 
-def test_removed_resources_are_unloaded(tmp_path, monkeypatch) -> None:
-    card_file = tmp_path / "a-card.js"
-    card_file.write_text("// card")
-    custom = cc.CustomCards("dom")
-    monkeypatch.setattr(
-        custom, "_load", lambda path, size: MagicMock(tags=["a-card"], memory=0)
-    )
+@pytest.mark.usefixtures("fresh_card_state")
+def test_an_unknown_custom_card_is_not_reported_when_a_resource_could_not_run(
+    tmp_path: Path, custom_cards: cc.CustomCards, definitions: cd.CardDefinitions
+) -> None:
+    """A resource that did not run may have defined the card."""
+    broken = tmp_path / "broken.js"
+    broken.write_text("invalid code", encoding="utf-8")
+    custom_cards.refresh([broken])
+    cards = [{"type": "custom:maybe-in-the-broken-resource"}]
 
-    custom.refresh([card_file])
-    assert custom.check("a-card", {"type": "custom:a-card"}) is not None
-    custom.refresh([])
-    assert custom.check("a-card", {"type": "custom:a-card"}) is None
+    assert definitions.validate(_views(*cards), custom_cards) == []
 
 
-def test_deleted_resource_files_are_evicted(tmp_path, monkeypatch) -> None:
-    path = tmp_path / "deleted.js"
-    path.write_text("// card")
-    custom = cc.CustomCards("dom")
-    monkeypatch.setattr(
-        cc, "_Bundle", MagicMock(return_value=MagicMock(tags=["a-card"]))
-    )
-    custom.refresh([path])
-    assert custom._owner("a-card") is not None
-    path.unlink()
-    custom.refresh([path])  # The resource registration still exists.
-    assert custom._owner("a-card") is None
+def test_removed_resources_are_unloaded(
+    tmp_path: Path, custom_cards: cc.CustomCards
+) -> None:
+    card = card_file(tmp_path / "a-card.js", "a-card")
+    custom_cards.refresh([card])
+    assert custom_cards.check("a-card", {"type": "custom:a-card"}) == []
+
+    custom_cards.refresh([])
+
+    assert custom_cards.check("a-card", {"type": "custom:a-card"}) is None
+
+
+def test_deleted_resource_files_are_evicted(
+    tmp_path: Path, custom_cards: cc.CustomCards
+) -> None:
+    card = card_file(tmp_path / "deleted.js", "a-card")
+    custom_cards.refresh([card])
+    assert custom_cards.check("a-card", {}) == []
+
+    card.unlink()
+    custom_cards.refresh([card])  # The resource registration still exists.
+
+    assert custom_cards.check("a-card", {}) is None
+    assert custom_cards.status()["state"] == "partial"
 
 
 def test_capacity_skipped_resources_retry_without_file_changes(
-    tmp_path, monkeypatch
+    tmp_path: Path, custom_cards: cc.CustomCards, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    files = [tmp_path / f"card-{i}.js" for i in range(2)]
-    for path in files:
-        path.write_text("// card")
-    monkeypatch.setattr(cc, "_TOTAL_MEMORY", cc._BUNDLE_MEMORY)
-    factory = MagicMock(return_value=MagicMock())
-    monkeypatch.setattr(cc, "_Bundle", factory)
-    custom = cc.CustomCards("dom")
-    custom.refresh(files)
-    assert custom._bundles[files[1]][1] is None
-    custom.refresh(files[1:])
-    assert custom._bundles[files[1]][1] is not None
-    assert factory.call_count == 2
+    monkeypatch.setattr(cc, "BUNDLE_MEMORY", _PER_CARD)
+    monkeypatch.setattr(cc, "TOTAL_MEMORY", _PER_CARD)  # room for one card
+    files = [card_file(tmp_path / f"{tag}.js", tag) for tag in ("a-card", "b-card")]
 
+    custom_cards.refresh(files)
+    assert custom_cards.check("b-card", {}) is None
+    assert custom_cards.status()["state"] == "partial"
 
-def test_failed_resources_stay_cached_but_type_changes_reload(
-    tmp_path, monkeypatch
-) -> None:
-    path = tmp_path / "broken.js"
-    path.write_text("invalid code")
-    factory = MagicMock(side_effect=ValueError("bad script"))
-    monkeypatch.setattr(cc, "_Bundle", factory)
-    custom = cc.CustomCards("dom")
-    custom.refresh([path])
-    custom.refresh([path])
-    assert factory.call_count == 1  # Do not retry broken code on every request.
-    custom.refresh([path], {path})
-    assert factory.call_count == 2
-    assert factory.call_args.kwargs["module"] is True
-    assert factory.call_args.kwargs["deadline"] is not None
+    custom_cards.refresh(files[1:])  # the first one's room is free again
 
-
-def test_oversized_card_files_are_not_run(tmp_path, monkeypatch) -> None:
-    card_file = tmp_path / "huge-card.js"
-    card_file.write_text("x" * 64)
-    monkeypatch.setattr(cc, "_MAX_SOURCE_BYTES", 32)
-    monkeypatch.setattr(cc, "_Bundle", MagicMock(side_effect=AssertionError("ran")))
-
-    assert cc.CustomCards("dom")._load(card_file, card_file.stat().st_size) is None
-
-
-@pytest.mark.asyncio
-async def test_first_use_shares_one_background_index_build(monkeypatch):
-    release = asyncio.Event()
-    definitions = object()
-    runtime = AsyncMock(return_value=True)
-
-    async def build(fn):
-        await release.wait()
-        return definitions
-
-    monkeypatch.setattr(cd, "_definitions", None)
-    monkeypatch.setattr(cd, "_build_task", None)
-    monkeypatch.setattr(cd, "async_ensure_runtime", runtime)
-    hass = MagicMock()
-    hass.async_create_background_task = lambda coro, name: asyncio.create_task(coro)
-    hass.async_add_executor_job = AsyncMock(side_effect=build)
-    try:
-        assert await cd.async_get_definitions(hass, timeout=0.01) is None
-        assert await cd.async_get_definitions(hass, timeout=0.01) is None
-        runtime.assert_awaited_once()
-        release.set()
-        assert await cd.async_get_definitions(hass, timeout=1) is definitions
-        hass.async_add_executor_job.assert_awaited_once()
-    finally:
-        release.set()
-        await cd._build_task
-
-
-@pytest.mark.asyncio
-async def test_card_validation_executor_cannot_hold_a_saved_write(monkeypatch) -> None:
-    monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.01, raising=False)
-    monkeypatch.setattr(
-        cd, "async_get_definitions", AsyncMock(return_value=MagicMock())
-    )
-    hass = MagicMock()
-    hass.async_add_executor_job = AsyncMock(side_effect=lambda *args: None)
-
-    async def stuck(*args):
-        await asyncio.Event().wait()
-
-    hass.async_add_executor_job.side_effect = stuck
-    assert await asyncio.wait_for(cd.async_card_warnings(hass, {}), 0.5) == []
-
-
-@pytest.mark.asyncio
-async def test_describe_answers_while_the_index_is_still_building(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A first-use build that outlasts the command wait is reported, not timed out."""
-    import voluptuous as vol
-
-    monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.05, raising=False)
-    monkeypatch.setattr(cd, "_definitions", None)
-    monkeypatch.setattr(cd, "_build_failed_at", None)
-    building = asyncio.create_task(asyncio.Event().wait())
-    monkeypatch.setattr(cd, "_build_task", building)
-    prep = dcw.command_specs(vol)[0][2]
-    try:
-        result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
-        assert result["result"] == {"success": False, "error": "definitions_loading"}
-        assert not building.done()
-    finally:
-        building.cancel()
-    failed = asyncio.create_task(asyncio.sleep(0, result=None))  # a build that failed
-    settled, _pending = await asyncio.wait({building, failed})
-    assert settled == {building, failed}
-    monkeypatch.setattr(cd, "_build_task", failed)
-    monkeypatch.setattr(cd, "_build_failed_at", time.monotonic())
-    result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
-    assert result["result"] == {"success": False, "error": "unavailable"}
-
-
-@pytest.mark.asyncio
-async def test_a_slow_describe_of_a_loaded_index_is_a_timeout_not_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import voluptuous as vol
-
-    monkeypatch.setattr(cd, "_CARD_WORK_SECONDS", 0.05, raising=False)
-    monkeypatch.setattr(cd, "_definitions", MagicMock())
-
-    async def slow(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
-        await asyncio.Event().wait()
-        return {}
-
-    monkeypatch.setattr(dcw, "_describe", slow)
-    prep = dcw.command_specs(vol)[0][2]
-    result = await asyncio.wait_for(prep(MagicMock(), {"card_type": "tile"}), 2)
-    assert result["result"] == {"success": False, "error": "describe_timeout"}
-
-
-@pytest.mark.asyncio
-async def test_describe_timeout_reaches_the_caller_as_a_timeout(
-    component: AsyncMock,
-) -> None:
-    component.send_command.return_value = {
-        "result": {"success": False, "error": "describe_timeout"}
-    }
-    with pytest.raises(ToolError) as err:
-        await describe_mod.describe_card_response(MagicMock(), "tile")
-    assert "TIMEOUT_OPERATION" in str(err.value)
-
-
-@pytest.mark.asyncio
-async def test_slow_custom_refresh_preserves_builtin_describe(monkeypatch) -> None:
-    import voluptuous as vol
-
-    definitions = MagicMock()
-    definitions.card_types.return_value = [{"type": "tile"}]
-    monkeypatch.setattr(
-        cd, "async_get_definitions", AsyncMock(return_value=definitions)
-    )
-    monkeypatch.setattr(cd, "_CUSTOM_WAIT_SECONDS", 0.01, raising=False)
-
-    async def slow(hass: HomeAssistant, timeout=None):
-        if timeout is None:
-            await asyncio.Event().wait()
-
-    monkeypatch.setattr(cd, "async_get_custom_cards", slow)
-    prep = dcw.command_specs(vol)[0][2]
-    result = await asyncio.wait_for(prep(MagicMock(), {}), 0.5)
-    assert result["result"]["success"] is True
-    assert result["result"]["card_types"] == [{"type": "tile"}]
+    assert custom_cards.check("b-card", {}) == []
 
 
 def test_bundle_admission_reserves_room_for_later_heap_growth(
-    tmp_path, monkeypatch
+    tmp_path: Path, custom_cards: cc.CustomCards, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    custom = cc.CustomCards("dom")
-    monkeypatch.setattr(cc, "_TOTAL_MEMORY", 100)
-    monkeypatch.setattr(cc, "_BUNDLE_MEMORY", 40)
-    custom._bundles = {tmp_path / str(i): (0, MagicMock(memory=1)) for i in range(2)}
-    card_file = tmp_path / "new.js"
-    card_file.write_text("// card")
-    load = MagicMock()
-    monkeypatch.setattr(cc, "_Bundle", load)
-    assert custom._load(card_file, 7) is None
-    load.assert_not_called()
+    """Each card is admitted at its full heap allowance, not at what it uses
+    now, so two cards using little still leave no room for a third."""
+    monkeypatch.setattr(cc, "BUNDLE_MEMORY", _PER_CARD)
+    monkeypatch.setattr(cc, "TOTAL_MEMORY", _PER_CARD * 5 // 2)
+    tags = ("a-card", "b-card", "c-card")
+
+    custom_cards.refresh([card_file(tmp_path / f"{tag}.js", tag) for tag in tags])
+
+    assert [custom_cards.check(tag, {}) for tag in tags] == [[], [], None]
 
 
-@pytest.mark.asyncio
-async def test_describe_drops_stale_capabilities_after_unknown_command(
-    component, monkeypatch
+def test_failed_resources_stay_cached_but_a_type_change_reloads(
+    tmp_path: Path,
+    custom_cards: cc.CustomCards,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from ha_mcp.tools import component_api
+    """A card that only runs as an ES module fails as a script: that failure is
+    not retried on every request, but re-registering it as a module loads it."""
+    path = tmp_path / "module-card.js"
+    path.write_text(
+        "void import.meta;\n"
+        "class Card extends HTMLElement { setConfig(c) {} }\n"
+        "customElements.define('a-card', Card);\n",
+        encoding="utf-8",
+    )
 
-    client = MagicMock()
-    component_api._CAPS_CACHE[client] = _caps("dashboard_cards")
-    error = RuntimeError("removed command")
-    error.code = "unknown_command"
-    component.send_command.side_effect = error
-    with pytest.raises(ToolError):
-        await describe_mod.describe_card_response(client, "tile")
-    assert client not in component_api._CAPS_CACHE
+    def failed_loads() -> int:
+        return sum("did not load" in record.getMessage() for record in caplog.records)
+
+    with caplog.at_level(logging.DEBUG, logger=cc.__name__):
+        custom_cards.refresh([path])
+        custom_cards.refresh([path])
+        assert failed_loads() == 1
+        assert custom_cards.check("a-card", {}) is None
+
+        custom_cards.refresh([path], {path})
+
+    assert custom_cards.check("a-card", {}) == []
 
 
-def test_engine_calls_skip_quickjs_full_garbage_collection() -> None:
-    """quickjs-ng's run_gc default runs gc.collect() under the GIL per call (#2744)."""
-    definitions = object.__new__(cd.CardDefinitions)
-    definitions._engine = MagicMock(return_value={"value": "src"})
-    assert definitions._js("source", {"id": "1"}) == {"value": "src"}
-    definitions._engine.assert_called_once_with("source", {"id": "1"}, run_gc=False)
+def test_oversized_card_files_are_not_run(
+    tmp_path: Path, custom_cards: cc.CustomCards, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    small = card_file(tmp_path / "small-card.js", "small-card")
+    big = card_file(tmp_path / "huge-card.js", "huge-card")
+    big.write_text(big.read_text(encoding="utf-8") + "// padding\n", encoding="utf-8")
+    monkeypatch.setattr(cc, "MAX_SOURCE_BYTES", small.stat().st_size)
 
-    bundle = object.__new__(cc._Bundle)
-    bundle.engine = MagicMock(return_value={"value": True})
-    bundle._js("pump", None)
-    bundle.engine.assert_called_once_with("pump", None, run_gc=False)
+    custom_cards.refresh([small, big])
+
+    assert custom_cards.check("small-card", {}) == []
+    assert custom_cards.check("huge-card", {}) is None
+    assert custom_cards.status()["state"] == "partial"
+
+
+def test_engine_calls_skip_quickjs_full_garbage_collection(
+    tmp_path: Path, custom_cards: cc.CustomCards, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """quickjs-ng's ``run_gc`` default runs ``gc.collect()`` under the GIL on
+    every call, which stalls Home Assistant's event loop (#2744)."""
+    import quickjs
+
+    with counted_full_collections(monkeypatch) as collections:
+        definitions = real_definitions()
+        definitions.describe("tile")
+        definitions.validate(_views({"type": "tile", "x": 1}))
+        custom_cards.refresh([card_file(tmp_path / "a-card.js", "a-card")])
+        custom_cards.check("a-card", {})
+        custom_cards.describe("a-card")
+        assert collections == []
+
+        quickjs.Function("f", "function f() { return 1; }")()
+        assert collections == ["gc"]

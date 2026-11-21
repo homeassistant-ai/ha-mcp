@@ -69,9 +69,9 @@ async def fetch_device_via_component(
     invalidate the cached caps), or errored (logged). A component that answers
     with ``{"device": None}`` is authoritative — the device does not exist — so
     the caller must distinguish that from a ``None`` return (which means "component
-    unavailable, fall back"). Falls back **silently**, mirroring
-    ``ha_get_state``: the legacy path returns the byte-identical device either way
-    and the ``log.warning`` preserves operator visibility. A
+    unavailable, fall back"). Falls back **silently**: the legacy path returns the
+    byte-identical device either way and the ``log.warning`` preserves operator
+    visibility. A
     ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
     (re)connect — is caught here and mapped to ``None``: the consumers' legacy
     paths ride the ``send_websocket_message`` bridge (registry tools) or a
@@ -207,3 +207,19 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
         )
         return None
     return result
+
+
+async def device_list_reply(client: Any) -> dict[str, Any]:
+    """The device registry as a ``config/device_registry/list`` reply, the
+    component asked first; without its answer Core's command is sent.
+
+    Not for rows the visibility resolver or the bulk selector judges: those
+    read :func:`~ha_mcp.visibility.resolver.core_device_list_reply`.
+    """
+    via_component = await fetch_device_list_via_component(client)
+    if via_component is not None:
+        return {"success": True, "result": via_component["devices"]}
+    reply: dict[str, Any] = await client.send_websocket_message(
+        {"type": "config/device_registry/list"}
+    )
+    return reply

@@ -35,16 +35,18 @@ async def core(
     return await connect_core(app, hass, hass_client, hass_access_token, monkeypatch)
 
 
+@pytest.mark.parametrize("prefix", ["abc123_", ""], ids=["hash-prefixed", "exact"])
 async def test_refuses_and_tells_the_user_while_the_sibling_runs(
     hass: HomeAssistant,
     hass_ws_client: WebSocketGenerator,
     app: App,
     core: CoreLink,
     variant: Variant,
+    prefix: str,
 ) -> None:
-    # Supervisor hash-prefixes third-party slugs.
+    # Supervisor hash-prefixes third-party slugs; an official one is exact.
     app.supervisor.addons = [
-        {"slug": f"abc123_{variant.sibling_base}", "state": "started"}
+        {"slug": f"{prefix}{variant.sibling_base}", "state": "started"}
     ]
 
     assert await run_main(hass, app) == 1
@@ -53,7 +55,7 @@ async def test_refuses_and_tells_the_user_while_the_sibling_runs(
     assert not app.path(variant.config_file).exists()
 
 
-@pytest.mark.parametrize("sibling", ["stopped", "absent"])
+@pytest.mark.parametrize("sibling", ["stopped", "absent", "only-this-flavor-runs"])
 async def test_starts_quietly_without_a_running_sibling(
     hass: HomeAssistant,
     hass_ws_client: WebSocketGenerator,
@@ -67,6 +69,10 @@ async def test_starts_quietly_without_a_running_sibling(
         app.supervisor.addons = [
             {"slug": f"abc123_{variant.sibling_base}", "state": "stopped"}
         ]
+    elif sibling == "only-this-flavor-runs":
+        # One flavor's slug contains the other's: neither may read its own
+        # running install as the sibling.
+        app.supervisor.addons = [{"slug": f"abc123_{variant.slug}", "state": "started"}]
     app.set_options(mcp_server_url=upstream.target_url())
 
     assert await run_main(hass, app) == 0

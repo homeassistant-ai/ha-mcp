@@ -262,12 +262,12 @@ def _read_recorded_pid() -> int | None:
 # dribbles can stretch the total), which in practice bounds the startup
 # delay when the recorded URL points at a hung process; the exit wait
 # bounds how long we give a healthy sidecar to finish dying.
-_SHUTDOWN_HTTP_TIMEOUT = 2.0
-_OLD_SIDECAR_EXIT_WAIT = 5.0
+SHUTDOWN_HTTP_TIMEOUT = 2.0
+OLD_SIDECAR_EXIT_WAIT = 5.0
 _OLD_SIDECAR_EXIT_POLL = 0.1
 # How long the spawning parent keeps the spawn lock while the child gets
 # through interpreter start + imports to _write_pid_url.
-_CHILD_PUBLISH_WAIT = 5.0
+CHILD_PUBLISH_WAIT = 5.0
 
 
 def _no_proxy_opener() -> Any:
@@ -366,7 +366,7 @@ def _post_shutdown(url: str) -> tuple[bool, bool | None]:
         import urllib.request
 
         request = urllib.request.Request(_shutdown_url(url), data=b"", method="POST")
-        with _no_proxy_opener().open(request, timeout=_SHUTDOWN_HTTP_TIMEOUT) as resp:
+        with _no_proxy_opener().open(request, timeout=SHUTDOWN_HTTP_TIMEOUT) as resp:
             # urllib raises for non-2xx; reaching here is success. The
             # endpoint reports whether THIS request created the disable
             # sentinel — the authoritative signal for clearing it (a
@@ -533,7 +533,7 @@ def _wait_for_external_retired_pid(
         return
     import time
 
-    deadline = time.monotonic() + _OLD_SIDECAR_EXIT_WAIT
+    deadline = time.monotonic() + OLD_SIDECAR_EXIT_WAIT
     while _pid_alive(pid):
         if time.monotonic() >= deadline:
             logger.warning(
@@ -541,7 +541,7 @@ def _wait_for_external_retired_pid(
                 "config dir %s.",
                 pid,
                 url,
-                _OLD_SIDECAR_EXIT_WAIT,
+                OLD_SIDECAR_EXIT_WAIT,
                 config_dir,
             )
             return
@@ -594,7 +594,7 @@ def _log_shutdown_timeout(exc: BaseException) -> None:
     logger.warning(
         "Old sidecar did not answer /shutdown within %.1fs (%s); "
         "it may still be running. Spawning replacement anyway.",
-        _SHUTDOWN_HTTP_TIMEOUT,
+        SHUTDOWN_HTTP_TIMEOUT,
         exc,
     )
 
@@ -680,14 +680,14 @@ def _shutdown_existing_sidecar() -> None:
     # could delete the replacement's freshly written files. (Current-code
     # sidecars can't: _cleanup_owned_serving_files checks ownership under
     # _serving_files_lock.)
-    deadline = time.monotonic() + _OLD_SIDECAR_EXIT_WAIT
+    deadline = time.monotonic() + OLD_SIDECAR_EXIT_WAIT
     while _pid_alive(pid):
         if time.monotonic() >= deadline:
             logger.warning(
                 "Old sidecar pid %s still alive %.0fs after acknowledging "
                 "shutdown; spawning replacement anyway.",
                 pid,
-                _OLD_SIDECAR_EXIT_WAIT,
+                OLD_SIDECAR_EXIT_WAIT,
             )
             return
         time.sleep(_OLD_SIDECAR_EXIT_POLL)
@@ -766,7 +766,7 @@ def _spawn_lock() -> Iterator[bool]:
         os.close(fd)
 
 
-def _bind_listener(preferred: int, source: str) -> socket.socket:
+def bind_listener(preferred: int, source: str) -> socket.socket:
     """Bind and return the sidecar's actual serving socket.
 
     Binding the real socket up front (instead of probing a port and
@@ -984,7 +984,7 @@ def _do_spawn() -> None:
     # the child must not wedge stdio startup.
     import time
 
-    deadline = time.monotonic() + _CHILD_PUBLISH_WAIT
+    deadline = time.monotonic() + CHILD_PUBLISH_WAIT
     while not _url_file().exists():
         if proc.poll() is not None:
             logger.warning(
@@ -1000,7 +1000,7 @@ def _do_spawn() -> None:
                 "Settings UI sidecar pid=%d has not published its URL after "
                 "%.0fs; continuing without waiting further.",
                 proc.pid,
-                _CHILD_PUBLISH_WAIT,
+                CHILD_PUBLISH_WAIT,
             )
             return
         time.sleep(_OLD_SIDECAR_EXIT_POLL)
@@ -1405,7 +1405,7 @@ def run_main() -> int:
     remembered_port, remembered_secret = persisted if persisted else (0, None)
     pin_port = get_global_settings().sidecar_pin_port
     try:
-        listener = _bind_listener(
+        listener = bind_listener(
             pin_port or remembered_port, "Pinned" if pin_port else "Remembered"
         )
     except OSError:
@@ -1434,7 +1434,7 @@ def run_main() -> int:
         log_level=log_level.lower(),
         access_log=False,
         # Bounded graceful drain keeps a retiring sidecar's exit inside
-        # the parent's _OLD_SIDECAR_EXIT_WAIT window.
+        # the parent's OLD_SIDECAR_EXIT_WAIT window.
         timeout_graceful_shutdown=3,
         ws="none",
     )
@@ -1464,7 +1464,7 @@ def run_main() -> int:
 
     try:
         # Hand uvicorn the pre-bound socket — re-binding host/port here
-        # would reintroduce the probe-then-rebind race _bind_listener
+        # would reintroduce the probe-then-rebind race bind_listener
         # exists to close.
         server.run(sockets=[listener])
     finally:

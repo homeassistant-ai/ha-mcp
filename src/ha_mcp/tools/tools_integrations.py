@@ -35,7 +35,9 @@ from .component_helper_collections import removal_reply, stored_helper_target
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_backup import (
     flow_helper_backup_domain,
+    removal_backup_domain,
     removal_backup_id,
+    removal_helper_type,
     resolve_config_entry_backup_domain,
     skip_unless_flow_helper,
 )
@@ -87,15 +89,7 @@ from .ws_waiters import verify_entity_removed, wait_for_entity_removed
 logger = logging.getLogger(__name__)
 
 # First wait between helper registry lookups; each later retry doubles it.
-_REGISTRY_RETRY_BASE_DELAY = 0.5
-
-
-def _removal_backup_domain(kwargs: dict[str, Any]) -> str:
-    """Snapshot under ``helper_<type>``, the handler ha_config_set_helper uses,
-    when helper_type is set; an untyped target here is a config entry
-    (_skip_removal_capture already skipped an untyped entity_id)."""
-    helper_type = kwargs.get("helper_type")
-    return f"helper_{helper_type}" if helper_type else "integration"
+REGISTRY_RETRY_BASE_DELAY = 0.5
 
 
 def _skip_removal_capture(kwargs: dict[str, Any]) -> bool:
@@ -103,7 +97,7 @@ def _skip_removal_capture(kwargs: dict[str, Any]) -> bool:
     _delete_resolved_flow_helper once Core resolves its entry, a type-less
     entity_id by the resolved call (_remove_resolved_helper, which again
     defers a FLOW type to _delete_resolved_flow_helper)."""
-    helper_type = kwargs.get("helper_type")
+    helper_type = removal_helper_type(kwargs)
     if helper_type is None:
         return "." in str(kwargs.get("target", ""))
     return _is_flow_helper_domain(f"helper_{helper_type}")
@@ -437,17 +431,6 @@ class IntegrationTools:
                 default=None,
             ),
         ] = None,
-        show_advanced_options: Annotated[
-            bool,
-            Field(
-                description=(
-                    "When include_subentry_schema=True, ask older Home Assistant "
-                    "versions to expose advanced flow options. No-op on HA "
-                    "2026.6+; pending removal before HA 2027.6."
-                ),
-                default=False,
-            ),
-        ] = False,
         exact_match: Annotated[
             bool,
             Field(
@@ -633,7 +616,6 @@ class IntegrationTools:
             include_diagnostics_bool = include_diagnostics
             include_subentries_bool = include_subentries
             include_subentry_schema_bool = include_subentry_schema
-            show_advanced_options_bool = show_advanced_options
             exact_match_bool = exact_match
             limit_int = limit
             offset_int = offset
@@ -673,7 +655,6 @@ class IntegrationTools:
                     include_subentry_schema=include_subentry_schema_bool,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
-                    show_advanced_options=show_advanced_options_bool,
                     include_diagnostics=include_diagnostics_bool,
                     include_ws_commands=include_ws_commands,
                     device_id=device_id,
@@ -714,7 +695,6 @@ class IntegrationTools:
                 include_subentry_schema=include_subentry_schema_bool,
                 subentry_type=subentry_type,
                 subentry_id=subentry_id,
-                show_advanced_options=show_advanced_options_bool,
             )
             if ignored_detail_params:
                 result.setdefault("warnings", []).append(
@@ -752,7 +732,6 @@ class IntegrationTools:
         include_subentry_schema: bool,
         subentry_type: str | None,
         subentry_id: str | None,
-        show_advanced_options: bool,
         include_diagnostics: bool,
         include_ws_commands: bool,
         device_id: str | None,
@@ -770,7 +749,6 @@ class IntegrationTools:
             include_subentry_schema=include_subentry_schema,
             subentry_type=subentry_type,
             subentry_id=subentry_id,
-            show_advanced_options=show_advanced_options,
         )
         if include_diagnostics:
             resp["diagnostics"] = await fetch_integration_diagnostics(
@@ -830,7 +808,6 @@ class IntegrationTools:
         include_subentry_schema: bool,
         subentry_type: str | None,
         subentry_id: str | None,
-        show_advanced_options: bool,
     ) -> list[str]:
         """Detail-only subentry params that are ignored in list mode."""
         ignored_detail_params: list[str] = []
@@ -842,8 +819,6 @@ class IntegrationTools:
             ignored_detail_params.append("subentry_type")
         if subentry_id is not None:
             ignored_detail_params.append("subentry_id")
-        if show_advanced_options:
-            ignored_detail_params.append("show_advanced_options")
         return ignored_detail_params
 
     async def _get_single_entry(
@@ -855,7 +830,6 @@ class IntegrationTools:
         include_subentry_schema: bool,
         subentry_type: str | None,
         subentry_id: str | None,
-        show_advanced_options: bool,
     ) -> dict[str, Any]:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
@@ -869,7 +843,6 @@ class IntegrationTools:
                     include_subentry_schema=include_subentry_schema,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
-                    show_advanced_options=show_advanced_options,
                 )
 
             result = await self._client.get_config_entry(entry_id)
@@ -926,7 +899,6 @@ class IntegrationTools:
                     resp,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
-                    show_advanced_options=show_advanced_options,
                 )
 
             return resp
@@ -974,7 +946,6 @@ class IntegrationTools:
         include_subentry_schema: bool,
         subentry_type: str | None,
         subentry_id: str | None,
-        show_advanced_options: bool,
     ) -> dict[str, Any]:
         """Build the single-entry response from a component ``config_entries`` read.
 
@@ -1059,7 +1030,6 @@ class IntegrationTools:
                 resp,
                 subentry_type=subentry_type,
                 subentry_id=subentry_id,
-                show_advanced_options=show_advanced_options,
             )
 
         return resp
@@ -1854,7 +1824,7 @@ class IntegrationTools:
         ),
     )
     @with_auto_backup(
-        domain_fn=_removal_backup_domain,
+        domain_fn=removal_backup_domain,
         id_fn=removal_backup_id,
         domain_resolver=resolve_config_entry_backup_domain,
         skip_fn=_skip_removal_capture,
@@ -1891,7 +1861,7 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "Config subentry ID to remove when helper_type='config_subentry'."
+                    "Config subentry ID to remove; target is its parent entry_id."
                 ),
                 default=None,
             ),
@@ -1944,13 +1914,13 @@ class IntegrationTools:
           sub-entities (e.g. utility_meter tariffs) are removed together. An
           entity registered by another integration is refused with
           VALIDATION_INVALID_PARAMETER and nothing is deleted.
+        - subentry_id (helper_type omitted or "config_subentry") + parent
+          entry_id → delete that one config subentry, whatever the target looks
+          like. A subentry_id with any other helper_type is refused.
         - helper_type=None + entity_id → the entity's registry entry names its
           helper (storage type or helper flow); an entity of any other
           integration is refused with VALIDATION_INVALID_PARAMETER.
-        - helper_type=None + entry_id → direct config entry delete (any
-          integration).
-        - helper_type="config_subentry" + parent entry_id + subentry_id →
-          delete one config subentry.
+        - helper_type=None + entry_id → direct config entry delete.
 
         A target that cannot be removed raises a structured error rather than
         returning silent success: ENTITY_NOT_FOUND when the entity_id is absent
@@ -2020,7 +1990,10 @@ class IntegrationTools:
         wait_bool = wait
         warnings: list[str] = []
 
-        # === Routing dispatch ===
+        # === Routing dispatch: a subentry_id names a config subentry, nothing else ===
+        helper_type = removal_helper_type(
+            {"helper_type": helper_type, "subentry_id": subentry_id}
+        )
         if helper_type is None and "." in target:
             # An entity_id alone: its registry entry names the helper, and the
             # resolved call runs the matching path with its own backup.
@@ -2063,7 +2036,7 @@ class IntegrationTools:
     # intentional and prevents future renames pulled by either side.
 
     @with_auto_backup(
-        domain_fn=_removal_backup_domain,
+        domain_fn=removal_backup_domain,
         id_fn=removal_backup_id,
         domain_resolver=resolve_config_entry_backup_domain,
         skip_fn=_skip_removal_capture,
@@ -2375,17 +2348,13 @@ class IntegrationTools:
         if not isinstance(result, dict) or not result.get("success"):
             error = result.get("error", "Operation failed")
             error_msg = websocket_error_message(error)
-            # Detect "subentry already absent" by HA's structured
-            # ``code="not_found"`` only. A generic ``"not found" in
-            # error_msg`` substring match was rejected because it can
-            # collide with unrelated HA error messages (e.g.
-            # "repository not found", "integration not found") and
-            # mis-classify a real failure as a missing target.
-            # The HA ``config_entries/subentries/delete`` handler raises
-            # with ``code="not_found"`` when entry_id or subentry_id is
-            # missing; if a future HA version uses a different code, we
-            # raise SERVICE_CALL_FAILED instead — safer than mis-classifying.
-            error_code = error.get("code") if isinstance(error, dict) else None
+            # Only Core's own ``not_found`` code means the subentry is absent:
+            # matching "not found" in the message would also catch unrelated
+            # failures ("repository not found"). The client reports the code
+            # beside the message; a dict error carries it inside.
+            error_code = result.get("error_code") or (
+                error.get("code") if isinstance(error, dict) else None
+            )
             if error_code == "not_found":
                 # Subentry absent under the parent config entry. Surface
                 # as RESOURCE_NOT_FOUND so the caller learns the target
@@ -2579,7 +2548,7 @@ class IntegrationTools:
                         logger.info(f"Found unique_id: {unique_id} for {entity_id}")
                         break
                 if attempt < max_retries - 1:
-                    wait_time = _REGISTRY_RETRY_BASE_DELAY * (2**attempt)
+                    wait_time = REGISTRY_RETRY_BASE_DELAY * (2**attempt)
                     logger.debug(
                         f"Registry lookup failed for {entity_id}, "
                         f"waiting {wait_time}s before retry..."
@@ -2591,7 +2560,7 @@ class IntegrationTools:
                 # re-reported as ENTITY_NOT_FOUND in the fallback below.
                 logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
-                    wait_time = _REGISTRY_RETRY_BASE_DELAY * (2**attempt)
+                    wait_time = REGISTRY_RETRY_BASE_DELAY * (2**attempt)
                     await asyncio.sleep(wait_time)
         return unique_id, registry_result
 

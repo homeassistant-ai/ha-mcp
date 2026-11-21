@@ -53,7 +53,7 @@ from .stdio_settings_sidecar import _TRUTHY  # shared HA_MCP_DISABLE_* truthy se
 logger = logging.getLogger(__name__)
 
 DISABLE_ENV = "HA_MCP_DISABLE_UPDATE_CHECK"
-_PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
+PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 _STABLE_PACKAGE = "ha-mcp"
 _DEV_PACKAGE = "ha-mcp-dev"
 # Tight timeout so the once-per-process check can never add more than a blip of
@@ -96,7 +96,7 @@ def _is_disabled() -> bool:
 def is_update_check_disabled() -> bool:
     """Public accessor for the HA_MCP_DISABLE_UPDATE_CHECK opt-out.
 
-    The HACS auto-refresh nudge gates on the same switch: an operator who
+    The Marketplace auto-refresh nudge gates on the same switch: an operator who
     opted out of update phone-home should not get update-driven side
     effects either.
     """
@@ -123,7 +123,7 @@ def _fetch_latest_from_pypi(package: str) -> PyPIRelease | None:
         # follow_redirects=True mirrors the sibling fetch in tools_updates.py and
         # survives any future PyPI redirect (the JSON API serves 200 directly today).
         resp = httpx.get(
-            _PYPI_JSON_URL.format(package=package),
+            PYPI_JSON_URL.format(package=package),
             timeout=_HTTP_TIMEOUT_SECONDS,
             follow_redirects=True,
         )
@@ -385,15 +385,12 @@ def update_command_hint(current: str, info: UpdateInfo | None = None) -> str:
         # In-process (custom component) server: each component release
         # installs its own server build when Home Assistant restarts.
         return (
-            "Update the HA-MCP integration in HACS (the Marketplace on "
-            "Home Assistant 2026.11+), then restart Home Assistant."
+            "Update the HA-MCP integration in the Marketplace, then restart "
+            "Home Assistant."
         )
     if is_running_in_addon():
         # Add-on users update through the Supervisor UI, not pip/docker.
-        return (
-            "Update from Settings -> Apps -> Home Assistant MCP Server "
-            "(Settings -> Add-ons before Home Assistant 2026.2)."
-        )
+        return "Update from Settings -> Apps -> Home Assistant MCP Server."
     dev = is_dev_version(current)
     if _running_in_docker():
         # Dev images are tagged :dev (rolling); :stable is the stable channel.

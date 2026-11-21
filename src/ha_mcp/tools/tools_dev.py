@@ -77,7 +77,7 @@ _OPT_PIP_SPEC = "pip_spec"
 # before the serving thread is torn down. Mirrors
 # settings_ui._supervisor._SUPERVISOR_SELF_RESTART_FLUSH_DELAY_S, with more headroom
 # because the embedded response may traverse the HA ingress/webhook hop.
-_SELF_ACTION_FLUSH_DELAY_S = 1.0
+SELF_ACTION_FLUSH_DELAY_S = 1.0
 
 # Strong references to in-flight fire-and-forget tasks so the event
 # loop's weakref-only task table can't garbage-collect them mid-run.
@@ -497,7 +497,7 @@ def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:
     """
 
     async def _reload() -> None:
-        await asyncio.sleep(_SELF_ACTION_FLUSH_DELAY_S)
+        await asyncio.sleep(SELF_ACTION_FLUSH_DELAY_S)
         try:
             await client.call_service(
                 "homeassistant", "reload_config_entry", {"entry_id": entry_id}
@@ -560,10 +560,10 @@ class DevTools:
     def _settings_rows(self) -> list[dict[str, Any]]:
         """Build the full settings matrix from both registries."""
         from ..config import (
-            _ADVANCED_SETTINGS_BOUNDS,
             _ADVANCED_SETTINGS_CHOICES,
             _ADVANCED_SETTINGS_SENTINELS,
             _FEATURE_FLAG_INT_BOUNDS,
+            ADVANCED_SETTINGS_BOUNDS,
             ADVANCED_SETTINGS_FIELDS,
             FEATURE_FLAG_FIELDS,
             OAUTH_MODE_TOKEN,
@@ -615,7 +615,7 @@ class DevTools:
                 "origin": origin,
                 "editable": registry_editable and origin != "env",
             }
-            bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+            bounds = ADVANCED_SETTINGS_BOUNDS.get(fname)
             if bounds is not None:
                 row["min"], row["max"] = bounds
                 sentinel = _ADVANCED_SETTINGS_SENTINELS.get(fname)
@@ -783,7 +783,7 @@ class DevTools:
         after our JSON response has flushed. Failures can only be
         logged — there is no caller left to answer.
         """
-        await asyncio.sleep(_SELF_ACTION_FLUSH_DELAY_S)
+        await asyncio.sleep(SELF_ACTION_FLUSH_DELAY_S)
         try:
             result = await self._client.submit_options_flow_step(flow_id, user_input)
             if result.get("type") == "create_entry":
@@ -1012,10 +1012,10 @@ class DevTools:
         _guard_security_policy_setting(setting)
 
         from ..config import (
-            _ADVANCED_SETTINGS_BOUNDS,
             _ADVANCED_SETTINGS_CHOICES,
             _ADVANCED_SETTINGS_SENTINELS,
             _FEATURE_FLAG_INT_BOUNDS,
+            ADVANCED_SETTINGS_BOUNDS,
             ADVANCED_SETTINGS_FIELDS,
             FEATURE_FLAG_FIELDS,
             _read_feature_flag_override_file,
@@ -1039,7 +1039,7 @@ class DevTools:
             overrides = await asyncio.to_thread(_read_feature_flag_override_file)
             origin = self._advanced_origin(setting, env_name, overrides)
             editable = registry_editable and origin != "env"
-            bounds = _ADVANCED_SETTINGS_BOUNDS.get(setting)
+            bounds = ADVANCED_SETTINGS_BOUNDS.get(setting)
             sentinel = _ADVANCED_SETTINGS_SENTINELS.get(setting)
             choices = _ADVANCED_SETTINGS_CHOICES.get(setting)
         else:
@@ -1825,7 +1825,7 @@ class DevTools:
         """Manage the running ha-mcp server itself (developer mode).
 
         When NOT to use: to restart Home Assistant use ha_restart; to
-        update Home Assistant Apps (add-ons) or HACS packages use
+        update Home Assistant Apps (add-ons) or Marketplace repositories use
         ha_manage_app / ha_manage_hacs.
 
         Caveats: update_source changes ONLY the ha_mcp_tools custom

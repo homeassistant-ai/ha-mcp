@@ -14,6 +14,8 @@ the hidden-entity score penalty while the output still looked clean —
 these tests pin the contract.
 """
 
+from typing import Any
+
 from ha_mcp.tools.response_helpers import public_fields
 
 
@@ -45,7 +47,7 @@ class TestPublicFields:
         assert result["items"] is shared_list
 
     def test_handles_int_keys(self):
-        d = {1: "one", "_hidden_by": "x", "name": "n"}
+        d: dict[Any, Any] = {1: "one", "_hidden_by": "x", "name": "n"}
         # int keys (can't startswith) pass through untouched.
         assert public_fields(d) == {1: "one", "name": "n"}
 

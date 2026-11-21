@@ -97,6 +97,56 @@ async def test_labels_core_converted_values_with_display_unit(
     assert entity["statistics"][0]["sum"] == 1250.0
 
 
+@pytest.mark.parametrize("units", [None, {"energy": "Wh"}])
+async def test_converted_values_keep_the_stored_reset_timestamp(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    units: dict[str, str] | None,
+) -> None:
+    """A read Core converts to another unit returns the stored ``last_reset``
+    from that one read."""
+    last_reset = START - timedelta(days=1)
+    hass.states.async_set(STATISTIC_ID, "1", {"unit_of_measurement": "kWh"})
+    metadata: StatisticMetaData = {
+        "mean_type": StatisticMeanType.NONE,
+        "has_sum": True,
+        "name": None,
+        "source": "recorder",
+        "statistic_id": STATISTIC_ID,
+        "unit_class": "energy",
+        "unit_of_measurement": "MWh",
+    }
+    async_import_statistics(
+        hass, metadata, [{"start": START, "last_reset": last_reset, "sum": 1.25}]
+    )
+    await async_wait_recording_done(hass)
+
+    with patch.object(
+        core_client, "send_websocket_message", wraps=core_client.send_websocket_message
+    ) as sent:
+        response = await tools_history.HistoryTools(core_client).ha_get_history(
+            entity_ids=STATISTIC_ID,
+            source="statistics",
+            start_time=START.isoformat(),
+            end_time=END.isoformat(),
+            period="hour",
+            statistic_types=["sum", "last_reset"],
+            core_options={"units": units} if units else None,
+        )
+
+    row = response["data"]["entities"][0]["statistics"][0]
+    assert row["sum"] != 1.25
+    assert row["last_reset"] == last_reset.timestamp() * 1000
+    assert not [w for w in response.get("warnings", []) if "last_reset" in w]
+    reads = [
+        call.args[0]
+        for call in sent.call_args_list
+        if call.args[0].get("type") == "recorder/statistics_during_period"
+    ]
+    assert len(reads) == 1
+
+
 @pytest.mark.parametrize("in_window,offset", [(False, 0), (True, 10)])
 async def test_unit_is_available_even_when_page_is_empty(
     recorder_mock: Recorder,

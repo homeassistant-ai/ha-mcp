@@ -9,6 +9,11 @@ import httpx
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_embedded
+from ..client.exceptions import (
+    HomeAssistantCommandNotSent,
+    HomeAssistantNotReached,
+    http_failure_status,
+)
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, raise_tool_error
@@ -16,12 +21,33 @@ from .helpers import exception_to_structured_error, raise_tool_error
 logger = logging.getLogger(__name__)
 
 # Embedded mode: delay before the restart fires, so ha_restart's reply flushes
-# to the client first. Same value as tools_dev._SELF_ACTION_FLUSH_DELAY_S.
+# to the client first. Same value as tools_dev.SELF_ACTION_FLUSH_DELAY_S.
 EMBEDDED_RESTART_DELAY_S = 1.0
 
 # Strong references to in-flight deferred restarts (the event loop holds tasks
 # only weakly).
 RESTART_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _reply_lost_after_dispatch(error: Exception) -> bool:
+    """Whether the restart went out and only its answer was lost.
+
+    Core stops while the call is open, so this is what a restart that worked
+    looks like to its caller: a dropped connection, or the proxy's 502/503/504
+    (the Supervisor answers 502 for the app's call on Home Assistant OS).
+    """
+    if isinstance(error, (HomeAssistantCommandNotSent, HomeAssistantNotReached)):
+        # Failed WebSocket upgrades, even when the proxy returned 5xx, and a
+        # redirect the client did not follow.
+        return False
+    if isinstance(error, HomeAssistantConnectionError):
+        # A connection or pool acquisition that failed sent nothing, and a
+        # reply that timed out on an open connection is not a restart: Core
+        # closes the connection when it stops.
+        return not error.timed_out and not isinstance(
+            error.__cause__, (httpx.ConnectError, httpx.PoolTimeout)
+        )
+    return http_failure_status(error) in {502, 503, 504}
 
 
 def _schedule_embedded_restart(client: Any, data: dict[str, Any]) -> None:
@@ -32,14 +58,12 @@ def _schedule_embedded_restart(client: Any, data: dict[str, Any]) -> None:
         try:
             await client.call_service("homeassistant", "restart", data)
         except Exception as exc:
-            # No caller left to answer; WARNING is the level HA surfaces. A
-            # lost reply means the restart reached HA and it went down first
-            # (expected); a connect error or timeout may never have
-            # dispatched, so those keep the traceback.
-            if isinstance(exc.__cause__, httpx.ReadError | httpx.RemoteProtocolError):
+            # No caller left to answer; WARNING is the level HA surfaces.
+            if _reply_lost_after_dispatch(exc):
                 logger.warning(
                     "Deferred Home Assistant restart dispatched; HA closed the "
-                    "connection before replying (expected)"
+                    "connection before replying (expected): %s",
+                    exc,
                 )
             else:
                 logger.warning("Deferred Home Assistant restart failed", exc_info=True)
@@ -72,7 +96,7 @@ async def _embedded_precheck(client: Any, *, safe_mode: bool) -> list[str]:
             "one: it stays down until Home Assistant is next "
             "restarted normally."
         )
-    # A missing field (older Core, renamed key) means the check was not made,
+    # A missing field (a renamed key) means the check was not made,
     # so it warns like an unanswered command instead of passing silently.
     recorder = await _core_info(client, "recorder/info")
     if recorder is None or not isinstance(recorder.get("migration_in_progress"), bool):
@@ -143,7 +167,7 @@ async def restart_home_assistant(
             )
         )
 
-    restart_initiated = False
+    awaiting_restart_reply = False
     data = {"safe_mode": safe_mode}
     try:
         # Check configuration first as a safety measure
@@ -183,9 +207,7 @@ async def restart_home_assistant(
                 "warnings": warnings,
             }
 
-        # Call the restart service - mark as initiated before the call
-        # as the connection may be closed before we get a response
-        restart_initiated = True
+        awaiting_restart_reply = True
         await client.call_service("homeassistant", "restart", data)
 
         return {
@@ -203,21 +225,7 @@ async def restart_home_assistant(
     except ToolError:
         raise
     except Exception as e:  # noqa: BLE001
-        error_msg = str(e)
-        # Connection errors after restart initiated are expected
-        # (HA closes connections during restart)
-        if restart_initiated and any(
-            pattern in error_msg.lower()
-            for pattern in (
-                "connect",
-                "closed",
-                "504",
-                "502",
-                "503",
-                "gateway",
-                "unavailable",
-            )
-        ):
+        if awaiting_restart_reply and _reply_lost_after_dispatch(e):
             return {
                 "success": True,
                 "message": (

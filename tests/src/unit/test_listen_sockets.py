@@ -4,26 +4,35 @@ from __future__ import annotations
 
 import errno
 import logging
+import runpy
 import socket
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 import pytest_socket
 
-from ._embedded_server_helpers import _load as _load
-from ._embedded_server_helpers import _require_ipv6_loopback as _require_ipv6_loopback
-from .test_sidecar_pin_port import _a_free_port
+from ha_mcp import listen_sockets
+
+from ._core_client import free_port
 
 # These tests run their own listener on the loopback interface; Core's test
 # plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
 pytestmark = pytest.mark.usefixtures("socket_enabled")
 
-_REPO = Path(__file__).parents[3]
+_START = runpy.run_path(
+    str(Path(__file__).parents[3] / "homeassistant-addon" / "start.py"),
+    run_name="addon_start_listen_sockets",
+)
 
 
-listen_sockets = _load(_REPO / "src/ha_mcp/listen_sockets.py", "listen_sockets_ut")
+@pytest.fixture
+def ipv6_loopback(socket_enabled: None) -> None:
+    """Skip on a machine with no IPv6 loopback to connect over."""
+    try:
+        socket.create_server(("::1", 0), family=socket.AF_INET6).close()
+    except OSError:
+        pytest.skip("IPv6 loopback unavailable on this machine")
 
 
 def _connects(address: str, port: int) -> bool:
@@ -34,11 +43,11 @@ def _connects(address: str, port: int) -> bool:
     return True
 
 
+@pytest.mark.usefixtures("ipv6_loopback")
 def test_wildcard_host_accepts_ipv4_and_ipv6_clients() -> None:
-    _require_ipv6_loopback()
     # Core's test plugin allows connections to 127.0.0.1 only.
     pytest_socket.socket_allow_hosts(["127.0.0.1", "::1"])
-    port = _a_free_port()
+    port = free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None
     try:
@@ -67,7 +76,7 @@ def test_port_in_use_is_reported_not_skipped() -> None:
 def test_machine_without_ipv6_still_serves_ipv4(
     monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    class _NoIPv6Socket(listen_sockets._ListenSocket):
+    class _NoIPv6Socket(listen_sockets.ListenSocket):
         def __init__(self, family: int = -1, *args: Any, **kwargs: Any) -> None:
             if failure == "socket" and family == socket.AF_INET6:
                 raise OSError(errno.EAFNOSUPPORT, "Address family not supported")
@@ -78,8 +87,8 @@ def test_machine_without_ipv6_still_serves_ipv4(
                 raise OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
             super().bind(address)
 
-    monkeypatch.setattr(listen_sockets, "_ListenSocket", _NoIPv6Socket)
-    port = _a_free_port()
+    monkeypatch.setattr(listen_sockets, "ListenSocket", _NoIPv6Socket)
+    port = free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None
     try:
@@ -91,11 +100,11 @@ def test_machine_without_ipv6_still_serves_ipv4(
             sock.close()
 
 
+@pytest.mark.usefixtures("ipv6_loopback")
 def test_startup_line_logged_when_every_socket_serves(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    _require_ipv6_loopback()
-    port = _a_free_port()
+    port = free_port()
     sockets = listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     assert sockets is not None and len(sockets) == 2
     caplog.set_level(logging.INFO, logger="uvicorn.error")
@@ -112,15 +121,11 @@ def test_startup_line_logged_when_every_socket_serves(
 
 
 def test_specific_host_is_left_to_uvicorn() -> None:
-    assert listen_sockets.wildcard_listen_sockets("127.0.0.1", _a_free_port()) is None
+    assert listen_sockets.wildcard_listen_sockets("127.0.0.1", free_port()) is None
 
 
-def test_app_hands_dual_stack_sockets_to_the_server(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _require_ipv6_loopback()
-    monkeypatch.setitem(sys.modules, "ha_mcp.listen_sockets", listen_sockets)
-    start = _load(_REPO / "homeassistant-addon/start.py", "addon_start_ut")
+@pytest.mark.usefixtures("ipv6_loopback")
+def test_app_hands_dual_stack_sockets_to_the_server() -> None:
     seen: dict[str, Any] = {}
 
     class _Mcp:
@@ -129,7 +134,7 @@ def test_app_hands_dual_stack_sockets_to_the_server(
             for sock in kwargs["sockets"] or []:
                 sock.close()
 
-    assert start._run_mcp_server(_Mcp(), "0.0.0.0", _a_free_port(), "/p", {}) == 0
+    assert _START["run_mcp_server"](_Mcp(), "0.0.0.0", free_port(), "/p", {}) == 0
     assert seen["host"] == "0.0.0.0"
     # IPv6 is only ever bound behind the local-network guard (#2915).
     assert [m.cls.__name__ for m in seen["middleware"]] == ["IPv6LanGuard"]
@@ -138,38 +143,33 @@ def test_app_hands_dual_stack_sockets_to_the_server(
     assert families == {socket.AF_INET, socket.AF_INET6}
 
 
-def test_app_with_a_specific_host_keeps_uvicorns_own_bind(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_app_with_a_specific_host_keeps_uvicorns_own_bind() -> None:
     # An MCP_HOST override binds exactly that host, unguarded, with uvicorn's
     # proxy-header handling intact for a reverse proxy in front of it.
-    monkeypatch.setitem(sys.modules, "ha_mcp.listen_sockets", listen_sockets)
-    start = _load(_REPO / "homeassistant-addon/start.py", "addon_start_ut2")
     seen: dict[str, Any] = {}
 
     class _Mcp:
         def run(self, **kwargs: Any) -> None:
             seen.update(kwargs)
 
-    assert start._run_mcp_server(_Mcp(), "127.0.0.1", _a_free_port(), "/p", {}) == 0
+    assert _START["run_mcp_server"](_Mcp(), "127.0.0.1", free_port(), "/p", {}) == 0
     assert seen["sockets"] is None
     assert "middleware" not in seen
     assert "proxy_headers" not in seen["uvicorn_config"]
 
 
+@pytest.mark.usefixtures("ipv6_loopback")
 def test_a_failed_family_releases_the_one_already_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _require_ipv6_loopback()
-
-    class _IPv6Refused(listen_sockets._ListenSocket):
+    class _IPv6Refused(listen_sockets.ListenSocket):
         def bind(self, address: Any) -> None:
             if self.family == socket.AF_INET6:
                 raise OSError(errno.EACCES, "Permission denied")
             super().bind(address)
 
-    monkeypatch.setattr(listen_sockets, "_ListenSocket", _IPv6Refused)
-    port = _a_free_port()
+    monkeypatch.setattr(listen_sockets, "ListenSocket", _IPv6Refused)
+    port = free_port()
     with pytest.raises(OSError):
         listen_sockets.wildcard_listen_sockets("0.0.0.0", port)
     # The IPv4 socket bound before IPv6 failed must be closed again: a plain
@@ -178,12 +178,12 @@ def test_a_failed_family_releases_the_one_already_bound(
         probe.bind(("127.0.0.1", port))
 
 
+@pytest.mark.usefixtures("ipv6_loopback")
 def test_port_held_on_ipv6_only_keeps_the_ipv4_listener(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # Before IPv6 was added the server bound IPv4 alone; another process
     # holding the port on IPv6 must not stop it from starting.
-    _require_ipv6_loopback()
     with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as taken:
         taken.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
         taken.bind(("::1", 0))

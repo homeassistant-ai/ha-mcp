@@ -6,11 +6,16 @@ import pytest
 from starlette.requests import Request
 
 from ._js_harness import HarnessResult, extract_script_body, run_script
-from .test_settings_ui_js_behavior import DEFAULT_FETCHES
+from ._settings_ui_dom import DEFAULT_FETCHES
 
 
 def _delete_backups(
-    reply: dict, *, locale: str = "en", messages=None, response=None
+    reply: dict,
+    *,
+    locale: str = "en",
+    messages=None,
+    response=None,
+    missing: tuple[str, ...] = (),
 ) -> HarnessResult:
     from ha_mcp.settings_ui import render_settings_html
 
@@ -30,6 +35,7 @@ def _delete_backups(
             "window.prompt = () => '';"
             "const catalogElement = document.getElementById('ha-mcp-i18n');"
             "const catalog = JSON.parse(catalogElement.textContent);"
+            f"for (const key of {json.dumps(list(missing))}) delete catalog.messages[key];"
             f"Object.assign(catalog.messages, {json.dumps(messages or {})});"
             "catalogElement.textContent = JSON.stringify(catalog);"
         ),
@@ -59,15 +65,9 @@ def _delete_backups(
 
 
 @pytest.mark.parametrize("locale", ["en", "fr"])
-def test_partial_delete_reports_in_use_and_other_failures(
-    locale: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_partial_delete_reports_in_use_and_other_failures(locale: str) -> None:
     """Incomplete catalogs inherit the new English result and retry guidance."""
-    if locale != "en":
-        from ha_mcp.settings_ui._i18n import CATALOGS
-
-        for key in ("backup.bulk.partial", "backup.bulk.in_use"):
-            monkeypatch.delitem(CATALOGS[locale]["messages"], key, raising=False)
+    missing = ("backup.bulk.partial", "backup.bulk.in_use") if locale != "en" else ()
     result = _delete_backups(
         {
             "success": True,
@@ -77,6 +77,7 @@ def test_partial_delete_reports_in_use_and_other_failures(
             "failure_reasons": {"active.yaml": "snapshot_in_use"},
         },
         locale=locale,
+        missing=missing,
     )
     assert result.alerts == [
         "Deleted 1 backup(s); failed to delete 2 backup(s).\n\n"

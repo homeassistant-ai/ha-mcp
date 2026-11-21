@@ -9,7 +9,6 @@ chosen tool comes back from ``ha_search_tools(tools=[...])``.
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any, Literal
 
 import pytest
@@ -18,13 +17,15 @@ import ha_mcp.server as server_module
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp._vendor.mcp.types import ToolAnnotations
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.config import get_global_settings
 from ha_mcp.read_only import ReadOnlyToolsTransform
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 from ha_mcp.transforms.compact_params import compact_params
 
+from ._real_server import build_server
+from ._search_noop_tools import noop_tool
 from ._tool_errors import rejected_call_body
-from .test_search_pinned_results import _tool
-from .test_search_pinned_results import toolsearch_server as toolsearch_server
 
 # These tests exercise the search tools a search-mode connection gets.
 pytestmark = pytest.mark.usefixtures("tool_search_default")
@@ -56,7 +57,7 @@ _WRITE = Tool.from_function(
     description="set a thing",
     annotations=ToolAnnotations(destructive_hint=True),
 )
-_PINNED = _tool("ha_get_state", "get entity state")
+_PINNED = noop_tool("ha_get_state", "get entity state")
 _ENTITY_DESCRIPTION = (
     "Get entity details, with the\nsummary line wrapped.\n\n"
     "Guidance the agent needs only once it calls the tool.\n\n"
@@ -66,7 +67,12 @@ _ENTITY_DESCRIPTION = (
 
 async def _call(arguments: dict[str, Any]) -> list[dict[str, Any]]:
     mcp = FastMCP("compact-search")
-    for tool in (_TYPED, _WRITE, _PINNED, _tool("ha_get_entity", _ENTITY_DESCRIPTION)):
+    for tool in (
+        _TYPED,
+        _WRITE,
+        _PINNED,
+        noop_tool("ha_get_entity", _ENTITY_DESCRIPTION),
+    ):
         mcp.add_tool(tool)
     mcp.add_transform(ReadOnlyToolsTransform())
     mcp.add_transform(CategorizedSearchTransform(always_visible=["ha_get_state"]))
@@ -87,10 +93,20 @@ async def _typed_params() -> str:
 
 @pytest.fixture
 def read_only_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "ha_mcp.read_only.get_global_settings",
-        lambda: SimpleNamespace(read_only_mode=True),
-    )
+    monkeypatch.setattr(get_global_settings(), "read_only_mode", True)
+
+
+@pytest.fixture
+def toolsearch_server(
+    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> server_module.HomeAssistantSmartMCPServer:
+    """The real catalog behind the search transform, on Core. Pins and
+    disables from the developer's environment are cleared so the
+    assertions see the default catalog."""
+    monkeypatch.setenv("ENABLE_TOOL_SEARCH", "true")
+    monkeypatch.setenv("PINNED_TOOLS", "")
+    monkeypatch.setenv("DISABLED_TOOLS", "")
+    return build_server(monkeypatch, core_client)
 
 
 @pytest.mark.anyio

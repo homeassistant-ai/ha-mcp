@@ -14,7 +14,10 @@ from typing import Any
 from annotatedyaml import SECRET_YAML
 from annotatedyaml.loader import FastSafeLoader
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.error import CommentMark
 from ruamel.yaml.scalarbool import ScalarBoolean
+from ruamel.yaml.tokens import CommentToken
 
 
 class _TaggedScalar:
@@ -177,6 +180,55 @@ def yaml_dumps(ry: YAML, data: Any) -> str:
     return buf.getvalue()
 
 
+def _comment_block_ending(data: Any, key: str, column: int) -> list[CommentToken]:
+    """The comment lines at ``column`` that close the value of ``key``, with
+    the blank lines between and after them."""
+    token: Any = None
+    node: Any = data
+    last: Any = key
+    while True:
+        slot = node.ca.items.get(last) if hasattr(node, "ca") else None
+        # A mapping keeps the comment after a value in slot 2, a list in slot 0.
+        found = slot and slot[0 if isinstance(node, CommentedSeq) else 2]
+        token = found or token
+        node = node[last]
+        if isinstance(node, CommentedMap) and node:
+            last = list(node)[-1]
+        elif isinstance(node, CommentedSeq) and node:
+            last = len(node) - 1
+        else:
+            break
+    # The token starts with the rest of the value's own line.
+    lines = token.value.split("\n")[1:-1] if token else []
+    # A comment indented deeper than the next key belongs to the removed value.
+    own = [
+        i
+        for i, line in enumerate(lines)
+        if line.strip() and len(line) - len(line.lstrip()) != column
+    ]
+    kept = lines[own[-1] + 1 :] if own else lines
+    while kept and not kept[0].strip():
+        kept = kept[1:]
+    return [CommentToken(line.strip() + "\n", CommentMark(column)) for line in kept]
+
+
+def drop_key(data: Any, key: str) -> None:
+    """Delete ``key`` from a loaded mapping, keeping the comments above the next key.
+
+    ruamel keeps the comment lines above a key at the end of the value before
+    it, so deleting that value alone would delete them too.
+    """
+    keys = list(data)
+    following = keys[keys.index(key) + 1 : keys.index(key) + 2]
+    block: list[CommentToken] = []
+    if following and isinstance(data, CommentedMap) and following[0] in data.lc.data:
+        block = _comment_block_ending(data, key, data.lc.key(following[0])[1])
+    del data[key]
+    if block:
+        before = data.ca.items.setdefault(following[0], [None, [], None, None])
+        before[1] = [*block, *(before[1] or [])]
+
+
 def _jsonify_float(node: float) -> float | str:
     """Narrow a float to something json can encode.
 
@@ -231,30 +283,12 @@ def yaml_jsonify(node: Any) -> Any:
     return str(node)
 
 
-def _key_value(node: Any, parts: list[str]) -> tuple[bool, str | None]:
-    """Walk ``parts`` in ``node``, rejecting paths that cross a file boundary.
-
-    The returned file is the one that writes the first segment. Every mapping
-    along the path must come from that same file: if an ``!include`` supplies
-    an intermediate mapping, no single file holds the full dotted path and a
-    read addressed by that path cannot use it.
-    """
-    root_file = getattr(node, "__config_file__", None)
-    if not isinstance(root_file, str):
-        return False, None
-    # secrets.yaml values are secret payloads, not config definitions; a
-    # mapping-valued !secret is nested under its secret name, not a file root.
-    if os.path.basename(root_file) == SECRET_YAML:
-        return False, None
-    current = node
-    for part in parts:
-        if not isinstance(current, dict) or part not in current:
-            return False, None
-        current_file = getattr(current, "__config_file__", root_file)
-        if current_file != root_file:
-            return False, None
-        current = current[part]
-    return True, root_file
+def _key_file(node: dict, name: str) -> str | None:
+    """Read the origin of the actual key object kept by Core's YAML loader."""
+    if name not in node:
+        return None
+    key = next(key for key in node if key == name)
+    return getattr(key, "__config_file__", getattr(node, "__config_file__", None))
 
 
 def _walk_yaml_mappings(
@@ -264,36 +298,43 @@ def _walk_yaml_mappings(
     found: set[str],
     parent_file: str | None = None,
 ) -> None:
-    """Walk mappings, matching ``parts`` only at the top of each file.
-
-    A definition is a top-level key of the file that writes it. Matching every
-    nested mapping would report a key such as ``sensor`` under ``template`` as
-    a top-level definition, and the read addressed from that file cannot
-    supply the path. A mapping whose ``__config_file__`` differs from its
-    parent's starts a new file, so it is a root too.
-    """
+    """Collect the file that writes ``parts[0]`` wherever the whole path is in
+    Core's config, also below an include tag. Only a key at the top of a file
+    counts: ``sensor`` under ``template`` is not a definition of ``sensor``.
+    The rest of the path may be merged in from other files; the caller reads
+    the file and says so when the path is not readable there."""
     if id(node) in seen:
         return
     seen.add(id(node))
-    node_file = getattr(node, "__config_file__", None)
-    at_file_root = parent_file is None or (
-        isinstance(node_file, str) and node_file != parent_file
-    )
-    children: Any
-    if isinstance(node, dict):
-        if at_file_root:
-            matched, path = _key_value(node, parts)
-            if matched and path:
-                found.add(path)
-        children = node.values()
-    elif isinstance(node, list):
-        children = node
-    else:
-        return
-    child_parent = node_file if isinstance(node_file, str) else parent_file
-    for child in children:
-        if isinstance(child, (dict, list)):
-            _walk_yaml_mappings(child, parts, seen, found, child_parent)
+    node_file = getattr(node, "__config_file__", parent_file)
+    if isinstance(node, list):
+        for child in node:
+            _walk_yaml_mappings(child, parts, seen, found, node_file)
+    elif isinstance(node, dict):
+        # !include and !include_dir_merge_named credit the resulting mapping
+        # to the including file, but each written key retains its own origin.
+        root_file = _key_file(node, parts[0])
+        if (
+            root_file
+            and root_file != parent_file
+            and os.path.basename(root_file) != SECRET_YAML
+        ):
+            current = node[parts[0]]
+            for part in parts[1:]:
+                if not isinstance(current, dict) or part not in current:
+                    break
+                current = current[part]
+            else:
+                found.add(root_file)
+        for key, child in node.items():
+            if isinstance(child, (dict, list)):
+                _walk_yaml_mappings(
+                    child,
+                    parts,
+                    seen,
+                    found,
+                    getattr(key, "__config_file__", node_file),
+                )
 
 
 def find_yaml_key_files(config: Any, yaml_path: str) -> list[str]:

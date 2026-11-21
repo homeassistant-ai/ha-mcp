@@ -7,19 +7,21 @@ case-sensitively and case-insensitively, and for every value a wildcard path
 or a list argument yields.
 """
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
 from ha_mcp.policy.evaluator import Verdict, evaluate, find_matching_rule
-from ha_mcp.policy.model import Policy, Predicate, Rule
+from ha_mcp.policy.model import Policy, Predicate, PredicateOp, Rule
 
 
 def _allow(*rules: Rule) -> Policy:
     return Policy(rule_effect="allow", rules=list(rules))
 
 
-def _allow_one(path: str, op: str, value, tool: str = "ha_call_service") -> Policy:
+def _allow_one(
+    path: str, op: PredicateOp, value, tool: str = "ha_call_service"
+) -> Policy:
     return _allow(Rule(tool_name=tool, when=[Predicate(path=path, op=op, value=value)]))
 
 
@@ -168,7 +170,7 @@ class TestAllowListWildcardIsUniversal:
 
     def test_empty_operations_list_needs_approval(self):
         policy = _allow(self.LIGHTS_ONLY)
-        args = {"operations": []}
+        args: dict[str, Any] = {"operations": []}
         assert evaluate("ha_bulk_control", args, policy) == Verdict.REQUIRE_APPROVAL
 
     def test_an_operation_without_the_field_needs_approval(self):
@@ -180,7 +182,7 @@ class TestAllowListWildcardIsUniversal:
             150,
             tool="ha_bulk_control",
         )
-        args = {
+        args: dict[str, Any] = {
             "operations": [
                 {
                     "entity_id": "light.a",
@@ -200,7 +202,7 @@ class TestAllowListWildcardIsUniversal:
         dim = _allow_one(
             "args.operations.*.parameters.*", "lt", 150, tool="ha_bulk_control"
         )
-        args = {
+        args: dict[str, Any] = {
             "operations": [
                 {
                     "entity_id": "light.a",
@@ -221,7 +223,7 @@ class TestAllowListWildcardIsUniversal:
                 when=[Predicate(path="args.operations.*.parameters", op="exists")],
             )
         )
-        args = {
+        args: dict[str, Any] = {
             "operations": [
                 {"entity_id": "light.a", "action": "on", "parameters": {}},
                 {"entity_id": "lock.front", "action": "unlock"},
@@ -274,7 +276,7 @@ class TestAllowListWildcardIsUniversal:
                 )
             ],
         )
-        args = {
+        args: dict[str, Any] = {
             "operations": [
                 {
                     "entity_id": "light.a",
@@ -339,7 +341,7 @@ class TestAllowListListArguments:
 
     def test_empty_list_needs_approval(self):
         policy = _allow_one("args.data.entity_id", "neq", "lock.x")
-        args = {"data": {"entity_id": []}}
+        args: dict[str, Any] = {"data": {"entity_id": []}}
         assert evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
 
     def test_whole_argument_object_can_be_approved_exactly(self):
@@ -426,8 +428,9 @@ class TestAllowListDispatch:
     def test_unknown_effect_fails_closed(self):
         # Validation rejects this value; evaluate() must not treat whatever
         # slips past as the permissive require-approval reading.
+        invalid_effect: Any = "Allow"
         policy = Policy.model_construct(
-            rule_effect="Allow", rules=[Rule(tool_name="ha_restart")]
+            rule_effect=invalid_effect, rules=[Rule(tool_name="ha_restart")]
         )
         assert evaluate("ha_get_state", {}, policy) == Verdict.REQUIRE_APPROVAL
 

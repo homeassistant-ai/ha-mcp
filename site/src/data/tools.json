@@ -180,7 +180,7 @@
   {
     "name": "ha_list_floors_areas",
     "title": "List Floors and Areas",
-    "description": "List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.\n\nUse for location-based reasoning where floor-to-area relationships matter, such as \"which rooms are on the ground floor\" or operations scoped to a level.\n\nFloors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.",
+    "description": "List floors in the order Home Assistant keeps them, each with their assigned areas nested, plus areas without a floor.\n\nUse for location-based reasoning where floor-to-area relationships matter, such as \"which rooms are on the ground floor\" or operations scoped to a level.\n\nha_set_area_or_floor(order=...) sets the order of the floors, and of the areas within each group. Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.",
     "inputSchema": {
       "properties": {
         "fields": {
@@ -191,7 +191,7 @@
         "area_fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Project each area record (in floors[].areas, unassigned_areas, and orphaned_areas) to only the specified keys. E.g. [\"area_id\", \"name\"] returns slim area records. None = full records. Unknown keys yield empty records. Available keys: area_id, name, icon, floor_id, aliases, picture, labels."
+          "description": "Project each area record (in floors[].areas, unassigned_areas, and orphaned_areas) to only the specified keys. E.g. [\"area_id\", \"name\"] returns slim area records. None = full records. Unknown keys yield empty records. Keys are those of Home Assistant's area registry row, e.g. floor_id."
         }
       }
     },
@@ -209,7 +209,7 @@
   {
     "name": "ha_remove_area_or_floor",
     "title": "Remove Area or Floor",
-    "description": "Remove a Home Assistant area or floor.\n\nRemoving an area unassigns its entities and devices (the entities and\ndevices themselves are not removed). Removing a floor unassigns its\nareas. May break automations referencing the removed area/floor.",
+    "description": "Remove a Home Assistant area or floor.\n\nRemoving an area unassigns its entities and devices (the entities and\ndevices themselves are not removed). Removing a floor unassigns its\nareas. May break automations referencing the removed area/floor. The\nauto-backup of this call restores the area or floor itself, not the\nentities, devices or areas it carried.",
     "inputSchema": {
       "properties": {
         "kind": {
@@ -239,8 +239,8 @@
   },
   {
     "name": "ha_set_area_or_floor",
-    "title": "Create or Update Area or Floor",
-    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture, labels, temperature_entity_id,\nhumidity_entity_id) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", labels=[\"site_home\"])\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", temperature_entity_id=\"sensor.kitchen_temp\", humidity_entity_id=None)\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
+    "title": "Create, Update or Reorder Areas or Floors",
+    "description": "Create, update or reorder Home Assistant areas or floors.\n\nPass kind='area' (with optional floor_id, picture, labels, temperature_entity_id,\nhumidity_entity_id) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\nPass order alone to set the order Home Assistant lists areas or floors in.\nA reorder is not covered by the auto-backup; its reply carries the order read just before it as previous_order.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", labels=[\"site_home\"])\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", temperature_entity_id=\"sensor.kitchen_temp\", humidity_entity_id=None)\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)\nha_set_area_or_floor(kind=\"floor\", order=[\"first_floor\", \"ground_floor\"])",
     "inputSchema": {
       "properties": {
         "kind": {
@@ -263,8 +263,7 @@
         },
         "level": {
           "type": "int | None",
-          "description": "Numeric level when kind='floor' (0=ground, 1=first, -1=basement).",
-          "default": null
+          "description": "Numeric level when kind='floor' (0=ground, 1=first, -1=basement; null to clear; omit to leave unchanged)."
         },
         "icon": {
           "type": "str | None",
@@ -291,6 +290,11 @@
         "humidity_entity_id": {
           "type": "str | None",
           "description": "Sensor the area reports humidity from, when kind='area' (a sensor.* entity with device_class humidity; null or empty string to clear). Omit to leave unchanged."
+        },
+        "order": {
+          "type": "str | list[str] | None",
+          "description": "Reorder the areas or floors of this kind: every existing id, in the new order; Core refuses a list that misses an existing id or names an unknown one.",
+          "default": null
         }
       },
       "required": [
@@ -663,7 +667,7 @@
   {
     "name": "ha_config_remove_calendar_event",
     "title": "Remove Calendar Event",
-    "description": "Delete an event from a calendar.\n\nDeletes a calendar event via the WebSocket ``calendar/event/delete``\ncommand. HA's calendar component only registers ``create_event`` and\n``get_events`` as REST services — delete and update live on the\nWebSocket API only. Get the event UID from\nha_config_get_calendar_events().\n\nEXAMPLES:\n- Delete a single event: ha_config_remove_calendar_event(\"calendar.family\", uid=\"event-12345\")\n- Delete one occurrence and all later ones: ha_config_remove_calendar_event(\"calendar.work\", uid=\"recurring-event-67890\", recurrence_id=\"20240115T100000\", recurrence_range=\"THISANDFUTURE\")",
+    "description": "Delete an event from a calendar.\n\nGet the event UID from ha_config_get_calendar_events().\n\nEXAMPLES:\n- Delete a single event: ha_config_remove_calendar_event(\"calendar.family\", uid=\"event-12345\")\n- Delete one occurrence and all later ones: ha_config_remove_calendar_event(\"calendar.work\", uid=\"recurring-event-67890\", recurrence_id=\"20240115T100000\", recurrence_range=\"THISANDFUTURE\")",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -704,7 +708,7 @@
   {
     "name": "ha_config_set_calendar_event",
     "title": "Create or Update Calendar Event",
-    "description": "Create a new event in a calendar, or update an existing one.\n\nCreates a one-off event via the calendar.create_event service, or a\nrecurring series via the WebSocket ``calendar/event/create`` command\nwhen ``rrule`` is provided (the REST service schema does not accept\nrecurrence rules). Passing ``uid`` switches to update mode, which uses\nthe WebSocket ``calendar/event/update`` command — HA registers no REST\nservice for updating an event.\n\n**When NOT to use:**\n- To retrieve calendar events, use ``ha_config_get_calendar_events``.\n- To delete an event, use ``ha_config_remove_calendar_event``.\n- To find the ``uid`` of an event to update, use\n  ``ha_config_get_calendar_events``; this tool does not search.\n\nPassing date-only values (``YYYY-MM-DD``) for both ``start`` and\n``end`` creates an all-day event; passing full ISO datetimes creates\na timed event. The two forms cannot be mixed — a date-only ``start``\nwith a datetime ``end`` (or vice versa) is rejected.\n\nAn update replaces the whole event rather than patching it, so\n``summary``, ``start`` and ``end`` stay required in update mode, and a\n``description`` or ``location`` that is not re-supplied is cleared.\nAn ``rrule`` is the exception: Home Assistant accepts a new rule but\nhas no way to express \"no recurrence\", so an existing rule survives an\nupdate that omits it. Delete the event and create it again to drop the\nrecurrence.\n\nNot every calendar integration supports event creation; recurring\nevents additionally require the integration to support recurrence\n(the built-in Local Calendar does). Update support is narrower still:\nLocal Calendar implements it, while the core Google Calendar and CalDAV\nintegrations do not.\n\nEXAMPLES:\n- Create: ha_config_set_calendar_event(\"calendar.family\", summary=\"Doctor appointment\", start=\"2024-01-15T14:00:00\", end=\"2024-01-15T15:00:00\")\n- Recurring (every Monday, 10 occurrences): ha_config_set_calendar_event(\"calendar.work\", summary=\"Team meeting\", start=\"2024-01-15T10:00:00\", end=\"2024-01-15T11:00:00\", rrule=\"FREQ=WEEKLY;BYDAY=MO;COUNT=10\")\n- Update this and all later occurrences: ha_config_set_calendar_event(\"calendar.work\", summary=\"Team meeting (new time)\", start=\"2024-02-05T11:00:00\", end=\"2024-02-05T12:00:00\", uid=\"recurring-event-67890\", recurrence_id=\"20240205T100000\", recurrence_range=\"THISANDFUTURE\")",
+    "description": "Create a new event in a calendar, or update an existing one.\n\nPassing ``uid`` switches to update mode.\n\n**When NOT to use:**\n- To retrieve calendar events, use ``ha_config_get_calendar_events``.\n- To delete an event, use ``ha_config_remove_calendar_event``.\n- To find the ``uid`` of an event to update, use\n  ``ha_config_get_calendar_events``; this tool does not search.\n\nPassing date-only values (``YYYY-MM-DD``) for both ``start`` and\n``end`` creates an all-day event; passing full ISO datetimes creates\na timed event. Home Assistant refuses a mix of the two.\n\nAn update replaces the whole event rather than patching it, so\n``summary``, ``start`` and ``end`` stay required in update mode, and a\n``description`` or ``location`` that is not re-supplied is cleared.\nAn ``rrule`` is the exception: Home Assistant accepts a new rule but\nhas no way to express \"no recurrence\", so an existing rule survives an\nupdate that omits it. Delete the event and create it again to drop the\nrecurrence.\n\nWhich writes a calendar accepts depends on its integration; Home\nAssistant refuses a create or update the calendar does not support,\nand its error says so.\n\nEXAMPLES:\n- Create: ha_config_set_calendar_event(\"calendar.family\", summary=\"Doctor appointment\", start=\"2024-01-15T14:00:00\", end=\"2024-01-15T15:00:00\")\n- Recurring (every Monday, 10 occurrences): ha_config_set_calendar_event(\"calendar.work\", summary=\"Team meeting\", start=\"2024-01-15T10:00:00\", end=\"2024-01-15T11:00:00\", rrule=\"FREQ=WEEKLY;BYDAY=MO;COUNT=10\")\n- Update this and all later occurrences: ha_config_set_calendar_event(\"calendar.work\", summary=\"Team meeting (new time)\", start=\"2024-02-05T11:00:00\", end=\"2024-02-05T12:00:00\", uid=\"recurring-event-67890\", recurrence_id=\"20240205T100000\", recurrence_range=\"THISANDFUTURE\")",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -740,7 +744,7 @@
         },
         "uid": {
           "type": "str | None",
-          "description": "UID of an existing event to update. Omit to create a new event.",
+          "description": "UID of an existing event to update; omit to create one.",
           "default": null
         },
         "recurrence_id": {
@@ -1052,7 +1056,7 @@
   {
     "name": "ha_config_list_dashboard_resources",
     "title": "List Dashboard Resources",
-    "description": "List Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns one page of registered resources; `total_count` and `has_more`\nreport the full set, and `inline_count` and `by_type` summarise every\nresource, not just this page. Each resource has a unique ID for\nupdate/delete operations. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the\ncontent instead of the full encoded URL to save tokens.\n`resource_mode` is Core's lovelace resource mode; in 'yaml' mode\nresources cannot be created, updated or deleted through the API.\n\nEXAMPLES:\n- Next page: ha_config_list_dashboard_resources(offset=100)\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n- Verify an edit by hash: ha_config_list_dashboard_resources(include_hash=True)\n\nHome Assistant 2026.6+ exposes resource management in the UI by default;\nAPI access works regardless of UI availability.",
+    "description": "List Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns one page of registered resources; `total_count` and `has_more`\nreport the full set, and `inline_count` and `by_type` summarise every\nresource, not just this page. Each resource has a unique ID for\nupdate/delete operations. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the\ncontent instead of the full encoded URL to save tokens.\n`resource_mode` is Core's lovelace resource mode; in 'yaml' mode\nresources cannot be created, updated or deleted through the API.\n\nEXAMPLES:\n- Next page: ha_config_list_dashboard_resources(offset=100)\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n- Verify an edit by hash: ha_config_list_dashboard_resources(include_hash=True)\n\nHome Assistant exposes resource management in the UI by default;\nAPI access works regardless of UI availability.",
     "inputSchema": {
       "properties": {
         "include_content": {
@@ -1182,7 +1186,7 @@
   {
     "name": "ha_config_set_dashboard_resource",
     "title": "Set Dashboard Resource",
-    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- edits: Search/replace edits on an existing inline resource. Any\n  failing edit (or a config_hash mismatch) aborts the whole call\n  and saves nothing. Prefer this over content= for small changes to a\n  large card: only the changed text is sent.\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only; URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (/config/www/; Marketplace\n  cards: /local/community/...), /hacsfiles/... (HACS cards) or\n  https://... (CDN). Supports all types: 'module', 'js', 'css', 'html'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n- Patch: ha_config_set_dashboard_resource(resource_id=\"abc123\", edits=[{\"old\": \"color: red\", \"new\": \"color: blue\"}], config_hash=\"<_config_hash from the list>\")\n\nInline writes return the stored content's config_hash.\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
+    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- edits: Search/replace edits on an existing inline resource. Any\n  failing edit (or a config_hash mismatch) aborts the whole call\n  and saves nothing. Prefer this over content= for small changes to a\n  large card: only the changed text is sent.\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only; URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (/config/www/; Marketplace\n  cards: /local/community/...), /hacsfiles/... (the older path\n  for the same folder) or https://... (CDN). Supports all types:\n  'module', 'js', 'css', 'html'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- Store cards need no call: in storage mode the Marketplace registers the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n- Patch: ha_config_set_dashboard_resource(resource_id=\"abc123\", edits=[{\"old\": \"color: red\", \"new\": \"color: blue\"}], config_hash=\"<_config_hash from the list>\")\n\nInline writes return the stored content's config_hash.\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
     "inputSchema": {
       "properties": {
         "content": {
@@ -1235,7 +1239,7 @@
   {
     "name": "ha_dev_manage_server",
     "title": "Manage MCP Server (dev)",
-    "description": "Manage the running ha-mcp server itself (developer mode).\n\nWhen NOT to use: to restart Home Assistant use ha_restart; to\nupdate Home Assistant Apps (add-ons) or HACS packages use\nha_manage_app / ha_manage_hacs.\n\nCaveats: update_source changes ONLY the ha_mcp_tools custom\ncomponent's separate in-process server entry — it never updates\nthe app (add-on), Docker, standalone, or PyPI server that may be\nserving this connection (update those via ha_manage_app /\ndocker pull / pip). In embedded mode that entry IS this server,\nso the update self-interrupts; elsewhere this connection is\nuntouched and keeps its current version. Success means the\nentry's options were applied — the component then reinstalls in\nthe background, which can take minutes and can still fail\n(check HA logs). update_source requires the component's\nin-process server entry to exist. restart interrupts this MCP\nconnection in embedded and app deployments (the reply\narrives just before the server goes down) and supports those\ntwo deployments only (standalone processes must be restarted\nexternally). approve/deny require the separate\n'dev_tools_security_policy_access' setting, off by default.\n\nEXAMPLES:\nha_dev_manage_server(\"update_source\", pip_spec=\"https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz\")\nha_dev_manage_server(\"update_source\", pip_spec=\"clear\")\nha_dev_manage_server(\"approve\", token=\"abc123\")",
+    "description": "Manage the running ha-mcp server itself (developer mode).\n\nWhen NOT to use: to restart Home Assistant use ha_restart; to\nupdate Home Assistant Apps (add-ons) or Marketplace repositories use\nha_manage_app / ha_manage_hacs.\n\nCaveats: update_source changes ONLY the ha_mcp_tools custom\ncomponent's separate in-process server entry — it never updates\nthe app (add-on), Docker, standalone, or PyPI server that may be\nserving this connection (update those via ha_manage_app /\ndocker pull / pip). In embedded mode that entry IS this server,\nso the update self-interrupts; elsewhere this connection is\nuntouched and keeps its current version. Success means the\nentry's options were applied — the component then reinstalls in\nthe background, which can take minutes and can still fail\n(check HA logs). update_source requires the component's\nin-process server entry to exist. restart interrupts this MCP\nconnection in embedded and app deployments (the reply\narrives just before the server goes down) and supports those\ntwo deployments only (standalone processes must be restarted\nexternally). approve/deny require the separate\n'dev_tools_security_policy_access' setting, off by default.\n\nEXAMPLES:\nha_dev_manage_server(\"update_source\", pip_spec=\"https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz\")\nha_dev_manage_server(\"update_source\", pip_spec=\"clear\")\nha_dev_manage_server(\"approve\", token=\"abc123\")",
     "inputSchema": {
       "properties": {
         "action": {
@@ -1559,7 +1563,7 @@
   {
     "name": "ha_get_entity",
     "title": "Get Entity",
-    "description": "Get entity registry information for one or more entities.\n\nReturns detailed entity registry metadata: area, custom name/icon,\noriginal name, disabled_by/hidden_by (with enabled/hidden shorthands),\naliases (a null entry = the entity's own name), labels, categories,\ndevice_class override, per-domain options, platform, device_id,\nconfig_entry_id and unique_id.\n\nRESOLVER MODE:\nPass unique_id (instead of entity_id) to resolve a stable integration\nunique_id to its entity_id(s). Since the registry's unique key is\n(domain, platform, unique_id), the same unique_id can match multiple\nplatforms — all matches are returned in entity_entries with a `matches`\ncount. Narrow with domain/platform. Resolver reads as_partial_dict, so\naliases and the device_class override come back as defaults ([]/null).\n\nWhen config_entry_id is non-null — e.g. for UI-created template / group /\nutility_meter / derivative helpers — pass it to\n``ha_get_integration(entry_id=..., include_options=True)`` to read the\nhelper's current config (template body, group members, etc.) without\nscanning a domain list. Voice-assistant exposure is stored under options\nbut is set via ha_set_entity(expose_to=...).\n\nResolved-name enrichment (present only when the ha_mcp_tools component\nadvertises it; otherwise these keys are absent): `area` (assigned area\nNAME, device-inherited when the entity has none), `floor`, and\n`label_names`. This tool's base `labels` carries the label ids;\nha_search result_fields and ha_get_entity_exposure instead emit the\nresolved names under `labels`.\n\nRELATED TOOLS: ha_set_entity() to modify these properties; ha_get_state()\nfor current state/attributes; ha_search() to find entities.\n\nEXAMPLES:\n- Single entity: ha_get_entity(\"sensor.temperature\")\n- Multiple entities: ha_get_entity([\"light.living_room\", \"switch.porch\"])\n- Resolve a unique_id: ha_get_entity(unique_id=\"00:11:22:33\", domain=\"sensor\")",
+    "description": "Get entity registry entries, or without an entity the registry settings and exposed entities.\n\nReturns each entry as Home Assistant's entity registry serves it\n(`config/entity_registry/get` / `get_entries`): area_id, name override,\noriginal_name, icon, disabled_by/hidden_by, aliases (a null alias is the\nentity's own name), labels, categories, device_class, capabilities,\nentity_category, per-domain options, platform, device_id,\nconfig_entry_id, unique_id and `next_name_part`. An entity with a\ndevice_id and no name of its own (`name: \"\"`, or `name: null` with no\n`original_name`) is the main entity of its device (the dialog's \"Main\nentity of the device\" switch). Plus the enrichment keys below.\n\nRESOLVER MODE:\nPass unique_id to resolve it to its entity_id(s). Since the registry's\nunique key is (domain, platform, unique_id), the same unique_id can match\nmultiple platforms — all matches are returned in entity_entries with a\n`matches` count. Narrow with domain/platform.\n\nWhen config_entry_id is non-null — e.g. for UI-created template / group /\nutility_meter / derivative helpers — pass it to\n``ha_get_integration(entry_id=..., include_options=True)`` to read the\nhelper's current config (template body, group members, etc.) without\nscanning a domain list.\n\nResolved-name enrichment on an entity_id or unique_id lookup, served by the\nha_mcp_tools component (absent without it, and a warning says which\nfields are missing and whether to install or update the component):\n`full_name` (the name Home Assistant shows, composed from the parent\ndevice, device and entity names; null when it has none),\n`area` (assigned area NAME, device-inherited when the entity has none),\n`floor`, and `label_names`. This tool's base `labels` carries the label ids;\nha_search result_fields and the exposure listing's `entity_info`\ninstead emit the resolved names under `labels`.\n\nVOICE ASSISTANT EXPOSURE:\nAn entity with a registry entry keeps its exposure in the entry's\n`options` (`options.<assistant>.should_expose`; absent while nothing is\nstored); ha_set_entity(expose_to=...) sets it. An entity without a\nregistry entry that has a state, or is stored as exposed, returns\n`entity_entry: null` with `exposed_to` (the assistants Home Assistant has\nstored as exposed) and\n`is_exposed_anywhere`; a list call returns such entities under\n`unregistered_entities`.\n\nWITHOUT entity_id AND unique_id: returns the registry-wide state:\n`settings` (Home Assistant's `config/entity_registry/settings/get`:\n`entity_id_parts`, the name parts new entity IDs are built from, null\nfor Home Assistant's default) and `exposed_entities`, the entities\nexposed to at least one voice assistant as Home Assistant's\n`expose_entity/list` map, with `count` and a per-assistant `summary`\n(an assistant with no exposed entity is left out). An entity missing\nfrom that map is not stored as exposed: either it is stored as not\nexposed, or nothing is stored yet and Home Assistant applies its own\ndefault when an assistant first asks (it depends on the assistant's\nexpose-new-entities flag and on the entity). When the ha_mcp_tools\ncomponent advertises it, `entity_info` names each listed entity:\ndomain, area, floor and labels (plus friendly_name and state when it\nhas a state). Without it the listing has no `entity_info`, and a\nwarning says whether to install or update the component.\n\nRELATED TOOLS: ha_set_entity() to modify these properties; ha_get_state()\nfor current state/attributes; ha_search() to find entities.\n\nEXAMPLES:\n- Single entity: ha_get_entity(\"sensor.temperature\")\n- Multiple entities: ha_get_entity([\"light.living_room\", \"switch.porch\"])\n- Resolve a unique_id: ha_get_entity(unique_id=\"00:11:22:33\", domain=\"sensor\")\n- Entities exposed to Alexa: ha_get_entity(exposed_to=\"cloud.alexa\")\n- Registry settings and all exposed entities: ha_get_entity()",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -1581,6 +1585,11 @@
           "type": "str | None",
           "description": "Resolver filter (unique_id mode only): restrict matches to this integration platform, e.g. 'hue'.",
           "default": null
+        },
+        "exposed_to": {
+          "type": "str | None",
+          "description": "Without entity_id and unique_id: list only the entities exposed to this voice assistant, an ID Home Assistant knows (today 'conversation', 'cloud.alexa', 'cloud.google_assistant'). Adds `assistant` and its `expose_new_entities` flag; leaves out `summary`.",
+          "default": null
         }
       }
     },
@@ -1594,35 +1603,6 @@
       "Entity Registry"
     ],
     "source_file": "tools_entities.py"
-  },
-  {
-    "name": "ha_get_entity_exposure",
-    "title": "Get Entity Exposure",
-    "description": "Get entity exposure settings - list all or get settings for a specific entity.\n\nWithout an entity_id: lists the entities that have explicit exposure\nsettings for voice assistants (Alexa, Google Assistant, Assist) as\n`exposed_entities`, plus a per-assistant `summary` count. An entity absent\nfrom that list uses the default exposure settings.\n\nWith an entity_id: returns `exposed_to` (assistant -> True/False from the\nentity's explicit settings), `is_exposed_anywhere`, and\n`has_custom_settings`. When has_custom_settings is False the defaults\napply and exposed_to is all False; the default values themselves are\nnot computed.\n\nEXAMPLES:\n- Filter by assistant: ha_get_entity_exposure(assistant=\"cloud.alexa\")\n- Get specific entity: ha_get_entity_exposure(entity_id=\"light.living_room\")\n\nWhen the ha_mcp_tools component advertises the exposure capability, each\nrecord is additively enriched with the entity's name/area so no second\nha_search is needed to identify it: friendly_name, domain, area, floor,\nand labels (plus state for entities that have one) on a single-entity\nlookup, and a parallel entity_info map keyed by entity_id when listing.\nThese fields are absent when the component is unavailable.",
-    "inputSchema": {
-      "properties": {
-        "entity_id": {
-          "type": "str | None",
-          "description": "Entity ID to check exposure settings for.",
-          "default": null
-        },
-        "assistant": {
-          "type": "str | None",
-          "description": "Filter by assistant: 'conversation', 'cloud.alexa', or 'cloud.google_assistant'.",
-          "default": null
-        }
-      }
-    },
-    "annotations": {
-      "readOnlyHint": true,
-      "destructiveHint": false,
-      "idempotentHint": true,
-      "openWorldHint": false
-    },
-    "tags": [
-      "Entity Registry"
-    ],
-    "source_file": "tools_voice_assistant.py"
   },
   {
     "name": "ha_remove_entity",
@@ -1653,12 +1633,13 @@
   {
     "name": "ha_set_entity",
     "title": "Set Entity",
-    "description": "Update entity properties in the entity registry.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, \"Show As\" device class override, per-domain registry options,\nenabled/disabled state, visibility, aliases, labels, voice assistant\nexposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.\n\nSHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload\nneeded.\n\nREGISTRY OPTIONS: multi-domain options are sent as separate registry\nupdates because HA's WS schema requires options_domain + options to be\npaired one domain at a time.\n\nENTITY ID RENAME: Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitations:\n- Entity history is preserved (HA 2022.4+)\n- Entities without unique IDs cannot be renamed\n- Entities disabled by their integration cannot be renamed\n\nDEVICE RENAME:\nnew_device_name can be combined with new_entity_id to rename both in one\ncall. The device is looked up automatically.\n\nUse ha_search() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Set Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"window\")\n- Set sensor precision: ha_set_entity(\"sensor.power\", options={\"sensor\": {\"display_precision\": 2}})\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nENABLED/DISABLED WARNING:\nA disabled entity will NOT appear in state queries, dashboards, or\nautomations until re-enabled AND the integration is reloaded. This is\nNOT the same as \"turning off\" an entity.\n\nFor automations and scripts, enabled=False is blocked. For automations,\nuse ha_config_set_automation(entity_id=\"automation.xxx\", enabled=False)\n(or enabled=True to re-enable).\nFor scripts, ha_config_set_script(script_id=\"script.xxx\", run=\"stop\")\nonly stops a currently running execution; it does not disable the script.\nHome Assistant has no script runtime enable/disable service.",
+    "description": "Update entity registry entries, or without entity_id the registry-wide settings.\n\nAllows modifying entity metadata such as area assignment, display name,\nicon, \"Show As\" device class override, per-domain registry options,\nenabled/disabled state, visibility, aliases, labels, voice assistant\nexposure, and entity_id rename in a single call.\n\nBULK OPERATIONS:\nWhen entity_id is a list, only labels, expose_to, and categories parameters are supported.\nOther parameters (area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.\n\nSHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload\nneeded.\n\nREGISTRY OPTIONS: multi-domain options are sent as separate registry\nupdates because HA's WS schema requires options_domain + options to be\npaired one domain at a time.\n\nENTITY ID RENAME: Voice exposure settings are preserved automatically.\n\nWARNING: Renaming an entity_id does NOT update references in automations,\nscripts, templates, or dashboards. All consumers of the old entity_id must\nbe updated manually — HA does not propagate the rename automatically.\n\nRename limitation: an entity without a unique ID cannot be renamed.\n\nREGISTRY-WIDE SETTINGS: for the parameters sent, the reply has Home\nAssistant's `settings`, the `expose_new_entities` written, and the values\nthey replace\n(`previous_settings`, `previous_expose_new_entities`). ha_get_entity()\nreads them.\n\nUse ha_search() or ha_get_device() to find entity IDs.\nUse ha_config_get_label() to find available label IDs.\n\nEXAMPLES:\n- Assign to area: ha_set_entity(\"sensor.temp\", area_id=\"living_room\")\n- Set Show As: ha_set_entity(\"binary_sensor.zone_10\", device_class=\"window\")\n- Set sensor precision: ha_set_entity(\"sensor.power\", options={\"sensor\": {\"display_precision\": 2}})\n- Stop exposing new entities to Alexa: ha_set_entity(expose_new_entities={\"cloud.alexa\": false})\n- Rename entity and device: ha_set_entity(\"light.old\", new_entity_id=\"light.new\", new_device_name=\"New Lamp\")\n- Add labels to multiple: ha_set_entity([\"light.a\", \"light.b\"], labels=[\"new\"], label_operation=\"add\")\n- Expose to Alexa: ha_set_entity(\"light.lamp\", expose_to={\"cloud.alexa\": True})\n\nAUTOMATIONS AND SCRIPTS:\nFor automations and scripts, enabled=False is blocked. For automations,\nuse ha_config_set_automation(entity_id=\"automation.xxx\", enabled=False)\n(or enabled=True to re-enable).\nFor scripts, ha_config_set_script(script_id=\"script.xxx\", run=\"stop\")\nonly stops a currently running execution; it does not disable the script.\nHome Assistant has no script runtime enable/disable service.",
     "inputSchema": {
       "properties": {
         "entity_id": {
-          "type": "str | list[str]",
-          "description": "Entity ID or list of entity IDs to update."
+          "type": "str | list[str] | None",
+          "description": "Entity ID or list of entity IDs to update. Omit only for the registry-wide expose_new_entities and entity_id_parts.",
+          "default": null
         },
         "area_id": {
           "type": "str | None",
@@ -1667,12 +1648,12 @@
         },
         "name": {
           "type": "str | None",
-          "description": "Display name for the entity. Use empty string '' to remove custom name and revert to default. A whitespace-only value acts like '', for clients that cannot send an empty string.",
+          "description": "The entity's own name part, not the full name. Use empty string '' to remove the custom name and revert to default. A whitespace-only value acts like '', for clients that cannot send an empty string.",
           "default": null
         },
         "use_device_name": {
           "type": "bool | None",
-          "description": "HA 2026.10's 'Use device name' switch. True names the entity after its device and follows device renames; False restores the integration's default name. Omit to leave it as is; not combinable with name.",
+          "description": "The entity dialog's 'Main entity of the device' switch. True names the entity after its device, following device renames, and like the dialog moves it from its own area to the device's. An entity without a name of its own already is the main entity and is left as is. False restores the integration's default name. Omit to leave it as is; not combinable with name.",
           "default": null
         },
         "icon": {
@@ -1687,12 +1668,12 @@
         },
         "options": {
           "type": "dict[str, dict[str, Any]] | None",
-          "description": "Per-domain entity registry options (e.g. sensor 'display_precision', weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, e.g. {\"sensor\": {\"display_precision\": 2}}. Multiple domains are sent as separate registry updates. For 'Show As' use device_class; for voice-assistant exposure use expose_to, not options.<assistant>.should_expose.",
+          "description": "Per-domain entity registry options (e.g. sensor 'display_precision', weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, e.g. {\"sensor\": {\"display_precision\": 2}}. For 'Show As' use device_class; for voice-assistant exposure use expose_to, not options.<assistant>.should_expose.",
           "default": null
         },
         "enabled": {
           "type": "bool | None",
-          "description": "True to enable the entity, False to disable it. WARNING: Setting enabled=False is a registry-level disable — it completely removes the entity from the state machine and hides it from the UI. A reload or restart is required to restore it after re-enabling.",
+          "description": "True to enable the entity, False to disable it. WARNING: enabled=False is a registry-level disable, not 'turning off': the entity leaves the state machine, the UI, dashboards and automations. Re-enabling returns Home Assistant's own answer: require_restart, or reload_delay (seconds until it reloads the integration itself).",
           "default": null
         },
         "hidden": {
@@ -1727,23 +1708,30 @@
         },
         "expose_to": {
           "type": "dict[str, bool] | None",
-          "description": "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. Valid assistants: 'conversation' (Assist), 'cloud.alexa', 'cloud.google_assistant'. Example: {\"conversation\": true, \"cloud.alexa\": false}.",
+          "description": "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. Assistant IDs Home Assistant knows, today 'conversation' (Assist), 'cloud.alexa' and 'cloud.google_assistant'; it refuses any other name before any change is sent to it. Example: {\"conversation\": true, \"cloud.alexa\": false}. An entity without a registry entry is written under the id Home Assistant reads it by and answers with entity_entry null; an id Home Assistant does not know is refused before anything is written.",
+          "default": null
+        },
+        "expose_new_entities": {
+          "type": "dict[str, bool] | None",
+          "description": "Registry-wide, no entity_id: each assistant's 'Expose new entities' switch, as a dict mapping assistant IDs to booleans (e.g. {\"cloud.alexa\": false}). Home Assistant refuses an assistant it does not know before any change is sent.",
+          "default": null
+        },
+        "entity_id_parts": {
+          "type": "list[str] | None",
+          "description": "Registry-wide, no entity_id: the name parts new entity IDs are built from, in order. Home Assistant judges the list; today it takes 'area', 'floor', 'parent_device', 'device' and 'entity', and requires 'device' and 'entity'. [] restores Home Assistant's default.",
           "default": null
         },
         "new_entity_id": {
           "type": "str | None",
-          "description": "New entity ID to rename to (e.g., 'light.new_name'). Domain must match the original.",
+          "description": "New entity ID to rename to (e.g., 'light.new_name'); the domain must stay the same. 'auto' takes the ID Home Assistant would generate for the entity now, like the UI's Restore entity ID (no rename when the entity already has it).",
           "default": null
         },
         "new_device_name": {
           "type": "str | None",
-          "description": "New display name for the associated device. If provided, both entity and device are updated in one operation. Empty or whitespace-only never changes the device name: it is reported under warnings when other fields are given and is an error when it is the only update. To clear the device name use ha_set_device(name='').",
+          "description": "New display name for the associated device. An entity_id Home Assistant does not know is refused; an entity without a device gets a warning. Empty or whitespace-only never changes the device name: it is reported under warnings when other fields are given and is an error when it is the only update. To clear the device name use ha_set_device(name='').",
           "default": null
         }
-      },
-      "required": [
-        "entity_id"
-      ]
+      }
     },
     "annotations": {
       "readOnlyHint": false,
@@ -1915,7 +1903,7 @@
   {
     "name": "ha_config_list_groups",
     "title": "List Groups",
-    "description": "List Home Assistant entity groups with their member entities.\n\nReturns one page of old-style groups created via the group.set service\nor YAML configuration (platform-specific groups such as light or cover\ngroups are separate entities); `total_count` and `has_more` report the\nfull set. Each group carries Core's state fields and attributes, its\nmembers as `entity_ids`, and its object_id. `auto` is true for a group\ncreated by ha_config_set_group (group.set) and false for a YAML group.\nCore does not expose a group's all/any mode.\n\nEXAMPLE: ha_config_list_groups(offset=100)",
+    "description": "List Home Assistant entity groups with their member entities.\n\nReturns one page of old-style groups created via the group.set service\nor YAML configuration (platform-specific groups such as light or cover\ngroups are separate entities); `total_count` and `has_more` report the\nfull set. Each group carries Core's state fields and attributes, its\nmembers as `entity_ids`, and its object_id. `auto` is true for a group\ncreated by ha_config_set_group (group.set) and false for a YAML group.\nCore does not expose a group's all/any mode.\nWithout the ha_mcp_tools component, `last_reported` comes from Core's\nREST API, can lag the live time, and the reply says so.\n\nEXAMPLE: ha_config_list_groups(offset=100)",
     "inputSchema": {
       "properties": {
         "limit": {
@@ -2042,27 +2030,37 @@
   },
   {
     "name": "ha_get_hacs_info",
-    "title": "Get HACS Info",
-    "description": "Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.\n\nOn Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool\nuses whichever the instance has. Use ``action=\"search\"`` to\nsearch/browse/list store repositories, or ``action=\"info\"`` for one\nrepository's full details as the store reports them (the README is in\n``additional_info``). This tool is read-only; to install or add\nrepositories use ``ha_manage_hacs``, and for non-HACS entities/config use\nthe domain-specific tools.\n\n**DASHBOARD TIP:** ``action=\"search\", installed_only=True, category=\"lovelace\"``\ndiscovers installed custom cards to wire into ``ha_config_set_dashboard()``.\n\n**Examples:**\n- Search the store: ha_get_hacs_info(action=\"search\", query=\"mushroom\", category=\"lovelace\")\n- List installed: ha_get_hacs_info(action=\"search\", installed_only=True)\n- Repository details: ha_get_hacs_info(action=\"info\", repository_id=\"441028036\")\n- Before an update: ha_get_hacs_info(action=\"info\", repository_id=\"owner/repo\", include_releases=True)\n\n**Caveats:** ``info`` fetches full repository detail from GitHub, so it can hit GitHub\nrate limits without a connected GitHub account; ``search`` reads the locally cached\nrepository index.",
+    "title": "Get Marketplace Info",
+    "description": "Get data from Home Assistant's Marketplace, what HACS became in 2026.11.\n\nThis tool only reads; to install, update, add or forget repositories\nuse ``ha_manage_hacs``. Use ``search`` to browse, filter or list\ninstalled repositories: it filters and pages the store's own list, in\nthe order Core lists it. Use ``info`` for one\nrepository's full record as the store sends it (the README is\n``additional_info``).\n\n**DASHBOARD TIP:** ``action=\"search\", installed_only=True, category=\"lovelace\"``\nfinds installed custom cards to wire into ``ha_config_set_dashboard()``.\n\n**Examples:**\n- Search: ha_get_hacs_info(action=\"search\", query=\"mushroom\", category=\"lovelace\")\n- Updates waiting: ha_get_hacs_info(action=\"search\", status=[\"pending-upgrade\"])\n- Details before an update: ha_get_hacs_info(action=\"info\", repository_id=\"owner/repo\", include_releases=True)\n- Before adding a repository: ha_get_hacs_info(action=\"detect\", repository=\"owner/repo\")\n\n**Caveats:** ``info`` marks the repository as seen (Core clears its\n``new`` flag) and may fetch it from GitHub. ``detect`` needs the\naccepted first-run warning and a connected GitHub account.\n``download_source`` opens and ends the Marketplace entry's options\nflow, as the panel's \"Download source\" does.",
     "inputSchema": {
       "properties": {
         "action": {
-          "type": "Literal['search', 'info']",
-          "description": "'search' the store, or 'info' for one repository"
+          "type": "Literal['search', 'info', 'removed', 'critical', 'detect', 'download_source']",
+          "description": "'search' the store's repositories, 'info' for one repository, 'removed' for repositories the catalog removed, 'critical' for those it marks critical, 'detect' for the categories a GitHub repository's content fits, 'download_source' for the sources the Marketplace can download from and the one in use"
         },
         "query": {
           "type": "str",
-          "description": "Search keyword (action='search')",
+          "description": "Words that must each appear in a row (action='search': name, full_name, description, authors, topics, category, domain, status and versions; action='removed': repository, reason, removal_type), case-insensitive",
           "default": ""
         },
         "category": {
           "type": "str | None",
-          "description": "Filter by category (action='search'). One of the categories the store reports (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
+          "description": "Only this category (action='search'). One of the Marketplace's categories (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
+          "default": null
+        },
+        "status": {
+          "type": "list[str] | str | None",
+          "description": "Only rows whose store status is one of these (action='search'), e.g. 'installed', 'pending-upgrade', 'pending-restart', 'new'; an installed row waiting for an update or a restart has that status, so use installed_only for every installed row",
+          "default": null
+        },
+        "source": {
+          "type": "Literal['catalog', 'custom'] | None",
+          "description": "Only catalog repositories or only custom ones added by link (action='search')",
           "default": null
         },
         "installed_only": {
           "type": "bool",
-          "description": "Only return installed repositories (action='search')",
+          "description": "Only installed repositories (action='search')",
           "default": false
         },
         "max_results": {
@@ -2071,7 +2069,7 @@
             "ge": 1,
             "le": 100
           },
-          "description": "Maximum number of results (action='search')",
+          "description": "Rows per page (action='search' / 'removed')",
           "default": 10
         },
         "offset": {
@@ -2079,18 +2077,23 @@
           "constraints": {
             "ge": 0
           },
-          "description": "Results to skip for pagination (action='search')",
+          "description": "Rows to skip (action='search' / 'removed')",
           "default": 0
         },
         "repository_id": {
           "type": "str | None",
-          "description": "Numeric HACS ID or 'owner/repo' path (action='info')",
+          "description": "The repository's numeric Marketplace id or its 'owner/repo' name, which is looked up in the store's list (action='info')",
           "default": null
         },
         "include_releases": {
           "type": "bool",
-          "description": "Add the repository's GitHub releases and the release notes of versions newer than the installed one (action='info')",
+          "description": "Add the repository's GitHub releases, and with an upgrade pending the release notes of its update entity (action='info')",
           "default": false
+        },
+        "repository": {
+          "type": "str | None",
+          "description": "'owner/repo' or a GitHub URL (action='detect')",
+          "default": null
         }
       },
       "required": [
@@ -2110,42 +2113,67 @@
   },
   {
     "name": "ha_manage_hacs",
-    "title": "Manage HACS",
-    "description": "Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.\n\nOn Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool\nuses whichever the instance has. This tool performs writes; to search the\nstore or read repository details use ``ha_get_hacs_info``. Use\n``action=\"update_information\"`` to run the HACS UI's \"Update information\"\naction (\"Refresh information\" in the Marketplace) — a forced re-fetch of\none repository's release data from GitHub, so a pending update becomes\nvisible to the store and its update entity immediately.\n\n**Examples:**\n- Install latest: ha_manage_hacs(action=\"download\", repository_id=\"441028036\")\n- Install a version: ha_manage_hacs(action=\"download\", repository_id=\"piitaya/lovelace-mushroom\", version=\"v4.0.0\")\n- Remove: ha_manage_hacs(action=\"remove\", repository_id=\"owner/repo\")\n- Add a custom repo: ha_manage_hacs(action=\"add_repository\", repository=\"owner/repo\", category=\"lovelace\")\n- Refresh release data: ha_manage_hacs(action=\"update_information\", repository_id=\"owner/repo\")\n- Accept the Marketplace warning: ha_manage_hacs(action=\"accept_warning\", confirm=True)\n\n**Caveats:** Installing an integration usually needs a Home Assistant restart to\nactivate; new Lovelace cards need a browser cache clear. ``add_repository`` requires ``owner/repo``\nformat plus a matching ``category``. Removing an integration deletes its files but\nthe loaded module persists until the next Home Assistant restart — delete its config\nentries first (``ha_remove_helpers_integrations``). HACS refreshes custom\nrepositories on its own only about every 48 hours (the Marketplace only with a\nconnected GitHub account), so ``update_information`` is the way to surface a\njust-published release. The Marketplace refuses installs until the user this server\nconnects as has accepted its first-run warning; Home Assistant keeps that per user,\nso the user's own acceptance in the UI does not cover this server. Ask the user\nwhether they have read it (Settings > Marketplace) and accept it before\n``accept_warning``. Adding a repository needs a GitHub account the user connects in\nthe Marketplace panel.",
+    "title": "Manage Marketplace",
+    "description": "Manage Home Assistant's Marketplace (what HACS became in 2026.11): install, update, remove and add repositories.\n\nThis tool writes; to search the store or read a repository use\n``ha_get_hacs_info``. Use ``update_information`` to surface a\njust-published release: on its own the Marketplace re-reads an\ninstalled custom repository only every 48 hours, and only with a\nconnected GitHub account; catalog repositories follow the catalog,\nwhich it refreshes every 6 hours without one.\n\n**Examples:**\n- Install the latest: ha_manage_hacs(action=\"download\", repository_id=\"441028036\")\n- Install a version: ha_manage_hacs(action=\"download\", repository_id=\"piitaya/lovelace-mushroom\", version=\"v4.0.0\")\n- Add a custom repository: ha_manage_hacs(action=\"add_repository\", repository=\"owner/repo\")\n- Read a repository at another version, installing nothing: ha_manage_hacs(action=\"set_version\", repository_id=\"owner/repo\", version=\"v1.2.0\")\n- Accept the warning: ha_manage_hacs(action=\"accept_warning\", confirm=True)\n- Connect GitHub: ha_manage_hacs(action=\"connect_github\"), then again with\n  the flow_id it returns for the URL and code the user enters on GitHub,\n  then again with flow_id once they did, for the outcome\n- Change the download source: ha_manage_hacs(action=\"set_download_source\")\n  returns the form and flow_id; once the user chose, call again with\n  flow_id and config={\"profile\": \"<their choice>\"}\n\n**Caveats:** An installed integration loads after a Home Assistant\nrestart, and a new dashboard card after a browser cache clear. The\nMarketplace refuses to uninstall an integration while it has config\nentries. Installs, version and beta changes, and adding or detecting\na repository wait for the first-run warning, which Home Assistant\nkeeps per user, so the user's own acceptance in the UI does not cover\nthis server: ask whether they read it (Settings > Marketplace) before\n``accept_warning``. Adding and detecting a repository also need a\nconnected GitHub account. A saved download source reloads the\nMarketplace, and the call waits for it.",
     "inputSchema": {
       "properties": {
         "action": {
-          "type": "Literal['download', 'add_repository', 'remove', 'update_information', 'accept_warning']",
-          "description": "'download' to install/update, 'add_repository' to register a custom repo, 'remove' to uninstall a downloaded repo, 'update_information' to refresh a repository's release data from GitHub, or 'accept_warning' to accept the Marketplace's first-run warning for the user this server connects as"
+          "type": "Literal['download', 'remove', 'add_repository', 'remove_repository', 'update_information', 'set_version', 'set_beta', 'ignore', 'clear_new', 'acknowledge_critical', 'connect_github', 'set_download_source', 'accept_warning']",
+          "description": "'download' installs or updates; 'remove' uninstalls; 'add_repository' adds a custom repository; 'remove_repository' forgets a custom one that is not installed; 'update_information' re-reads a repository from GitHub; 'set_version' selects the tag or branch the Marketplace reads the repository at and installs nothing (the default branch clears the selection, and the next download without version resets it; to install a version pass version to 'download'); 'set_beta' shows or hides prereleases; 'ignore' hides a repository's removal notice (the store has no un-ignore); 'clear_new' clears the new flag; 'acknowledge_critical' confirms a critical removal was seen; 'connect_github' runs the GitHub sign-in one step per call; 'set_download_source' picks where the Marketplace downloads from, one step per call; 'accept_warning' accepts the first-run warning for the user this server connects as"
         },
         "repository_id": {
           "type": "str | None",
-          "description": "Numeric HACS ID or 'owner/repo' path (action='download' / 'remove' / 'update_information')",
+          "description": "The repository's numeric Marketplace id or its 'owner/repo' name, which is looked up in the store's list (action='download', 'remove', 'remove_repository', 'update_information', 'set_version', 'set_beta', 'ignore'; 'clear_new' instead of categories)",
           "default": null
         },
         "version": {
           "type": "str | None",
-          "description": "Specific version to install (action='download')",
+          "description": "A release tag or branch (action='download', default the latest; action='set_version')",
           "default": null
         },
         "repository": {
           "type": "str | None",
-          "description": "GitHub repo 'owner/repo' to add (action='add_repository')",
+          "description": "'owner/repo' or a GitHub URL (action='add_repository'); the full name of a critical repository (action='acknowledge_critical')",
           "default": null
         },
         "category": {
           "type": "str | None",
-          "description": "Repository category (action='add_repository'). One of the categories the store reports (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
+          "description": "action='add_repository'; without it the Marketplace detects it. One of the Marketplace's categories (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
+          "default": null
+        },
+        "categories": {
+          "type": "list[str] | str | None",
+          "description": "Whole categories to clear (action='clear_new')",
+          "default": null
+        },
+        "show_beta": {
+          "type": "bool | None",
+          "description": "True shows prereleases (action='set_beta')",
           "default": null
         },
         "confirm_replace_built_in": {
           "type": "bool | None",
-          "description": "Marketplace only (action='download'): install a repository that replaces the built-in integration of the same domain. Set it only after the user agrees.",
+          "description": "action='download': install a repository that replaces the built-in integration of the same domain. Set it only after the user agrees.",
           "default": null
         },
         "confirm": {
           "type": "bool | None",
           "description": "action='accept_warning': True once the user has said they read the Marketplace's first-run warning and accept it",
+          "default": null
+        },
+        "config": {
+          "type": "dict[str, Any] | None",
+          "description": "action='set_download_source': the answer to the form, sent to Home Assistant as given, e.g. {'profile': '<one of its options>'}. A mirror is run by a third party (Home Assistant's text for each option names who): the user picks one, not you.",
+          "default": null
+        },
+        "flow_id": {
+          "type": "str | None",
+          "description": "action='connect_github' / 'set_download_source': the flow a previous call opened; without it a new one opens",
+          "default": null
+        },
+        "abort": {
+          "type": "bool | None",
+          "description": "action='connect_github' / 'set_download_source': True ends flow_id's flow",
           "default": null
         }
       },
@@ -2257,11 +2285,6 @@
           "description": "Existing config subentry ID to reconfigure when helper_type='config_subentry'.",
           "default": null
         },
-        "show_advanced_options": {
-          "type": "bool",
-          "description": "When helper_type='config_subentry', ask older Home Assistant versions to expose advanced flow options. No-op on HA 2026.6+; pending removal before HA 2027.6.",
-          "default": false
-        },
         "icon": {
           "type": "str | None",
           "description": "Material Design Icon (e.g., 'mdi:bell'); '' or ' ' clears it, except a zone's stored icon, which Home Assistant keeps on update as the zone dialog does: it can be changed but not removed. A storage helper's icon goes into its stored config when Home Assistant's schema for the type has an icon field, as the helper's own dialog stores it, and the entity registry is left alone; otherwise (person, tag, or another type without the ha_mcp_tools component) it goes into the entity registry. An icon override in the entity registry is set or cleared with ha_set_entity. Restoring a storage helper's automatic backup also puts back its registry icon, unless the backup predates registry icons being recorded; a flow helper's backup holds no icon, so its restore does not set one",
@@ -2339,7 +2362,7 @@
   {
     "name": "ha_remove_helpers_integrations",
     "title": "Remove Helper or Integration",
-    "description": "Remove a Home Assistant helper or integration config entry.\n\nUnifies three backend removal mechanisms — simple-helper websocket\ndelete, config-entry delete, and config-subentry delete — behind one\nentry point; helper_type picks the path, or the entity registry does\nwhen an entity_id comes without one.\n\nWHEN NOT TO USE:\n- Removing only an entity (without deleting its underlying helper or\n  config entry) — use `ha_remove_entity` instead.\n- YAML-configured helpers — they have no storage backend. Edit the\n  YAML file and reload the relevant integration.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nROUTING:\n- SIMPLE helper_type (input_button, input_boolean, input_select,\n  input_number, input_text, input_datetime, counter, timer, schedule,\n  zone, person, tag) + bare helper_id (its storage id) or entity_id →\n  websocket delete.\n- FLOW helper_type (any helper flow Home Assistant lists: template, group,\n  utility_meter, derivative, ...; custom helper integrations too)\n  + full entity_id → resolve entity_id to\n  config_entry_id via entity_registry, then delete the config entry. All\n  sub-entities (e.g. utility_meter tariffs) are removed together. An\n  entity registered by another integration is refused with\n  VALIDATION_INVALID_PARAMETER and nothing is deleted.\n- helper_type=None + entity_id → the entity's registry entry names its\n  helper (storage type or helper flow); an entity of any other\n  integration is refused with VALIDATION_INVALID_PARAMETER.\n- helper_type=None + entry_id → direct config entry delete (any\n  integration).\n- helper_type=\"config_subentry\" + parent entry_id + subentry_id →\n  delete one config subentry.\n\nA target that cannot be removed raises a structured error rather than\nreturning silent success: ENTITY_NOT_FOUND when the entity_id is absent\nfrom both the state machine and the entity registry, or for a bare\nhelper_id no stored helper has (a bare helper_id on a FLOW target also\nraises it — FLOW resolution needs a full entity_id); RESOURCE_NOT_FOUND\nwhen it exists but is not storage- or registry-managed (a YAML-configured helper, or an entity with a state\nbut no registry entry), for a config entry the backend reports as 404,\nor for a missing config subentry.\nCalling N times gives the same response. Transient connectivity failures\nraise their own codes (CONNECTION_FAILED, CONNECTION_TIMEOUT) so\nretry logic can branch separately.\n\nEXAMPLES:\n- Remove SIMPLE button: ha_remove_helpers_integrations(target=\"my_button\", helper_type=\"input_button\", confirm=True)\n- Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target=\"sensor.energy_peak\", helper_type=\"utility_meter\", confirm=True)\n- Remove whatever helper owns an entity: ha_remove_helpers_integrations(target=\"sensor.energy_peak\", confirm=True)\n- Remove any integration by entry_id: ha_remove_helpers_integrations(target=\"01HXYZ...\", confirm=True)\n- Remove a config subentry: ha_remove_helpers_integrations(target=\"01HXYZ...\", helper_type=\"config_subentry\", subentry_id=\"subentry-123\", confirm=True)\n\nWARNING: Removing a helper or integration that is referenced by\nautomations, scripts, or other integrations may cause those to fail.\nUse ha_search() / ha_get_integration() to verify before removal.\nha_manage_backup(scope=\"edits\", action=\"restore\") recreates removed FLOW\nhelpers whose options could be snapshotted, and config subentries. It\ncannot recreate custom helper integrations (their options are withheld)\nor otp (no stored options); re-add those yourself, otp through the user\nin the HA UI.",
+    "description": "Remove a Home Assistant helper or integration config entry.\n\nUnifies three backend removal mechanisms — simple-helper websocket\ndelete, config-entry delete, and config-subentry delete — behind one\nentry point; helper_type picks the path, or the entity registry does\nwhen an entity_id comes without one.\n\nWHEN NOT TO USE:\n- Removing only an entity (without deleting its underlying helper or\n  config entry) — use `ha_remove_entity` instead.\n- YAML-configured helpers — they have no storage backend. Edit the\n  YAML file and reload the relevant integration.\n- ha-mcp's own ha_mcp_tools entries are refused: manage them in the HA\n  UI, or (server settings, developer mode on) ha_dev_manage_settings /\n  ha_dev_manage_server.\n\nROUTING:\n- SIMPLE helper_type (input_button, input_boolean, input_select,\n  input_number, input_text, input_datetime, counter, timer, schedule,\n  zone, person, tag) + bare helper_id (its storage id) or entity_id →\n  websocket delete.\n- FLOW helper_type (any helper flow Home Assistant lists: template, group,\n  utility_meter, derivative, ...; custom helper integrations too)\n  + full entity_id → resolve entity_id to\n  config_entry_id via entity_registry, then delete the config entry. All\n  sub-entities (e.g. utility_meter tariffs) are removed together. An\n  entity registered by another integration is refused with\n  VALIDATION_INVALID_PARAMETER and nothing is deleted.\n- subentry_id (helper_type omitted or \"config_subentry\") + parent\n  entry_id → delete that one config subentry, whatever the target looks\n  like. A subentry_id with any other helper_type is refused.\n- helper_type=None + entity_id → the entity's registry entry names its\n  helper (storage type or helper flow); an entity of any other\n  integration is refused with VALIDATION_INVALID_PARAMETER.\n- helper_type=None + entry_id → direct config entry delete.\n\nA target that cannot be removed raises a structured error rather than\nreturning silent success: ENTITY_NOT_FOUND when the entity_id is absent\nfrom both the state machine and the entity registry, or for a bare\nhelper_id no stored helper has (a bare helper_id on a FLOW target also\nraises it — FLOW resolution needs a full entity_id); RESOURCE_NOT_FOUND\nwhen it exists but is not storage- or registry-managed (a YAML-configured helper, or an entity with a state\nbut no registry entry), for a config entry the backend reports as 404,\nor for a missing config subentry.\nCalling N times gives the same response. Transient connectivity failures\nraise their own codes (CONNECTION_FAILED, CONNECTION_TIMEOUT) so\nretry logic can branch separately.\n\nEXAMPLES:\n- Remove SIMPLE button: ha_remove_helpers_integrations(target=\"my_button\", helper_type=\"input_button\", confirm=True)\n- Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target=\"sensor.energy_peak\", helper_type=\"utility_meter\", confirm=True)\n- Remove whatever helper owns an entity: ha_remove_helpers_integrations(target=\"sensor.energy_peak\", confirm=True)\n- Remove any integration by entry_id: ha_remove_helpers_integrations(target=\"01HXYZ...\", confirm=True)\n- Remove a config subentry: ha_remove_helpers_integrations(target=\"01HXYZ...\", helper_type=\"config_subentry\", subentry_id=\"subentry-123\", confirm=True)\n\nWARNING: Removing a helper or integration that is referenced by\nautomations, scripts, or other integrations may cause those to fail.\nUse ha_search() / ha_get_integration() to verify before removal.\nha_manage_backup(scope=\"edits\", action=\"restore\") recreates removed FLOW\nhelpers whose options could be snapshotted, and config subentries. It\ncannot recreate custom helper integrations (their options are withheld)\nor otp (no stored options); re-add those yourself, otp through the user\nin the HA UI.",
     "inputSchema": {
       "properties": {
         "target": {
@@ -2353,7 +2376,7 @@
         },
         "subentry_id": {
           "type": "str | None",
-          "description": "Config subentry ID to remove when helper_type='config_subentry'.",
+          "description": "Config subentry ID to remove; target is its parent entry_id.",
           "default": null
         },
         "confirm": {
@@ -2718,11 +2741,6 @@
           "description": "Existing subentry ID used with include_subentry_schema=True to inspect a reconfigure flow.",
           "default": null
         },
-        "show_advanced_options": {
-          "type": "bool",
-          "description": "When include_subentry_schema=True, ask older Home Assistant versions to expose advanced flow options. No-op on HA 2026.6+; pending removal before HA 2027.6.",
-          "default": false
-        },
         "exact_match": {
           "type": "bool",
           "description": "Use exact substring matching for query filter. Set to False for fuzzy matching when the query may contain typos.",
@@ -2809,63 +2827,19 @@
   },
   {
     "name": "ha_get_system_health",
-    "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
-    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.\n\nReturns health check results from integrations, system resources, and\nconnectivity; available information varies by installation type and\nloaded integrations. Optional sections are selected with `include`.\n\nThe result may include ``ha_mcp_update`` ``{current, latest,\nupdate_available}``. When update_available is true, tell the user a newer\nha-mcp release is available (with ``python_required``, give ``upgrade_command``).\n\nEXAMPLES:\n- ha_get_system_health(include=\"repairs,zha_network,zwave_network,config_check\")\n- Page a list-valued diagnostics sub-tree: ha_get_system_health(include=\"diagnostics\", config_entry_id=\"abc\", diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10), then repeat with diagnostics_data_offset=10 while has_more is true.",
+    "title": "Get System Health (incl. ZHA/Z-Wave/Thread/Matter networks)",
+    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, Thread and Matter networks.\n\nReturns health check results from integrations, system resources, and\nconnectivity; available information varies by installation type and\nloaded integrations. Each domain carries the ``name`` and key ``labels``\nthe System information dialog shows. Checks that Home Assistant runs in\nthe background are awaited up to a deadline; one still running shows as\npending, with a warning. Optional sections are selected with `include`.\n\nNot for one integration's diagnostics: use\nha_get_integration(include_diagnostics=True). Not for themes: use\nha_manage_theme(action='list'). Not for a single device's radio state:\nuse ha_get_device. Use this tool for the state of the whole\ninstallation: health checks, repairs, radio networks, Supervisor,\nstartup times and the configuration check.\n\nThe result may include ``ha_mcp_update`` ``{current, latest,\nupdate_available}``. When update_available is true, tell the user a newer\nha-mcp release is available (with ``python_required``, give ``upgrade_command``).\n\nEXAMPLES:\n- ha_get_system_health(include=\"repairs,zha_network,zwave_network,config_check\")\n- ha_get_system_health(include=\"supervisor,integration_startup\")",
     "inputSchema": {
       "properties": {
         "include": {
           "type": "str | None",
-          "description": "Comma-separated extra sections: 'repairs' (Repair items, active only unless include_dismissed_repairs=True); 'zha_network' (ZHA devices with radio signal summary: name, LQI, RSSI); 'zha_network_full' (all ZHA device details; large on 100+ device networks); 'zwave_network' (Z-Wave JS status and node summary: status, security, routing); 'thread_network' (per border-router channel, extended_pan_id and border_agent_id; not per-node Thread health); 'matter_network' (Matter integration presence: config_entry_id, state, title; per-node health is in Matter node diagnostics); 'themes' (installed theme names, count, default_theme, default_dark_theme); 'diagnostics' (per-integration diagnostics dump, integration-defined JSON; REQUIRES config_entry_id; payloads can be large — pair with diagnostics_fields or diagnostics_truncate_at_bytes); 'config_check' (validate the HA configuration, the pre-restart check ha_restart runs automatically; returns {result: valid|invalid, is_valid, errors}); 'dead_entities' (orphaned/stale entity-registry entries: config_entry_orphans whose owning integration instance is gone, and stale_restored entries HA restored on startup that the loaded integration no longer provides, each with entity_id + platform for cleanup via ha_remove_entity; unknown-state entities and merely-offline devices are excluded).",
+          "description": "Comma-separated extra sections: 'repairs' (Repair items with the title, description and data the Repairs page shows, active only unless include_dismissed_repairs=True); 'zha_network' (ZHA devices with radio signal summary: name, LQI, RSSI); 'zha_network_full' (all ZHA device details; large on 100+ device networks); 'zwave_network' (Z-Wave JS driver connection, controller and node status); 'thread_network' (the Thread datasets Home Assistant knows, and its OTBR border routers; no network keys); 'matter_network' (what the Matter panel reads: Core's Matter config entry and network topology, nodes and connections capped at 50 each); 'supervisor' (Supervisor installs: resolution info with the unhealthy and unsupported reasons, and the Core and Supervisor container stats); 'integration_startup' (each integration's setup time in seconds, slowest first); 'config_check' (validate the HA configuration, the pre-restart check ha_restart runs automatically; returns Core's {result: valid|invalid, errors, warnings}, the messages as one string or null; warnings alone stay valid); 'dead_entities' (orphaned/stale entity-registry entries: config_entry_orphans whose owning integration instance is gone, and stale_restored entries HA restored on startup that the loaded integration no longer provides, each with entity_id + platform for cleanup via ha_remove_entity; unknown-state entities and merely-offline devices are excluded).",
           "default": null
         },
         "include_dismissed_repairs": {
           "type": "bool | None",
           "description": "Include user-dismissed/ignored repairs. Only meaningful when 'repairs' is in include. Dismiss or restore one with ha_manage_updates(action='ignore_repair' / 'unignore_repair').",
           "default": false
-        },
-        "config_entry_id": {
-          "type": "str | None",
-          "description": "Config entry ID of the integration (find via ha_get_integration). Required when include contains 'diagnostics'.",
-          "default": null
-        },
-        "device_id": {
-          "type": "str | None",
-          "description": "With include='diagnostics', return the device-scoped dump for this device instead of the full integration dump. Some integrations only expose config-entry-level dumps.",
-          "default": null
-        },
-        "diagnostics_fields": {
-          "type": "list[str] | str | None",
-          "description": "Top-level keys to keep from the diagnostics data payload (e.g. ['home_assistant', 'issues']). Accepts a JSON list or comma-separated string. Only applies with include='diagnostics'.",
-          "default": null
-        },
-        "diagnostics_truncate_at_bytes": {
-          "type": "int | None",
-          "constraints": {
-            "ge": 1
-          },
-          "description": "Byte cap on the serialized diagnostics payload (post-projection / post-data_path). On hit, drops data and emits truncated=true, bytes_total, byte_cap, plus available_fields (when the capped value is a dict). Recommended starting point: 20000. Only applies with include='diagnostics'.",
-          "default": null
-        },
-        "diagnostics_data_path": {
-          "type": "str | None",
-          "description": "Dotted path into the diagnostics data sub-tree (e.g. 'data.devices' for ZHA per-device records). Walks into the post-fields payload. Resolution failures replace data with null and surface data_path_error. Only applies with include='diagnostics'.",
-          "default": null
-        },
-        "diagnostics_data_offset": {
-          "type": "int | None",
-          "constraints": {
-            "ge": 0
-          },
-          "description": "Pagination start index for list-valued diagnostics_data_path results. Only applies with include='diagnostics'.",
-          "default": 0
-        },
-        "diagnostics_data_limit": {
-          "type": "int | None",
-          "constraints": {
-            "ge": 1
-          },
-          "description": "Pagination window for list-valued diagnostics_data_path results; data becomes {path, items, offset, limit, total, has_more}. Only applies with include='diagnostics'.",
-          "default": null
         }
       }
     },
@@ -3028,7 +3002,7 @@
   {
     "name": "ha_config_get_label",
     "title": "Get Label",
-    "description": "Get label info - list all labels or get a specific one by ID.\n\nWithout a label_id: Lists all Home Assistant labels with their configurations.\nWith a label_id: Returns configuration for that specific label.\n\nEXAMPLES:\n- List all labels: ha_config_get_label()\n- Get specific label: ha_config_get_label(\"my_label_id\")\n\nUse ha_config_set_label() to create or update labels.\nUse ha_set_entity(labels=[\"label1\", \"label2\"]) to assign labels to entities,\nha_set_device(labels=[...]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[...]) for areas.",
+    "description": "Get label info - list all labels or get a specific one by ID.\n\nWithout a label_id: Lists all Home Assistant labels with their configurations.\nWith a label_id: Returns that label and, as `related`, Home Assistant's\nRelated set for it: the areas, devices and entities that carry it (an\nautomation, script, scene, group or person that carries it is also listed\nunder its own key), the automations and scripts that target it, and the\nareas, floors, devices, config entries and integrations of the carrying\nitems. A template that uses the label (for example `label_entities('x')`)\nis not listed. `related` is None, with a warning, when Home Assistant\ncannot answer; that does not mean the label is unused.\n\nEXAMPLES:\n- List all labels: ha_config_get_label()\n- Get specific label: ha_config_get_label(\"my_label_id\")\n\nUse ha_config_set_label() to create or update labels.\nUse ha_set_entity(labels=[\"label1\", \"label2\"]) to assign labels to entities,\nha_set_device(labels=[...]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[...]) for areas.",
     "inputSchema": {
       "properties": {
         "label_id": {
@@ -3052,7 +3026,7 @@
   {
     "name": "ha_config_remove_category",
     "title": "Remove Category",
-    "description": "Delete a Home Assistant category.\n\nRemoves the category from the category registry for the given scope.\nThis will also remove the category assignment from all entities in that scope.\n\nEXAMPLES:\n- Delete category: ha_config_remove_category(\"automation\", \"my_category_id\")\n\nUse ha_config_get_category() to find category IDs.\n\n**WARNING:** Deleting a category will remove it from all assigned entities.\nThis action cannot be undone.",
+    "description": "Delete a Home Assistant category.\n\nRemoves the category from the category registry for the given scope, and\nfrom every entity in that scope that had it. The auto-backup of this call\nrestores the category itself, under a new id, not the entities that had it.\n\nTo move one entity to another category or out of its category and keep the\ncategory, use ha_set_entity(categories=...) instead.\n\nEXAMPLES:\n- Delete category: ha_config_remove_category(\"automation\", \"my_category_id\")\n\nUse ha_config_get_category() to find category IDs.",
     "inputSchema": {
       "properties": {
         "scope": {
@@ -3083,7 +3057,7 @@
   {
     "name": "ha_config_remove_label",
     "title": "Remove Label",
-    "description": "Delete a Home Assistant label.\n\nRemoves the label from the label registry. This will also remove the label\nfrom all entities, devices, and areas that have it assigned.\n\nEXAMPLES:\n- Delete label: ha_config_remove_label(\"my_label_id\")\n\nUse ha_config_get_label() to find label IDs.\n\n**WARNING:** Deleting a label will remove it from all assigned entities.\nThis action cannot be undone.",
+    "description": "Delete a Home Assistant label.\n\nRemoves the label from the label registry. Home Assistant also takes it off\nevery entity, device and area that carries it. Automations and scripts that\ntarget the label keep the reference, which then matches nothing.\n\nTo take a label off one item and keep it, use ha_set_entity,\nha_set_device or ha_set_area_or_floor instead. Before deleting, call\nha_config_get_label(label_id): its `related` lists what carries or\ntargets the label, but not a template that uses it, so an empty `related`\ndoes not prove the label unused. The auto-backup of this call restores\nthe label itself, under the id its current name gives it (a new one if\nit was renamed since it was created), not what carried it.\n\nEXAMPLES:\n- Delete label: ha_config_remove_label(\"my_label_id\")\n\nUse ha_config_get_label() to find label IDs.",
     "inputSchema": {
       "properties": {
         "label_id": {
@@ -3109,16 +3083,17 @@
   {
     "name": "ha_config_set_category",
     "title": "Create or Update Category",
-    "description": "Create or update a Home Assistant category.\n\nCreates a new category if category_id is not provided, or updates an existing category if category_id is provided.\n\nCategories are domain-scoped organizational groups for automations, scripts,\nscenes, and helpers. Unlike labels (which are cross-domain), categories are\nspecific to a single domain scope.\n\nEXAMPLES:\n- Create automation category: ha_config_set_category(\"Lighting\", scope=\"automation\")\n- Create with icon: ha_config_set_category(\"Security\", scope=\"automation\", icon=\"mdi:shield\")\n- Update category: ha_config_set_category(\"Updated Name\", scope=\"automation\", category_id=\"my_category_id\")\n\nAfter creating a category, use ha_set_entity(categories={\"automation\": \"category_id\"}) to assign it.",
+    "description": "Create or update a Home Assistant category.\n\nCreates a new category if category_id is not provided, or updates an existing category if category_id is provided.\n\nCategories are domain-scoped organizational groups for automations, scripts,\nscenes, and helpers. Unlike labels (which are cross-domain), categories are\nspecific to a single domain scope.\n\nEXAMPLES:\n- Create automation category: ha_config_set_category(scope=\"automation\", name=\"Lighting\")\n- Create with icon: ha_config_set_category(scope=\"automation\", name=\"Security\", icon=\"mdi:shield\")\n- Update category: ha_config_set_category(scope=\"automation\", category_id=\"my_category_id\", name=\"Updated Name\")\n\nAfter creating a category, use ha_set_entity(categories={\"automation\": \"category_id\"}) to assign it.",
     "inputSchema": {
       "properties": {
-        "name": {
-          "type": "str",
-          "description": "Display name for the category"
-        },
         "scope": {
           "type": "str",
           "description": "Domain scope for the category (e.g., 'automation', 'script', 'scene', 'helpers')."
+        },
+        "name": {
+          "type": "str | None",
+          "description": "Display name. Required to create; omit on update to keep it.",
+          "default": null
         },
         "category_id": {
           "type": "str | None",
@@ -3127,12 +3102,11 @@
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:tag', 'mdi:label')",
+          "description": "Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); '' or ' ' clears it",
           "default": null
         }
       },
       "required": [
-        "name",
         "scope"
       ]
     },
@@ -3150,12 +3124,13 @@
   {
     "name": "ha_config_set_label",
     "title": "Create or Update Label",
-    "description": "Create or update a Home Assistant label.\n\nCreates a new label if label_id is not provided, or updates an existing\nlabel if label_id is provided. Labels are a cross-domain tagging system\nfor entities, devices, and areas.\n\nEXAMPLES:\n- Create: ha_config_set_label(\"Security\", color=\"red\", icon=\"mdi:shield\", description=\"Security-related devices\")\n- Update: ha_config_set_label(\"Updated Name\", label_id=\"my_label_id\", color=\"blue\")\n- Create and apply to areas: ha_config_set_label(\"Site Home\", areas=[\"kitchen\", \"living_room\"])\n\nAfter creating a label, use ha_set_entity(labels=[\"label_id\"]) to assign it to entities,\nha_set_device(labels=[\"label_id\"]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[\"label_id\"]) for areas (replaces the area's set).",
+    "description": "Create or update a Home Assistant label.\n\nCreates a new label if label_id is not provided, or updates an existing\nlabel if label_id is provided. Labels are a cross-domain tagging system\nfor entities, devices, and areas.\n\nEXAMPLES:\n- Create: ha_config_set_label(name=\"Security\", color=\"red\", icon=\"mdi:shield\", description=\"Security-related devices\")\n- Update: ha_config_set_label(label_id=\"my_label_id\", color=\"blue\")\n- Create and apply to areas: ha_config_set_label(name=\"Site Home\", areas=[\"kitchen\", \"living_room\"])\n\nAfter creating a label, use ha_set_entity(labels=[\"label_id\"]) to assign it to entities,\nha_set_device(labels=[\"label_id\"]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[\"label_id\"]) for areas (replaces the area's set).",
     "inputSchema": {
       "properties": {
         "name": {
-          "type": "str",
-          "description": "Display name for the label"
+          "type": "str | None",
+          "description": "Display name. Required to create; omit on update to keep it.",
+          "default": null
         },
         "label_id": {
           "type": "str | None",
@@ -3164,17 +3139,17 @@
         },
         "color": {
           "type": "str | None",
-          "description": "Color for the label (e.g., 'red', 'blue', 'green', or hex like '#FF5733')",
+          "description": "Color for the label (e.g., 'red', 'blue', 'green', or hex like '#FF5733'); '' or ' ' clears it",
           "default": null
         },
         "icon": {
           "type": "str | None",
-          "description": "Material Design Icon (e.g., 'mdi:tag', 'mdi:label')",
+          "description": "Material Design Icon (e.g., 'mdi:tag', 'mdi:label'); '' or ' ' clears it",
           "default": null
         },
         "description": {
           "type": "str | None",
-          "description": "Description of the label's purpose",
+          "description": "Description of the label's purpose; '' or ' ' clears it",
           "default": null
         },
         "areas": {
@@ -3182,10 +3157,7 @@
           "description": "Area IDs to apply this label to (adds the label without removing existing ones). Omit to leave area assignments unchanged; an empty list is a no-op (assigns nothing and removes nothing). To clear an area's labels use ha_set_area_or_floor(kind='area', labels=[]).",
           "default": null
         }
-      },
-      "required": [
-        "name"
-      ]
+      }
     },
     "annotations": {
       "readOnlyHint": false,
@@ -3201,7 +3173,7 @@
   {
     "name": "ha_manage_radio",
     "title": "Manage Radios (Z-Wave / Zigbee / Matter / Thread)",
-    "description": "Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.\n\nFor node diagnostics and network summaries prefer ha_get_device /\nha_get_system_health, which mirror 'diagnostics' and 'network_status'.\nThis tool also exposes active 'ping' probes and parameter reads.\nZ-Wave 'get_config_params' lists cached configuration values/metadata;\n'get_config_param' reads one from the cache or explicitly from the device.\nNeither enables or creates entities. Write actions perform\ninclusion/commissioning, removal, healing,\nreconfiguration, firmware updates and credential provisioning.\n\nCaveats: long-running actions (inclusion, rebuild routes, firmware) start the\noperation and return immediately with long_running=true; completion\nhappens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-\nPIN pairing) is not scriptable — use SmartStart/QR provisioning here or\nthe HA UI. HA administrator access is required for parameter reads.",
+    "description": "Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.\n\nFor node diagnostics and network summaries prefer ha_get_device /\nha_get_system_health; 'diagnostics' and 'network_status' here return\nthis tool's own, smaller shapes.\nThis tool also exposes active 'ping' probes and parameter reads.\nZ-Wave 'get_config_params' lists cached configuration values/metadata;\n'get_config_param' reads one from the cache or explicitly from the device.\nNeither enables or creates entities. Write actions perform\ninclusion/commissioning, removal, healing,\nreconfiguration, firmware updates and credential provisioning.\n\nCaveats: long-running actions (inclusion, rebuild routes, firmware) start the\noperation and return immediately with long_running=true; completion\nhappens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-\nPIN pairing) is not scriptable — use SmartStart/QR provisioning here or\nthe HA UI. HA administrator access is required for parameter reads.",
     "inputSchema": {
       "properties": {
         "radio": {
@@ -3874,12 +3846,12 @@
         },
         "return_response": {
           "type": "bool",
-          "description": "If True, the service's response data is returned once, as the top-level 'service_response' key — never nested inside 'result'.",
+          "description": "If True, the service's response data is returned once, as the top-level 'service_response' key — never nested inside 'result'. With the ha_mcp_tools component, a response Home Assistant rejects after the service ran still succeeds, with 'response_error' and a warning not to call it again.",
           "default": false
         },
         "wait": {
           "type": "bool",
-          "description": "If True (default), wait for the entity state to change before returning. Applies only to state-changing services called with a single entity_id. A comma-separated multi-target does not get confirmed by this: it falls through to a legacy path that polls for the literal composite entity_id and times out after 10s. Set wait=False for multi-target calls.",
+          "description": "If True (default), wait for the entity state to change before returning. Applies only to state-changing services called with a single entity_id. A comma-separated multi-target does not get confirmed by this: without return_response it falls through to a legacy path that polls for the literal composite entity_id and times out after 10s. Set wait=False for multi-target calls.",
           "default": true
         },
         "verbose": {
@@ -4056,7 +4028,7 @@
   {
     "name": "ha_config_set_yaml",
     "title": "Raw YAML Config Edit",
-    "description": "Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT).\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``template-guidelines.md`` ships under ``skill_content`` by default.\n\nDestructive, disabled by default. Prefer the dedicated tools:\nha_config_set_helper for template sensors and every other helper type,\nha_config_set_automation / ha_config_set_script / ha_config_set_scene\nfor storage-mode items.\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms),\nfor integrations with significant YAML-only configuration (knx\nentities in package files), for registering YAML-mode dashboards via\n``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys),\nand for editing theme files in ``themes/*.yaml``. Themes only load when\nconfiguration.yaml carries the ``frontend: themes:`` include (e.g.\n``!include_dir_merge_named themes``); this tool cannot add that include\n(``frontend`` is not an allowed key). ``automation``, ``script`` and\n``scene`` keys are accepted only when ``file`` is a ``packages/*.yaml``\nand the operator has turned on that key's packages setting (each is\noff by default); writes of those keys to ``configuration.yaml`` are\nrejected; use the storage-mode tools.\n\nCheck ``post_action`` in the response: most keys need a full HA\nrestart. For ``themes/*.yaml`` this tool *performs* the reload itself\n(``frontend.reload_themes``), so ``post_action`` is ``reload_performed``\n(or ``reload_available`` plus ``reload_error`` if that reload failed).\nFor template, mqtt, group, automation, script, and scene it only\n*advertises* the reload service (``post_action: reload_available`` with\na ``reload_service`` to call yourself); the edit is on disk but not yet\nlive. Preserves YAML comments and HA tags (``!include``,\n``!secret``) on round-trip; ``replace`` swaps the subtree as-is.\n\nTwo-step confirmation (default ON, toggle ENABLE_YAML_EDIT_CONFIRM /\nServer Settings): the first call returns ``preview: true`` with a\nunified ``diff`` of exactly what would change on disk and a\n``confirm_token`` — nothing is written. Review the diff, then repeat\nthe identical call adding ``confirm_token`` to apply. Every applied\nwrite also returns the final ``diff``. A token mismatch means the file\nchanged since the preview (or the token was wrong); use the freshly\nreturned token.",
+    "description": "Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT).\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``template-guidelines.md`` ships under ``skill_content`` by default.\n\nDestructive, disabled by default. Prefer the dedicated tools:\nha_config_set_helper for template sensors and every other helper type,\nha_config_set_automation / ha_config_set_script / ha_config_set_scene\nfor storage-mode items.\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms),\nfor integrations with significant YAML-only configuration (knx\nentities in package files), for registering YAML-mode dashboards via\n``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys),\nand for editing theme files in ``themes/*.yaml``. Themes only load when\nconfiguration.yaml carries the ``frontend: themes:`` include (e.g.\n``!include_dir_merge_named themes``); this tool cannot add that include\n(``frontend`` is not an allowed key). ``automation``, ``script`` and\n``scene`` keys are accepted only when ``file`` is a ``packages/*.yaml``\nand the operator has turned on that key's packages setting (each is\noff by default); writes of those keys to ``configuration.yaml`` are\nrejected; use the storage-mode tools.\n\nCheck ``post_action`` in the response. For ``themes/*.yaml`` this tool\n*performs* the reload itself (``frontend.reload_themes``), so\n``post_action`` is ``reload_performed`` (or ``reload_available`` plus\n``reload_error`` if that reload failed). For any other key it is\n``reload_available`` with the ``reload_service`` to call yourself when\nHome Assistant has ``<key>.reload`` (the key's integration is loaded),\nand ``restart_required`` otherwise; the edit is on disk but not yet\nlive. Preserves YAML comments and HA tags (``!include``,\n``!secret``) on round-trip; ``replace`` swaps the subtree as-is.\n\nTwo-step confirmation (default ON, toggle ENABLE_YAML_EDIT_CONFIRM /\nServer Settings): the first call returns ``preview: true`` with a\nunified ``diff`` of exactly what would change on disk and a\n``confirm_token`` — nothing is written. Review the diff, then repeat\nthe identical call adding ``confirm_token`` to apply. Every applied\nwrite also returns the final ``diff``. A token mismatch means the file\nchanged since the preview (or the token was wrong); use the freshly\nreturned token.",
     "inputSchema": {
       "properties": {
         "yaml_path": {
@@ -4315,16 +4287,21 @@
   {
     "name": "ha_manage_theme",
     "title": "Manage Frontend Themes",
-    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through HACS\n(the Marketplace on 2026.11+, both via ha_manage_hacs); editing custom theme files goes through\nha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name\nand attempts an automatic theme reload).\n\nWhen to use: action='list' discovers installed theme names and the\ncurrent defaults; action='set' selects the backend default theme\n(optionally per light/dark mode).\n\nSCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):\nTaking a dashboard screenshot makes the Puppet engine write the saved\ntheme of the Home Assistant user its token belongs to, which also\nflips that user's live web and mobile sessions. The screenshot tools\nare read-only and only *report* this; use action='set_engine_theme'\nwith the value quoted in their warning to put it back, and\naction='get_engine_theme' to inspect it. These act on that engine\naccount's per-user profile via frontend/set_user_data, which is a\ndifferent layer from the backend default that action='set' changes.\nGiving the engine its own dedicated user and token avoids the issue\nentirely.\n\nCaveats: action='set' changes the backend-selected default only -\nusers who explicitly picked a theme in their profile keep their\nchoice. Theme names are validated by Home Assistant at call time.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set dark-mode theme: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", mode=\"dark\")\n- Restore built-in default: ha_manage_theme(\n      action=\"set\", theme_name=\"default\")\n- Inspect the engine account's theme: ha_manage_theme(\n      action=\"get_engine_theme\")\n- Undo a screenshot's theme change (pass BOTH values from the\n  warning, so a theme changed since then is not overwritten):\n  ha_manage_theme(action=\"set_engine_theme\",\n      value={\"theme\": \"\", \"dark\": False},\n      expected_current={\"theme\": \"default\", \"dark\": True})",
+    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through the\nMarketplace (ha_manage_hacs); theme files\nare edited with ha_write_file or ha_config_set_yaml (beta), which\nreload themes after the edit. After any other change to theme files,\nha_reload_core(target='themes') loads them.\n\nWhen to use: action='list' discovers installed theme names, the modes\neach theme declares and the current defaults; action='set' selects\nthe backend default theme, the dark-mode one, or both in one call,\nand returns the defaults Home Assistant then holds. Home Assistant\ndescribes frontend.set_theme's fields in\nha_list_services(domain='frontend', detail_level='full').\n\nSCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):\nTaking a dashboard screenshot makes the Puppet engine write the saved\ntheme of the Home Assistant user its token belongs to, which also\nflips that user's live web and mobile sessions. The screenshot tools\nare read-only and only *report* this; use action='set_engine_theme'\nwith the value quoted in their warning to put it back, and\naction='get_engine_theme' to inspect it. These act on that engine\naccount's per-user profile via frontend/set_user_data, which is a\ndifferent layer from the backend default that action='set' changes.\nGiving the engine its own dedicated user and token avoids the issue\nentirely.\n\nCaveats: action='set' changes the backend-selected defaults only -\nusers who explicitly picked a theme in their profile keep their\nchoice.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set light and dark defaults: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", theme_name_dark=\"nord_dark\")\n- Inspect the engine account's theme: ha_manage_theme(\n      action=\"get_engine_theme\")\n- Undo a screenshot's theme change (pass BOTH values from the\n  warning, so a theme changed since then is not overwritten):\n  ha_manage_theme(action=\"set_engine_theme\",\n      value={\"theme\": \"\", \"dark\": False},\n      expected_current={\"theme\": \"default\", \"dark\": True})",
     "inputSchema": {
       "properties": {
         "action": {
           "type": "ThemeAction",
-          "description": "Theme operation: 'list' installed themes, 'set' the backend default theme, or read/restore the screenshot engine account's own per-user theme with 'get_engine_theme' / 'set_engine_theme'."
+          "description": "Theme operation: 'list' installed themes, 'set' the backend default themes, or read/restore the screenshot engine account's own per-user theme with 'get_engine_theme' / 'set_engine_theme'."
         },
         "theme_name": {
           "type": "str | None",
-          "description": "Theme name when action='set'. Must be an installed theme; 'default' restores the built-in theme, 'none' resets the chosen mode to the built-in default.",
+          "description": "action='set': the default theme, sent as frontend.set_theme's 'name'.",
+          "default": null
+        },
+        "theme_name_dark": {
+          "type": "str | None",
+          "description": "action='set': the dark-mode default theme, sent as frontend.set_theme's 'name_dark'; 'none' removes the dark-mode override.",
           "default": null
         },
         "expected_current": {
@@ -4340,11 +4317,6 @@
         "value": {
           "type": "dict[str, Any] | None",
           "description": "Frontend user-data theme object when action='set_engine_theme', e.g. {'theme': '', 'dark': False}. An empty dict restores default/auto behavior.",
-          "default": null
-        },
-        "mode": {
-          "type": "Literal['light', 'dark'] | None",
-          "description": "Which mode the theme applies to when action='set'. Defaults to light.",
           "default": null
         }
       },
@@ -4366,7 +4338,7 @@
   {
     "name": "ha_manage_updates",
     "title": "Manage Updates",
-    "description": "Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore).\n\nCovers Core, OS, supervisor, apps (add-ons), device firmware, and HACS\nupdate entities, plus the Repairs issues in Settings > System > Repairs.\nRepairs are listed by ha_get_overview (not here); pass their domain and\nissue_id to 'ignore_repair' / 'unignore_repair'. In Read Only Mode the\nread actions ('list', 'get') stay available; write actions are blocked.\n\n'install' blocks until each update finishes (minutes). One that outlasts\nthe request timeout ends the call with a connection timeout while it\nkeeps running, and a Core update restarts Home Assistant; neither means\nfailure, but later batch targets were not started. Confirm per entity\nwith action='get'; finished updates drop out of 'list', which also\nreturns ha_mcp_update — this MCP server's own update status {current,\nlatest, update_available; python_required + upgrade_command if it needs another Python}.\n\nEXAMPLES:\n- Pre-update analysis: ha_manage_updates(action=\"get\", entity_ids=[\"update.home_assistant_core_update\"], include_release_notes=True)\n- Update everything pending in a category: ha_manage_updates(action=\"install\", categories=[\"addons\", \"hacs\"])\n- Dismiss a repair: ha_manage_updates(action=\"ignore_repair\", repairs=[{\"domain\": \"sun\", \"issue_id\": \"abc\"}])",
+    "description": "Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore).\n\nCovers Core, OS, supervisor, apps (add-ons), device firmware, and\nMarketplace update entities, plus the Repairs issues in Settings > System > Repairs.\nRepairs are listed by ha_get_overview (not here); pass their domain and\nissue_id to 'ignore_repair' / 'unignore_repair'. In Read Only Mode the\nread actions ('list', 'get') stay available; write actions are blocked.\n\n'install' blocks until each update finishes (minutes). One that outlasts\nthe request timeout ends the call with a connection timeout while it\nkeeps running, and a Core update restarts Home Assistant; neither means\nfailure, but later batch targets were not started. Confirm per entity\nwith action='get'; finished updates drop out of 'list', which also\nreturns ha_mcp_update — this MCP server's own update status {current,\nlatest, update_available; python_required + upgrade_command if it needs another Python}.\n\nEXAMPLES:\n- Pre-update analysis: ha_manage_updates(action=\"get\", entity_ids=[\"update.home_assistant_core_update\"], include_release_notes=True)\n- Update everything pending in a category: ha_manage_updates(action=\"install\", categories=[\"addons\", \"hacs\"])\n- Dismiss a repair: ha_manage_updates(action=\"ignore_repair\", repairs=[{\"domain\": \"sun\", \"issue_id\": \"abc\"}])",
     "inputSchema": {
       "properties": {
         "action": {
@@ -4381,7 +4353,7 @@
         },
         "categories": {
           "type": "list[str] | str | None",
-          "description": "For install: apply every pending update in these categories ('addons', 'hacs', 'devices', 'other'). As with the HA 'Update all' button, core/os/supervisor are excluded (target those individually via entity_ids) and skipped updates are never included.",
+          "description": "For install: apply every pending update in these categories ('addons', 'hacs' (Marketplace repositories), 'devices', 'other'). As with the HA 'Update all' button, core/os/supervisor are excluded (target those individually via entity_ids) and skipped updates are never included.",
           "default": null
         },
         "include_skipped": {
@@ -4420,12 +4392,12 @@
   {
     "name": "ha_reload_core",
     "title": "Reload Core Components",
-    "description": "Execute a Home Assistant configuration reload without a full restart.\n\nReloads specific configuration components so changes take effect without\nrestarting Home Assistant — much faster than a full restart. Use it after\nediting automation/script YAML, adding YAML helpers, or changing\ncustomize.yaml or themes.\n\nEXAMPLES:\n- ha_reload_core(target=\"automations\")\n- ha_reload_core(entry_id=\"abc123\")",
+    "description": "Execute a Home Assistant configuration reload without a full restart.\n\nWHEN NOT TO USE: an integration that is not loaded yet has nothing to\nreload; a YAML block added for one needs ha_restart.\n\nUse it after editing automation/script YAML, adding YAML helpers, or\nchanging customize.yaml or themes.\n\nReload-all checks the configuration first and refuses, with the\nreason, when the check fails. A single integration's reload does not\ncheck first: some (template is one) log a configuration they reject\nand keep running, so read the result back.\n\nEXAMPLES:\n- ha_reload_core(target=\"automation\")\n- ha_reload_core(entry_id=\"abc123\")",
     "inputSchema": {
       "properties": {
         "target": {
           "type": "str",
-          "description": "What to reload: 'all', 'automations', 'scripts', 'scenes', 'groups', 'input_booleans', 'input_numbers', 'input_texts', 'input_selects', 'input_datetimes', 'input_buttons', 'timers', 'templates', 'persons', 'zones', 'core' (customize, packages) or 'themes'.",
+          "description": "What to reload: 'all' (Home Assistant's own reload-all: every integration that can reload its YAML but notify, the core config, themes and custom templates), 'core' (customize, packages), 'themes', 'custom_templates', or the domain of an integration that has a reload service, such as 'automation', 'script', 'scene', 'template', 'group', 'input_boolean' or 'mqtt'. Any other target, an integration that is not loaded yet included, is refused with the domains this Home Assistant can reload.",
           "default": "all"
         },
         "entry_id": {

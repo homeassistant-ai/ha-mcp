@@ -42,6 +42,7 @@ from ha_mcp.tools.config_entry_flow import (
     restore_config_entry_options,
 )
 from ha_mcp.tools.config_helpers import describe
+from ha_mcp.tools.integration_flow_steps import reset_opened_flows
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 
 _SOURCES = ["sensor.a", "sensor.b"]
@@ -326,7 +327,7 @@ async def test_an_open_form_names_the_later_forms_and_the_last_one_none(
 
 
 async def test_a_flow_is_continued_after_the_server_forgot_it(
-    hass: HomeAssistant, component_tools: HelperConfigTools, opened_flows: Any
+    hass: HomeAssistant, component_tools: HelperConfigTools
 ) -> None:
     """An ha-mcp restart empties its own list of open flows; Home Assistant
     still holds the flow, and its record says what the flow is for."""
@@ -335,7 +336,7 @@ async def test_a_flow_is_continued_after_the_server_forgot_it(
     update = await component_tools.ha_config_set_helper(
         helper_type="template", helper_id=entry_id
     )
-    opened_flows.clear()
+    reset_opened_flows()  # an ha-mcp restart
 
     created = await component_tools.ha_config_set_helper(
         helper_type="min_max", flow_id=create["flow_id"], config=dict(_MIN_MAX)
@@ -352,7 +353,7 @@ async def test_a_flow_is_continued_after_the_server_forgot_it(
 
 
 async def test_a_forgotten_flow_is_not_continued_for_another_target(
-    hass: HomeAssistant, component_tools: HelperConfigTools, opened_flows: Any
+    hass: HomeAssistant, component_tools: HelperConfigTools
 ) -> None:
     """Core's record binds the flow as the server's own list did: a create
     flow is not answered as the options flow of an existing helper."""
@@ -360,7 +361,7 @@ async def test_a_forgotten_flow_is_not_continued_for_another_target(
     shown = await component_tools.ha_config_set_helper(
         helper_type="template", menu_choice="sensor"
     )
-    opened_flows.clear()
+    reset_opened_flows()  # an ha-mcp restart
 
     with pytest.raises(ToolError):
         await component_tools.ha_config_set_helper(
@@ -379,12 +380,12 @@ async def test_a_forgotten_flow_is_not_continued_for_another_target(
 
 
 async def test_without_the_component_a_forgotten_flow_is_refused_unanswered(
-    hass: HomeAssistant, tools: HelperConfigTools, opened_flows: Any
+    hass: HomeAssistant, tools: HelperConfigTools
 ) -> None:
     """Core's REST API does not say what a flow is for, so the answer is not
     sent to a flow the server cannot bind to the call's target."""
     shown = await tools.ha_config_set_helper(helper_type="min_max")
-    opened_flows.clear()
+    reset_opened_flows()  # an ha-mcp restart
 
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_config_set_helper(
@@ -770,7 +771,6 @@ async def test_a_subentry_is_created_and_then_reconfigured_as_a_patch(
 async def test_a_forgotten_subentry_flow_is_continued_for_its_own_subentry_only(
     component_tools: HelperConfigTools,
     parent_entry: MockConfigEntry,
-    opened_flows: Any,
 ) -> None:
     """A subentry's reconfigure flow is bound to that subentry by Core's
     record: it is not answered as the flow that creates a new one."""
@@ -786,7 +786,7 @@ async def test_a_forgotten_subentry_flow_is_continued_for_its_own_subentry_only(
     shown = await component_tools.ha_config_set_helper(
         **subentry, subentry_id=subentry_id
     )
-    opened_flows.clear()
+    reset_opened_flows()  # an ha-mcp restart
 
     with pytest.raises(ToolError):
         await component_tools.ha_config_set_helper(

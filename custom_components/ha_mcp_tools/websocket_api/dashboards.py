@@ -103,7 +103,7 @@ def _do_dashboards(
             # document per-dashboard verdicts + honesty counters the server's
             # ha_search dashboard bucket needs. Additive — a pre-#2008 server
             # ignores them.
-            "document_matches": _dashboard_document_matches(
+            "document_matches": dashboard_document_matches(
                 prepped.get("docs") or [], query_lower
             ),
             "yaml_skipped": prepped.get("yaml_skipped", 0),
@@ -176,24 +176,17 @@ def _lovelace_dashboards_map(hass: HomeAssistant) -> Mapping[Any, Any] | None:
 def _lovelace_container(hass: HomeAssistant) -> Any:
     """``hass.data[LOVELACE_DATA]``, or ``None`` if lovelace is absent.
 
-    Uses a function-local import of core's key (older cores keyed
-    ``hass.data["lovelace"]``, so both are tried), guarded so a missing key /
-    core drift degrades to ``None`` (the server keeps its legacy path) rather
+    Core drift degrades to ``None`` (the server keeps its legacy path) rather
     than raising.
     """
     try:
         from homeassistant.components.lovelace import LOVELACE_DATA
-
-        key: Any = LOVELACE_DATA
-    except Exception:  # noqa: BLE001  # pragma: no cover - defensive; core drift / older core
-        key = "lovelace"
+    except ImportError:  # pragma: no cover - defensive; core drift
+        return None
     data = getattr(hass, "data", None)
     if not isinstance(data, Mapping):
         return None
-    container = data.get(key)
-    if container is None and key != "lovelace":
-        container = data.get("lovelace")
-    return container
+    return data.get(LOVELACE_DATA)
 
 
 def _dashboard_list_rows(dashboards_map: Mapping[Any, Any]) -> list[dict[str, Any]]:
@@ -340,7 +333,7 @@ def _dashboard_mode(dash: Any) -> str | None:
     return str(mode) if isinstance(mode, str) else None
 
 
-def _dashboard_document_matches(
+def dashboard_document_matches(
     docs: list[dict[str, Any]], query_lower: str
 ) -> list[dict[str, Any]]:
     """Per-dashboard whole-document verdicts: ``[{url_path, title}, ...]``.

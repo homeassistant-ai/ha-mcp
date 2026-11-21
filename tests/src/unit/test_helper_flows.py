@@ -1,160 +1,224 @@
-"""Helper types come from Core's helper flow list, read at call time (#2632)."""
+"""Helper types come from Core's helper flow list, read at call time (#2632).
+
+Also holds Core's helper flow list reads and a custom helper integration."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch
 
+import probatio
 import pytest
+from homeassistant.components.config import config_entries as config_entries_view
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.loader import async_clear_custom_components_cache
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_config_flow,
+    mock_integration,
+    mock_platform,
+)
 
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools import auto_backup, flow_helper_lookup, helper_flows
-from ha_mcp.tools.backup import _edits_create
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.tools import flow_helper_lookup, helper_flows
 from ha_mcp.tools.config_entry_backup import resolve_config_entry_backup_domain
-from ha_mcp.tools.flow_helper_lookup import _raise_platform_mismatch
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import manage_backup
+from ._backup_core import snapshot_manager as snapshot_manager
+from ._core_setup import install_custom_helper
+from ._template_helper_core import create_template_sensor
 from ._tool_errors import error_of
-from .test_backup_manager import _StubClient, _StubSettings
 
-# The real Core read, kept before conftest's autouse fixture replaces it.
-_REAL_FETCH = helper_flows._fetch_helper_flow_types
+CUSTOM = "my_custom_helper"
 
 
-class _Client:
-    """A REST client double that can be weakly referenced, like the real one."""
+@contextmanager
+def flow_list_reads() -> Iterator[AsyncMock]:
+    """Count Core's reads of the helper flow list; Core still answers each one."""
+    with patch.object(
+        config_entries_view,
+        "async_get_config_flows",
+        wraps=config_entries_view.async_get_config_flows,
+    ) as spy:
+        yield spy
 
-    def __init__(self, reply: Any) -> None:
-        self._request = AsyncMock(return_value=reply)
+
+class MonotonicClock:
+    """The reading of ``time.monotonic`` the helper flow cache sees."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
 
 
-@pytest.mark.asyncio
-async def test_helper_types_are_read_from_core_once_per_client(
+class _CustomHelperFlow(ConfigFlow):
+    """A helper integration's config flow: a name and a source entity."""
+
+    VERSION = 1
+
+    async def async_step_user(
+        self, user_input: dict[str, str] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is None:
+            return self.async_show_form(
+                step_id="user",
+                data_schema=probatio.Schema(
+                    {probatio.Required("name"): str, probatio.Required("source"): str}
+                ),
+            )
+        return self.async_create_entry(title=user_input["name"], data=user_input)
+
+
+@pytest.fixture
+def custom_helper_flow(
+    hass: HomeAssistant,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", _REAL_FETCH)
-    client = _Client(["template", "my_helper"])
-    for _ in range(2):
-        assert await helper_flows.helper_flow_types(client) == {"template", "my_helper"}
-    client._request.assert_awaited_once_with(
-        "GET", "/config/config_entries/flow_handlers", params={"type": "helper"}
+    enable_custom_integrations: None,
+) -> Iterator[None]:
+    """``my_custom_helper``: a custom helper integration Core's loader finds on
+    disk and whose config flow runs."""
+    install_custom_helper(tmp_path, monkeypatch, CUSTOM)
+    mock_integration(hass, MockModule(CUSTOM))
+    mock_platform(hass, f"{CUSTOM}.config_flow")
+    with mock_config_flow(CUSTOM, _CustomHelperFlow):
+        yield
+
+
+@pytest.fixture
+async def config_up(hass: HomeAssistant) -> None:
+    """``config`` serves the flow list and the registry reads."""
+    assert await async_setup_component(hass, "config", {})
+
+
+async def _call_with_unknown_type(kind: str, client: HomeAssistantClient) -> Any:
+    if kind == "list":
+        return await HelperConfigTools(client).ha_config_list_helpers(
+            helper_type="no_such_helper"
+        )
+    if kind == "set":
+        return await HelperConfigTools(client).ha_config_set_helper(
+            helper_type="no_such_helper", name="X"
+        )
+    return await IntegrationTools(client).ha_remove_helpers_integrations(
+        target="no_such_helper.x", helper_type="no_such_helper", confirm=True
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("config_up")
+async def test_helper_types_are_read_from_core_once_per_client(
+    core_client: HomeAssistantClient,
+) -> None:
+    with flow_list_reads() as reads:
+        types = [await helper_flows.helper_flow_types(core_client) for _ in range(2)]
+    assert types[0] == types[1]
+    assert {"template", "group"} <= types[0]
+    assert "automation" not in types[0]
+    reads.assert_awaited_once()
+
+
+@pytest.mark.usefixtures("config_up")
 async def test_a_helper_integration_installed_later_shows_up_after_the_cache_expires(
-    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", _REAL_FETCH)
-    monkeypatch.setattr(helper_flows, "_TTL_SECONDS", 0.0)
-    client = _Client(["template"])
-    await helper_flows.helper_flow_types(client)
-    await helper_flows.helper_flow_types(client)
-    assert client._request.await_count == 2
+    clock = MonotonicClock()
+    monkeypatch.setattr(helper_flows, "time", clock)
+    with flow_list_reads() as reads:
+        await helper_flows.helper_flow_types(core_client)
+        await helper_flows.helper_flow_types(core_client)
+        assert reads.await_count == 1
+        clock.now += 301
+        await helper_flows.helper_flow_types(core_client)
+    assert reads.await_count == 2
 
 
-@pytest.mark.asyncio
-async def test_a_client_that_cannot_be_weakly_referenced_is_still_served(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", _REAL_FETCH)
-    client = SimpleNamespace(_request=AsyncMock(return_value=["template"]))
-    assert await helper_flows.helper_flow_types(client) == {"template"}
-
-
-@pytest.mark.asyncio
 async def test_an_unreadable_helper_list_is_a_connection_error_not_an_empty_one(
-    monkeypatch: pytest.MonkeyPatch,
+    unreachable_client: HomeAssistantClient,
 ) -> None:
-    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", _REAL_FETCH)
     with pytest.raises(HomeAssistantConnectionError):
-        await helper_flows.helper_flow_types(_Client({}))
+        await helper_flows.helper_flow_types(unreachable_client)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("helper_type,also", [("input_boolean", ()), ("all", ("all",))])
 async def test_storage_types_need_no_core_read(
-    monkeypatch: pytest.MonkeyPatch, helper_type: str, also: tuple[str, ...]
+    unreachable_client: HomeAssistantClient, helper_type: str, also: tuple[str, ...]
 ) -> None:
-    fetch = AsyncMock()
-    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", fetch)
-    await helper_flows.require_helper_type(_Client([]), helper_type, *also)
-    fetch.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_otp_is_accepted_like_any_helper_flow_core_lists() -> None:
-    await helper_flows.require_helper_type(_Client([]), "otp")
-
-
-@pytest.mark.asyncio
-async def test_a_helper_integration_installed_since_the_last_read_is_accepted(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fetch = AsyncMock(side_effect=[frozenset({"template"}), frozenset({"new_helper"})])
-    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", fetch)
-    client = _Client([])
-    await helper_flows.helper_flow_types(client)  # cached before the install
-    await helper_flows.require_helper_type(client, "new_helper")
-    assert fetch.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_a_fresh_read_is_not_repeated_for_an_unknown_type(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fetch = AsyncMock(return_value=frozenset({"template"}))
-    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", fetch)
+    """A read would fail here, as it does for a flow type."""
+    await helper_flows.require_helper_type(unreachable_client, helper_type, *also)
     with pytest.raises(ToolError):
-        await helper_flows.require_helper_type(_Client([]), "no_such_helper")
-    assert fetch.await_count == 1
+        await helper_flows.require_helper_type(unreachable_client, "template")
 
 
-@pytest.mark.asyncio
-async def test_an_entity_of_a_newly_installed_helper_integration_is_a_helper(
+@pytest.mark.usefixtures("config_up")
+async def test_otp_is_accepted_like_any_helper_flow_core_lists(
+    core_client: HomeAssistantClient,
+) -> None:
+    await helper_flows.require_helper_type(core_client, "otp")
+
+
+@pytest.mark.usefixtures("config_up", "enable_custom_integrations")
+async def test_a_helper_integration_installed_since_the_last_read_is_accepted(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fetch = AsyncMock(side_effect=[frozenset({"template"}), frozenset({"new_helper"})])
-    monkeypatch.setattr(helper_flows, "_fetch_helper_flow_types", fetch)
-    monkeypatch.setattr(
-        flow_helper_lookup,
-        "_read_registry_entry",
-        AsyncMock(return_value=({"platform": "new_helper"}, "ok")),
-    )
-    client = _Client([])
-    await helper_flows.helper_flow_types(client)  # cached before the install
-    assert await flow_helper_lookup.resolve_helper_entity(client, "sensor.new") == (
-        "new_helper",
-        "sensor.new",
-    )
+    await helper_flows.helper_flow_types(core_client)  # cached before the install
+    install_custom_helper(tmp_path, monkeypatch, CUSTOM)
+    async_clear_custom_components_cache(hass)
+    with flow_list_reads() as reads:
+        await helper_flows.require_helper_type(core_client, CUSTOM)
+    reads.assert_awaited_once()
 
 
-_UNKNOWN_TYPE_CALLS = [
-    lambda: HelperConfigTools(_Client([])).ha_config_list_helpers(
-        helper_type="no_such_helper"
-    ),
-    lambda: HelperConfigTools(_Client([])).ha_config_set_helper(
-        helper_type="no_such_helper", name="X"
-    ),
-    lambda: IntegrationTools(_Client([])).ha_remove_helpers_integrations(
-        target="no_such_helper.x", helper_type="no_such_helper", confirm=True
-    ),
-]
+@pytest.mark.usefixtures("config_up")
+async def test_a_fresh_read_is_not_repeated_for_an_unknown_type(
+    core_client: HomeAssistantClient,
+) -> None:
+    with flow_list_reads() as reads, pytest.raises(ToolError):
+        await helper_flows.require_helper_type(core_client, "no_such_helper")
+    reads.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("call", _UNKNOWN_TYPE_CALLS, ids=["list", "set", "remove"])
+@pytest.mark.usefixtures("config_up", "enable_custom_integrations")
+async def test_an_entity_of_a_newly_installed_helper_integration_is_a_helper(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entity = entity_registry.async_get_or_create("sensor", CUSTOM, "gate")
+    await helper_flows.helper_flow_types(core_client)  # cached before the install
+    install_custom_helper(tmp_path, monkeypatch, CUSTOM)
+    async_clear_custom_components_cache(hass)
+    assert await flow_helper_lookup.resolve_helper_entity(
+        core_client, entity.entity_id
+    ) == (CUSTOM, entity.entity_id)
+
+
+@pytest.mark.usefixtures("config_up")
+@pytest.mark.parametrize("kind", ["list", "set", "remove"])
 async def test_an_unknown_helper_type_is_refused_naming_the_known_ones(
-    call: Any,
+    core_client: HomeAssistantClient, kind: str
 ) -> None:
     with pytest.raises(ToolError) as exc_info:
-        await call()
+        await _call_with_unknown_type(kind, core_client)
     error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "no_such_helper" in error["message"]
@@ -164,68 +228,63 @@ async def test_an_unknown_helper_type_is_refused_naming_the_known_ones(
     assert "template" in suggestions
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("call", _UNKNOWN_TYPE_CALLS, ids=["list", "set", "remove"])
+@pytest.mark.parametrize("kind", ["list", "set", "remove"])
 async def test_a_failed_helper_flow_read_is_a_structured_connection_error(
-    monkeypatch: pytest.MonkeyPatch, call: Any
+    unreachable_client: HomeAssistantClient, kind: str
 ) -> None:
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(side_effect=HomeAssistantConnectionError("down")),
-    )
     with pytest.raises(ToolError) as exc_info:
-        await call()
+        await _call_with_unknown_type(kind, unreachable_client)
     assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
 
 
-def _enable_auto_backup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        auto_backup,
-        "get_global_settings",
-        lambda: SimpleNamespace(enable_auto_backup=True, auto_backup_dir=str(tmp_path)),
-    )
-
-
 async def _update_unknown_helper_type(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> tuple[dict[str, Any], _Client]:
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> tuple[dict[str, Any], MockConfigEntry]:
     """Update a ``no_such_helper`` the component does not cover and Core does
-    not list; return the refusal and the client."""
-    _enable_auto_backup(monkeypatch, tmp_path)
-
-    async def fake_ws_send(client: Any, message: dict[str, Any]) -> Any:
-        return {"covered_types": [], "helpers": []}
-
-    monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
-    client = _Client([])
-    client.start_options_flow = AsyncMock()
+    not list; return the refusal and the real template entry it targeted."""
+    entry = await create_template_sensor(hass, "1")
     with pytest.raises(ToolError) as exc_info:
         await HelperConfigTools(client).ha_config_set_helper(
-            helper_type="no_such_helper", helper_id="entry_1", config={"x": 1}
+            helper_type="no_such_helper",
+            helper_id=entry.entry_id,
+            config={"state": "{{ 2 }}"},
         )
-    return error_of(exc_info), client
+    return error_of(exc_info), entry
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("backup_settings")
 async def test_an_update_with_an_unknown_helper_type_is_refused_before_any_write(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
     """with_auto_backup captures before the tool body checks helper_type; the
-    update is still refused before its options flow starts."""
-    error, client = await _update_unknown_helper_type(monkeypatch, tmp_path)
+    update is still refused before it changes the entry."""
+    error, entry = await _update_unknown_helper_type(hass, component_core_client)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-    client.start_options_flow.assert_not_awaited()
+    assert entry.options["state"] == "{{ '1' }}"
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("backup_settings")
+async def test_the_same_update_with_the_entrys_own_type_is_written(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """The twin of the refusal above: it is the type, not the call, that refuses."""
+    entry = await create_template_sensor(hass, "1")
+    await HelperConfigTools(component_core_client).ha_config_set_helper(
+        helper_type="template", helper_id=entry.entry_id, config={"state": "{{ 2 }}"}
+    )
+    assert entry.options["state"] == "{{ 2 }}"
+
+
+@pytest.mark.usefixtures("backup_settings")
 async def test_the_skipped_capture_of_an_unknown_helper_type_is_not_a_failed_read(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A type Core does not list has nothing to back up: the capture logs the
     skip at INFO, not a failed fetch at WARNING."""
     with caplog.at_level(logging.INFO):
-        await _update_unknown_helper_type(monkeypatch, tmp_path)
+        await _update_unknown_helper_type(hass, component_core_client)
     records = [r for r in caplog.records if r.name == bm.logger.name]
     assert [r for r in records if r.levelno >= logging.WARNING] == []
     assert any(
@@ -234,234 +293,174 @@ async def test_the_skipped_capture_of_an_unknown_helper_type_is_not_a_failed_rea
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("backup_settings")
 async def test_an_entry_delete_proceeds_when_the_helper_flow_read_fails(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Deciding whether the deleted entry is a helper needs Core's helper flow
     list; when that read fails the delete still runs, with the skipped backup
     reported."""
-    _enable_auto_backup(monkeypatch, tmp_path)
+    entry = await create_template_sensor(hass, "1")
     monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(side_effect=HomeAssistantConnectionError("down")),
+        config_entries_view,
+        "async_get_config_flows",
+        _failing_flow_list,
     )
-    # A capture that got past the domain decision would read through here.
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(return_value=[]))
-    client = _Client([])
-    client.get_config_entry = AsyncMock(return_value={"domain": "template"})
-    client.delete_config_entry = AsyncMock(return_value={"require_restart": False})
-    result = await IntegrationTools(client).ha_remove_helpers_integrations(
-        target="entry_1", confirm=True
-    )
-    client.delete_config_entry.assert_awaited_once_with("entry_1")
+    result = await IntegrationTools(
+        component_core_client
+    ).ha_remove_helpers_integrations(target=entry.entry_id, confirm=True)
+    assert hass.config_entries.async_get_entry(entry.entry_id) is None
     [warning] = result.get("warnings") or [None]
     assert warning is not None
     assert warning.startswith("No pre-write backup was taken")
 
 
-def _custom_flow_client() -> MagicMock:
-    """A client whose config flow for my_custom_helper takes a name and a source."""
-    client = MagicMock()
-    client.start_config_flow = AsyncMock(
-        return_value={
-            "type": "form",
-            "flow_id": "f1",
-            "step_id": "user",
-            "data_schema": [{"name": "name"}, {"name": "source"}],
-        }
-    )
-    client.submit_config_flow_step = AsyncMock(
-        return_value={
-            "type": "create_entry",
-            "result": {"entry_id": "e-custom", "domain": "my_custom_helper"},
-        }
-    )
-    client.abort_config_flow = AsyncMock(return_value={})
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": []}
-    )
-    return client
+async def _failing_flow_list(*args: Any, **kwargs: Any) -> set[str]:
+    raise HomeAssistantConnectionError("down")
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("custom_helper_flow", "config_up")
 async def test_a_custom_helper_flow_is_created_through_its_config_flow(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """A helper integration outside Core's built-in list is created through
     its own config flow, like template or group."""
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(return_value=frozenset({"template", "my_custom_helper"})),
-    )
-    client = _custom_flow_client()
-    result = await HelperConfigTools(client).ha_config_set_helper(
-        helper_type="my_custom_helper",
+    result = await HelperConfigTools(core_client).ha_config_set_helper(
+        helper_type=CUSTOM,
         name="Gate",
         config={"source": "sensor.x"},
         wait=False,
     )
     assert result["success"] is True, result
-    assert {c.args[0] for c in client.start_config_flow.await_args_list} == {
-        "my_custom_helper"
-    }
-    submitted = [c.args[1] for c in client.submit_config_flow_step.await_args_list]
-    assert {"name": "Gate", "source": "sensor.x"} in submitted
+    [entry] = hass.config_entries.async_entries(CUSTOM)
+    assert entry.title == "Gate"
+    assert entry.data == {"name": "Gate", "source": "sensor.x"}
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("custom_helper_flow", "config_up")
 async def test_a_custom_helper_flow_describes_its_config_flow_fields(
-    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
 ) -> None:
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(return_value=frozenset({"template", "my_custom_helper"})),
+    result = await HelperConfigTools(core_client).ha_config_list_helpers(
+        helper_type=CUSTOM, describe=True
     )
-    client = _custom_flow_client()
-    result = await HelperConfigTools(client).ha_config_list_helpers(
-        helper_type="my_custom_helper", describe=True
-    )
-    client.start_config_flow.assert_awaited_with("my_custom_helper")
     assert [field["name"] for field in result["fields"]] == ["name", "source"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("custom_helper_flow", "config_up")
 async def test_a_custom_helper_flow_is_removed_through_the_flow_path(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
 ) -> None:
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(return_value=frozenset({"template", "my_custom_helper"})),
+    entry = MockConfigEntry(domain=CUSTOM, title="Gate")
+    entry.add_to_hass(hass)
+    entity = entity_registry.async_get_or_create(
+        "sensor", CUSTOM, "gate", config_entry=entry
     )
-    delete_flow = AsyncMock(return_value={"success": True})
-    monkeypatch.setattr(IntegrationTools, "_delete_flow_helper", delete_flow)
-    await IntegrationTools(_Client([])).ha_remove_helpers_integrations(
-        target="sensor.custom", helper_type="my_custom_helper", confirm=True
+    await IntegrationTools(core_client).ha_remove_helpers_integrations(
+        target=entity.entity_id, helper_type=CUSTOM, confirm=True
     )
-    assert delete_flow.await_args.args[0] == "my_custom_helper"
+    assert hass.config_entries.async_get_entry(entry.entry_id) is None
 
 
-@pytest.mark.parametrize("helper_type", ["template", "otp", "my_custom_helper"])
-def test_any_flow_helper_type_gets_an_options_handler(
-    tmp_path: Path, helper_type: str
+@pytest.mark.usefixtures("custom_helper_flow", "config_up")
+async def test_a_platform_that_is_a_custom_helper_flow_is_offered_as_the_retry(
+    core_client: HomeAssistantClient, entity_registry: er.EntityRegistry
 ) -> None:
-    mgr = bm.get_backup_manager(
-        _StubClient(), _StubSettings(auto_backup_dir=str(tmp_path))
-    )
-    handler = mgr.handler_for(f"helper_{helper_type}")
-    assert handler is not None
-    assert handler.fetch.__qualname__.startswith("_make_flow_helper_handler")
-
-
-@pytest.mark.parametrize("domain", ["helper_input_boolean", "helper_config_subentry"])
-def test_storage_and_subentry_domains_get_no_flow_handler(
-    tmp_path: Path, domain: str
-) -> None:
-    mgr = bm.get_backup_manager(
-        _StubClient(), _StubSettings(auto_backup_dir=str(tmp_path))
-    )
-    handler = mgr.handler_for(domain)
-    assert handler is not None
-    assert not handler.fetch.__qualname__.startswith("_make_flow_helper_handler")
-
-
-@pytest.mark.parametrize(
-    "domain,is_flow",
-    [
-        ("helper_template", True),
-        ("helper_my_custom_helper", True),
-        ("helper_input_boolean", False),
-        ("helper_config_subentry", False),
-        ("helper_", False),
-        ("automation", False),
-    ],
-)
-def test_flow_helper_snapshot_domains_need_no_list_of_flow_types(
-    domain: str, is_flow: bool
-) -> None:
-    assert bm._is_flow_helper_domain(domain) is is_flow
-
-
-def test_a_mistyped_flow_domain_does_not_stay_in_the_supported_domains(
-    tmp_path: Path,
-) -> None:
-    mgr = bm.get_backup_manager(
-        _StubClient(), _StubSettings(auto_backup_dir=str(tmp_path))
-    )
-    before = mgr.supported_domains()
-    assert mgr.handler_for("helper_input_bolean") is not None
-    assert mgr.supported_domains() == before
-
-
-@pytest.mark.asyncio
-async def test_an_on_demand_snapshot_of_an_unlisted_helper_type_is_refused(
-    tmp_path: Path,
-) -> None:
-    mgr = bm.get_backup_manager(
-        _StubClient(), _StubSettings(auto_backup_dir=str(tmp_path))
-    )
+    entity = entity_registry.async_get_or_create("sensor", CUSTOM, "gate")
     with pytest.raises(ToolError) as exc_info:
-        await _edits_create(mgr, "edits", "create", "helper_input_bolean", "x.y")
+        await IntegrationTools(core_client).ha_remove_helpers_integrations(
+            target=entity.entity_id, helper_type="template", confirm=True
+        )
+    assert error_of(exc_info)["suggestion"] == (
+        f"Pass helper_type='{CUSTOM}', or omit helper_type."
+    )
+
+
+@pytest.mark.usefixtures("custom_helper_flow")
+async def test_a_template_helper_is_read_through_its_options_handler(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    entry = await create_template_sensor(hass, "1")
+    handler = snapshot_manager.handler_for("helper_template")
+    assert handler is not None
+    held = await handler.fetch(component_core_client, entry.entry_id)
+    assert held["entry_id"] == entry.entry_id
+    assert held["options"]["state"] == "{{ '1' }}"
+
+
+async def test_a_mistyped_flow_domain_does_not_stay_in_the_supported_domains(
+    snapshot_manager: bm.BackupManager,
+) -> None:
+    before = snapshot_manager.supported_domains()
+    assert snapshot_manager.handler_for("helper_input_bolean") is not None
+    assert snapshot_manager.supported_domains() == before
+    assert snapshot_manager.handler_for("helper_") is None
+
+
+@pytest.mark.usefixtures("config_up")
+async def test_an_on_demand_snapshot_of_an_unlisted_helper_type_is_refused(
+    component_core_client: HomeAssistantClient, snapshot_manager: bm.BackupManager
+) -> None:
+    with pytest.raises(ToolError) as exc_info:
+        await manage_backup(
+            component_core_client,
+            scope="edits",
+            action="create",
+            domain="helper_input_bolean",
+            entity_id="x.y",
+        )
     assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
-def test_a_platform_that_is_a_custom_helper_flow_is_offered_as_the_retry() -> None:
-    with pytest.raises(ToolError) as exc_info:
-        _raise_platform_mismatch(
-            "sensor.x", "template", "my_custom_helper", frozenset({"my_custom_helper"})
-        )
-    assert error_of(exc_info)["suggestion"] == (
-        "Pass helper_type='my_custom_helper', or omit helper_type."
-    )
-
-
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("config_up")
 @pytest.mark.parametrize(
     "entry_domain,backup_domain",
     [("template", "helper_template"), ("hue", "integration")],
 )
 async def test_an_entry_delete_is_backed_up_as_a_helper_only_for_a_helper_flow(
-    entry_domain: str, backup_domain: str
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entry_domain: str,
+    backup_domain: str,
 ) -> None:
-    client = MagicMock(
-        get_config_entry=AsyncMock(return_value={"domain": entry_domain})
-    )
+    entry = MockConfigEntry(domain=entry_domain)
+    entry.add_to_hass(hass)
     domain = await resolve_config_entry_backup_domain(
-        client, {"target": "e1"}, "integration", "e1"
+        core_client, {"target": entry.entry_id}, "integration", entry.entry_id
     )
     assert domain == backup_domain
 
 
-@pytest.mark.asyncio
+@pytest.mark.usefixtures("custom_helper_flow", "backup_settings")
 @pytest.mark.parametrize(
-    "record,reason",
+    "domain,options,detail",
     [
-        (
-            {"options": None, "options_withheld": "custom_integration"},
-            "options_withheld",
-        ),
-        ({"options": {}}, "invalid_options"),
+        (CUSTOM, {"k": "v"}, "custom integration"),
+        ("otp", {}, "no stored options"),
     ],
 )
 async def test_a_helper_without_readable_options_is_not_backed_up_and_says_why(
-    monkeypatch: pytest.MonkeyPatch, record: dict[str, Any], reason: str
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+    domain: str,
+    options: dict[str, Any],
+    detail: str,
 ) -> None:
-    async def fake_ws_send(client: Any, message: dict[str, Any]) -> Any:
-        if message["type"] == "ha_mcp_tools/helpers_list":
-            return {
-                "covered_types": ["my_helper"],
-                "helpers": [
-                    {"kind": "flow", "helper_type": "my_helper", "entry_id": "e1"}
-                    | record
-                ],
-            }
-        return []
-
-    monkeypatch.setattr(bm, "_ws_send", fake_ws_send)
-    with pytest.raises(bm._FlowHelperReadError) as exc_info:
-        await bm._fetch_flow_helper(None, "e1", "my_helper")
-    assert exc_info.value.reason == reason
+    entry = MockConfigEntry(domain=domain, options=options)
+    entry.add_to_hass(hass)
+    with pytest.raises(ToolError) as exc_info:
+        await manage_backup(
+            component_core_client,
+            scope="edits",
+            action="create",
+            domain=f"helper_{domain}",
+            entity_id=entry.entry_id,
+        )
+    assert detail in error_of(exc_info)["message"]

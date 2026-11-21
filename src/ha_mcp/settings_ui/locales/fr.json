@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Chemin des outils enregistrés",
     "advanced.code_mode_saved_tools_path.help": "Fichier JSON utilisé pour persister les outils personnalisés entre les redémarrages.",
     "advanced.extra_yaml_write_keys.label": "Clés d'écriture YAML supplémentaires",
-    "advanced.extra_yaml_write_keys.help": "Clés de premier niveau supplémentaires que ha_config_set_yaml peut écrire en plus de celles intégrées, pour les intégrations basées sur YAML sur cette installation (par ex. alert2). Entrez une clé par ligne ou séparez les clés par des virgules. Les clés qui redéfinissent la limite de confiance de Home Assistant ne peuvent jamais être ajoutées et sont ignorées. Nécessite le composant personnalisé 1.2.4 ou une version plus récente.",
+    "advanced.extra_yaml_write_keys.help": "Clés de premier niveau supplémentaires que ha_config_set_yaml peut écrire en plus de celles intégrées, pour les intégrations privilégiant YAML sur cette installation (par ex. alert2). Entrez une clé par ligne ou séparez les clés par des virgules. Les clés qui redéfinissent la limite de confiance de Home Assistant ne peuvent jamais être ajoutées et sont ignorées.",
     "advanced.redact_app_option_keys.label": "Clés d'options d'application supplémentaires à masquer",
     "advanced.redact_app_option_keys.help": "Noms d'options de l'application (add-on) à masquer comme les champs de mot de passe, pour les applications dont le schéma stocke un secret en texte brut (par exemple backup_password). Séparez les noms par des virgules ou des retours à la ligne. Un nom s'applique à toutes les applications ; écrivez app_slug:name pour le limiter à une seule application. Nommer un groupe d'options couvre toutes les options qu'il contient. Utilisé uniquement lorsque l'option Masquer les secrets est active. Vide par défaut.",
     "advanced.sidecar_pin_port.label": "Port du sidecar de l'interface des paramètres",
@@ -758,11 +758,7 @@
     },
     "ha_get_entity": {
       "title": "Obtenir l'entité",
-      "description": "Récupère les informations du registre sur une ou plusieurs entités."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Obtenir la visibilité de l'entité",
-      "description": "Affiche les entités exposées aux assistants vocaux."
+      "description": "Obtenir les entrées du registre des entités, ou sans entité, les paramètres du registre et les entités exposées."
     },
     "ha_get_hacs_info": {
       "title": "Obtenir les informations HACS",
@@ -793,8 +789,8 @@
       "description": "Récupère l'état actuel et les attributs d'une ou plusieurs entités."
     },
     "ha_get_system_health": {
-      "title": "Obtenir l'état du système",
-      "description": "Récupère les informations d'état sur Home Assistant, Zigbee, Z-Wave et les intégrations."
+      "title": "Obtenir l'état de santé du système (incl. réseaux ZHA, Z-Wave, Thread et Matter)",
+      "description": "Obtenir l'état de santé du système Home Assistant, y compris les réseaux Zigbee (ZHA), Z-Wave JS, Thread et Matter."
     },
     "ha_get_todo": {
       "title": "Obtenir les listes de tâches",
@@ -810,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Lister les étages et zones",
-      "description": "Affiche les étages avec les zones imbriquées, y compris les zones sans étage."
+      "description": "Lister les étages dans l'ordre où Home Assistant les conserve, chacun avec ses zones assignées imbriquées, ainsi que les zones sans étage."
     },
     "ha_list_services": {
       "title": "Lister les services",
@@ -905,8 +901,8 @@
       "description": "Recherche dans les entités et le contenu des automatisations, scripts, scènes, assistants et tableaux de bord."
     },
     "ha_set_area_or_floor": {
-      "title": "Créer/mettre à jour une zone ou un étage",
-      "description": "Crée ou met à jour une zone ou un étage dans Home Assistant."
+      "title": "Créer, mettre à jour ou réorganiser des zones ou des étages",
+      "description": "Créer, mettre à jour ou réorganiser les zones ou les étages de Home Assistant."
     },
     "ha_set_device": {
       "title": "Mettre à jour l'appareil",
@@ -914,7 +910,7 @@
     },
     "ha_set_entity": {
       "title": "Mettre à jour l'entité",
-      "description": "Met à jour le nom, la zone, les étiquettes et d'autres propriétés de l'entité."
+      "description": "Mettre à jour les entrées du registre des entités, ou sans entity_id, les paramètres globaux du registre."
     },
     "ha_set_integration": {
       "title": "Mettre à jour l'intégration",

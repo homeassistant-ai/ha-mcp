@@ -93,13 +93,13 @@ _LOGGER = logging.getLogger(__name__)
 
 # Listing tools is two loopback round-trips (initialize + tools/list); a slow
 # answer means the server thread is wedged, not that the network is slow.
-_LIST_TOOLS_TIMEOUT_SECONDS = 10.0
+LIST_TOOLS_TIMEOUT_SECONDS = 10.0
 
 # Tool calls run real work — WebSocket-verified device control, dashboard
 # screenshots, config writes that poll for completion — well beyond the 10s a
 # remote-server integration would allow. The conversation agent shows a spinner
 # for the duration, so err generous rather than kill a legitimate slow tool.
-_CALL_TOOL_TIMEOUT_SECONDS = 300.0
+CALL_TOOL_TIMEOUT_SECONDS = 300.0
 
 
 @cache
@@ -126,6 +126,12 @@ def _schema_converter() -> Callable[[Any], Any]:
     return cast(Callable[[Any], Any], legacy.convert_to_voluptuous)
 
 
+def reset_schema_converter() -> None:
+    """Resolve the converter again on the next conversion; tests use it to
+    switch codecs within one process."""
+    _schema_converter.cache_clear()
+
+
 def convert_to_voluptuous(schema: Any) -> vol.Schema:
     """Convert an OpenAPI schema on stable and Probatio-based HA Core."""
     return cast(vol.Schema, _schema_converter()(schema))
@@ -134,7 +140,7 @@ def convert_to_voluptuous(schema: Any) -> vol.Schema:
 # Keywords whose value is a mapping keyed by author-chosen names — property
 # names, definition names, regexes — rather than by JSON Schema keywords. A key
 # spelled like a bound is one of those names and must not be rewritten.
-_SCHEMA_MAPS: frozenset[str] = frozenset(
+SCHEMA_MAPS: frozenset[str] = frozenset(
     {
         "properties",
         "patternProperties",
@@ -149,7 +155,7 @@ _SCHEMA_MAPS: frozenset[str] = frozenset(
 # Keywords whose value is instance data rather than a subschema. A key spelled
 # like a bound inside one of these is a value in someone's default, not a bound.
 # ``example`` is OpenAPI's singular spelling of ``examples``.
-_INSTANCE_VALUES: frozenset[str] = frozenset(
+INSTANCE_VALUES: frozenset[str] = frozenset(
     {"default", "const", "enum", "examples", "example"}
 )
 # Keywords whose value is neither a subschema nor a map of subschemas.
@@ -158,11 +164,11 @@ _INSTANCE_VALUES: frozenset[str] = frozenset(
 # those names, and its ``$ref`` value would read as a non-numeric bound and be
 # dropped, corrupting a valid discriminated union. OpenAPI ``x-`` specification
 # extensions carry arbitrary vendor objects the same way and are matched by
-# prefix in ``_is_opaque_key``.
+# prefix in ``is_opaque_key``.
 _OPAQUE_KEYWORDS: frozenset[str] = frozenset({"discriminator"})
 
 
-def _is_opaque_key(key: str) -> bool:
+def is_opaque_key(key: str) -> bool:
     """True for a keyword whose value must be copied through untouched."""
     return key in _OPAQUE_KEYWORDS or key.startswith("x-")
 
@@ -170,7 +176,7 @@ def _is_opaque_key(key: str) -> bool:
 # Each exclusive keyword, the inclusive twin it folds into, the picker that
 # keeps the tighter of the two when both are present, and the step to the
 # nearest integer the bound still admits.
-_EXCLUSIVE_BOUNDS: tuple[
+EXCLUSIVE_BOUNDS: tuple[
     tuple[str, str, Callable[[Any, Any], Any], Callable[[Any], int]], ...
 ] = (
     ("exclusiveMinimum", "minimum", max, lambda bound: math.floor(bound) + 1),
@@ -220,12 +226,12 @@ def _to_inclusive_bounds(schema: Any, rewrite: _Rewrite | None = None) -> Any:
 
     result: dict[str, Any] = {}
     for key, value in schema.items():
-        if key in _INSTANCE_VALUES or _is_opaque_key(key):
+        if key in INSTANCE_VALUES or is_opaque_key(key):
             # Copied, not aliased: the result is handed to Core and kept in
             # the search catalog, and neither may reach back into the MCP
             # result object this schema came from.
             result[key] = copy.deepcopy(value)
-        elif key in _SCHEMA_MAPS and isinstance(value, dict):
+        elif key in SCHEMA_MAPS and isinstance(value, dict):
             result[key] = {
                 name: _to_inclusive_bounds(sub, rewrite) for name, sub in value.items()
             }
@@ -257,7 +263,7 @@ def _admits_integers_only(node: dict[str, Any]) -> bool:
 
 def _fold_bounds(node: dict[str, Any], rewrite: _Rewrite | None = None) -> None:
     """Fold each exclusive keyword into its inclusive twin, in place."""
-    for exclusive, inclusive, tighter, to_integer in _EXCLUSIVE_BOUNDS:
+    for exclusive, inclusive, tighter, to_integer in EXCLUSIVE_BOUNDS:
         if exclusive not in node:
             continue
         bound = node.pop(exclusive)
@@ -394,14 +400,14 @@ def _transport_errors() -> tuple[type[BaseException], ...]:
     :func:`_transport_error_leaves` to find. Includes ExceptionGroup because
     the SDK's anyio task groups wrap in-session failures — but a caught group
     must still pass
-    :func:`_is_transport_failure` before being mapped to a friendly error,
+    :func:`is_transport_failure` before being mapped to a friendly error,
     or a genuine bug that happened inside the task group would be relabeled
     as a transport failure (review finding).
     """
     return (*_transport_error_leaves(), ExceptionGroup)
 
 
-def _is_transport_failure(err: BaseException) -> bool:
+def is_transport_failure(err: BaseException) -> bool:
     """Return True when ``err`` is purely a transport failure.
 
     A group counts only when EVERY leaf (nested groups included) is a
@@ -410,7 +416,7 @@ def _is_transport_failure(err: BaseException) -> bool:
     remapped to a "could not reach the server" message.
     """
     if isinstance(err, ExceptionGroup):
-        return all(_is_transport_failure(exc) for exc in err.exceptions)
+        return all(is_transport_failure(exc) for exc in err.exceptions)
     return isinstance(err, _transport_error_leaves())
 
 
@@ -453,7 +459,7 @@ def _loopback_httpx_client_factory(
     That deprecated entry point takes no ``http_client`` — it always builds
     its own via this factory — but the factory itself IS overridable, so the
     same ``verify=False`` / ``trust_env=False`` posture as the canonical path
-    in :func:`_mcp_session` still applies: this fallback is loopback-only
+    in :func:`mcp_session` still applies: this fallback is loopback-only
     too, so a real SSL context is pure waste and this call must never be
     diverted through an environment proxy (which would also leak the URL's
     embedded ``secret_path`` to it).
@@ -489,7 +495,7 @@ def _loopback_httpx_client_factory(
 
 
 @asynccontextmanager
-async def _mcp_session(
+async def mcp_session(
     url: str,
 ) -> AsyncIterator[tuple[ClientSession, mcp_types.InitializeResult]]:
     """Open an initialized MCP session against the loopback server.
@@ -505,7 +511,7 @@ async def _mcp_session(
     shared client is built with no explicit ``timeout=``, so it silently
     carries httpx's own hardcoded 5-second default — capping every tool call
     at 5 seconds of read-idle no matter how generous
-    ``_CALL_TOOL_TIMEOUT_SECONDS`` / ``_LIST_TOOLS_TIMEOUT_SECONDS`` looked
+    ``CALL_TOOL_TIMEOUT_SECONDS`` / ``LIST_TOOLS_TIMEOUT_SECONDS`` looked
     (live-found investigating a ~60s Assist-pipeline hang: a real tool doing
     real work never got anywhere near its own asyncio budget).
 
@@ -559,7 +565,7 @@ async def _mcp_session(
                 http_lib.AsyncClient(
                     verify=False,
                     trust_env=False,
-                    timeout=http_lib.Timeout(_CALL_TOOL_TIMEOUT_SECONDS),
+                    timeout=http_lib.Timeout(CALL_TOOL_TIMEOUT_SECONDS),
                 )
             )
             transport = streamable_http_client(url=url, http_client=http_client)
@@ -599,7 +605,7 @@ class HaMcpTool(llm.Tool):
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
-    ) -> llm.ToolResult | JsonObjectType:
+    ) -> llm.ToolResult:
         """Call the tool on the in-process server and return its result."""
         dumped = await _forward_tool_call(
             hass, self._server_url, self.name, tool_input.tool_args
@@ -609,7 +615,7 @@ class HaMcpTool(llm.Tool):
         return tool_result(dumped, error=dumped.get("isError") is True)
 
 
-def _unknown_tool(name: str) -> llm.ToolResult | JsonObjectType:
+def _unknown_tool(name: str) -> llm.ToolResult:
     """The answer for a tool that does not exist or is not exposed."""
     return tool_result(
         {
@@ -631,8 +637,8 @@ async def _forward_tool_call(
     """
     try:
         async with (
-            asyncio.timeout(_CALL_TOOL_TIMEOUT_SECONDS),
-            _mcp_session(server_url) as (session, _init),
+            asyncio.timeout(CALL_TOOL_TIMEOUT_SECONDS),
+            mcp_session(server_url) as (session, _init),
         ):
             exposed, _pinned, _stamped = partition_tools(
                 (await session.list_tools()).tools
@@ -641,7 +647,7 @@ async def _forward_tool_call(
                 return None
             result = await session.call_tool(name, arguments)
     except _transport_errors() as err:
-        if not _is_transport_failure(err):
+        if not is_transport_failure(err):
             raise
         raise HomeAssistantError(
             f"Error calling the HA-MCP tool {name}: {err}"
@@ -709,7 +715,7 @@ class HaMcpCallTool(llm.Tool):
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
-    ) -> llm.ToolResult | JsonObjectType:
+    ) -> llm.ToolResult:
         """Forward the call when the target is exposed; unknown-tool otherwise."""
         name = str(tool_input.tool_args.get("name", ""))
         arguments = tool_input.tool_args.get("arguments") or {}
@@ -745,15 +751,15 @@ class HaMcpLlmApi(llm.API):
         """
         try:
             async with (
-                asyncio.timeout(_LIST_TOOLS_TIMEOUT_SECONDS),
-                _mcp_session(self.server_url) as (
+                asyncio.timeout(LIST_TOOLS_TIMEOUT_SECONDS),
+                mcp_session(self.server_url) as (
                     session,
                     init_result,
                 ),
             ):
                 list_result = await session.list_tools()
         except _transport_errors() as err:
-            if not _is_transport_failure(err):
+            if not is_transport_failure(err):
                 raise
             raise HomeAssistantError(
                 f"Could not reach the in-process HA-MCP server: {err}"

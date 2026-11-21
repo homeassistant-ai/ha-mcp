@@ -46,7 +46,6 @@ from .const import (
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_OAUTH_REGENERATE,
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
@@ -58,6 +57,7 @@ from .const import (
     WEBHOOK_AUTH_NONE,
 )
 from .entry_device import async_register_entry_device
+from .oauth_redirect_allowlist import OPT_OAUTH_REDIRECT_ALLOWLIST
 
 # NOTE: embedded_setup (and its embedded_server / mcp_webhook
 # chain), plus websocket_api, are imported lazily inside the entry lifecycle
@@ -126,7 +126,7 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # entry.data, and those writes must not self-reload.
     domain_data[DATA_LAST_OPTIONS] = dict(entry.options)
 
-    # The server package arrives with the component release HACS delivers
+    # The server package arrives with the component release the Marketplace delivers
     # (the manifest pins it), so the server update entity, its PyPI poll and
     # the automatic reinstall are gone. Drop the entity they left behind.
     _remove_retired_update_entity(hass, entry)

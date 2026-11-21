@@ -250,17 +250,53 @@ jobs:
         # parallel run excludes them; a single-worker phase runs them after,
         # when nothing else can be in flight.
         run: |
+          # Each phase sets its own -m and worker count, and pytest keeps the
+          # last of either, so the dispatch arguments may not set them. The
+          # loop splits them as the pytest commands below do, and reads a
+          # short-option cluster such as -vn2 the way pytest does. An @file
+          # argument would add options the loop cannot see.
+          set -f
+          # shellcheck disable=SC2086
+          for argument in $PYTEST_ARGS; do
+            case "$argument" in
+              @*|--markexpr*|--numprocesses*) refused=$argument ;;
+              --*) ;;
+              -?*)
+                cluster=${argument#-}
+                while [ -n "$cluster" ]; do
+                  case "$cluster" in
+                    [mn]*) refused=$argument; break ;;
+                    # These take a value: the rest of the cluster is that value.
+                    [cokprW]*) break ;;
+                  esac
+                  cluster=${cluster#?}
+                done ;;
+            esac
+            if [ -n "${refused:-}" ]; then
+              echo "::error::pytest_args cannot set $refused here; narrow with -k or pytest_paths."
+              exit 1
+            fi
+          done
+          # pytest_paths may hold filename patterns, expanded after cd tests.
+          set +f
           cd tests
           # Inputs are data, intentionally word-split into pytest arguments.
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 \
-            -m "not addon_disruptive" $PYTEST_ARGS
+            -m "not addon_disruptive" $PYTEST_ARGS || parallel=$?
+          # Exit 5 is an empty selection: a -k can pick only disruptive tests,
+          # or none. Either phase may be empty, not both.
+          [ "${parallel:-0}" -eq 0 ] || [ "$parallel" -eq 5 ] || exit "$parallel"
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n0 -v --tb=short --maxfail=0 \
-            -m addon_disruptive $PYTEST_ARGS \
-            || { rc=$?; [ "$rc" -eq 5 ] && echo "no disruptive tests in selection"; [ "$rc" -eq 5 ]; }
+            -m addon_disruptive $PYTEST_ARGS || serial=$?
+          [ "${serial:-0}" -eq 0 ] || [ "$serial" -eq 5 ] || exit "$serial"
+          if [ "${parallel:-0}" -eq 5 ] && [ "${serial:-0}" -eq 5 ]; then
+            echo "::error::The selection matched no tests."
+            exit 5
+          fi
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-beta-test-image.qcow2
@@ -271,9 +307,9 @@ jobs:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
-          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit)
-          # so HACS repo adds don't hit the unauthenticated shared-IP
-          # GitHub rate limit — the recurring HACS-install flake.
+          # Feeds _conftest_haos.py's Marketplace token injection (qcow2 pre-boot
+          # edit) so the Marketplace's GitHub calls don't hit the unauthenticated
+          # shared-IP GitHub rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HAOS + app diagnostics from booted qcow2 (always)
@@ -345,7 +381,7 @@ jobs:
             cat "$outdir/config.yaml" || true
           done
           ls -laR /tmp/haos-inaddon-beta-diagnostics/ || true
-          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
+          # The Marketplace token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.
@@ -506,9 +542,9 @@ jobs:
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
-          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit) so HACS
-          # repo adds don't hit the unauthenticated shared-IP GitHub rate limit —
-          # the recurring HACS-install flake.
+          # Feeds _conftest_haos.py's Marketplace token injection (qcow2 pre-boot
+          # edit) so the Marketplace's GitHub calls don't hit the unauthenticated
+          # shared-IP GitHub rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HA diagnostics from booted qcow2 (always)
@@ -563,7 +599,7 @@ jobs:
             cat "$outdir/config-dir-listing.txt" || true
           done
           ls -laR /tmp/haos-embedded-beta-diagnostics/ || true
-          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
+          # The Marketplace token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.

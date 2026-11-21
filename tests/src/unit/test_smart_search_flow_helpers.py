@@ -1,638 +1,356 @@
-"""Unit tests for ``ha_search`` coverage of UI-created flow-based
-helpers (template, group, utility_meter, derivative, ...).
+"""``ha_search`` over UI-created flow helpers (template, group, ...), issue #1457.
 
-Issue #1457: deep_search previously hard-coded the helper list to
-``input_*`` only, so config-entry helpers were invisible. The flow-helper
-branch now lists config entries for any helper flow Home Assistant lists
-and probes each entry's options flow so the helper's current config
-(template body, group members, etc.) is searchable alongside the
-storage-based helpers.
+Flow helpers are config entries, not storage records: the search lists the
+entries of every helper flow Home Assistant lists and reads each one's current
+config from its options flow, so a template body or group members are
+searchable. Only Home Assistant's own helper flows are opened (#2987).
+
+Every test searches a real ``hass`` through the server's own client; the
+helper flow lists are Core's own answers.
 """
 
-import asyncio
-import logging
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.config import config_entries as config_entries_view
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry, mock_config_flow
 
-from ha_mcp.tools import helper_flows
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.config import get_global_settings
 from ha_mcp.tools.smart_search import SmartSearchTools
 
+from ._core_setup import install_custom_helper
+from ._template_helper_core import create_template_sensor
 
-def _make_tools(client: Any) -> SmartSearchTools:
-    """Construct SmartSearchTools without loading global settings."""
-    with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
-        mock_settings.return_value.fuzzy_threshold = 60
-        return SmartSearchTools(client=client)
-
-
-def _make_flow_form(suggested_value: str) -> dict[str, Any]:
-    """Build the options-flow response shape HA returns for a template helper."""
-    return {
-        "flow_id": "flow-1",
-        "type": "form",
-        "step_id": "binary_sensor",
-        "data_schema": [
-            {
-                "name": "state",
-                "selector": {"template": {}},
-                "description": {"suggested_value": suggested_value},
-                "required": True,
-            }
-        ],
-    }
+CUSTOM = "my_custom_helper"
+_STORAGE_HELPERS = (
+    "input_boolean",
+    "input_number",
+    "input_select",
+    "input_text",
+    "input_datetime",
+    "input_button",
+)
+BACKEND_NOT_SCANNED = "1 helper backend(s) not scanned"
+CUSTOM_NOT_SCANNED = "1 custom helper integration entry not scanned"
 
 
-@pytest.mark.asyncio
-class TestFlowHelperDeepSearch:
-    """``_search_flow_helpers`` surfaces flow-helper config entries."""
-
-    async def test_template_helper_matches_on_title(self) -> None:
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXTEMPLATEWEATHER",
-                    "domain": "template",
-                    "title": "Weather Message",
-                    "supports_options": True,
-                },
-                {
-                    "entry_id": "01HXTEMPLATEOTHER",
-                    "domain": "template",
-                    "title": "Unrelated",
-                    "supports_options": True,
-                },
-            ]
-        )
-        # Title-only exact match — no probe needed for the matching entry.
-        client.start_options_flow = AsyncMock(
-            return_value=_make_flow_form("{{ states('sensor.x') }}")
-        )
-        client.abort_options_flow = AsyncMock()
-
-        tools = _make_tools(client)
-        semaphore = asyncio.Semaphore(8)
-        results, _, _ = await tools._search_flow_helpers(
-            "weather", exact_match=True, semaphore=semaphore, include_config=False
-        )
-
-        entry_ids = {r["entry_id"] for r in results}
-        assert "01HXTEMPLATEWEATHER" in entry_ids
-        assert "01HXTEMPLATEOTHER" not in entry_ids
-        match = next(r for r in results if r["entry_id"] == "01HXTEMPLATEWEATHER")
-        assert match["helper_type"] == "template"
-        assert match["name"] == "Weather Message"
-        assert match["match_in_name"] is True
-        # include_config=False → no config in result, no options probe needed.
-        assert "config" not in match
-
-    async def test_template_helper_matches_on_template_body(self) -> None:
-        # Query is a substring of the template body but NOT the title —
-        # forces the options-flow probe path.
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXTEMPLATEX",
-                    "domain": "template",
-                    "title": "Renamed Sensor",
-                    "supports_options": True,
-                },
-            ]
-        )
-        client.start_options_flow = AsyncMock(
-            return_value=_make_flow_form(
-                "{{ states('sensor.outside_temperature') | float }}"
-            )
-        )
-        client.abort_options_flow = AsyncMock()
-
-        tools = _make_tools(client)
-        results, _, _ = await tools._search_flow_helpers(
-            "outside_temperature",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=False,
-        )
-
-        assert len(results) == 1
-        assert results[0]["entry_id"] == "01HXTEMPLATEX"
-        assert results[0]["match_in_config"] is True
-        client.start_options_flow.assert_awaited_once_with("01HXTEMPLATEX")
-        client.abort_options_flow.assert_awaited_once_with("flow-1")
-
-    async def test_include_config_attaches_options_body(self) -> None:
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXTEMPLATEZ",
-                    "domain": "template",
-                    "title": "Comfort Index",
-                    "supports_options": True,
-                }
-            ]
-        )
-        client.start_options_flow = AsyncMock(
-            return_value=_make_flow_form("{{ comfort_index() }}")
-        )
-        client.abort_options_flow = AsyncMock()
-
-        tools = _make_tools(client)
-        results, _, _ = await tools._search_flow_helpers(
-            "comfort",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=True,
-        )
-        assert results[0]["config"] == {"state": "{{ comfort_index() }}"}
-        # include_config=True forces the probe even though the title already
-        # exact-matches (the config body has to be fetched to attach it).
-        client.start_options_flow.assert_awaited_once_with("01HXTEMPLATEZ")
-
-    async def test_skips_non_flow_helper_domains(self) -> None:
-        # Mixed list: only the template entry should be considered.
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXLIGHTHUE",
-                    "domain": "hue",
-                    "title": "Hue Bridge",
-                    "supports_options": True,
-                },
-                {
-                    "entry_id": "01HXTEMPLATEAA",
-                    "domain": "template",
-                    "title": "Match Me",
-                    "supports_options": True,
-                },
-            ]
-        )
-        client.start_options_flow = AsyncMock(
-            return_value=_make_flow_form("{{ true }}")
-        )
-        client.abort_options_flow = AsyncMock()
-
-        tools = _make_tools(client)
-        results, _, _ = await tools._search_flow_helpers(
-            "match",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=False,
-        )
-        assert [r["entry_id"] for r in results] == ["01HXTEMPLATEAA"]
-        # The non-helper entry is not even probed for an options body.
-        probed = {c.args[0] for c in client.start_options_flow.await_args_list}
-        assert "01HXLIGHTHUE" not in probed
-
-    async def test_optionless_entry_matches_on_title_without_a_probe(self) -> None:
-        # A helper flow with no options flow (otp) has no body to probe, but
-        # its title is still searchable.
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXNOOPTS",
-                    "domain": "otp",
-                    "title": "Router Login",
-                    "supports_options": False,
-                }
-            ]
-        )
-        client.start_options_flow = AsyncMock()
-        tools = _make_tools(client)
-        results, failed, _ = await tools._search_flow_helpers(
-            "router",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=True,
-        )
-        assert [(r["entry_id"], r["config"]) for r in results] == [("01HXNOOPTS", {})]
-        assert failed == 0
-        client.start_options_flow.assert_not_awaited()
-
-    async def test_rest_call_failure_signals_failed_for_partial(self) -> None:
-        # The config-entries list fetch raising means the whole flow-helper
-        # surface is unreachable — it must signal a non-zero failure count (not
-        # just an empty list) so ``_deep_search_helpers`` routes it to
-        # ``partial``. The whole-surface failure counts as 1.
-        client = MagicMock()
-        client._request = AsyncMock(side_effect=RuntimeError("REST down"))
-        tools = _make_tools(client)
-        results, failed, _ = await tools._search_flow_helpers(
-            "anything",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=False,
-        )
-        assert results == []
-        assert failed == 1
-
-    async def test_unexpected_list_shape_signals_failed(self) -> None:
-        # A non-list response from the config-entries endpoint (e.g. an error
-        # dict on a future HA version) is a backend failure, not "no helpers" —
-        # it must signal a non-zero count rather than be swallowed to empty.
-        client = MagicMock()
-        client._request = AsyncMock(return_value={"error": "boom"})
-        tools = _make_tools(client)
-        results, failed, _ = await tools._search_flow_helpers(
-            "anything",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=False,
-        )
-        assert results == []
-        assert failed == 1
-
-    async def test_empty_flow_entries_is_not_a_failure(self) -> None:
-        # A successful list with no flow-helper entries is a genuine zero —
-        # the failure count must stay 0 so a clean instance doesn't report
-        # partial.
-        client = MagicMock()
-        client._request = AsyncMock(return_value=[])
-        tools = _make_tools(client)
-        results, failed, _ = await tools._search_flow_helpers(
-            "anything",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=False,
-        )
-        assert results == []
-        assert failed == 0
-
-    async def test_does_not_match_on_opaque_entry_id(self) -> None:
-        # Regression (issue #1457 review): the config-entry ULID must not be a
-        # search target. Here the entry_id contains "weather" but neither the
-        # title nor the template body does — the entry must NOT match "weather".
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXWEATHERZZZ",
-                    "domain": "template",
-                    "title": "Bedroom Light",
-                    "supports_options": True,
-                }
-            ]
-        )
-        client.start_options_flow = AsyncMock(
-            return_value=_make_flow_form("{{ 1 + 1 }}")
-        )
-        client.abort_options_flow = AsyncMock()
-
-        tools = _make_tools(client)
-        results, _, _ = await tools._search_flow_helpers(
-            "weather",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=False,
-        )
-        assert results == []
-
-    async def test_skips_entry_with_non_string_entry_id(self) -> None:
-        # A malformed config entry (missing/None entry_id) is skipped without a
-        # probe; the valid sibling is still returned.
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": None,
-                    "domain": "template",
-                    "title": "Match Me",
-                    "supports_options": True,
-                },
-                {
-                    "entry_id": "01HXTEMPLATEOK",
-                    "domain": "template",
-                    "title": "Match Me",
-                    "supports_options": True,
-                },
-            ]
-        )
-        client.start_options_flow = AsyncMock(
-            return_value=_make_flow_form("{{ true }}")
-        )
-        client.abort_options_flow = AsyncMock()
-
-        tools = _make_tools(client)
-        results, _, _ = await tools._search_flow_helpers(
-            "match",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=False,
-        )
-        assert [r["entry_id"] for r in results] == ["01HXTEMPLATEOK"]
-
-    async def test_probe_failure_counts_but_keeps_other_entries(self) -> None:
-        # start_options_flow raising for one entry is a probe failure: that
-        # entry's config body is never searched, so it doesn't match — but the
-        # failure is now COUNTED (returned as 1) so deep_search can surface
-        # ``partial`` instead of a silent false no-match. The healthy sibling
-        # is still returned. The gather-level isolation path (a code bug inside
-        # score_entry) is covered by test_score_entry_crash_is_isolated.
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXBAD",
-                    "domain": "template",
-                    "title": "Broken",
-                    "supports_options": True,
-                },
-                {
-                    "entry_id": "01HXGOOD",
-                    "domain": "template",
-                    "title": "Renamed Sensor",
-                    "supports_options": True,
-                },
-            ]
-        )
-
-        async def flaky_flow(entry_id: str) -> dict[str, Any]:
-            if entry_id == "01HXBAD":
-                raise RuntimeError("flow init exploded")
-            return _make_flow_form("{{ states('sensor.outside_temperature') }}")
-
-        client.start_options_flow = AsyncMock(side_effect=flaky_flow)
-        client.abort_options_flow = AsyncMock()
-
-        tools = _make_tools(client)
-        results, failed, _ = await tools._search_flow_helpers(
-            "outside_temperature",
-            exact_match=True,
-            semaphore=asyncio.Semaphore(8),
-            include_config=False,
-        )
-        assert [r["entry_id"] for r in results] == ["01HXGOOD"]
-        # The bad entry's options-flow probe failed → counted as 1.
-        assert failed == 1
-
-    async def test_probe_failure_counted_even_when_entry_matches(self) -> None:
-        # A probe failure must be counted even when the entry still MATCHES (on
-        # title): the entry is returned, but its config body was never searched,
-        # so the failure is reported so the caller sees ``partial``. Guards the
-        # ``return result, probe_failed`` match-branch — a refactor that early-
-        # returns ``result`` alone would drop the signal and ship green.
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXMATCH",
-                    "domain": "template",
-                    "title": "Kitchen Temp",
-                    "supports_options": True,
-                }
-            ]
-        )
-        # Probe fails — title still matches, so the entry is returned, but the
-        # config body is unread → the failure must be counted.
-        client.start_options_flow = AsyncMock(
-            side_effect=RuntimeError("options flow down")
-        )
-        client.abort_options_flow = AsyncMock()
-        tools = _make_tools(client)
-
-        # Force a mid-range title score (matches at threshold 60, below the
-        # perfect-100 probe-skip), so the entry matches AND the probe runs.
-        with patch.object(tools, "_score_deep_match", return_value=(70, 60, True)):
-            results, failed, _ = await tools._search_flow_helpers(
-                "kitchen",
-                exact_match=False,
-                semaphore=asyncio.Semaphore(8),
-                include_config=False,
-            )
-
-        assert [r["entry_id"] for r in results] == ["01HXMATCH"]
-        # The probe failed → counted as 1, even though the entry matched.
-        assert failed == 1
-
-    async def test_score_entry_crash_is_isolated_and_logged(self, caplog) -> None:
-        # A real bug inside score_entry (not a probe/API failure) is isolated by
-        # gather: the bad entry is dropped and logged at WARNING (discoverable,
-        # per review), the healthy entry is still returned, and the multi-source
-        # search does not crash. Unlike a probe failure, a scoring bug is NOT a
-        # backend outage, so it must NOT count toward partial (failed stays 0).
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXGOOD",
-                    "domain": "template",
-                    "title": "Good",
-                    "supports_options": True,
-                },
-                {
-                    "entry_id": "01HXBOOM",
-                    "domain": "template",
-                    "title": "Boom",
-                    "supports_options": True,
-                },
-            ]
-        )
-        client.start_options_flow = AsyncMock(return_value=_make_flow_form("{{ x }}"))
-        client.abort_options_flow = AsyncMock()
-        tools = _make_tools(client)
-
-        def scorer(entity_id, friendly_name, *args, **kwargs):
-            if friendly_name == "Boom":
-                raise TypeError("scoring blew up")
-            return (100, 100, True)
-
-        with (
-            patch.object(tools, "_score_deep_match", side_effect=scorer),
-            caplog.at_level(logging.WARNING, logger="ha_mcp.tools.smart_search"),
-        ):
-            results, failed, _ = await tools._search_flow_helpers(
-                "good",
-                exact_match=True,
-                semaphore=asyncio.Semaphore(8),
-                include_config=False,
-            )
-
-        assert [r["entry_id"] for r in results] == ["01HXGOOD"]
-        assert "flow-helper scoring failed" in caplog.text
-        # A scoring bug is logged but not counted — it's a code error, not a
-        # backend probe failure, so it must not inflate the partial count.
-        assert failed == 0
-
-    async def test_below_threshold_score_filters_entry(self) -> None:
-        # A non-zero score below the threshold is filtered via
-        # `if total_score < threshold: return None`.
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXLOW",
-                    "domain": "template",
-                    "title": "Low Score",
-                    "supports_options": True,
-                }
-            ]
-        )
-        client.start_options_flow = AsyncMock(return_value=_make_flow_form("{{ x }}"))
-        client.abort_options_flow = AsyncMock()
-        tools = _make_tools(client)
-
-        with patch.object(tools, "_score_deep_match", return_value=(50, 100, False)):
-            results, _, _ = await tools._search_flow_helpers(
-                "x",
-                exact_match=True,
-                semaphore=asyncio.Semaphore(8),
-                include_config=False,
-            )
-        assert results == []
-
-    async def test_fuzzy_mode_probes_when_title_below_perfect_score(self) -> None:
-        # Regression guard for the probe-skip threshold. In fuzzy mode a title
-        # scoring below 100 (but above fuzzy_threshold) must STILL trigger the
-        # options probe — the config could score higher, and results sort by
-        # score. The earlier logic skipped the probe once the title cleared
-        # fuzzy_threshold, under-ranking such entries.
-        client = MagicMock()
-        client._request = AsyncMock(
-            return_value=[
-                {
-                    "entry_id": "01HXFUZZY",
-                    "domain": "template",
-                    "title": "Weather Stuff",
-                    "supports_options": True,
-                }
-            ]
-        )
-        client.start_options_flow = AsyncMock(
-            return_value=_make_flow_form("{{ true }}")
-        )
-        client.abort_options_flow = AsyncMock()
-
-        tools = _make_tools(client)
-        # Force a mid-range title score: above fuzzy_threshold (60), below 100.
-        with patch.object(tools, "_score_deep_match", return_value=(70, 60, True)):
-            results, _, _ = await tools._search_flow_helpers(
-                "weather",
-                exact_match=False,
-                semaphore=asyncio.Semaphore(8),
-                include_config=False,
-            )
-        client.start_options_flow.assert_awaited_once_with("01HXFUZZY")
-        assert [r["entry_id"] for r in results] == ["01HXFUZZY"]
+@pytest.fixture
+async def storage_helpers(hass: HomeAssistant) -> None:
+    """The ``input_*`` lists answer, so only the flow helpers can make a
+    search partial."""
+    for domain in _STORAGE_HELPERS:
+        assert await async_setup_component(hass, domain, {})
 
 
-@pytest.mark.asyncio
-async def test_a_search_opens_no_options_flow_for_a_custom_helper_integration(
+@pytest.fixture
+async def helpers_up(hass: HomeAssistant, storage_helpers: None) -> None:
+    """``config`` serves the entry and helper flow lists; ``template`` is
+    loaded, so Core knows its entries have an options flow."""
+    assert await async_setup_component(hass, "config", {})
+    assert await async_setup_component(hass, "template", {})
+
+
+async def template_helper(hass: HomeAssistant, title: str, state: str) -> ConfigEntry:
+    """A template sensor helper titled ``title`` whose state template is ``state``."""
+    entry = await create_template_sensor(hass, "0")
+    hass.config_entries.async_update_entry(
+        entry, title=title, options={**entry.options, "state": state}
+    )
+    await hass.async_block_till_done()
+    return entry
+
+
+def unknown_type_template(hass: HomeAssistant, title: str) -> MockConfigEntry:
+    """A stored template helper of a type this Core does not know (as a newer
+    Home Assistant would have made it): its options flow cannot be read."""
+    entry = MockConfigEntry(
+        domain="template",
+        title=title,
+        options={"name": title, "template_type": "no_such_type", "state": "{{ 1 }}"},
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def search(
+    client: HomeAssistantClient,
+    query: str,
+    *,
+    include_config: bool = False,
+    exact_match: bool = True,
+) -> dict[str, Any]:
+    result: dict[str, Any] = await SmartSearchTools(client=client).deep_search(
+        query,
+        search_types=["helper"],
+        limit=10,
+        include_config=include_config,
+        exact_match=exact_match,
+    )
+    return result
+
+
+async def search_with_config(
+    client: HomeAssistantClient, query: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Search with configs, and the entries whose options flow it opened (Core
+    still answers each one)."""
+    with patch.object(
+        client, "start_options_flow", wraps=client.start_options_flow
+    ) as opened:
+        result = await search(client, query, include_config=True)
+    return result, [call.args[0] for call in opened.await_args_list]
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_a_flow_helper_is_found_by_its_title(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    weather = await template_helper(hass, "Weather Message", "{{ 1 }}")
+    await template_helper(hass, "Unrelated", "{{ 2 }}")
+
+    result = await search(core_client, "weather")
+
+    [match] = result["helpers"]
+    assert match["entry_id"] == weather.entry_id
+    assert match["helper_type"] == "template"
+    assert match["name"] == "Weather Message"
+    assert match["match_in_name"] is True
+    assert "config" not in match
+    assert "partial" not in result
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_a_flow_helper_is_found_by_its_template_and_its_flow_is_closed(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The template body is read from the options flow the UI opens; the
+    search leaves no options flow open behind it."""
+    entry = await template_helper(
+        hass, "Renamed Sensor", "{{ states('sensor.outside_temperature') | float }}"
+    )
+
+    result = await search(core_client, "outside_temperature")
+
+    [match] = result["helpers"]
+    assert match["entry_id"] == entry.entry_id
+    assert match["match_in_config"] is True
+    assert hass.config_entries.options.async_progress() == []
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_include_config_returns_the_helpers_current_template(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The title alone already matches; the body is still read to return it."""
+    await template_helper(hass, "Comfort Index", "{{ states('sensor.comfort') }}")
+
+    result = await search(core_client, "comfort", include_config=True)
+
+    [match] = result["helpers"]
+    assert match["config"]["state"] == "{{ states('sensor.comfort') }}"
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_another_integrations_entry_is_not_a_helper_result(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    MockConfigEntry(domain="hue", title="Match Hue Bridge").add_to_hass(hass)
+    helper = await template_helper(hass, "Match Me", "{{ true }}")
+
+    result = await search(core_client, "match")
+
+    assert [m["entry_id"] for m in result["helpers"]] == [helper.entry_id]
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_a_helper_without_an_options_flow_is_found_by_its_title(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """OTP has no options flow, so there is no body to read: the entry is
+    found by its title, with an empty config, and the search is complete."""
+    entry = MockConfigEntry(domain="otp", title="Router Login")
+    entry.add_to_hass(hass)
+
+    result, opened = await search_with_config(core_client, "router")
+
+    assert [(m["entry_id"], m["config"]) for m in result["helpers"]] == [
+        (entry.entry_id, {})
+    ]
+    assert "partial" not in result
+    assert opened == []
+
+
+@pytest.mark.usefixtures("storage_helpers")
+async def test_an_unreadable_entry_list_makes_the_search_partial(
+    core_client: HomeAssistantClient,
+) -> None:
+    """Without ``config`` Core serves no entry list: the flow helpers were not
+    searched, which the search says instead of reporting no helpers."""
+    result = await search(core_client, "anything")
+
+    assert result["helpers"] == []
+    assert result["partial"] is True
+    assert BACKEND_NOT_SCANNED in result["partial_reason"]
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_no_flow_helpers_is_a_complete_answer(
+    core_client: HomeAssistantClient,
+) -> None:
+    result = await search(core_client, "anything")
+
+    assert result["helpers"] == []
+    assert "partial" not in result
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_a_flow_helper_is_not_found_by_its_opaque_entry_id(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Part of the entry's random id is no match (issue #1457 review); its
+    title still is."""
+    entry = await template_helper(hass, "Bedroom Light", "{{ 1 + 1 }}")
+
+    by_id = await search(core_client, entry.entry_id[-8:].lower())
+    by_title = await search(core_client, "bedroom")
+
+    assert by_id["helpers"] == []
+    assert [m["entry_id"] for m in by_title["helpers"]] == [entry.entry_id]
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_an_unreadable_helper_body_is_reported_and_the_others_still_found(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    unknown_type_template(hass, "Broken")
+    good = await template_helper(
+        hass, "Renamed Sensor", "{{ states('sensor.outside_temperature') }}"
+    )
+
+    result = await search(core_client, "outside_temperature")
+
+    assert [m["entry_id"] for m in result["helpers"]] == [good.entry_id]
+    assert BACKEND_NOT_SCANNED in result["partial_reason"]
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_a_title_match_with_an_unreadable_body_still_makes_the_search_partial(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The entry is returned on its title, but its body was never searched."""
+    entry = unknown_type_template(hass, "Kitchen Temp")
+
+    result = await search(core_client, "kitchen", include_config=True)
+
+    assert [m["entry_id"] for m in result["helpers"]] == [entry.entry_id]
+    assert BACKEND_NOT_SCANNED in result["partial_reason"]
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_a_fuzzy_title_match_below_a_perfect_score_still_has_its_body_searched(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A title that matches but scores below 100 does not stop the body read:
+    the body can score higher, and results are ranked by score."""
+    monkeypatch.setattr(get_global_settings(), "fuzzy_threshold", 60)
+    await template_helper(
+        hass, "Garden Climate", "{{ states('sensor.garden_humidity') }}"
+    )
+
+    result = await search(core_client, "garden humidity", exact_match=False)
+
+    [match] = result["helpers"]
+    assert match["match_in_name"] is True
+    assert match["match_in_config"] is True
+
+
+class _CustomHelperFlow(ConfigFlow):
+    """A custom helper integration's flow, with an options flow of its own."""
+
+    VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        return OptionsFlow()
+
+
+@pytest.fixture
+def custom_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable_custom_integrations: None
+) -> Iterator[None]:
+    """``my_custom_helper``: a helper flow Core lists that is not Core's own."""
+    install_custom_helper(tmp_path, monkeypatch, CUSTOM)
+    with mock_config_flow(CUSTOM, _CustomHelperFlow):
+        yield
+
+
+@pytest.mark.usefixtures("helpers_up", "custom_helper")
+async def test_a_search_opens_no_options_flow_for_a_custom_helper_integration(
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """Without the component, a helper flow outside Home Assistant's own is not
-    probed (#2987): its first step is the integration's own code. The entry is
+    opened (#2987): its first step is the integration's own code. The entry is
     still found by its title, its config is withheld, and the search says its
-    body was not searched."""
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(return_value=frozenset({"template", "my_custom_helper"})),
-    )
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_core_helper_domains",
-        AsyncMock(return_value=frozenset({"template"})),
-    )
-    client = MagicMock()
-    client._request = AsyncMock(
-        return_value=[
-            {
-                "entry_id": "01HXCUSTOMGATE",
-                "domain": "my_custom_helper",
-                "title": "Gate Opener",
-                "supports_options": True,
-            }
-        ]
-    )
-    client.start_options_flow = AsyncMock()
-    tools = _make_tools(client)
+    body was not searched. Core's own template helper beside it is read."""
+    custom = MockConfigEntry(domain=CUSTOM, title="Gate Opener")
+    custom.add_to_hass(hass)
+    template = await template_helper(hass, "Gate Template", "{{ 1 }}")
 
-    found, failed, unsearched = await tools._search_flow_helpers(
-        "gate",
-        exact_match=True,
-        semaphore=asyncio.Semaphore(8),
-        include_config=True,
-    )
+    result, opened = await search_with_config(core_client, "gate")
 
-    client.start_options_flow.assert_not_awaited()
-    assert (failed, unsearched) == (0, 1)
-    [match] = found
-    assert match["config"] is None
-    assert match["options_withheld"] == "custom_integration"
+    [found] = [m for m in result["helpers"] if m["entry_id"] == custom.entry_id]
+    assert found["config"] is None
+    assert found["options_withheld"] == "custom_integration"
+    assert CUSTOM_NOT_SCANNED in result["partial_reason"]
+    assert opened == [template.entry_id]
 
 
-@pytest.mark.asyncio
-async def test_an_unreadable_integration_list_opens_no_flow(
+@pytest.mark.usefixtures("helpers_up")
+async def test_a_non_admin_token_opens_no_flow_and_says_the_bodies_were_not_searched(
+    hass: HomeAssistant,
+    read_only_client: HomeAssistantClient,
+) -> None:
+    """Core's catalog of its own helpers is admin-only: without it no entry
+    can be told apart from a custom one, so none is opened, and each counts
+    as unsearched."""
+    entry = await template_helper(hass, "Anything", "{{ 1 }}")
+
+    result, opened = await search_with_config(read_only_client, "anything")
+
+    assert opened == []
+    assert [m["entry_id"] for m in result["helpers"]] == [entry.entry_id]
+    assert CUSTOM_NOT_SCANNED in result["partial_reason"]
+
+
+@pytest.mark.usefixtures("helpers_up")
+async def test_a_failed_helper_flow_list_after_the_entries_is_one_failure(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When Home Assistant's own helper list cannot be read, no entry can be
-    told apart from a custom one, so none is probed and all count as unsearched."""
+    """The entries read succeeds and Core fails the helper flow list: the
+    flow helpers count as one unscanned backend instead of failing the search."""
+    await template_helper(hass, "Anything", "{{ 1 }}")
     monkeypatch.setattr(
-        helper_flows,
-        "_fetch_core_helper_domains",
-        AsyncMock(side_effect=RuntimeError("descriptions down")),
-    )
-    client = MagicMock()
-    client._request = AsyncMock(
-        return_value=[
-            {
-                "entry_id": "01HXTEMPLATEA",
-                "domain": "template",
-                "title": "Anything",
-                "supports_options": True,
-            }
-        ]
-    )
-    client.start_options_flow = AsyncMock()
-    tools = _make_tools(client)
-
-    results, failed, unsearched = await tools._search_flow_helpers(
-        "anything",
-        exact_match=True,
-        semaphore=asyncio.Semaphore(8),
-        include_config=True,
+        config_entries_view,
+        "async_get_config_flows",
+        AsyncMock(side_effect=HomeAssistantError("flow list unavailable")),
     )
 
-    client.start_options_flow.assert_not_awaited()
-    assert ([r["entry_id"] for r in results], failed, unsearched) == (
-        ["01HXTEMPLATEA"],
-        0,
-        1,
-    )
+    result = await search(core_client, "anything")
 
-
-@pytest.mark.asyncio
-async def test_a_failed_helper_flow_read_after_the_entries_is_one_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The entries read succeeds and the helper flow read raises: the surface
-    counts as one failure instead of raising out of the search."""
-    monkeypatch.setattr(
-        helper_flows,
-        "_fetch_helper_flow_types",
-        AsyncMock(side_effect=RuntimeError("flow_handlers down")),
-    )
-    client = MagicMock()
-    client._request = AsyncMock(
-        return_value=[
-            {
-                "entry_id": "01HXTEMPLATEA",
-                "domain": "template",
-                "title": "Anything",
-                "supports_options": True,
-            }
-        ]
-    )
-    tools = _make_tools(client)
-    results, failed, _ = await tools._search_flow_helpers(
-        "anything",
-        exact_match=True,
-        semaphore=asyncio.Semaphore(8),
-        include_config=False,
-    )
-    assert (results, failed, _) == ([], 1, 0)
+    assert result["helpers"] == []
+    assert BACKEND_NOT_SCANNED in result["partial_reason"]

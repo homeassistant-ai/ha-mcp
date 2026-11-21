@@ -1,536 +1,296 @@
-"""Unit tests for ha_get_history offset/limit pagination (issue #930).
+"""``ha_get_history`` offset/limit pagination (issue #930).
 
-Tests that history and statistics sources correctly support offset-based
-pagination with standardized metadata: total_count, offset, limit, count,
-has_more, next_offset.
+States and statistics are written to Core's recorder and read back through
+the tool; every row is Core's. Each entity carries total_count, offset, limit,
+count, has_more and next_offset.
 """
 
-import contextlib
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
+from homeassistant.components.recorder import Recorder
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_history import HistoryTools
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from ._client_spies import sent_messages
+from ._recorded_history import import_statistic, record_states, statistics
 
-PAGINATION_FIELDS = {
-    "total_count",
-    "offset",
-    "limit",
-    "count",
-    "has_more",
-    "next_offset",
-}
+START = datetime(2024, 1, 1, tzinfo=UTC)
+END = START + timedelta(days=7)
+SENSOR = "sensor.test"
+ENERGY = "sensor.energy"
 
 
-def _make_mock_client() -> MagicMock:
-    client = MagicMock()
-    client.base_url = "http://homeassistant.local"
-    client.token = "test_token"
-    return client
+async def _record(hass: HomeAssistant, count: int, entity_id: str = SENSOR) -> None:
+    """``count`` state changes "0", "1", ... one minute apart, oldest first."""
+    assert await async_setup_component(hass, "history", {})
+    await record_states(
+        hass,
+        entity_id,
+        *((str(i), None, START.timestamp() + 60 * (i + 1)) for i in range(count)),
+    )
 
 
-def _make_history_states(n: int) -> list[dict]:
-    """Generate n minimal state-change dicts (short-form HA format)."""
-    return [
-        {"s": str(i), "lu": 1700000000.0 + i, "lc": 1700000000.0 + i} for i in range(n)
-    ]
+async def _history(
+    client: HomeAssistantClient, entity_ids: str | list[str] = SENSOR, **kwargs: Any
+) -> dict[str, Any]:
+    result: dict[str, Any] = await HistoryTools(client).ha_get_history(
+        entity_ids=entity_ids,
+        start_time=START.isoformat(),
+        end_time=END.isoformat(),
+        **kwargs,
+    )
+    return result
 
 
-def _make_stat_rows(n: int) -> list[dict]:
-    """Generate n minimal statistics rows."""
-    return [{"start": 1700000000 + i * 300, "mean": float(i)} for i in range(n)]
+async def _import_rows(hass: HomeAssistant, count: int) -> None:
+    """``count`` hourly statistics rows whose mean is the row's position."""
+    await import_statistic(
+        hass,
+        ENERGY,
+        "kWh",
+        "energy",
+        [
+            {"start": START + timedelta(hours=i), "mean": float(i), "sum": float(i)}
+            for i in range(count)
+        ],
+        mean=True,
+    )
 
 
-def _make_ws_dispatcher(
-    history_result: dict | None = None, stat_result: dict | None = None
-):
-    """Async ``send_websocket_message`` stand-in dispatching on ``message['type']``.
-
-    Since issue #1813 the history/statistics tools route their single WS command
-    through the shared pooled ``client.send_websocket_message`` rather than a
-    per-call dedicated connection, so tests configure the client method directly.
-    """
-
-    async def send_websocket_message(message):
-        cmd = message["type"]
-        if cmd == "history/history_during_period":
-            return {"success": True, "result": history_result or {}}
-        if cmd == "recorder/statistics_during_period":
-            return {"success": True, "result": stat_result or {}}
-        return {"success": False, "error": f"unknown command: {cmd}"}
-
-    return send_websocket_message
+def _entity(result: dict[str, Any]) -> dict[str, Any]:
+    [entity] = result["data"]["entities"]
+    return entity
 
 
-# ---------------------------------------------------------------------------
-# Tests: history source
-# ---------------------------------------------------------------------------
+# --- history source ---------------------------------------------------------
 
 
-class TestHistoryPagination:
-    """Pagination for source='history'."""
+async def test_history_first_page_reports_the_next_offset(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _record(hass, 20)
 
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
+    entity = _entity(await _history(core_client, limit=5))
 
-    @pytest.fixture
-    def history_tool(self, mock_client):
-        self._mock_client = mock_client
-        return HistoryTools(mock_client).ha_get_history
+    assert len(entity["states"]) == 5
+    assert entity["count"] == 5
+    assert entity["limit"] == 5
+    assert entity["total_count"] == 20
+    assert entity["offset"] == 0
+    assert entity["has_more"] is True
+    assert entity["next_offset"] == 5
 
-    def _patch_ws(self, states: list[dict]):
-        # Configure the pooled transport on the tool's client; nullcontext keeps
-        # the existing ``with self._patch_ws(...)`` call sites intact.
-        self._mock_client.send_websocket_message = _make_ws_dispatcher(
-            history_result={"sensor.test": states}
-        )
-        return contextlib.nullcontext()
 
-    @pytest.mark.asyncio
-    async def test_default_offset_returns_first_page(self, history_tool):
-        """offset=0 (default) returns the first limit entries."""
-        states = _make_history_states(20)
-        with (
-            self._patch_ws(states),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(entity_ids="sensor.test", limit=5)
+async def test_history_offset_skips_the_newest_states(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The default order is newest first, so offset=5 starts at the sixth newest."""
+    await _record(hass, 20)
 
-        entity = result["data"]["entities"][0]
-        assert len(entity["states"]) == 5
-        assert entity["total_count"] == 20
+    entity = _entity(await _history(core_client, limit=5, offset=5))
+
+    assert [row["state"] for row in entity["states"]] == ["14", "13", "12", "11", "10"]
+    assert entity["offset"] == 5
+
+
+async def test_history_offset_past_the_end_returns_an_empty_last_page(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _record(hass, 10)
+
+    entity = _entity(await _history(core_client, limit=5, offset=100))
+
+    assert entity["states"] == []
+    assert entity["has_more"] is False
+    assert entity["next_offset"] is None
+    assert entity["total_count"] == 10
+
+
+async def test_history_partial_last_page_says_there_is_no_more(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _record(hass, 7)
+
+    entity = _entity(await _history(core_client, limit=5, offset=5))
+
+    assert [row["state"] for row in entity["states"]] == ["1", "0"]
+    assert entity["has_more"] is False
+    assert entity["next_offset"] is None
+
+
+async def test_history_without_limit_returns_one_page_of_100(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _record(hass, 150)
+
+    entity = _entity(await _history(core_client))
+
+    assert entity["count"] == 100
+    assert entity["total_count"] == 150
+    assert entity["has_more"] is True
+    assert entity["next_offset"] == 100
+
+
+async def test_history_limit_above_the_documented_maximum_is_clamped(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The limit parameter documents a maximum of 1000."""
+    await _record(hass, 5)
+
+    entity = _entity(await _history(core_client, limit=1001))
+
+    assert entity["limit"] == 1000
+    assert entity["count"] == 5
+
+
+# --- offset with several entities --------------------------------------------
+
+
+async def test_offset_with_several_entities_is_refused_before_core_is_asked(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Pages are per entity, so an offset across entities has no single meaning."""
+    await _record(hass, 5, "sensor.a")
+    await _record(hass, 5, "sensor.b")
+
+    with sent_messages(core_client) as sent, pytest.raises(ToolError) as exc_info:
+        await _history(core_client, ["sensor.a", "sensor.b"], offset=1, limit=10)
+
+    error = json.loads(str(exc_info.value))["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "single entity_id" in error["message"]
+    assert not any(
+        call.args[0]["type"] == "history/history_during_period"
+        for call in sent.await_args_list
+    )
+
+
+async def test_several_entities_page_each_entity_from_offset_zero(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _record(hass, 5, "sensor.a")
+    await _record(hass, 5, "sensor.b")
+
+    result = await _history(core_client, ["sensor.a", "sensor.b"], offset=0, limit=3)
+
+    entities = result["data"]["entities"]
+    assert [entity["entity_id"] for entity in entities] == ["sensor.a", "sensor.b"]
+    for entity in entities:
         assert entity["offset"] == 0
-        assert entity["has_more"] is True
-        assert entity["next_offset"] == 5
-
-    @pytest.mark.asyncio
-    async def test_offset_skips_entries(self, history_tool):
-        """offset=5 skips the first 5 entries (newest-first by default)."""
-        states = _make_history_states(20)
-        with (
-            self._patch_ws(states),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(entity_ids="sensor.test", limit=5, offset=5)
-
-        entity = result["data"]["entities"][0]
-        assert len(entity["states"]) == 5
-        assert entity["offset"] == 5
-        # Default order="desc" reverses the HA list (oldest-first) to newest-first.
-        # States 0..19, reversed = [19,18,...,0]; offset=5 → first entry is state "14".
-        assert entity["states"][0]["state"] == "14"
-
-    @pytest.mark.asyncio
-    async def test_offset_beyond_total_returns_empty(self, history_tool):
-        """offset beyond total_count returns empty states, has_more=False."""
-        states = _make_history_states(10)
-        with (
-            self._patch_ws(states),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(entity_ids="sensor.test", limit=5, offset=100)
-
-        entity = result["data"]["entities"][0]
-        assert entity["states"] == []
-        assert entity["has_more"] is False
-        assert entity["next_offset"] is None
-        assert entity["total_count"] == 10
-
-    @pytest.mark.asyncio
-    async def test_last_page_has_more_false(self, history_tool):
-        """Final page returns has_more=False and next_offset=None."""
-        states = _make_history_states(7)
-        with (
-            self._patch_ws(states),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(entity_ids="sensor.test", limit=5, offset=5)
-
-        entity = result["data"]["entities"][0]
-        assert len(entity["states"]) == 2
-        assert entity["has_more"] is False
-        assert entity["next_offset"] is None
-
-    @pytest.mark.asyncio
-    async def test_pagination_fields_present(self, history_tool):
-        """All standardized pagination fields are present in each entity."""
-        states = _make_history_states(3)
-        with (
-            self._patch_ws(states),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(entity_ids="sensor.test", limit=2)
-
-        entity = result["data"]["entities"][0]
-        assert PAGINATION_FIELDS.issubset(entity.keys())
+        assert entity["count"] == 3
+        assert entity["total_count"] == 5
 
 
-# ---------------------------------------------------------------------------
-# Tests: statistics source
-# ---------------------------------------------------------------------------
+# --- statistics source -------------------------------------------------------
 
 
-class TestStatisticsPagination:
-    """Pagination for source='statistics'."""
+async def test_statistics_without_limit_returns_one_page_of_100(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _import_rows(hass, 150)
 
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
+    entity = _entity(await statistics(core_client, [ENERGY], START, END))
 
-    @pytest.fixture
-    def history_tool(self, mock_client):
-        self._mock_client = mock_client
-        return HistoryTools(mock_client).ha_get_history
-
-    def _patch_ws(self, rows: list[dict]):
-        self._mock_client.send_websocket_message = _make_ws_dispatcher(
-            stat_result={"sensor.energy": rows}
-        )
-        return contextlib.nullcontext()
-
-    @pytest.mark.asyncio
-    async def test_default_limit_applied(self, history_tool):
-        """Without explicit limit, default (100) is applied."""
-        rows = _make_stat_rows(150)
-        with (
-            self._patch_ws(rows),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(
-                entity_ids="sensor.energy", source="statistics", start_time="30d"
-            )
-
-        entity = result["data"]["entities"][0]
-        assert entity["count"] == 100
-        assert entity["total_count"] == 150
-        assert entity["has_more"] is True
-        assert entity["next_offset"] == 100
-
-    @pytest.mark.asyncio
-    async def test_offset_skips_rows(self, history_tool):
-        """offset=10 skips the first 10 statistics rows."""
-        rows = _make_stat_rows(20)
-        with (
-            self._patch_ws(rows),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(
-                entity_ids="sensor.energy",
-                source="statistics",
-                start_time="30d",
-                limit=5,
-                offset=10,
-            )
-
-        entity = result["data"]["entities"][0]
-        assert entity["count"] == 5
-        assert entity["offset"] == 10
-        assert entity["statistics"][0]["mean"] == 10.0
-
-    @pytest.mark.asyncio
-    async def test_offset_beyond_total_returns_empty(self, history_tool):
-        """offset beyond available rows returns empty statistics."""
-        rows = _make_stat_rows(5)
-        with (
-            self._patch_ws(rows),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(
-                entity_ids="sensor.energy",
-                source="statistics",
-                start_time="30d",
-                limit=5,
-                offset=50,
-            )
-
-        entity = result["data"]["entities"][0]
-        assert entity["statistics"] == []
-        assert entity["has_more"] is False
-        assert entity["next_offset"] is None
-
-    @pytest.mark.asyncio
-    async def test_pagination_fields_present(self, history_tool):
-        """All standardized pagination fields present for statistics source."""
-        rows = _make_stat_rows(3)
-        with (
-            self._patch_ws(rows),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(
-                entity_ids="sensor.energy",
-                source="statistics",
-                start_time="30d",
-                limit=2,
-            )
-
-        entity = result["data"]["entities"][0]
-        assert PAGINATION_FIELDS.issubset(entity.keys())
-
-    @pytest.mark.asyncio
-    async def test_statistics_query_params_default(self, history_tool):
-        """query_params echoes defaults: statistic_types=None, limit=_DEFAULT_HISTORY_LIMIT, offset=0.
-
-        Verifies that _fetch_statistics includes a query_params block in its response
-        matching _fetch_history symmetry. Default call: no statistic_types, no limit/offset.
-        """
-        rows = _make_stat_rows(5)
-        with (
-            self._patch_ws(rows),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(
-                entity_ids="sensor.energy", source="statistics", start_time="30d"
-            )
-
-        assert "query_params" in result["data"], (
-            f"Expected query_params in statistics response, got keys: {list(result.keys())}"
-        )
-        qp = result["data"]["query_params"]
-        assert qp["statistic_types"] is None
-        assert qp["limit"] == 100  # _DEFAULT_HISTORY_LIMIT
-        assert qp["offset"] == 0
-
-    @pytest.mark.asyncio
-    async def test_statistics_query_params_roundtrip(self, history_tool):
-        """query_params echoes explicit caller values: statistic_types, limit, offset.
-
-        A bug that assigns the wrong value to any param would fail the exact-equality
-        assertion — stronger than checking key presence only.
-        """
-        rows = _make_stat_rows(50)
-        with (
-            self._patch_ws(rows),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(
-                entity_ids="sensor.energy",
-                source="statistics",
-                start_time="30d",
-                statistic_types=["mean"],
-                limit=10,
-                offset=5,
-            )
-
-        assert "query_params" in result["data"]
-        qp = result["data"]["query_params"]
-        assert qp["statistic_types"] == ["mean"]
-        assert qp["limit"] == 10
-        assert qp["offset"] == 5
-
-    @pytest.mark.asyncio
-    async def test_statistics_query_params_string_comma_normalized(self, history_tool):
-        """query_params.statistic_types reflects the normalized list when caller passes a comma-separated string.
-
-        Regression test for #990: prior to the fix, query_params echoed the raw caller input,
-        so a caller passing "mean,max" (string) would see the string in query_params while the
-        top-level statistic_types key contained the parsed list. Both must now be a list.
-        """
-        rows = _make_stat_rows(5)
-        with (
-            self._patch_ws(rows),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(
-                entity_ids="sensor.energy",
-                source="statistics",
-                start_time="30d",
-                statistic_types="mean,max",
-            )
-
-        qp = result["data"]["query_params"]
-        assert qp["statistic_types"] == ["mean", "max"]
-        assert result["data"]["statistic_types"] == ["mean", "max"]
-
-    @pytest.mark.asyncio
-    async def test_statistics_query_params_string_bracketed_normalized(
-        self, history_tool
-    ):
-        """query_params.statistic_types reflects the normalized list when caller passes a bracketed string.
-
-        Regression test for #990: covers the parse_string_list_param branch (e.g. '["mean","max"]').
-        """
-        rows = _make_stat_rows(5)
-        with (
-            self._patch_ws(rows),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(
-                entity_ids="sensor.energy",
-                source="statistics",
-                start_time="30d",
-                statistic_types='["mean","max"]',
-            )
-
-        qp = result["data"]["query_params"]
-        assert qp["statistic_types"] == ["mean", "max"]
-        assert result["data"]["statistic_types"] == ["mean", "max"]
+    assert entity["count"] == 100
+    assert entity["limit"] == 100
+    assert entity["offset"] == 0
+    assert entity["total_count"] == 150
+    assert entity["has_more"] is True
+    assert entity["next_offset"] == 100
 
 
-# ---------------------------------------------------------------------------
-# Tests: Option 1 — multi-entity offset guard
-# ---------------------------------------------------------------------------
+async def test_statistics_offset_skips_the_oldest_rows(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _import_rows(hass, 20)
+
+    entity = _entity(
+        await statistics(core_client, [ENERGY], START, END, limit=5, offset=10)
+    )
+
+    assert [row["mean"] for row in entity["statistics"]] == [
+        10.0,
+        11.0,
+        12.0,
+        13.0,
+        14.0,
+    ]
+    assert entity["offset"] == 10
 
 
-class TestMultiEntityOffsetGuard:
-    """Guard: offset > 0 with multiple entity_ids raises VALIDATION_INVALID_PARAMETER."""
+async def test_statistics_offset_past_the_end_returns_an_empty_last_page(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _import_rows(hass, 5)
 
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
+    entity = _entity(
+        await statistics(core_client, [ENERGY], START, END, limit=5, offset=50)
+    )
 
-    @pytest.fixture
-    def history_tool(self, mock_client):
-        self._mock_client = mock_client
-        return HistoryTools(mock_client).ha_get_history
-
-    @pytest.mark.asyncio
-    async def test_multi_entity_offset_rejected(self, history_tool):
-        """offset > 0 with multiple entity_ids is rejected before any query.
-
-        Option 1 guard: build_pagination_metadata applies per entity, so
-        limit=100 across N entities returns up to 100*N rows with no top-level
-        has_more signal — a footgun for LLM token budgets.
-        """
-        send = self._mock_client.send_websocket_message = AsyncMock()
-        with pytest.raises(ToolError) as exc_info:
-            await history_tool(
-                entity_ids=["sensor.a", "sensor.b"],
-                offset=1,
-                limit=10,
-            )
-
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert "single entity_id" in error["message"]
-        send.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_multi_entity_offset_zero_allowed(self, history_tool):
-        """offset=0 (default) with multiple entity_ids is allowed."""
-        states = _make_history_states(5)
-        self._mock_client.send_websocket_message = _make_ws_dispatcher(
-            history_result={
-                "sensor.a": states,
-                "sensor.b": states,
-            }
-        )
-        with patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-        ):
-            result = await history_tool(
-                entity_ids=["sensor.a", "sensor.b"],
-                offset=0,
-                limit=3,
-            )
-
-        assert len(result["data"]["entities"]) == 2
-        for entity in result["data"]["entities"]:
-            assert entity["offset"] == 0
-            assert entity["count"] == 3
+    assert entity["statistics"] == []
+    assert entity["has_more"] is False
+    assert entity["next_offset"] is None
 
 
-# ---------------------------------------------------------------------------
-# Tests: default limit (history source) + MAX boundary
-# ---------------------------------------------------------------------------
+async def test_statistics_query_params_show_the_defaults_applied(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _import_rows(hass, 5)
+
+    result = await statistics(core_client, [ENERGY], START, END)
+
+    assert result["data"]["query_params"] == {
+        "statistic_types": None,
+        "limit": 100,
+        "offset": 0,
+    }
 
 
-class TestHistoryLimitBoundary:
-    """Default-limit and _MAX_HISTORY_LIMIT boundary tests for history source."""
+async def test_statistics_query_params_echo_the_caller_values(
+    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await _import_rows(hass, 50)
 
-    @pytest.fixture
-    def mock_client(self):
-        return _make_mock_client()
+    result = await statistics(
+        core_client,
+        [ENERGY],
+        START,
+        END,
+        statistic_types=["mean"],
+        limit=10,
+        offset=5,
+    )
 
-    @pytest.fixture
-    def history_tool(self, mock_client):
-        self._mock_client = mock_client
-        return HistoryTools(mock_client).ha_get_history
+    assert result["data"]["query_params"] == {
+        "statistic_types": ["mean"],
+        "limit": 10,
+        "offset": 5,
+    }
 
-    def _patch_ws(self, states):
-        self._mock_client.send_websocket_message = _make_ws_dispatcher(
-            history_result={"sensor.test": states}
-        )
-        return contextlib.nullcontext()
 
-    @pytest.mark.asyncio
-    async def test_default_limit_applied_history(self, history_tool):
-        """Without explicit limit, default (100) is applied for history source."""
-        states = _make_history_states(150)
-        with (
-            self._patch_ws(states),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(entity_ids="sensor.test")
+@pytest.mark.parametrize(
+    "statistic_types", ["mean,max", '["mean","max"]'], ids=["comma", "bracketed"]
+)
+async def test_statistics_query_params_show_string_types_as_a_list(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    statistic_types: str,
+) -> None:
+    """Regression #990: query_params echoed the raw string while the
+    top-level statistic_types held the parsed list."""
+    await _import_rows(hass, 5)
 
-        entity = result["data"]["entities"][0]
-        assert entity["count"] == 100
-        assert entity["total_count"] == 150
-        assert entity["has_more"] is True
-        assert entity["next_offset"] == 100
+    result = await statistics(
+        core_client, [ENERGY], START, END, statistic_types=statistic_types
+    )
 
-    @pytest.mark.asyncio
-    async def test_limit_exceeds_max_is_clamped(self, history_tool):
-        """limit > _MAX_HISTORY_LIMIT (1000) is silently clamped to 1000."""
-        states = _make_history_states(5)
-        with (
-            self._patch_ws(states),
-            patch(
-                "ha_mcp.tools.tools_history.add_timezone_metadata",
-                side_effect=lambda _c, d, **_kw: {"data": d, "metadata": {}},
-            ),
-        ):
-            result = await history_tool(entity_ids="sensor.test", limit=1001)
-
-        entity = result["data"]["entities"][0]
-        assert entity["limit"] == 1000
-        assert entity["count"] == 5
+    assert result["data"]["query_params"]["statistic_types"] == ["mean", "max"]
+    assert result["data"]["statistic_types"] == ["mean", "max"]

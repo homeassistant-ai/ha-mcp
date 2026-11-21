@@ -61,7 +61,7 @@
       "datasourceTemplate": "{{{datasource}}}"
     },
     {
-      "description": "Vendored library pins have no stock package manager. The websockets package rule regenerates its private tree with scripts/vendor_websockets.py, and the vendored fastmcp rule regenerates the FastMCP / MCP SDK trees with scripts/vendor_fastmcp.py, before committing; drift, manifest, and API tests remain merge gates.",
+      "description": "Vendored library pins have no stock package manager. The websockets package rule regenerates its private tree with scripts/vendor_websockets.py, and the vendored fastmcp rule regenerates the FastMCP / MCP SDK trees with scripts/vendor_fastmcp.py (run through uv for packaging), before committing; drift, manifest, and API tests remain merge gates.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^src/ha_mcp/_vendor/requirements\\.txt$/"
@@ -72,10 +72,11 @@
       "datasourceTemplate": "pypi"
     },
     {
-      "description": "Python-assignment version pins (e.g. HAOS_VERSION = \"17.3\" in build_image.py)",
+      "description": "Python-assignment version pins (e.g. HAOS_VERSION = \"17.3\" in build_image.py, QUICKJS_VERSION in card_runtime.py)",
       "customType": "regex",
       "managerFilePatterns": [
-        "/tests/.*\\.py$/"
+        "/tests/.*\\.py$/",
+        "/^custom_components/ha_mcp_tools/card_runtime\\.py$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+\\s*=\\s*[\"'](?<currentValue>[\\d.]+)[\"']"
@@ -161,7 +162,7 @@
       }
     },
     {
-      "description": "Regenerate the private FastMCP / MCP SDK trees with their pins; grouped because mcp pins mcp-types exactly.",
+      "description": "Regenerate the private FastMCP / MCP SDK trees with their pins; grouped because mcp pins mcp-types exactly. The generator also raises the pyproject.toml floors the new versions need, and uv lock re-locks for them, so the published package makes Home Assistant upgrade a dependency the vendored code outgrew. Python 3.14.2 or later because uv lock resolves the dev group's homeassistant, which requires it.",
       "matchManagers": [
         "custom.regex"
       ],
@@ -178,20 +179,24 @@
       ],
       "groupName": "vendored fastmcp",
       "constraints": {
-        "python": ">=3.14,<3.15"
+        "python": ">=3.14.2,<3.15"
       },
       "postUpgradeTasks": {
         "commands": [
-          "python3 -I scripts/vendor_fastmcp.py"
+          "uv run --no-project --with packaging python -I scripts/vendor_fastmcp.py",
+          "uv lock"
         ],
         "fileFilters": [
           "src/ha_mcp/_vendor/fastmcp/**",
           "src/ha_mcp/_vendor/mcp/**",
-          "src/ha_mcp/_vendor/mcp_types/**"
+          "src/ha_mcp/_vendor/mcp_types/**",
+          "pyproject.toml",
+          "uv.lock"
         ],
         "executionMode": "update",
         "installTools": {
-          "python": {}
+          "python": {},
+          "uv": {}
         }
       }
     },
@@ -219,7 +224,7 @@
       "prConcurrentLimit": 0
     },
     {
-      "description": "Re-lock when the dev group's Core pins move: uv lock takes the new Core's requirement pins, and --sync-lock moves the runtime packages Core pins only in package_constraints.txt (pydantic, httpx), in the same update.",
+      "description": "When the dev group's Core pins move, in the same update: sync_dev_integration_pins.py rewrites the dev group's integration pins and their Dependabot ignores from the new Core's manifests, uv lock takes the new Core's requirement pins, and --sync-lock moves the runtime packages Core pins only in package_constraints.txt (pydantic, httpx).",
       "matchManagers": [
         "custom.regex"
       ],
@@ -234,8 +239,37 @@
       },
       "postUpgradeTasks": {
         "commands": [
+          "uv run --no-project --with packaging python -I scripts/sync_dev_integration_pins.py",
           "uv lock",
           "uv run --no-project --with packaging python -I scripts/check_ha_constraint_alignment.py --sync-lock"
+        ],
+        "fileFilters": [
+          "pyproject.toml",
+          ".github/dependabot.yml",
+          "uv.lock"
+        ],
+        "executionMode": "branch",
+        "installTools": {
+          "python": {},
+          "uv": {}
+        }
+      }
+    },
+    {
+      "description": "quickjs-ng: the version the component installs (card_runtime.QUICKJS_VERSION) and the dev group's pin move in one update, re-locked, so the unit tests run the QuickJS users get. The component replaces an older quickjs-ng that no other installed package pins.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "quickjs-ng"
+      ],
+      "groupName": "quickjs-ng",
+      "constraints": {
+        "python": ">=3.14.2,<3.15"
+      },
+      "postUpgradeTasks": {
+        "commands": [
+          "uv lock"
         ],
         "fileFilters": [
           "uv.lock"

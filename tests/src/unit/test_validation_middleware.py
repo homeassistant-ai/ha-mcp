@@ -10,10 +10,7 @@ import pytest
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
-from ha_mcp.tools.validation_middleware import (
-    ValidationErrorMiddleware,
-    _closest_parameter,
-)
+from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
 from ha_mcp.utils.usage_logger import get_recent_logs, shutdown_usage_logger
 
 
@@ -59,7 +56,8 @@ async def test_wrapped_fastmcp_validation_error_is_structured():
         config: dict
 
     with pytest.raises(PydanticValidationError) as pyd_info:
-        _Args(config="{}")  # str where a dict is required -> dict_type error
+        # A str where a dict is required -> dict_type error.
+        _Args.model_validate({"config": "{}"})
 
     wrapped = FastMCPValidationError(str(pyd_info.value))
     wrapped.__cause__ = pyd_info.value
@@ -394,8 +392,21 @@ async def test_unknown_parameter_on_a_tool_without_parameters():
     assert msg.endswith("Valid parameters: none.")
 
 
-def test_shared_word_outranks_closer_spelling():
-    assert _closest_parameter("force", ["forced", "force_reload"]) == "force_reload"
+async def test_shared_word_outranks_closer_spelling() -> None:
+    """``force`` shares a whole word with ``force_reload``; the closer-spelled
+    ``forced`` shares none, so the hint names ``force_reload``."""
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_reload(forced: bool = False, force_reload: bool = False) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_test_reload", {"force": True})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`force`: unknown parameter, did you mean `force_reload`?" in msg
 
 
 def _suggestions(body: dict) -> list[str]:
@@ -655,12 +666,27 @@ async def test_stale_tool_list_hint_names_only_the_undeclared_arguments() -> Non
     assert "`alias`" not in stale[0] and "`config`" not in stale[0]
 
 
-def test_trailing_declared_name_outranks_closer_spelling():
+async def test_trailing_declared_name_outranks_closer_spelling() -> None:
     """A prefixed name points at the parameter it ends with: the renamed
     screenshot argument ``dashboard_url_path`` means ``url_path``, not the
     closer-spelled legacy ``dashboard_path``."""
-    screenshot_parameters = ["dashboard_path", "url_path", "view_path", "width"]
-    assert _closest_parameter("dashboard_url_path", screenshot_parameters) == "url_path"
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_screenshot(
+        dashboard_path: str | None = None,
+        url_path: str | None = None,
+        view_path: str | None = None,
+        width: int = 1000,
+    ) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_test_screenshot", {"dashboard_url_path": "lovelace"})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`dashboard_url_path`: unknown parameter, did you mean `url_path`?" in msg
 
 
 def _unknown_argument_error():
@@ -671,8 +697,9 @@ def _unknown_argument_error():
     def _target(entity_id: str | None = None) -> None:
         return None
 
+    invented = {"entitiy_id": "light.x"}
     with pytest.raises(PydanticValidationError) as info:
-        _target(entitiy_id="light.x")
+        _target(**invented)
     return info.value
 
 

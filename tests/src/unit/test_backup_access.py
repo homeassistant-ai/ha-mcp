@@ -1,18 +1,28 @@
-"""Backup controls reject explicit operations before touching Home Assistant."""
+"""The human backup controls refuse explicit backup operations before Home Assistant
+is touched, and leave inspection, automatic capture and the Backups tab working.
+
+Every reply is Core's: per-edit backups capture a label in Core's registry
+(``_backup_core``), full snapshots go to Core's backup integration
+(``_backup_snapshot_core``). The controls are the server's real settings.
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
+from starlette.requests import Request
 
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.backup_manager import BackupManager, DomainHandler
+from ha_mcp.backup_manager import BackupManager, get_backup_manager
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.config import (
     BACKUP_OVERRIDE_FIELDS,
     Settings,
@@ -21,132 +31,114 @@ from ha_mcp.config import (
     reset_global_settings,
 )
 from ha_mcp.read_only import read_only_request
-from ha_mcp.settings_ui import _handlers_backups as backup_ui
-from ha_mcp.tools import backup, backup_snapshot
+from ha_mcp.settings_ui import build_settings_handlers
+from ha_mcp.tools import backup
 from ha_mcp.tools.auto_backup import with_auto_backup
 from ha_mcp.tools.tools_dev import DevTools
 from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 
-pytestmark = pytest.mark.asyncio
+from ._backup_core import add_label, manage_backup, snapshot_of
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import snapshot_manager as snapshot_manager
+from ._backup_snapshot_core import PASSWORD, BackupInstall
+from ._backup_snapshot_core import backup_install as backup_install
+from ._backup_snapshot_core import tool_sockets as tool_sockets
+from ._client_spies import sent_messages
+from ._real_server import build_server
+
+BEFORE = "Before edit"
 
 
 @pytest.fixture
-def backup_world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
-    values = Settings(
-        _env_file=None,
-        ENABLE_SNAPSHOT_ACTIONS=True,
-        BACKUP_READ_ONLY=False,
-        READ_ONLY_MODE=False,
-    ).model_dump()
-    values.update(
-        enable_snapshot_actions=True,
-        backup_read_only=False,
-        read_only_mode=False,
-        enable_snapshot_delete=False,
-        enable_auto_backup=True,
-        auto_backup_dir=str(tmp_path / "backups"),
-    )
-    settings = SimpleNamespace(**values)
-    for module in (
-        backup,
-        backup_snapshot,
-        "ha_mcp.read_only",
-        "ha_mcp.tools.auto_backup",
-    ):
-        if isinstance(module, str):
-            monkeypatch.setattr(f"{module}.get_global_settings", lambda: settings)
-        else:
-            monkeypatch.setattr(module, "get_global_settings", lambda: settings)
-    ha = MagicMock()
-    ha.base_url = "http://backup-test.invalid"
-    ha.token = "test-token"
-    ha.verify_ssl = True
-    ha.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": {"backups": []}}
-    )
-    ws = MagicMock()
-    ws.send_command = AsyncMock(
-        return_value={"success": True, "result": {"backups": []}}
-    )
-    ws.disconnect = AsyncMock()
-    connect = AsyncMock(return_value=(ws, None))
-    monkeypatch.setattr(backup_snapshot, "get_connected_ws_client", connect)
-    manager = BackupManager(settings, ha)
+def label_id(label_registry: lr.LabelRegistry) -> str:
+    """A label in Core's registry, named ``BEFORE``."""
+    return add_label(label_registry, BEFORE)
 
-    async def fetch(_client: Any, _entity_id: str) -> dict[str, Any]:
-        return {"alias": "Before edit", "actions": []}
 
-    async def restore(_client: Any, _entity_id: str, config: Any) -> dict[str, Any]:
-        return {"config": config}
+@pytest.fixture
+async def captured(snapshot_manager: BackupManager, label_id: str) -> Path:
+    """A per-edit backup of the label, taken before the test changes a control."""
+    return await snapshot_of(snapshot_manager, label_id)
 
-    manager.register(DomainHandler(domain="automation", fetch=fetch, restore=restore))
-    get_manager = MagicMock(return_value=manager)
-    monkeypatch.setattr(backup, "get_backup_manager", get_manager)
-    monkeypatch.setattr("ha_mcp.tools.auto_backup.get_backup_manager", get_manager)
+
+def _registered(client: HomeAssistantClient) -> FastMCP:
     mcp = FastMCP("backup-access-test")
-    backup.register_backup_tools(mcp, ha)
-    return SimpleNamespace(
-        settings=settings,
-        ha=ha,
-        ws=ws,
-        connect=connect,
-        manager=manager,
-        get_manager=get_manager,
-        mcp=mcp,
-    )
+    backup.register_backup_tools(mcp, client)
+    return mcp
 
 
-async def _direct(world: SimpleNamespace, **arguments: Any) -> dict[str, Any]:
-    tool = await world.mcp.get_tool("ha_manage_backup")
-    return await tool.fn(**arguments)
+def _held(manager: BackupManager) -> list[str]:
+    return [entry["name"] for entry in manager.list_snapshots()]
 
 
-def _assert_no_io(world: SimpleNamespace) -> None:
-    world.connect.assert_not_awaited()
-    world.ws.send_command.assert_not_awaited()
-    assert world.ha.mock_calls == []
-    world.get_manager.assert_not_called()
+def _assert_untouched(
+    sockets: list[HomeAssistantWebSocketClient],
+    manager: BackupManager,
+    held: list[str],
+) -> None:
+    """No snapshot socket was opened and the per-edit backups are as they were."""
+    assert sockets == []
+    assert _held(manager) == held
 
 
-@pytest.mark.parametrize("action", ["list", "create", "restore", "delete"])
+@pytest.mark.parametrize("action", ["list", "delete"])
 async def test_disabled_snapshots_block_every_action_before_io(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    snapshot_manager: BackupManager,
+    tool_sockets: list[HomeAssistantWebSocketClient],
+    monkeypatch: pytest.MonkeyPatch,
     action: str,
 ) -> None:
-    backup_world.settings.enable_snapshot_actions = False
-    backup_world.settings.enable_snapshot_delete = True
-    with pytest.raises(ToolError, match="enable_snapshot_actions"):
-        await _direct(
-            backup_world,
+    """Listing is blocked too, and so is a delete the delete opt-in would allow."""
+    monkeypatch.setattr(backup_settings, "enable_snapshot_actions", False)
+    monkeypatch.setattr(backup_settings, "enable_snapshot_delete", True)
+    with (
+        sent_messages(core_client) as sent,
+        pytest.raises(ToolError, match="enable_snapshot_actions"),
+    ):
+        await manage_backup(
+            core_client,
             scope="snapshot",
             action=action,
             backup_id="snapshot-id",
             confirm=True,
         )
-    _assert_no_io(backup_world)
+    sent.assert_not_awaited()
+    _assert_untouched(tool_sockets, snapshot_manager, [])
 
 
 @pytest.mark.parametrize("scope", ["snapshot", "edits"])
 @pytest.mark.parametrize("action", ["create", "restore", "delete"])
 async def test_backup_read_only_blocks_explicit_writes_before_io(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    snapshot_manager: BackupManager,
+    tool_sockets: list[HomeAssistantWebSocketClient],
+    captured: Path,
+    label_id: str,
+    monkeypatch: pytest.MonkeyPatch,
     scope: str,
     action: str,
 ) -> None:
-    backup_world.settings.backup_read_only = True
-    backup_world.settings.enable_snapshot_delete = True
-    with pytest.raises(ToolError, match="backup_read_only"):
-        await _direct(
-            backup_world,
+    monkeypatch.setattr(backup_settings, "backup_read_only", True)
+    monkeypatch.setattr(backup_settings, "enable_snapshot_delete", True)
+    with (
+        sent_messages(core_client) as sent,
+        pytest.raises(ToolError, match="backup_read_only"),
+    ):
+        await manage_backup(
+            core_client,
             scope=scope,
             action=action,
             backup_id="snapshot-id",
-            backup_name="automation.kitchen.20261003_120000.yaml",
+            backup_name=captured.name,
             confirm=True,
-            domain="automation",
-            entity_id="kitchen",
+            domain="label",
+            entity_id=label_id,
         )
-    _assert_no_io(backup_world)
+    sent.assert_not_awaited()
+    _assert_untouched(tool_sockets, snapshot_manager, [captured.name])
 
 
 @pytest.mark.parametrize(
@@ -154,66 +146,86 @@ async def test_backup_read_only_blocks_explicit_writes_before_io(
     [("snapshot", "list"), ("edits", "list"), ("edits", "view"), ("edits", "diff")],
 )
 async def test_backup_read_only_keeps_backup_inspection_available(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    backup_install: BackupInstall,
+    captured: Path,
+    monkeypatch: pytest.MonkeyPatch,
     scope: str,
     action: str,
 ) -> None:
-    path = await backup_world.manager.maybe_snapshot("automation", "kitchen")
-    assert path is not None
-    backup_world.settings.backup_read_only = True
+    await backup_install.core()
+    monkeypatch.setattr(backup_settings, "backup_read_only", True)
     # Disabling snapshots must not disable the edits scope.
-    backup_world.settings.enable_snapshot_actions = scope == "snapshot"
-    result = await _direct(
-        backup_world,
+    monkeypatch.setattr(backup_settings, "enable_snapshot_actions", scope == "snapshot")
+    result = await manage_backup(
+        core_client,
         scope=scope,
         action=action,
-        domain="automation",
-        backup_name=path.name,
+        domain="label",
+        backup_name=captured.name,
     )
     assert result["success"] is True
 
 
 @pytest.mark.parametrize("restriction", ["global", "request"])
 async def test_backup_settings_cannot_lift_global_or_request_read_only(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    snapshot_manager: BackupManager,
+    tool_sockets: list[HomeAssistantWebSocketClient],
+    monkeypatch: pytest.MonkeyPatch,
     restriction: str,
 ) -> None:
     if restriction == "global":
-        backup_world.settings.read_only_mode = True
+        monkeypatch.setattr(backup_settings, "read_only_mode", True)
         with pytest.raises(ToolError, match="READ_ONLY_MODE"):
-            await _direct(backup_world, scope="snapshot", action="create")
+            await manage_backup(core_client, scope="snapshot", action="create")
     else:
         with read_only_request(), pytest.raises(ToolError, match="READ_ONLY_MODE"):
-            await _direct(backup_world, scope="snapshot", action="create")
-    _assert_no_io(backup_world)
+            await manage_backup(core_client, scope="snapshot", action="create")
+    _assert_untouched(tool_sockets, snapshot_manager, [])
 
 
 async def test_snapshot_delete_still_requires_its_separate_opt_in(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    snapshot_manager: BackupManager,
+    tool_sockets: list[HomeAssistantWebSocketClient],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(backup_settings, "enable_snapshot_delete", False)
     with pytest.raises(ToolError, match="enable_snapshot_delete"):
-        await _direct(
-            backup_world,
+        await manage_backup(
+            core_client,
             scope="snapshot",
             action="delete",
             backup_id="old",
             confirm=True,
         )
-    _assert_no_io(backup_world)
+    _assert_untouched(tool_sockets, snapshot_manager, [])
 
 
 async def test_existing_registration_observes_live_backup_controls(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    backup_install: BackupInstall,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A control a human changes applies to the tool already registered, both ways."""
+    await backup_install.core()
+    tool = await _registered(core_client).get_tool("ha_manage_backup")
     for field, blocked_action in (
         ("enable_snapshot_actions", "list"),
         ("backup_read_only", "create"),
     ):
-        setattr(backup_world.settings, field, field == "backup_read_only")
+        monkeypatch.setattr(backup_settings, field, field == "backup_read_only")
         with pytest.raises(ToolError, match=field):
-            await _direct(backup_world, scope="snapshot", action=blocked_action)
-        setattr(backup_world.settings, field, field != "backup_read_only")
-        assert (await _direct(backup_world, scope="snapshot", action="list"))["success"]
+            await tool.fn(scope="snapshot", action=blocked_action)
+        monkeypatch.setattr(backup_settings, field, field != "backup_read_only")
+        with sent_messages(core_client) as sent:
+            assert (await tool.fn(scope="snapshot", action="list"))["success"]
+        sent.assert_awaited()
 
 
 @pytest.mark.usefixtures("tool_search_default")
@@ -222,25 +234,25 @@ async def test_existing_registration_observes_live_backup_controls(
     [
         ("enable_snapshot_actions", "list", None),
         ("enable_snapshot_actions", "list", "ha_call_read_tool"),
-        ("enable_snapshot_actions", "list", "ha_call_write_tool"),
-        ("enable_snapshot_actions", "list", "ha_call_delete_tool"),
-        ("backup_read_only", "create", None),
         ("backup_read_only", "create", "ha_call_write_tool"),
         ("backup_read_only", "create", "ha_call_delete_tool"),
     ],
 )
 async def test_registered_transport_and_categorized_proxies_enforce_backup_controls(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    snapshot_manager: BackupManager,
+    tool_sockets: list[HomeAssistantWebSocketClient],
+    monkeypatch: pytest.MonkeyPatch,
     control: str,
     action: str,
     proxy: str | None,
 ) -> None:
-    setattr(backup_world.settings, control, control == "backup_read_only")
-    backup_world.mcp.add_transform(
-        CategorizedSearchTransform(always_visible=["ha_manage_backup"])
-    )
+    monkeypatch.setattr(backup_settings, control, control == "backup_read_only")
+    mcp = _registered(core_client)
+    mcp.add_transform(CategorizedSearchTransform(always_visible=["ha_manage_backup"]))
     arguments = {"scope": "snapshot", "action": action}
-    async with Client(backup_world.mcp) as client:
+    async with Client(mcp) as client:
         with pytest.raises(ToolError, match=control):
             await client.call_tool(
                 proxy or "ha_manage_backup",
@@ -248,48 +260,56 @@ async def test_registered_transport_and_categorized_proxies_enforce_backup_contr
                 if proxy
                 else arguments,
             )
-    _assert_no_io(backup_world)
+    _assert_untouched(tool_sockets, snapshot_manager, [])
 
 
 async def test_restore_selection_reaches_the_restore_as_given(
-    backup_world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    backup_install: BackupInstall,
 ) -> None:
     """A selection lost on the way would restore no app and back none up.
 
     Some MCP clients send arrays as JSON strings.
     """
-    restore = AsyncMock(return_value={"success": True})
-    monkeypatch.setattr(backup, "restore_backup", restore)
+    supervisor = await backup_install.supervisor()
+    target = supervisor.add_backup(
+        "old", apps=("core_ssh",), folders=("share",), password=None
+    )
     arguments = {
         "scope": "snapshot",
         "action": "restore",
-        "backup_id": "b1",
+        "backup_id": target,
         "restore_addons": '["core_ssh"]',
         "restore_folders": ["share"],
     }
-    async with Client(backup_world.mcp) as client:
+    async with Client(_registered(core_client)) as client:
         await client.call_tool("ha_manage_backup", arguments)
-    assert restore.await_args.kwargs["restore_addons"] == ["core_ssh"]
-    assert restore.await_args.kwargs["restore_folders"] == ["share"]
+    restore = supervisor.restores[0]
+    assert (restore["addons"], restore["folders"]) == (["core_ssh"], ["share"])
 
 
 async def test_backup_read_only_keeps_automatic_pre_edit_capture(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    snapshot_manager: BackupManager,
+    label_id: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    backup_world.settings.backup_read_only = True
-    backup_world.settings.enable_snapshot_actions = False
+    monkeypatch.setattr(backup_settings, "backup_read_only", True)
+    monkeypatch.setattr(backup_settings, "enable_snapshot_actions", False)
     wrote: list[str] = []
 
-    @with_auto_backup(domain="automation", id_param="entity_id", client=backup_world.ha)
+    @with_auto_backup(domain="label", id_param="entity_id", client=core_client)
     async def edit(*, entity_id: str) -> None:
-        entries = backup_world.manager.list_snapshots(domain="automation")
+        entries = snapshot_manager.list_snapshots(domain="label")
         assert len(entries) == 1  # Capture must precede the write.
-        saved = backup_world.manager.read_snapshot(entries[0]["name"])
-        assert saved["config"]["alias"] == "Before edit"
+        saved = snapshot_manager.read_snapshot(entries[0]["name"])
+        assert saved["config"]["name"] == BEFORE
         wrote.append(entity_id)
 
-    await edit(entity_id="kitchen")
-    assert wrote == ["kitchen"]
+    await edit(entity_id=label_id)
+    assert wrote == [label_id]
 
 
 @pytest.mark.parametrize(
@@ -299,7 +319,7 @@ async def test_backup_read_only_keeps_automatic_pre_edit_capture(
         ("backup_read_only", "BACKUP_READ_ONLY", True),
     ],
 )
-async def test_env_and_persisted_backup_controls_reach_runtime_settings(
+def test_env_and_persisted_backup_controls_reach_runtime_settings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     field: str,
@@ -321,38 +341,57 @@ async def test_env_and_persisted_backup_controls_reach_runtime_settings(
     assert get_backup_setting_origin(env) == "env"
 
 
+@pytest.fixture
+def file_backup_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Backup settings saved to the override file, with no variable pinning one."""
+    for row in BACKUP_OVERRIDE_FIELDS:
+        monkeypatch.delenv(row.env, raising=False)
+    monkeypatch.setattr("ha_mcp.config_backup.is_running_in_addon", lambda: False)
+    reset_global_settings()
+
+
+@pytest.mark.usefixtures("file_backup_settings")
 @pytest.mark.parametrize(
     ("field", "value"), [("enable_snapshot_actions", True), ("backup_read_only", False)]
 )
 async def test_developer_backup_write_cannot_change_human_controls(
-    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
     field: str,
     value: bool,
 ) -> None:
-    apply_config = AsyncMock()
-    monkeypatch.setattr(
-        "ha_mcp.settings_ui._handlers_backups.apply_backup_config", apply_config
-    )
-    dev = DevTools(MagicMock())
+    """The whole write is refused: the agent-editable field in it is not saved either."""
+    dev = DevTools(core_client)
     with pytest.raises(ToolError, match="human"):
         await dev.ha_dev_manage_settings(
             action="set_backup_config",
             backup={field: value, "enable_auto_backup": False},
         )
-    apply_config.assert_not_awaited()
+    assert get_backup_setting_origin("ENABLE_AUTO_BACKUP") == "default"
     for action in ("set", "reset"):
         with pytest.raises(ToolError, match="Unknown setting"):
             await dev.ha_dev_manage_settings(action=action, setting=field, value=True)
 
 
+@pytest.mark.usefixtures("file_backup_settings")
+async def test_developer_backup_write_saves_agent_editable_settings(
+    core_client: HomeAssistantClient,
+) -> None:
+    await DevTools(core_client).ha_dev_manage_settings(
+        action="set_backup_config", backup={"enable_auto_backup": False}
+    )
+    assert get_backup_setting_origin("ENABLE_AUTO_BACKUP") == "file"
+    assert get_global_settings().enable_auto_backup is False
+
+
 async def test_developer_reads_explain_human_control_editability(
+    core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for row in BACKUP_OVERRIDE_FIELDS:
         monkeypatch.delenv(row.env, raising=False)
     reset_global_settings()
     fields = (
-        await DevTools(MagicMock()).ha_dev_manage_settings(action="get_backup_config")
+        await DevTools(core_client).ha_dev_manage_settings(action="get_backup_config")
     )["data"]["fields"]
     rows = {row["field"]: row for row in fields}
     for field in ("enable_snapshot_actions", "backup_read_only"):
@@ -362,120 +401,125 @@ async def test_developer_reads_explain_human_control_editability(
 
 
 async def test_default_controls_preserve_snapshot_creation(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_install: BackupInstall,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for row in BACKUP_OVERRIDE_FIELDS:
         monkeypatch.delenv(row.env, raising=False)
-    defaults = Settings(_env_file=None)
-    monkeypatch.setattr(backup, "get_global_settings", lambda: defaults)
-    create = AsyncMock(return_value={"success": True, "backup_id": "created"})
-    monkeypatch.setattr(backup, "create_backup", create)
-    result = await _direct(
-        backup_world, scope="snapshot", action="create", name="Before edit"
+    reset_global_settings()
+    await backup_install.core()
+    await backup_install.configure(password=PASSWORD)
+    result = await manage_backup(
+        core_client, scope="snapshot", action="create", name=BEFORE
     )
-    assert result["backup_id"] == "created"
-    create.assert_awaited_once_with(
-        backup_world.ha,
-        "Before edit",
-        ctx=None,
-        include_homeassistant=None,
-        include_database=None,
-        include_addons=None,
-        include_all_addons=None,
-        include_folders=None,
-    )
+    assert (await backup_install.listed())[result["backup_id"]]["name"] == BEFORE
 
 
-async def test_create_parts_and_safety_backup_reach_their_handlers(
-    backup_world: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_create_parts_reach_the_backup(
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    backup_install: BackupInstall,
 ) -> None:
-    """A dropped or flipped safety_backup would make, or skip, a backup unasked."""
-    create = AsyncMock(return_value={"success": True})
-    restore = AsyncMock(return_value={"success": True})
-    monkeypatch.setattr(backup, "create_backup", create)
-    monkeypatch.setattr(backup, "restore_backup", restore)
-    await _direct(
-        backup_world,
+    """A dropped part would leave an app, a folder or the database out, or put it in."""
+    await backup_install.supervisor()
+    await backup_install.configure(password=PASSWORD)
+    result = await manage_backup(
+        core_client,
         scope="snapshot",
         action="create",
         include_homeassistant=True,
         include_database=False,
         include_addons=["core_ssh"],
-        include_all_addons=None,
         include_folders=["share"],
     )
-    assert create.await_args.kwargs == {
-        "ctx": None,
-        "include_homeassistant": True,
-        "include_database": False,
-        "include_addons": ["core_ssh"],
-        "include_all_addons": None,
-        "include_folders": ["share"],
-    }
-    await _direct(backup_world, scope="snapshot", action="restore", backup_id="b1")
-    assert restore.await_args.kwargs["safety_backup"] is False
-    await _direct(
-        backup_world,
-        scope="snapshot",
-        action="restore",
-        backup_id="b1",
-        safety_backup=True,
+    made = (await backup_install.listed())[result["backup_id"]]
+    assert (made["homeassistant_included"], made["database_included"]) == (True, False)
+    assert [app["slug"] for app in made["addons"]] == ["core_ssh"]
+    assert "share" in made["folders"]
+
+
+@pytest.mark.parametrize(
+    ("given", "operations"),
+    [({}, ["restore"]), ({"safety_backup": True}, ["backup", "restore"])],
+    ids=["not-asked", "asked"],
+)
+async def test_safety_backup_is_made_only_when_asked_for(
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    backup_install: BackupInstall,
+    given: dict[str, Any],
+    operations: list[str],
+) -> None:
+    """A dropped or flipped safety_backup would make, or skip, a backup unasked."""
+    supervisor = await backup_install.supervisor()
+    target = supervisor.add_backup("old")
+    await backup_install.configure(password=PASSWORD)
+    await manage_backup(
+        core_client, scope="snapshot", action="restore", backup_id=target, **given
     )
-    assert restore.await_args.kwargs["safety_backup"] is True
+    assert supervisor.operations == operations
 
 
 async def test_snapshot_toggle_does_not_block_explicit_edit_capture(
-    backup_world: SimpleNamespace,
+    core_client: HomeAssistantClient,
+    backup_settings: Settings,
+    snapshot_manager: BackupManager,
+    label_id: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    backup_world.settings.enable_snapshot_actions = False
-    backup_world.settings.enable_auto_backup = False
-    result = await _direct(
-        backup_world,
+    monkeypatch.setattr(backup_settings, "enable_snapshot_actions", False)
+    monkeypatch.setattr(backup_settings, "enable_auto_backup", False)
+    result = await manage_backup(
+        core_client,
         scope="edits",
         action="create",
-        domain="automation",
-        entity_id="kitchen",
+        domain="label",
+        entity_id=label_id,
     )
     assert result["success"] is True
-    entries = backup_world.manager.list_snapshots(domain="automation")
+    entries = snapshot_manager.list_snapshots(domain="label")
     assert len(entries) == 1
     assert (
-        backup_world.manager.read_snapshot(entries[0]["name"])["config"]["alias"]
-        == "Before edit"
+        snapshot_manager.read_snapshot(entries[0]["name"])["config"]["name"] == BEFORE
     )
 
 
 @pytest.mark.parametrize("action", ["restore", "delete"])
 async def test_human_backup_actions_remain_available_under_tool_restrictions(
-    backup_world: SimpleNamespace,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    label_registry: lr.LabelRegistry,
+    label_id: str,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     action: str,
 ) -> None:
-    from starlette.requests import Request
+    """The Backups tab still restores and deletes per-edit backups."""
+    monkeypatch.setenv("ENABLE_SNAPSHOT_ACTIONS", "false")
+    monkeypatch.setenv("BACKUP_READ_ONLY", "true")
+    monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+    monkeypatch.setenv("HAMCP_BACKUP_DIR", str(tmp_path / "backups"))
+    server = build_server(monkeypatch, core_client)
+    assert await async_setup_component(hass, "config", {})
+    manager = get_backup_manager(core_client, get_global_settings())
+    path = await snapshot_of(manager, label_id)
+    label_registry.async_update(label_id, name="After edit")
 
-    path = await backup_world.manager.maybe_snapshot("automation", "kitchen")
-    assert path is not None
-    backup_world.settings.enable_snapshot_actions = False
-    backup_world.settings.backup_read_only = True
-    monkeypatch.setattr(backup_ui, "get_global_settings", lambda: backup_world.settings)
-    monkeypatch.setattr(
-        backup_ui, "get_backup_manager", lambda *_args: backup_world.manager
+    handler = build_settings_handlers(server)[f"{action}_backup"]
+    response = await handler(
+        Request({"type": "http", "path_params": {"name": path.name}})
     )
-    server = SimpleNamespace(client=backup_world.ha)
-    request = Request({"type": "http", "path_params": {"name": path.name}})
-    handler = (
-        backup_ui._restore_backup if action == "restore" else backup_ui._delete_backup
-    )
-    response = await handler(server, request)
-    body = json.loads(response.body)
+
+    body = json.loads(bytes(response.body))
     assert response.status_code == 200
     assert body["success"] is True
     if action == "restore":
         assert body["data"]["restored_from"] == path.name
-        assert body["data"]["result"]["config"]["alias"] == "Before edit"
+        label = label_registry.async_get_label(label_id)
+        assert label is not None
+        assert label.name == BEFORE
     else:
         assert body["deleted"] == [path.name]
         with pytest.raises(FileNotFoundError):
-            backup_world.manager.read_snapshot(path.name)
+            manager.read_snapshot(path.name)

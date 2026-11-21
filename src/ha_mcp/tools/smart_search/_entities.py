@@ -12,19 +12,17 @@ from ...utils.device_registry_semantics import (
 from ...utils.entity_membership import normalize_member_entity_ids
 from ...utils.fuzzy_search import calculate_partial_ratio, calculate_ratio
 from ...visibility.resolver import (
+    core_device_list_reply,
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
+from ..component_registries import registry_list_reply
+from ..entity_registry_reads import GET_ENTRIES_CHUNK_SIZE
 from ..helpers import exception_to_structured_error
 from ..util_helpers import merge_visibility_warnings
 from ._base import _SearchBase
 
 logger = logging.getLogger(__name__)
-
-# Bounds the per-frame response size of config/entity_registry/get_entries
-# (extended entries, ~1KB typical each) so alias enrichment can't produce an
-# over-cap WebSocket frame on large instances (#1721).
-_GET_ENTRIES_CHUNK_SIZE = 500
 
 
 def _redact_hidden_memberships(
@@ -207,7 +205,7 @@ class EntitySearchMixin(_SearchBase):
 
         ``config/entity_registry/list`` deliberately omits ``aliases``;
         ``get_entries`` includes them. Survivors are split into
-        ``_GET_ENTRIES_CHUNK_SIZE``-sized chunks fetched concurrently: a
+        ``GET_ENTRIES_CHUNK_SIZE``-sized chunks fetched concurrently: a
         bounded number of round-trips (one per chunk), not N+1 fan-out, and
         each response frame stays bounded regardless of instance size.
         Enrichment is best-effort per chunk — one chunk failing does not
@@ -224,8 +222,8 @@ class EntitySearchMixin(_SearchBase):
             return aliases_map, []
 
         chunks: list[list[str]] = [
-            survivor_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
-            for i in range(0, len(survivor_ids), _GET_ENTRIES_CHUNK_SIZE)
+            survivor_ids[i : i + GET_ENTRIES_CHUNK_SIZE]
+            for i in range(0, len(survivor_ids), GET_ENTRIES_CHUNK_SIZE)
         ]
         responses: list[Any] = await asyncio.gather(
             *(
@@ -325,11 +323,7 @@ class EntitySearchMixin(_SearchBase):
             )
             fetch_slots.append("registry")
         if need_device:
-            fetch_coros.append(
-                self.client.send_websocket_message(
-                    {"type": "config/device_registry/list"}
-                )
-            )
+            fetch_coros.append(core_device_list_reply(self.client))
             fetch_slots.append("device")
         fetched = (
             await asyncio.gather(*fetch_coros, return_exceptions=True)
@@ -471,18 +465,12 @@ class EntitySearchMixin(_SearchBase):
             # Fetch all registries and states in parallel
             results = await asyncio.gather(
                 self.client.get_states(),
-                self.client.send_websocket_message(
-                    {"type": "config/area_registry/list"}
-                ),
+                registry_list_reply(self.client, "area"),
                 self.client.send_websocket_message(
                     {"type": "config/entity_registry/list"}
                 ),
-                self.client.send_websocket_message(
-                    {"type": "config/device_registry/list"}
-                ),
-                self.client.send_websocket_message(
-                    {"type": "config/floor_registry/list"}
-                ),
+                core_device_list_reply(self.client),
+                registry_list_reply(self.client, "floor"),
                 return_exceptions=True,
             )
 

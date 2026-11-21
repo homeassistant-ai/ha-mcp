@@ -5,7 +5,7 @@ pool, so a daemon thread parked in a blocking stdin read holds the
 ``BufferedReader`` lock whenever no message is in flight. If the process
 reaches interpreter finalization in that state, CPython aborts with
 ``Fatal Python error: _enter_buffered_busy`` — SIGABRT, which macOS turns
-into a user-visible crash dialog. ``ha_mcp.__main__._force_exit`` skips
+into a user-visible crash dialog. ``ha_mcp.__main__.force_exit`` skips
 finalization to neutralize this; a shutdown watchdog bounds the related
 hang where the SDK's stdio teardown never completes at all.
 
@@ -73,7 +73,7 @@ def _run_with_open_stdin(
 
 @pytest.mark.timeout(120)
 class TestForceExitMechanism:
-    """The finalization abort is real, and _force_exit sidesteps it."""
+    """The finalization abort is real, and force_exit sidesteps it."""
 
     def test_plain_exit_with_parked_reader_aborts(self) -> None:
         """Control: sys.exit() in the parked-reader state aborts the process.
@@ -81,7 +81,7 @@ class TestForceExitMechanism:
         This is the bug being guarded against (no anyio involved — the abort
         is CPython finalization behavior). If a future CPython release
         changes buffered-IO finalization so this passes cleanly (returncode
-        0, no fatal error), the _force_exit workaround in ha_mcp.__main__
+        0, no fatal error), the force_exit workaround in ha_mcp.__main__
         can likely be removed. It can also fail if the reader thread loses
         the startup race and is not yet inside read() at exit — treat that
         as a race to investigate, not as the upstream fix having landed.
@@ -93,7 +93,7 @@ class TestForceExitMechanism:
     def test_force_exit_with_parked_reader_is_clean(self) -> None:
         script = (
             _PARKED_READER_PREAMBLE
-            + "from ha_mcp.__main__ import _force_exit\n_force_exit(0)"
+            + "from ha_mcp.__main__ import force_exit\nforce_exit(0)"
         )
         code, stderr = _run_with_open_stdin(script)
         assert code == 0, f"stderr:\n{stderr}"
@@ -102,7 +102,7 @@ class TestForceExitMechanism:
     def test_force_exit_propagates_exit_code(self) -> None:
         script = (
             _PARKED_READER_PREAMBLE
-            + "from ha_mcp.__main__ import _force_exit\n_force_exit(7)"
+            + "from ha_mcp.__main__ import force_exit\nforce_exit(7)"
         )
         code, stderr = _run_with_open_stdin(script)
         assert code == 7, f"stderr:\n{stderr}"
@@ -110,19 +110,19 @@ class TestForceExitMechanism:
 
     def test_force_exit_with_blocked_stdout_writer_still_exits(self) -> None:
         """A writer thread blocked on a full stdout pipe (the client stopped
-        draining) holds the buffered-writer lock; _force_exit's flush must
+        draining) holds the buffered-writer lock; force_exit's flush must
         not deadlock on that lock or the hard-exit path — watchdog included
         — turns back into a hang. The parent deliberately never reads
         stdout so the 16 MiB write fills the pipe and blocks."""
         script = (
             "import sys, threading, time\n"
-            "from ha_mcp.__main__ import _force_exit\n"
+            "from ha_mcp.__main__ import force_exit\n"
             "threading.Thread(\n"
             "    target=lambda: sys.stdout.buffer.write(b'x' * (16 * 1024 * 1024)),\n"
             "    daemon=True,\n"
             ").start()\n"
             "time.sleep(1.0)  # let the pipe fill and the writer block\n"
-            "_force_exit(5)\n"
+            "force_exit(5)\n"
         )
         code, stderr = _run_with_open_stdin(script, stdout=subprocess.PIPE)
         assert code == 5, f"stderr:\n{stderr}"

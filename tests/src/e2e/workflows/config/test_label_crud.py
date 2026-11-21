@@ -324,7 +324,7 @@ class TestLabelAssignment:
             },
         )
         assign_data = assert_mcp_success(assign_result, "Assign label to entity")
-        logger.info(f"Label assigned: {assign_data.get('message')}")
+        logger.info(f"Label assigned: {assign_data.get('updates')}")
 
         # Clear labels from entity (restore original state)
         clear_result = await mcp_client.call_tool(
@@ -335,7 +335,7 @@ class TestLabelAssignment:
             },
         )
         clear_data = assert_mcp_success(clear_result, "Clear labels from entity")
-        logger.info(f"Labels cleared: {clear_data.get('message')}")
+        logger.info(f"Labels cleared: {clear_data.get('updates')}")
 
         # Clean up label
         await mcp_client.call_tool(
@@ -371,7 +371,7 @@ class TestLabelAssignment:
             },
         )
         assign_data = assert_mcp_success(assign_result, "Assign multiple labels")
-        logger.info(f"Multiple labels assigned: {assign_data.get('message')}")
+        logger.info(f"Multiple labels assigned: {assign_data.get('updates')}")
 
         # Clear labels from entity
         await mcp_client.call_tool(
@@ -413,7 +413,7 @@ class TestLabelAssignment:
             },
         )
         assign_data = assert_mcp_success(assign_result, "Assign label")
-        logger.info(f"Label assignment succeeded: {assign_data.get('message')}")
+        logger.info(f"Label assignment succeeded: {assign_data.get('updates')}")
 
         # Clear labels
         await mcp_client.call_tool(
@@ -454,7 +454,7 @@ class TestLabelAssignment:
             },
         )
         assign_data = assert_mcp_success(assign_result, "Assign label as JSON string")
-        logger.info(f"JSON label assignment succeeded: {assign_data.get('message')}")
+        logger.info(f"JSON label assignment succeeded: {assign_data.get('updates')}")
 
         # Clear labels
         await mcp_client.call_tool(

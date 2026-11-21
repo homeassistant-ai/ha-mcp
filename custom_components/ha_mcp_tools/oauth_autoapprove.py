@@ -39,7 +39,8 @@ credential and the tokens this flow issues grant nothing, but ``/authorize`` is
 anonymous: redirecting to any ``redirect_uri`` would make the Home Assistant
 origin an open redirector. It therefore redirects only to a callback on the
 administrator's allowlist (:mod:`oauth_redirect_allowlist`, #2427) and answers
-anything else with a page explaining how to add a legitimate callback.
+anything else with a page explaining how to add a legitimate callback, or why
+one carrying credentials or a ``#``, or too long, can never be added.
 """
 
 from __future__ import annotations
@@ -71,9 +72,11 @@ from .oauth_legacy import (
     read_form,
 )
 from .oauth_redirect_allowlist import (
+    MAX_OAUTH_CALLBACK_LENGTH,
     _is_listable,
     _is_valid_redirect_uri,
     is_redirect_allowed,
+    loggable_callback,
 )
 
 if TYPE_CHECKING:
@@ -90,19 +93,30 @@ _REFUSAL_LOG_INTERVAL = 60.0
 _refusal_log: dict[str, float] = {"last": float("-inf"), "suppressed": 0}
 
 
-def _log_refused_callback(redirect_uri: str) -> None:
+def reset_callback_refusal_log() -> None:
+    """Clear the refusal-log rate limit between isolated component lifecycles."""
+    _refusal_log.update(last=float("-inf"), suppressed=0)
+
+
+def _log_refused_callback(redirect_uri: str, listable: bool) -> None:
     now = time.monotonic()
     if now - _refusal_log["last"] < _REFUSAL_LOG_INTERVAL:
         _refusal_log["suppressed"] += 1
         return
     suppressed = int(_refusal_log["suppressed"])
     _refusal_log.update(last=now, suppressed=0)
-    # repr: the callback is attacker-supplied, and an encoded newline or
-    # terminal sequence in it must not forge log lines.
+    reason = (
+        "it is not on the OAuth callback list (Configure or the HA-MCP panel)"
+        if listable
+        else "a callback carrying a username, a password or a '#', or one that is "
+        "too long, can never be allowed"
+    )
+    # repr: the path is attacker-supplied, and an encoded newline or terminal
+    # sequence in it must not forge log lines.
     _LOGGER.warning(
-        "Refused a none-mode sign-in to callback %s: it is not on the OAuth "
-        "callback list (Configure or the HA-MCP panel)%s",
-        repr(redirect_uri[:200]),
+        "Refused a none-mode sign-in to callback %s: %s%s",
+        repr(loggable_callback(redirect_uri)[:200]),
+        reason,
         f"; {suppressed} more refused since the last such line" if suppressed else "",
     )
 
@@ -174,8 +188,23 @@ Then start connecting again.</p>
 </body></html>
 """
 
+_UNLISTABLE_CALLBACK_PAGE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HA-MCP: sign-in callback not allowed</title></head>
+<body style="font-family:sans-serif;max-width:40em;margin:2em auto;padding:0 1em">
+<h1>Sign-in callback not allowed</h1>
+<p>HA-MCP did not send this sign-in back to <code>{callback}</code> because a
+callback address may not contain a username, a password or a <code>#</code>, nor
+be longer than {limit} characters.</p>
+<p>Such an address cannot be allowed in Home Assistant's settings. The client
+you are connecting must use a plain <code>https</code> callback, or
+<code>http</code> on a loopback address such as <code>127.0.0.1</code>.</p>
+</body></html>
+"""
 
-def _unlisted_callback_response(redirect_uri: str) -> web.Response:
+
+def _unlisted_callback_response(redirect_uri: str, listable: bool) -> web.Response:
     """400 page for a callback the allowlist refuses — never a redirect.
 
     RFC 6749 §4.1.2.1: with an untrusted ``redirect_uri`` the server must not
@@ -183,7 +212,9 @@ def _unlisted_callback_response(redirect_uri: str) -> web.Response:
     """
     return web.Response(
         status=400,
-        text=_UNLISTED_CALLBACK_PAGE.format(callback=html.escape(redirect_uri)),
+        text=(
+            _UNLISTED_CALLBACK_PAGE if listable else _UNLISTABLE_CALLBACK_PAGE
+        ).format(callback=html.escape(redirect_uri), limit=MAX_OAUTH_CALLBACK_LENGTH),
         content_type="text/html",
         headers={
             "Cache-Control": "no-store",
@@ -217,7 +248,7 @@ class AutoApproveProvider:
         """True when ``redirect_uri`` is on the live callback allowlist.
 
         With the list turned off, any callback the list itself could hold is
-        accepted: still https, or http on a loopback host, with no userinfo.
+        accepted: https, or http on a loopback host, with no userinfo, not too long.
         """
         if self._allow_any():
             return _is_listable(redirect_uri)
@@ -327,8 +358,9 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         if err is not None:
             return err
         if not provider.allows_redirect(redirect_uri):
-            _log_refused_callback(redirect_uri)
-            return _unlisted_callback_response(redirect_uri)
+            listable = _is_listable(redirect_uri)
+            _log_refused_callback(redirect_uri, listable)
+            return _unlisted_callback_response(redirect_uri, listable)
 
         # RFC 9207: every authorization response — success or error — names the
         # issuer that produced it, so a client registered with several

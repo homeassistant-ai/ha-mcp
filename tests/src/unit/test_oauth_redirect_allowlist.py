@@ -1,50 +1,42 @@
-"""None-mode callback allowlist matching (#2427).
+"""None-mode callback allowlist matching and storage (#2427).
 
 An unlisted callback must never receive an auto-approved code, or the Home
-Assistant origin is an open redirector.
+Assistant origin is an open redirector. The sign-in views that enforce it are
+in ``test_oauth_redirect_allowlist_authorize.py``.
 """
 
 from __future__ import annotations
 
-import logging
-from typing import Any
+from pathlib import Path
 
 import pytest
 
-from custom_components.ha_mcp_tools.const import (
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     MAX_OAUTH_CALLBACK_LENGTH,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
-)
-from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
-    _is_valid_redirect_uri,
     effective_allowlist,
     is_redirect_allowed,
+    loggable_callback,
     normalize_allowlist,
     stored_allowlist,
 )
 
-from . import test_oauth_autoapprove as aa_tests
-from .test_mcp_webhook import (
-    DATA_WEBHOOK,
-    DOMAIN,
-    WEBHOOK_AUTH_NONE,
-    FakeSession,
-    _entry,
-    _register_hass,
-    mw,
-)
-from .test_oauth_autoapprove import AUTH_QS, oauth_dcr
-
-# These tests run their own listener on the loopback interface; Core's test
-# plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
-pytestmark = pytest.mark.usefixtures("socket_enabled")
-
-# The real-aiohttp /authorize harness, shared with the auto-approve suite.
-unified_view_client_factory = aa_tests.unified_view_client_factory
-
 CLAUDE = "https://claude.ai/api/mcp/auth_callback"
 LOOPBACK = "http://127.0.0.1/callback"
+
+_ROOT = Path(__file__).resolve().parents[3]
+_MODULE = "oauth_redirect_allowlist.py"
+_COMPONENT_COPY = _ROOT / "custom_components/ha_mcp_tools" / _MODULE
+_DEV_PROXY_COPY = (
+    _ROOT / "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev" / _MODULE
+)
+
+
+def test_the_webhook_proxy_copy_honours_the_same_callbacks_as_the_component() -> None:
+    """A drifted proxy copy would redirect sign-ins the component refuses. The
+    stable copy is held to the dev tree by the promote drift guards."""
+    assert _DEV_PROXY_COPY.read_bytes() == _COMPONENT_COPY.read_bytes()
 
 
 class TestIsRedirectAllowed:
@@ -66,7 +58,7 @@ class TestIsRedirectAllowed:
         assert not is_redirect_allowed(near_miss, [CLAUDE])
 
     def test_listed_loopback_callback_matches_any_port(self) -> None:
-        # RFC 8252 §7.3: native clients choose a free port per sign-in.
+        # RFC 8252 section 7.3: native clients choose a free port per sign-in.
         assert is_redirect_allowed("http://127.0.0.1:61264/callback", [LOOPBACK])
 
     def test_loopback_port_exception_keeps_the_path_exact(self) -> None:
@@ -76,7 +68,6 @@ class TestIsRedirectAllowed:
         assert not is_redirect_allowed("http://localhost:61264/callback", [LOOPBACK])
 
     def test_loopback_port_exception_keeps_the_userinfo_exact(self) -> None:
-        # Only the port may vary; anything else in the authority must match.
         assert not is_redirect_allowed(
             "http://user@127.0.0.1:61264/callback", [LOOPBACK]
         )
@@ -100,11 +91,6 @@ class TestIsRedirectAllowed:
         listed = "https://user@claude.ai/api/mcp/auth_callback"
         assert not is_redirect_allowed(listed, [listed])
 
-    def test_the_shared_floor_still_accepts_userinfo_for_other_modes(self) -> None:
-        # Legacy, ha_auth and DCR use the floor and keep their behaviour; only
-        # the none-mode list refuses userinfo.
-        assert _is_valid_redirect_uri("https://user@claude.ai/api/mcp/auth_callback")
-
     def test_the_default_list_is_all_listable(self) -> None:
         default = list(DEFAULT_OAUTH_REDIRECT_ALLOWLIST)
         assert normalize_allowlist(default) == (default, [])
@@ -119,6 +105,13 @@ class TestIsRedirectAllowed:
         listed = f"{CLAUDE}#frag"
         assert not is_redirect_allowed(listed, [listed])
 
+    def test_a_callback_too_long_for_any_list_is_refused_even_when_listed(
+        self,
+    ) -> None:
+        # No writer can store it, so /authorize must not call it listable.
+        long = f"{CLAUDE}?" + "a" * MAX_OAUTH_CALLBACK_LENGTH
+        assert not is_redirect_allowed(long, [long])
+
 
 class TestEffectiveAllowlist:
     def test_an_entry_never_edited_uses_the_default(self) -> None:
@@ -128,26 +121,13 @@ class TestEffectiveAllowlist:
         # Removing every entry must not bring the default back.
         assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: []}) == []
 
-    def test_a_malformed_stored_list_refuses_every_callback(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        # Falling back to the default would widen a security setting silently.
-        with caplog.at_level(logging.WARNING):
-            assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: CLAUDE}) == []
-        assert "malformed OAuth callback allowlist (str)" in caplog.text
+    def test_a_saved_list_is_in_force_as_written(self) -> None:
+        saved = {OPT_OAUTH_REDIRECT_ALLOWLIST: [CLAUDE, LOOPBACK]}
+        assert effective_allowlist(saved) == [CLAUDE, LOOPBACK]
 
-    def test_a_malformed_list_is_logged_once_without_its_contents(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        # /authorize reads the list on every anonymous request.
-        saved = {OPT_OAUTH_REDIRECT_ALLOWLIST: [CLAUDE, "http://localhost/cb#frag"]}
-        with caplog.at_level(logging.WARNING):
-            for _ in range(5):
-                assert effective_allowlist(saved) == []
-        lines = [r for r in caplog.records if "malformed" in r.getMessage()]
-        assert len(lines) == 1
-        assert "2 entries" in lines[0].getMessage()
-        assert CLAUDE not in caplog.text
+    def test_a_malformed_stored_list_refuses_every_callback(self) -> None:
+        # Falling back to the default would widen a security setting silently.
+        assert effective_allowlist({OPT_OAUTH_REDIRECT_ALLOWLIST: CLAUDE}) == []
 
     def test_a_list_with_an_unusable_entry_refuses_every_callback(self) -> None:
         # The writers never store this; a port-varied loopback request would
@@ -201,239 +181,22 @@ class TestNormalizeAllowlist:
         assert normalize_allowlist([long]) == ([], [long])
 
 
-# ---------------------------------------------------------------------------
-# Through the none-mode /authorize view
-# ---------------------------------------------------------------------------
+class TestLoggableCallback:
+    """A refused callback is logged; its userinfo, query and fragment can carry
+    a password or a token, so they must not reach the log."""
 
+    def test_keeps_scheme_host_port_and_path_only(self) -> None:
+        callback = "https://user:pw@claude.ai:8443/api/cb?token=abc#frag"
+        assert loggable_callback(callback) == "https://claude.ai:8443/api/cb"
 
-@pytest.fixture(autouse=True)
-def _fresh_refusal_log(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each test starts outside the refusal log's rate-limit interval."""
-    from custom_components.ha_mcp_tools import oauth_autoapprove
-    from custom_components.ha_mcp_tools import oauth_redirect_allowlist as allow
-
-    monkeypatch.setattr(allow, "_warned_malformed", {"value": None})
-
-    monkeypatch.setattr(
-        oauth_autoapprove, "_refusal_log", {"last": float("-inf"), "suppressed": 0}
-    )
-
-
-async def test_none_mode_refusal_log_is_rate_limited(
-    unified_view_client_factory: Any, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The view is anonymous: a burst of refusals writes one line, then a count."""
-    from custom_components.ha_mcp_tools import oauth_autoapprove
-
-    client = await unified_view_client_factory(mode="none")
-    with caplog.at_level(logging.WARNING):
-        for n in range(5):
-            await client.get(
-                "/api/ha_mcp_tools/oauth/authorize"
-                + AUTH_QS
-                + f"&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fcb{n}",
-                allow_redirects=False,
-            )
-        oauth_autoapprove._refusal_log["last"] -= (
-            oauth_autoapprove._REFUSAL_LOG_INTERVAL
-        )
-        await client.get(
-            "/api/ha_mcp_tools/oauth/authorize"
-            + AUTH_QS
-            + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Flast",
-            allow_redirects=False,
-        )
-    lines = [r for r in caplog.records if "not on the OAuth callback list" in r.message]
-    assert len(lines) == 2
-    assert "4 more refused since the last such line" in lines[1].message
-    assert "chatgpt.example/last" in lines[1].message
-
-
-async def test_none_mode_refuses_an_unlisted_callback_without_redirecting(
-    unified_view_client_factory: Any,
-) -> None:
-    """An anonymous /authorize must not bounce a visitor to any URL (#2427)."""
-    client = await unified_view_client_factory(mode="none")
-    resp = await client.get(
-        "/api/ha_mcp_tools/oauth/authorize"
-        + AUTH_QS
-        + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb",
-        allow_redirects=False,
-    )
-    assert resp.status == 400
-    assert "Location" not in resp.headers
-
-
-async def test_none_mode_refusal_is_logged(
-    unified_view_client_factory: Any, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Whoever reads the log can tell why a client keeps failing to sign in."""
-    client = await unified_view_client_factory(mode="none")
-    with caplog.at_level(logging.WARNING):
-        await client.get(
-            "/api/ha_mcp_tools/oauth/authorize"
-            + AUTH_QS
-            + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb",
-            allow_redirects=False,
-        )
-    assert "https://chatgpt.example/connector/cb" in caplog.text
-    assert "not on the OAuth callback list" in caplog.text
-
-
-async def test_none_mode_refusal_log_cannot_be_forged(
-    unified_view_client_factory: Any, caplog: pytest.LogCaptureFixture
-) -> None:
-    """An encoded newline in the callback must not start a second log line."""
-    client = await unified_view_client_factory(mode="none")
-    with caplog.at_level(logging.WARNING):
-        await client.get(
-            "/api/ha_mcp_tools/oauth/authorize"
-            + AUTH_QS
-            + "&redirect_uri=https%3A%2F%2Fevil.example%2Fcb%0AFORGED%20WARNING",
-            allow_redirects=False,
-        )
-    refusals = [r for r in caplog.records if "Refused a none-mode sign-in" in r.message]
-    assert len(refusals) == 1
-    assert "\n" not in refusals[0].getMessage()
-    assert "\\nFORGED" in refusals[0].getMessage()
-
-
-async def test_none_mode_refusal_page_escapes_the_callback(
-    unified_view_client_factory: Any,
-) -> None:
-    """The refusal page shows the callback to the user, so it must not run it."""
-    client = await unified_view_client_factory(mode="none")
-    resp = await client.get(
-        "/api/ha_mcp_tools/oauth/authorize"
-        + AUTH_QS
-        + "&redirect_uri=https%3A%2F%2Fevil.example%2F%3Cscript%3Ex%3C%2Fscript%3E",
-        allow_redirects=False,
-    )
-    body = await resp.text()
-    assert "<script>x" not in body
-    assert "&lt;script&gt;x" in body
-    # Defence in depth: nothing on the page may run, and it is never cached.
-    csp = resp.headers["Content-Security-Policy"]
-    assert "default-src 'none'" in csp
-    assert "script-src" not in csp
-    assert "no-store" in resp.headers["Cache-Control"]
-
-
-async def test_none_mode_follows_allowlist_edits_without_a_reload(
-    unified_view_client_factory: Any,
-) -> None:
-    """An administrator's edit applies to the next sign-in, no restart."""
-    allowlist: list[str] = []
-    client = await unified_view_client_factory(mode="none", allowlist=allowlist)
-    url = (
-        "/api/ha_mcp_tools/oauth/authorize"
-        + AUTH_QS
-        + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb"
-    )
-    assert (await client.get(url, allow_redirects=False)).status == 400
-
-    allowlist.append("https://chatgpt.example/connector/cb")
-
-    assert (await client.get(url, allow_redirects=False)).status == 302
-
-
-async def test_none_mode_dynamic_registration_cannot_add_a_callback(
-    unified_view_client_factory: Any,
-) -> None:
-    """A client registering its own callback must not get past the allowlist."""
-    key = b"k" * 32
-    callback = "https://evil.example/cb"
-    client_id = oauth_dcr.mint_client_id(key, [callback])
-    client = await unified_view_client_factory(mode="none", dcr_key=key)
-    resp = await client.get(
-        "/api/ha_mcp_tools/oauth/authorize"
-        "?response_type=code&code_challenge=" + "a" * 43 + "&code_challenge_method=S256"
-        f"&client_id={client_id}&redirect_uri=https%3A%2F%2Fevil.example%2Fcb",
-        allow_redirects=False,
-    )
-    assert resp.status == 400
-    assert "Location" not in resp.headers
-
-
-async def test_none_mode_listed_loopback_callback_autoapproves_on_any_port(
-    unified_view_client_factory: Any,
-) -> None:
-    """Native/CLI loopback callbacks (RFC 8252) pick a fresh port per sign-in."""
-    client = await unified_view_client_factory(
-        mode="none", allowlist=["http://localhost/callback"]
-    )
-    resp = await client.get(
-        "/api/ha_mcp_tools/oauth/authorize"
-        + AUTH_QS
-        + "&redirect_uri=http%3A%2F%2Flocalhost%3A61264%2Fcallback",
-        allow_redirects=False,
-    )
-    assert resp.status == 302
-    assert "code=" in resp.headers["Location"]
-
-
-async def test_the_registered_provider_follows_the_entry_allowlist(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An options edit to the callback list applies with no re-registration."""
-    hass = _register_hass()
-    monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
-    entry = _entry()
-    entry.options = {OPT_OAUTH_REDIRECT_ALLOWLIST: []}
-    await mw.async_register_webhook(
-        hass,
-        entry,
-        port=9584,
-        secret_path="/private_x",
-        auth_mode=WEBHOOK_AUTH_NONE,
-    )
-    provider = hass.data[DOMAIN][DATA_WEBHOOK][mw.CFG_AUTOAPPROVE_PROVIDER]
-    callback = "https://chatgpt.example/cb"
-    assert not provider.allows_redirect(callback)
-
-    entry.options = {OPT_OAUTH_REDIRECT_ALLOWLIST: [callback]}
-
-    assert provider.allows_redirect(callback)
-
-
-class TestAllowAnyCallback:
-    """Configure's switch that turns the none-mode list off."""
+    def test_keeps_an_ipv6_host_bracketed(self) -> None:
+        assert loggable_callback("http://[::1]:5000/cb?x=1") == "http://[::1]:5000/cb"
 
     @pytest.mark.parametrize(
-        "callback",
-        ["https://any-client.example/cb", "http://127.0.0.1:5000/callback"],
+        "unparseable",
+        ["https://claude.ai:abc/cb?token=abc", "http://[::1/cb", "token=abc", ""],
     )
-    def test_any_well_formed_callback_is_accepted(self, callback: str) -> None:
-        from custom_components.ha_mcp_tools.oauth_autoapprove import (
-            AutoApproveProvider,
-        )
-
-        provider = AutoApproveProvider(list, lambda: True)
-        assert provider.allows_redirect(callback)
-
-    @pytest.mark.parametrize(
-        "callback",
-        [
-            "http://evil.example/cb",
-            "https://user@evil.example/cb",
-            "https://evil.example/cb#frag",
-            "https://evil.example/cb#",
-            "javascript:alert(1)",
-        ],
-    )
-    def test_a_malformed_callback_is_still_refused(self, callback: str) -> None:
-        from custom_components.ha_mcp_tools.oauth_autoapprove import (
-            AutoApproveProvider,
-        )
-
-        provider = AutoApproveProvider(list, lambda: True)
-        assert not provider.allows_redirect(callback)
-
-    def test_the_list_applies_while_the_switch_is_off(self) -> None:
-        from custom_components.ha_mcp_tools.oauth_autoapprove import (
-            AutoApproveProvider,
-        )
-
-        provider = AutoApproveProvider(lambda: [CLAUDE], lambda: False)
-        assert provider.allows_redirect(CLAUDE)
-        assert not provider.allows_redirect("https://any-client.example/cb")
+    def test_an_unparseable_callback_logs_as_a_fixed_placeholder(
+        self, unparseable: str
+    ) -> None:
+        assert loggable_callback(unparseable) == "<unparseable callback>"

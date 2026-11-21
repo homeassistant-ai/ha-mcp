@@ -27,16 +27,14 @@ _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _PR_YML = _WORKFLOW_DIR / "pr.yml"
 _AGENTS_MD = _REPO_ROOT / "AGENTS.md"
 
-# Steps allowed to precede the validators: the checkout, the docs-size check
-# (reads AGENTS.md, executes nothing from the tree), and the fixture handling
-# Hassfest itself needs. Everything else executes PR-controlled code.
+# Steps allowed to precede the validators: the checkout and the docs-size check
+# (reads AGENTS.md, executes nothing from the tree). Everything else executes
+# PR-controlled code.
 _PRE_VALIDATOR_ALLOWLIST = {
     "(checkout)",
     "Docs Size Check",
     "HACS validation",
-    "Remove vendored test fixtures",
     "Hassfest",
-    "Restore vendored test fixtures",
 }
 
 
@@ -130,19 +128,6 @@ def test_mypy_step_accumulates_instead_of_aborting() -> None:
     assert 'exit "$status"' in run
 
 
-def test_fixture_restore_verifies_its_own_postcondition() -> None:
-    """A silently failed restore shrinks ruff/ast-grep/format coverage."""
-    names = [_step_name(step) for step in _steps()]
-    restore = names.index("Restore vendored test fixtures")
-    assert restore == names.index("Hassfest") + 1
-    run = str(_steps()[restore]["run"])
-    assert "git checkout HEAD -- tests/initial_test_state" in run
-    assert "git diff --quiet HEAD -- tests/initial_test_state" in run, (
-        "the restore must assert its postcondition: the fixture tree holds "
-        "tracked .py files the later lint steps walk"
-    )
-
-
 def test_pr_time_hacs_and_hassfest_survive_in_the_lane() -> None:
     """validate.yml lost its pull_request trigger; this lane is the only
     PR-time run of both validators now."""
@@ -158,7 +143,7 @@ def test_lane_timeout_matches_the_fetch_budget_docstring() -> None:
 
 
 def _setup_uv_sites() -> list[tuple[Path, dict[str, Any]]]:
-    sites = []
+    sites: list[tuple[Path, dict[str, Any]]] = []
     for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):

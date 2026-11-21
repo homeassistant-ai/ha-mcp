@@ -1,0 +1,133 @@
+"""Classify answers from Core and the File & YAML Tools service by their codes."""
+
+import pytest
+from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.setup import async_setup_component
+
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosedError
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandError
+from ha_mcp.tools.helpers import exception_to_structured_error
+
+from ._command_faults import pooled_socket
+from ._file_services import make_file_service
+
+
+async def test_core_schema_refusal_preserves_its_code(
+    core_client: HomeAssistantClient,
+) -> None:
+    ws = await pooled_socket(core_client)
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command("get_states", unexpected=True)
+
+    assert refused.value.code == "invalid_format"
+    result = exception_to_structured_error(refused.value, raise_error=False)
+    assert result["error"]["code"] == "VALIDATION_FAILED"
+    assert result["ha_error_code"] == "invalid_format"
+
+
+async def test_translated_service_refusal_survives_both_client_paths(
+    core_client: HomeAssistantClient,
+) -> None:
+    target = {"domain": "counter", "service": "missing_action"}
+    ws = await pooled_socket(core_client)
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command("call_service", **target)
+    reply = await core_client.send_websocket_message({"type": "call_service", **target})
+
+    assert (
+        refused.value.translation_key == reply["translation_key"] == "service_not_found"
+    )
+    assert (
+        refused.value.translation_domain
+        == reply["translation_domain"]
+        == "homeassistant"
+    )
+    assert (
+        refused.value.translation_placeholders
+        == reply["translation_placeholders"]
+        == target
+    )
+    result = exception_to_structured_error(
+        refused.value, context={"entity_id": "counter.example"}, raise_error=False
+    )
+    assert result["error"]["code"] == "SERVICE_NOT_FOUND"
+
+
+async def test_blank_translated_service_refusal_survives_tool_error_conversion(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+) -> None:
+    @callback
+    def refuse(call: ServiceCall) -> None:
+        raise HomeAssistantError(
+            "",
+            translation_domain=call.domain,
+            translation_key="operation_refused",
+            translation_placeholders={"service": call.service},
+        )
+
+    hass.services.async_register("test", "refuse", refuse)
+    ws = await pooled_socket(core_client)
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command("call_service", domain="test", service="refuse")
+
+    result = exception_to_structured_error(refused.value, raise_error=False)
+    assert result["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert result["ha_error_code"] == "home_assistant_error"
+    assert result["translation_domain"] == "test"
+    assert result["translation_key"] == "operation_refused"
+    assert result["translation_placeholders"] == {"service": "refuse"}
+    assert result["empty_error_message"] is True
+
+
+async def test_file_service_identifies_its_own_missing_file(
+    hass: HomeAssistant,
+) -> None:
+    service = await make_file_service(hass)
+    result = await service("read_file", {"path": "www/missing.css"})
+
+    assert result["success"] is False
+    assert result["error_code"] == "not_found"
+
+
+async def test_a_service_validation_refusal_is_a_validation_failure(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    @callback
+    def refuse(call: ServiceCall) -> None:
+        raise ServiceValidationError("brightness is out of range")
+
+    hass.services.async_register("test", "validate", refuse)
+    ws = await pooled_socket(core_client)
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command("call_service", domain="test", service="validate")
+
+    assert refused.value.code == "service_validation_error"
+    result = exception_to_structured_error(refused.value, raise_error=False)
+    assert result["error"]["code"] == "VALIDATION_FAILED"
+
+
+async def test_a_missing_entity_is_named_from_the_callers_context(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    assert await async_setup_component(hass, "config", {})
+    ws = await pooled_socket(core_client)
+    with pytest.raises(HomeAssistantCommandError) as refused:
+        await ws.send_command("config/entity_registry/get", entity_id="light.ghost")
+
+    result = exception_to_structured_error(
+        refused.value, context={"entity_id": "light.ghost"}, raise_error=False
+    )
+    assert result["error"]["code"] == "ENTITY_NOT_FOUND"
+    assert result["entity_id"] == "light.ghost"
+    assert result["ha_error_code"] == "not_found"
+
+
+def test_a_socket_that_drops_mid_write_is_a_connection_failure() -> None:
+    """A caller of ``send_command`` gets the socket library's own exception."""
+    result = exception_to_structured_error(
+        ConnectionClosedError(None, None), raise_error=False
+    )
+
+    assert result["error"]["code"] == "CONNECTION_FAILED"

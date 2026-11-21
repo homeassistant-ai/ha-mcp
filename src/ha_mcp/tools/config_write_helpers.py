@@ -24,6 +24,7 @@ from ..client.rest_client import (
 from ..utils.skill_loader import (
     BEST_PRACTICES_SKILL_NAME as _HA_BEST_PRACTICES_SKILL_NAME,
 )
+from .component_registries import category_list_reply
 from .ws_waiters import _get_waiter_ws_client, _ws_cleanup, _ws_subscribe_all
 
 logger = logging.getLogger(__name__)
@@ -129,9 +130,7 @@ async def apply_entity_category(
     # validate it). A failed recheck lookup falls through to the write: entry
     # validation already screened typos, and the config is saved either way.
     try:
-        check = await client.send_websocket_message(
-            {"type": "config/category_registry/list", "scope": scope}
-        )
+        check = await category_list_reply(client, scope)
         if isinstance(check, dict) and check.get("success"):
             valid_ids = {
                 c.get("category_id")
@@ -325,6 +324,8 @@ def attach_skill_content(
     referenced_files: set[str] | None,
 ) -> None:
     """In-place attach skill_content to a response, warn on degraded vendor.
+
+    Call it last: a field added afterwards lands behind ``skill_content``.
 
     Resolves ``canonical_files`` and/or ``referenced_files`` via
     :func:`build_skill_content` and attaches the result under

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.loader import async_get_integration
 from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.ha_mcp_tools import entry_device
@@ -27,35 +27,35 @@ async def _registered_device(
     return device
 
 
-def _manifest(monkeypatch: pytest.MonkeyPatch, read: AsyncMock) -> None:
-    """What reading this integration's manifest gives."""
-    monkeypatch.setattr(entry_device, "async_get_integration", read)
-
-
 async def test_the_device_reports_the_installed_release(
-    hass: HomeAssistant,
-    device_registry: dr.DeviceRegistry,
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant, device_registry: dr.DeviceRegistry
 ) -> None:
-    _manifest(monkeypatch, AsyncMock(return_value=SimpleNamespace(version="9.1.0")))
+    installed = await async_get_integration(hass, DOMAIN)
+    assert installed.version
     device = await _registered_device(hass, device_registry)
-    assert device.sw_version == "9.1.0"
+    assert device.sw_version == str(installed.version)
 
 
-@pytest.mark.parametrize(
-    "read",
-    [
-        AsyncMock(return_value=SimpleNamespace(version=None)),
-        AsyncMock(side_effect=OSError("unreadable")),
-    ],
-    ids=["version-less manifest", "unreadable manifest"],
-)
-async def test_a_manifest_problem_never_reads_none_or_blocks_setup(
+async def test_a_versionless_manifest_uses_the_component_version(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
     monkeypatch: pytest.MonkeyPatch,
-    read: AsyncMock,
 ) -> None:
-    _manifest(monkeypatch, read)
+    installed = await async_get_integration(hass, DOMAIN)
+    monkeypatch.delitem(installed.manifest, "version")
+    device = await _registered_device(hass, device_registry)
+    assert device.sw_version == COMPONENT_VERSION
+
+
+async def test_an_unreadable_manifest_does_not_block_setup(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        entry_device,
+        "async_get_integration",
+        AsyncMock(side_effect=OSError("unreadable")),
+    )
     device = await _registered_device(hass, device_registry)
     assert device.sw_version == COMPONENT_VERSION

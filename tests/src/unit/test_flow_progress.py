@@ -410,7 +410,7 @@ async def test_a_lost_poll_answer_is_possibly_applied_in_every_flow_kind(
                 stack.enter_context(
                     patch.object(
                         client,
-                        "_request",
+                        "guarded_request",
                         AsyncMock(side_effect=HomeAssistantConnectionError("reset")),
                     )
                 )

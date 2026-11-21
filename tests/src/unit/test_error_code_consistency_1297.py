@@ -1,1056 +1,327 @@
-"""Regression tests for issue #1297 D1 error-shape consistency work.
+"""A missing label, category, zone, device, automation or script is reported as
+``RESOURCE_NOT_FOUND`` with the ids that do exist (issue #1297).
 
-Label / category / device / zone not-found maps to ``RESOURCE_NOT_FOUND``,
-not ``ENTITY_NOT_FOUND``. These are registry metadata (labels, categories)
-or their own non-entity registries (devices, zones), all looked up by
-registry-internal id rather than entity_id. An agent branching on
-``error.code == "ENTITY_NOT_FOUND"`` retries via ``ha_search()``,
-which doesn't list any of them — wrong-tool spiral. (Callers here supply
-explicit suggestions, so the ``ENTITY_NOT_FOUND`` *default* suggestion
-table in ``errors.py:129-133`` doesn't surface; the agent-side
-classification by ``error.code`` is the leak path the fix closes.)
-
-The complementary D2 work (dashboards / dashboard-resource not-found
-suggestions) landed via #1386 and is covered there by
-``TestDeleteDashboardNotFoundShape`` in ``test_tools_config_dashboards.py``.
+Labels, categories, zones and devices are looked up by a registry id, not an
+entity_id. An agent that branches on ``ENTITY_NOT_FOUND`` retries through
+``ha_search()``, which lists none of them; the error must name the right tool
+and the ids it can retry with. Every tool here runs on the server's own client
+against a real ``hass``, so each registry row, list and 404 is Core's.
 """
 
+from __future__ import annotations
+
 import json
+from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import category_registry as cr
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
+from homeassistant.util.yaml import load_yaml_dict
+from pytest_homeassistant.common import MockConfigEntry
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_categories import CategoryTools
+from ha_mcp.tools.tools_config_automations import AutomationConfigTools
+from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+from ha_mcp.tools.tools_labels import LabelTools
+from ha_mcp.tools.tools_registry import RegistryTools
+from ha_mcp.tools.tools_zones import ZoneTools
+
+from ._automation_core import load_automations_file
+from ._command_faults import dropped_on, pooled_socket
+from ._config_writes import automation_tools, script_tools
+from ._tool_errors import rejected_call_body
+
+_SEQUENCE = [{"delay": {"seconds": 1}}]
+_SCRIPTS = {
+    "morning_routine": {"alias": "Morning routine", "sequence": []},
+    "evening_routine": {"alias": "Evening routine", "sequence": []},
+}
+_AUTOMATIONS = [
+    {"id": "1", "alias": "Morning routine", "triggers": [], "actions": []},
+    {"id": "2", "alias": "Evening routine", "triggers": [], "actions": []},
+]
+_OTHER_AUTOMATION = [{"id": "3", "alias": "Something", "triggers": [], "actions": []}]
+
+
+def _suggestions(body: dict[str, Any]) -> list[str]:
+    """Every suggestion: a single one is under ``suggestion``, more under
+    ``suggestions``."""
+    error = body["error"]
+    single = error.get("suggestion")
+    return ([single] if single else []) + list(error.get("suggestions") or [])
+
+
+async def _load_scripts(hass: HomeAssistant, scripts: dict[str, Any]) -> None:
+    """Write ``scripts`` to scripts.yaml (JSON is YAML) and have Core reload them."""
+    await hass.async_add_executor_job(
+        Path(hass.config.path("scripts.yaml")).write_text, json.dumps(scripts)
+    )
+    await hass.services.async_call("script", "reload", blocking=True)
+    await hass.async_block_till_done()
+
+
+async def _stored_script_keys(hass: HomeAssistant) -> set[str]:
+    stored = await hass.async_add_executor_job(
+        load_yaml_dict, hass.config.path("scripts.yaml")
+    )
+    return set(stored)
 
 
 @pytest.fixture
-def mock_ws_client():
-    """Mock client with an AsyncMock send_websocket_message ready for per-test programming."""
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock()
-    return client
+async def config_commands(hass: HomeAssistant) -> None:
+    """Core's ``config`` commands, which the registries' WebSocket API is part of."""
+    assert await async_setup_component(hass, "config", {})
 
 
-def _all_suggestions(error_payload: dict[str, Any]) -> list[str]:
-    """Collect every suggestion regardless of which field holds it.
-
-    ``create_error_response`` writes the first suggestion into the singular
-    ``suggestion`` key and only emits the plural ``suggestions`` list when
-    there are two or more — so a single-suggestion caller produces only
-    ``suggestion``. Tests need to look at both.
-    """
-    singular = error_payload.get("suggestion")
-    plural = error_payload.get("suggestions") or []
-    return ([singular] if singular else []) + list(plural)
-
-
-# ---------------------------------------------------------------------------
-# D1 — Label / Category get-by-id → RESOURCE_NOT_FOUND (was ENTITY_NOT_FOUND)
-# ---------------------------------------------------------------------------
+@pytest.fixture
+async def scripts(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> ConfigScriptTools:
+    """The script tools on a Core holding two scripts and an automation."""
+    tools = await script_tools(hass, core_client, monkeypatch)
+    assert await async_setup_component(hass, "automation", {})
+    await _load_scripts(hass, _SCRIPTS)
+    await load_automations_file(hass, "automations.yaml", _OTHER_AUTOMATION)
+    return tools
 
 
-class TestLabelGetMissingReturnsResourceNotFound:
-    """Regression: ha_config_get_label(missing) must surface
-    ``RESOURCE_NOT_FOUND``. Pre-#1297 it surfaced ``ENTITY_NOT_FOUND``,
-    routing agents to the entity-search path for non-entity metadata.
-    """
+@pytest.fixture
+async def automations(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AutomationConfigTools:
+    """The automation tools on a Core holding two automations and a script."""
+    tools = await automation_tools(hass, core_client, monkeypatch)
+    assert await async_setup_component(hass, "script", {})
+    await load_automations_file(hass, "automations.yaml", _AUTOMATIONS)
+    await _load_scripts(hass, {"something": {"sequence": []}})
+    return tools
 
-    @pytest.fixture
-    def tools(self, mock_ws_client):
-        from ha_mcp.tools.tools_labels import LabelTools
 
-        return LabelTools(mock_ws_client)
+@pytest.mark.usefixtures("config_commands")
+async def test_unknown_label_is_resource_not_found_with_the_label_ids(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Labels are registry metadata: the error points at ``ha_config_get_label``
+    and lists the labels that exist, not the entity search."""
+    label = lr.async_get(hass).async_create("Existing")
 
-    async def test_missing_label_id_surfaces_resource_not_found(
-        self, tools, mock_ws_client
-    ):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": [{"label_id": "existing", "name": "Existing"}],
-        }
+    body = await rejected_call_body(
+        LabelTools(core_client).ha_config_get_label(label_id="missing")
+    )
 
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_get_label(label_id="missing")
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert any("ha_config_get_label" in s for s in _suggestions(body))
+    assert body["available_label_ids"] == [label.label_id]
 
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND", (
-            "Labels are registry metadata, not entities — must classify as "
-            "RESOURCE_NOT_FOUND so agents route to ha_config_get_label() "
-            "instead of ha_search()."
+
+@pytest.mark.usefixtures("config_commands")
+async def test_unknown_category_is_resource_not_found_with_the_category_ids(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    category = cr.async_get(hass).async_create(scope="automation", name="Existing")
+
+    body = await rejected_call_body(
+        CategoryTools(core_client).ha_config_get_category(
+            scope="automation", category_id="missing"
         )
-        # The list-tool recovery suggestion (already pre-#1297) must survive.
-        assert any(
-            "ha_config_get_label" in s for s in _all_suggestions(error_data["error"])
-        )
-        # The available_label_ids surface (pre-#1297) must survive too.
-        assert "available_label_ids" in error_data
+    )
+
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert any("ha_config_get_category" in s for s in _suggestions(body))
+    assert body["available_category_ids"] == [category.category_id]
+    assert body["scope"] == "automation"
 
 
-class TestCategoryGetMissingReturnsResourceNotFound:
-    """Regression: ha_config_get_category(scope, missing) must surface
-    ``RESOURCE_NOT_FOUND``. Same reasoning as labels.
-    """
+@pytest.mark.usefixtures("config_commands")
+async def test_unknown_zone_is_resource_not_found_with_the_zone_ids(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """A zone is asked for by its zone_id: the error points at ``ha_get_zone``."""
+    assert await async_setup_component(hass, "zone", {})
+    created = await core_client.send_websocket_message(
+        {"type": "zone/create", "name": "Work", "latitude": 1.0, "longitude": 2.0}
+    )
+    assert created["success"], created
 
-    @pytest.fixture
-    def tools(self, mock_ws_client):
-        from ha_mcp.tools.tools_categories import CategoryTools
+    body = await rejected_call_body(
+        ZoneTools(core_client).ha_get_zone(zone_id="missing_zone")
+    )
 
-        return CategoryTools(mock_ws_client)
-
-    async def test_missing_category_id_surfaces_resource_not_found(
-        self, tools, mock_ws_client
-    ):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": [{"category_id": "existing", "name": "Existing"}],
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_get_category(
-                scope="automation", category_id="missing"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND", (
-            "Categories are registry metadata, not entities — must classify "
-            "as RESOURCE_NOT_FOUND."
-        )
-        assert any(
-            "ha_config_get_category" in s for s in _all_suggestions(error_data["error"])
-        )
-        assert "available_category_ids" in error_data
-        assert error_data["scope"] == "automation"
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert any("ha_get_zone" in s for s in _suggestions(body))
+    assert created["result"]["id"] in body["available_zone_ids"]
 
 
-class TestZoneGetMissingReturnsResourceNotFound:
-    """Regression: ha_get_zone(zone_id=missing) must surface
-    ``RESOURCE_NOT_FOUND``. Same pattern as labels/categories: registry-
-    internal ``zone_id`` lookup (not entity_id), with an explicit
-    ``ha_get_zone()`` recovery suggestion that the auto-injected entity-
-    search hint would have overridden.
-    """
+@pytest.mark.usefixtures("config_commands")
+@pytest.mark.parametrize("tool", ["ha_get_device", "ha_remove_device"])
+async def test_unknown_device_is_resource_not_found_with_the_device_ids(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tool: str
+) -> None:
+    """Devices are not entities: both device tools point at ``ha_get_device``
+    and list the devices that exist."""
+    entry = MockConfigEntry(domain="hue")
+    entry.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    known = {
+        registry.async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={("hue", serial)}
+        ).id
+        for serial in ("a", "b")
+    }
 
-    @pytest.fixture
-    def tools(self, mock_ws_client):
-        from ha_mcp.tools.tools_zones import ZoneTools
+    body = await rejected_call_body(
+        getattr(RegistryTools(core_client), tool)(device_id="missing-device-uuid")
+    )
 
-        return ZoneTools(mock_ws_client)
-
-    async def test_missing_zone_id_surfaces_resource_not_found(
-        self, tools, mock_ws_client
-    ):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": [{"id": "existing_zone", "name": "Existing"}],
-        }
-        mock_ws_client.get_states = AsyncMock(return_value=[])
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_get_zone(zone_id="missing_zone")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND", (
-            "Zones are addressed by registry-internal zone_id here, not by "
-            "entity_id — RESOURCE_NOT_FOUND is the correct category."
-        )
-        assert any("ha_get_zone" in s for s in _all_suggestions(error_data["error"]))
-        assert "available_zone_ids" in error_data
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert any("ha_get_device" in s for s in _suggestions(body))
+    assert set(body["available_device_ids"]) == known
 
 
-def _register_registry_tools_and_capture(mock_client):
-    """Class-pattern capture for tools_registry."""
-    from ha_mcp.tools.tools_registry import register_registry_tools
+@pytest.mark.parametrize(
+    ("tool", "kwargs"),
+    [
+        pytest.param("ha_config_get_automation", {}, id="get"),
+        pytest.param(
+            "ha_config_set_automation",
+            {"config": {"alias": "X", "triggers": [], "actions": []}},
+            id="set",
+        ),
+        pytest.param("ha_config_remove_automation", {}, id="remove"),
+    ],
+)
+async def test_missing_automation_lists_only_the_automations_that_exist(
+    automations: AutomationConfigTools, tool: str, kwargs: dict[str, Any]
+) -> None:
+    """A read, update or removal of an automation nothing knows names the
+    automations the caller can retry with; the script is not one of them."""
+    body = await rejected_call_body(
+        getattr(automations, tool)(entity_id="automation.missing", **kwargs)
+    )
 
-    mock_mcp = MagicMock()
-    captured: dict[str, Any] = {}
-
-    def capture_add_tool(method):
-        fmcp = getattr(method, "__fastmcp__", None)
-        name = (fmcp.name if fmcp else None) or method.__name__
-        captured[name] = method
-
-    mock_mcp.add_tool = capture_add_tool
-    register_registry_tools(mock_mcp, mock_client)
-    return captured
-
-
-class TestDeviceLookupMissingReturnsResourceNotFound:
-    """Sibling-bug fix discovered during the #1297 cross-family audit:
-    ``ha_get_device(device_id=missing)`` and ``ha_remove_device(device_id=missing)``
-    previously raised ``ENTITY_NOT_FOUND``. Devices are NOT entities — they live
-    in the device registry, addressed by device_id (UUID), with their own
-    suggestion (``ha_get_device()``). Same mis-classification class as the
-    labels/categories sites above.
-    """
-
-    async def test_get_device_missing_id_surfaces_resource_not_found(
-        self, mock_ws_client
-    ):
-        # Device list (few rows: pins available_device_ids), entities, entries, splits.
-        mock_ws_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {
-                    "success": True,
-                    "result": [{"id": "dev-existing-1"}, {"id": "dev-existing-2"}],
-                },
-                {"success": True, "result": []},  # entity_registry/list
-                {"success": True, "result": []},  # config_entries/get
-                {"success": True, "result": {}},  # list_composite_splits
-            ]
-        )
-        captured = _register_registry_tools_and_capture(mock_ws_client)
-        ha_get_device = captured["ha_get_device"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await ha_get_device(device_id="missing-device-uuid")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND", (
-            "Devices are not entities — must classify as RESOURCE_NOT_FOUND."
-        )
-        assert any("ha_get_device" in s for s in _all_suggestions(error_data["error"]))
-        assert error_data.get("available_device_ids") == [
-            "dev-existing-1",
-            "dev-existing-2",
-        ]
-
-    async def test_remove_device_missing_id_surfaces_resource_not_found(
-        self, mock_ws_client
-    ):
-        rows = [{"id": "dev-existing-1"}, {"id": "dev-existing-2"}]
-        mock_ws_client.send_websocket_message = AsyncMock(
-            side_effect=lambda msg, **_: {
-                "success": True,
-                "result": {} if msg["type"].endswith("composite_splits") else rows,
-            }
-        )
-        captured = _register_registry_tools_and_capture(mock_ws_client)
-        ha_remove_device = captured["ha_remove_device"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await ha_remove_device(device_id="missing-device-uuid")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND", (
-            "Devices are not entities — must classify as RESOURCE_NOT_FOUND."
-        )
-        assert any("ha_get_device" in s for s in _all_suggestions(error_data["error"]))
-        assert error_data.get("available_device_ids") == [
-            "dev-existing-1",
-            "dev-existing-2",
-        ]
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert body["automation_id"] == "automation.missing"
+    assert sorted(body["available_automation_ids"]) == [
+        "automation.evening_routine",
+        "automation.morning_routine",
+    ]
+    assert any("ha_search(domain_filter='automation')" in s for s in _suggestions(body))
 
 
-# ---------------------------------------------------------------------------
-# Mutation paths — KP13 #1397 review item 4: set / remove on missing registry
-# id should classify as RESOURCE_NOT_FOUND, not the generic SERVICE_CALL_FAILED.
-# Per-site WS "not found" substring match (HA Core surfaces it consistently in
-# the WS-response error string).
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("tool", "kwargs"),
+    [
+        pytest.param("ha_config_get_script", {}, id="get"),
+        pytest.param(
+            "ha_config_set_script",
+            {"config": {"sequence": _SEQUENCE}, "config_hash": "0" * 16},
+            id="set",
+        ),
+        pytest.param("ha_config_remove_script", {}, id="remove"),
+    ],
+)
+async def test_missing_script_lists_the_bare_ids_of_the_scripts_that_exist(
+    scripts: ConfigScriptTools, tool: str, kwargs: dict[str, Any]
+) -> None:
+    """The ids come without the ``script.`` prefix, the form ``script_id``
+    takes; the automation is not one of them."""
+    body = await rejected_call_body(
+        getattr(scripts, tool)(script_id="missing_script", **kwargs)
+    )
+
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert body["script_id"] == "missing_script"
+    assert sorted(body["available_script_ids"]) == [
+        "evening_routine",
+        "morning_routine",
+    ]
+    assert any("ha_search(domain_filter='script')" in s for s in _suggestions(body))
 
 
-class TestLabelMutationRoutesNotFoundToResourceNotFound:
-    """Label set-update / remove with a non-existent ``label_id`` must surface
-    ``RESOURCE_NOT_FOUND``, mirroring the GET-path classification.
-    """
+async def test_an_unreadable_entity_registry_still_reports_the_missing_script(
+    hass: HomeAssistant, scripts: ConfigScriptTools, core_client: HomeAssistantClient
+) -> None:
+    """The id list is best effort: a registry list that gets no answer leaves
+    it empty instead of hiding the not-found behind the transport failure."""
+    socket = await pooled_socket(core_client)
 
-    @pytest.fixture
-    def tools(self, mock_ws_client):
-        from ha_mcp.tools.tools_labels import LabelTools
-
-        return LabelTools(mock_ws_client)
-
-    async def test_set_update_with_missing_label_id(self, tools, mock_ws_client):
-        # set_label lists the registry first (issue #1860); "missing" is absent,
-        # so the existence pre-check short-circuits to RESOURCE_NOT_FOUND before
-        # any label_registry/update call is dispatched.
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": [{"label_id": "other", "name": "Other"}],
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_set_label(name="X", label_id="missing")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any(
-            "ha_config_get_label" in s for s in _all_suggestions(error_data["error"])
+    with dropped_on(hass, "config/entity_registry/list", socket):
+        body = await rejected_call_body(
+            scripts.ha_config_get_script(script_id="missing_script")
         )
 
-    async def test_remove_with_missing_label_id(self, tools, mock_ws_client):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Label not found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_label(label_id="missing")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any(
-            "ha_config_get_label" in s for s in _all_suggestions(error_data["error"])
-        )
-
-
-class TestCategoryMutationRoutesNotFoundToResourceNotFound:
-    """Category set-update / remove with a non-existent ``category_id`` must
-    surface ``RESOURCE_NOT_FOUND``.
-    """
-
-    @pytest.fixture
-    def tools(self, mock_ws_client):
-        from ha_mcp.tools.tools_categories import CategoryTools
-
-        return CategoryTools(mock_ws_client)
-
-    async def test_set_update_with_missing_category_id(self, tools, mock_ws_client):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Category not found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_set_category(
-                name="X", scope="automation", category_id="missing"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any(
-            "ha_config_get_category" in s for s in _all_suggestions(error_data["error"])
-        )
-
-    async def test_remove_with_missing_category_id(self, tools, mock_ws_client):
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Category not found",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_category(
-                scope="automation", category_id="missing"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert any(
-            "ha_config_get_category" in s for s in _all_suggestions(error_data["error"])
-        )
-
-    async def test_remove_with_doesnt_exist_phrasing(self, tools, mock_ws_client):
-        """HA Core's category-registry remove path surfaces the not-found case
-        with the phrasing ``"Category ID doesn't exist"`` rather than the more
-        common ``"not found"`` (observed live in PR #1397 CI on commit 70b9edf).
-        The substring check must accept both phrasings.
-        """
-        mock_ws_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": "Category ID doesn't exist",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_category(
-                scope="automation", category_id="missing"
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-
-
-# ---------------------------------------------------------------------------
-# D4 — available_*_ids parity for dashboards / automations / scripts
-# (KP13 #1397 second-pass review): the same audit family extended to the
-# three remaining sites whose RESOURCE_NOT_FOUND raise was missing the
-# ``available_*_ids`` payload that labels / categories / zones / devices
-# all surface. Pinning matches the sibling depth — error code + list-tool
-# suggestion + ``available_*_ids`` payload truncated to first-10.
-# ---------------------------------------------------------------------------
-
-
-class TestDeleteDashboardNotFoundSurfacesAvailableIds:
-    """Regression: ``ha_config_delete_dashboard`` with an unresolvable
-    url_path must populate ``available_dashboard_ids`` (first-10) in the
-    error context, mirroring the sibling registries.
-    ``_resolve_dashboard`` already returns the dashboards list alongside
-    the match — the fix re-uses it instead of discarding via ``_``.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock()
-        return client
-
-    @pytest.fixture
-    def delete_tool(self, mock_client):
-        from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
-
-        return DashboardConfigTools(mock_client).ha_config_delete_dashboard
-
-    async def test_missing_dashboard_surfaces_available_dashboard_ids(
-        self, delete_tool, mock_client
-    ):
-        # Registry list with three entries; the requested url_path is absent.
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": [
-                {"id": "dash-a", "url_path": "alpha-dash"},
-                {"id": "dash-b", "url_path": "beta-dash"},
-                {"id": "dash-c", "url_path": "gamma-dash"},
-            ],
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await delete_tool(url_path="ghost-dash")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data["action"] == "delete"
-        assert error_data["url_path"] == "ghost-dash"
-        # First-10 url_paths surface; here the registry only had 3 so all 3
-        # appear. Mirrors the sibling labels/categories/zones first-10 cap.
-        assert error_data.get("available_dashboard_ids") == [
-            "alpha-dash",
-            "beta-dash",
-            "gamma-dash",
-        ]
-        assert any(
-            "ha_config_get_dashboard" in s
-            for s in _all_suggestions(error_data["error"])
-        )
-
-    async def test_resolver_unexpected_shape_reports_registry_read_failure(
-        self, delete_tool, mock_client
-    ):
-        """An unreadable registry is not misclassified as a missing dashboard."""
-        # String response triggers the "unexpected shape" branch in
-        # _fetch_dashboards_list, which causes _resolve_dashboard to return
-        # (None, None).
-        mock_client.send_websocket_message.return_value = "garbage"
-
-        with pytest.raises(ToolError) as exc_info:
-            await delete_tool(url_path="ghost-dash")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "dashboard registry" in error_data["error"]["message"]
-        assert "available_dashboard_ids" not in error_data
-        assert error_data["action"] == "delete"
-        assert error_data["url_path"] == "ghost-dash"
-
-
-class TestGetAutomationMissingSurfacesAvailableIds:
-    """Regression: ``ha_config_get_automation`` for an automation nothing
-    resolves must surface ``RESOURCE_NOT_FOUND`` + ``available_automation_ids``
-    (first-10 from the entity registry, filtered by ``automation.`` prefix).
-    Pre-#1397-D4 the 404 surfaced without that payload or the list-tool
-    suggestion; both now come from ``_raise_automation_not_found``.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        from ha_mcp.client.rest_client import HomeAssistantAPIError
-
-        client = MagicMock()
-        client.base_url = client.token = None  # no component probe
-        # Neither the registry nor a state knows it (a registry hit with a
-        # 404 config GET is a YAML-defined automation, CONFIG_NOT_FOUND).
-        client._resolve_automation_id = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "Failed to resolve automation automation.missing",
-                status_code=404,
-            )
-        )
-        client.get_automation_config = AsyncMock()
-        # Entity registry list returns both automation and non-automation
-        # entries; the helper must filter by domain prefix.
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"entity_id": "automation.morning_routine"},
-                    {"entity_id": "automation.evening_routine"},
-                    {"entity_id": "script.something"},  # filtered out
-                    {"entity_id": "light.bedroom"},  # filtered out
-                ],
-            }
-        )
-        client.get_services = AsyncMock(return_value={})
-        client.get_states = AsyncMock(return_value=[])
-        return client
-
-    @pytest.fixture
-    def tools(self, mock_client):
-        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
-
-        return AutomationConfigTools(mock_client)
-
-    async def test_missing_automation_surfaces_available_automation_ids(
-        self, tools, mock_client
-    ):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_get_automation(entity_id="automation.missing")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data.get("automation_id") == "automation.missing"
-        # First-10 entries filtered to automation. prefix.
-        assert error_data.get("available_automation_ids") == [
-            "automation.morning_routine",
-            "automation.evening_routine",
-        ]
-        assert any(
-            "ha_search(domain_filter='automation')" in s
-            for s in _all_suggestions(error_data["error"])
-        )
-
-    async def test_registry_list_failure_yields_empty_available_ids(
-        self, tools, mock_client
-    ):
-        """Best-effort: when ``entity_registry/list`` fails, the structured
-        not-found raise still fires with ``available_automation_ids: []``
-        rather than masking the 404 behind the registry error.
-        """
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=RuntimeError("ws transport closed")
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_get_automation(entity_id="automation.missing")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data.get("available_automation_ids") == []
-
-
-class TestGetScriptMissingSurfacesAvailableIds:
-    """Regression: ``ha_config_get_script`` with a 404 from the REST client
-    must surface ``RESOURCE_NOT_FOUND`` + ``available_script_ids`` (first-10
-    bare IDs from the entity registry, filtered by ``script.`` prefix and
-    stripped to the bare form ``ha_config_get_script(script_id=...)`` takes).
-    Behavioral parity with ``ha_config_get_automation`` — both tools accept
-    either the bare storage key (``foo``) or the entity_id form
-    (``script.foo`` / ``automation.foo``). The mechanism differs: automations
-    resolve through the entity registry; scripts strip a leading ``script.``
-    prefix at the function head before the REST call.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        from ha_mcp.client.rest_client import HomeAssistantAPIError
-
-        client = MagicMock()
-        client.get_script_config = AsyncMock(
-            side_effect=HomeAssistantAPIError(
-                "Script not found: missing_script",
-                status_code=404,
-            )
-        )
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"entity_id": "script.morning_routine"},
-                    {"entity_id": "script.evening_routine"},
-                    {"entity_id": "automation.something"},  # filtered out
-                ],
-            }
-        )
-        return client
-
-    @pytest.fixture
-    def tools(self, mock_client):
-        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-
-        return ConfigScriptTools(mock_client)
-
-    async def test_missing_script_surfaces_available_script_ids(
-        self, tools, mock_client
-    ):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_get_script(script_id="missing_script")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data.get("script_id") == "missing_script"
-        # Bare IDs (stripped of the ``script.`` entity_id prefix) — what
-        # ``ha_config_get_script(script_id=...)`` takes for the retry.
-        assert error_data.get("available_script_ids") == [
-            "morning_routine",
-            "evening_routine",
-        ]
-        assert any(
-            "ha_search(domain_filter='script')" in s
-            for s in _all_suggestions(error_data["error"])
-        )
-
-    async def test_registry_list_failure_yields_empty_available_ids(
-        self, tools, mock_client
-    ):
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=RuntimeError("ws transport closed")
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_get_script(script_id="missing_script")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data.get("available_script_ids") == []
-
-
-class TestGetScriptAcceptsEntityIdForm:
-    """Regression: ``ha_config_get_script`` strips a leading ``script.``
-    prefix so the entity_id form (``script.foo``) and the bare storage key
-    (``foo``) both route to the same REST call. Closes the wrong-tool spiral
-    where ``_raise_script_not_found`` suggests
-    ``ha_search(domain_filter='script')`` which returns entity_ids
-    — feeding that output back into a bare-only GET would re-fail at the
-    same site that #1297 closes (KP13 #1397 fourth-pass).
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.get_script_config = AsyncMock(
-            return_value={
-                "script_id": "morning_routine",
-                "config": {"sequence": [], "mode": "single"},
-            }
-        )
-        # fetch_entity_category goes through send_websocket_message
-        # and expects ``result.result.categories`` — return an empty
-        # categories map so category-injection is a no-op.
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"categories": {}}}
-        )
-        return client
-
-    @pytest.fixture
-    def tools(self, mock_client):
-        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-
-        return ConfigScriptTools(mock_client)
-
-    async def test_entity_id_form_routes_to_bare_storage_key(self, tools, mock_client):
-        result = await tools.ha_config_get_script(script_id="script.morning_routine")
-
-        mock_client.get_script_config.assert_awaited_once_with("morning_routine")
-        assert result["success"] is True
-        assert result["script_id"] == "morning_routine"
-
-    async def test_bare_form_unchanged(self, tools, mock_client):
-        result = await tools.ha_config_get_script(script_id="morning_routine")
-
-        mock_client.get_script_config.assert_awaited_once_with("morning_routine")
-        assert result["success"] is True
-        assert result["script_id"] == "morning_routine"
-
-    async def test_only_leading_prefix_is_stripped(self, tools, mock_client):
-        # A bare key that happens to contain ``script.`` as a substring
-        # (not as a prefix) must pass through untouched.
-        mock_client.get_script_config = AsyncMock(
-            return_value={
-                "script_id": "my_script.backup",
-                "config": {"sequence": []},
-            }
-        )
-        result = await tools.ha_config_get_script(script_id="my_script.backup")
-
-        mock_client.get_script_config.assert_awaited_once_with("my_script.backup")
-        assert result["script_id"] == "my_script.backup"
-
-    async def test_nested_prefix_one_layer_strip(self, tools, mock_client):
-        # ``removeprefix`` strips exactly one leading occurrence, so
-        # ``script.script.foo`` becomes ``script.foo`` (not ``foo``). The
-        # second ``script.`` is preserved as part of the bare key.
-        mock_client.get_script_config = AsyncMock(
-            return_value={
-                "script_id": "script.foo",
-                "config": {"sequence": []},
-            }
-        )
-        result = await tools.ha_config_get_script(script_id="script.script.foo")
-
-        mock_client.get_script_config.assert_awaited_once_with("script.foo")
-        assert result["script_id"] == "script.foo"
-
-
-class TestScriptStripBeforeValidate:
-    """Regression: ``"script."`` (entity_id form with empty bare key) must
-    surface ``VALIDATION_INVALID_PARAMETER`` from
-    ``validate_identifier_not_empty``, not slip through validate
-    (non-empty pre-strip) and 404 at the downstream REST call. Pinned for
-    all three tools that perform the strip (KP13 #1397 fifth-pass).
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.get_services = AsyncMock(return_value={})
-        client.get_states = AsyncMock(return_value=[])
-        client.get_script_config = AsyncMock(
-            return_value={"script_id": "", "config": {}}
-        )
-        client.upsert_script_config = AsyncMock(return_value={})
-        client.delete_script_config = AsyncMock(return_value={})
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-        return client
-
-    @pytest.fixture
-    def tools(self, mock_client):
-        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-
-        return ConfigScriptTools(mock_client)
-
-    async def test_get_script_empty_after_strip_is_invalid_parameter(
-        self, tools, mock_client
-    ):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_get_script(script_id="script.")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        mock_client.get_script_config.assert_not_called()
-
-    async def test_set_script_empty_after_strip_is_invalid_parameter(
-        self, tools, mock_client
-    ):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_set_script(
-                script_id="script.",
-                config={"sequence": [{"delay": {"seconds": 1}}]},
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        mock_client.upsert_script_config.assert_not_called()
-
-    async def test_remove_script_empty_after_strip_is_invalid_parameter(
-        self, tools, mock_client
-    ):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_script(script_id="script.")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        mock_client.delete_script_config.assert_not_called()
-
-
-class TestSetRemoveScriptAcceptEntityIdForm:
-    """Regression: ``ha_config_set_script`` and ``ha_config_remove_script``
-    strip a leading ``script.`` prefix at the function head, mirroring
-    ``ha_config_get_script`` (KP13 #1397 fifth-pass). Closes the wrong-tool
-    spiral where ``ha_search(domain_filter='script')`` returns
-    entity_ids that would otherwise produce phantom ``script.script.foo``
-    storage keys on upsert / ``script.script.foo`` watcher targets on remove.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.get_services = AsyncMock(return_value={})
-        client.get_states = AsyncMock(return_value=[])
-        client.upsert_script_config = AsyncMock(
-            return_value={"script_id": "morning_routine"}
-        )
-        client.delete_script_config = AsyncMock(return_value={"success": True})
-        client.get_script_config = AsyncMock(
-            return_value={
-                "script_id": "morning_routine",
-                "config": {"sequence": [], "mode": "single"},
-            }
-        )
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": []}
-        )
-        return client
-
-    @pytest.fixture
-    def tools(self, mock_client):
-        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-
-        return ConfigScriptTools(mock_client)
-
-    async def test_set_script_entity_id_form_routes_to_bare_key(
-        self, tools, mock_client
-    ):
-        await tools.ha_config_set_script(
-            script_id="script.morning_routine",
-            config={"sequence": [{"delay": {"seconds": 1}}]},
-            wait=False,
-        )
-
-        # Upsert is called with the bare storage key — not the entity_id
-        # form — so the registry doesn't get a phantom ``script.script.*``.
-        mock_client.upsert_script_config.assert_awaited_once()
-        _, called_script_id = mock_client.upsert_script_config.call_args[0]
-        assert called_script_id == "morning_routine"
-
-    async def test_remove_script_entity_id_form_routes_to_bare_key(
-        self, tools, mock_client
-    ):
-        await tools.ha_config_remove_script(
-            script_id="script.morning_routine",
-            wait=False,
-        )
-
-        mock_client.delete_script_config.assert_awaited_once_with("morning_routine")
-
-    async def test_remove_script_wait_watcher_target_is_post_strip(
-        self, tools, mock_client
-    ):
-        # The strip keeps the removal check on the real entity: a
-        # ``script.script.foo`` target would 404, which counts as removed.
-        # A future refactor that drops the strip would regress silently if
-        # only the ``wait=False`` test exists.
-        from unittest.mock import patch
-
-        with patch(
-            "ha_mcp.tools.ws_waiters.wait_for_entity_removed",
-            new=AsyncMock(return_value=True),
-        ) as mock_watcher:
-            await tools.ha_config_remove_script(
-                script_id="script.morning_routine",
-                wait=True,
-            )
-
-        mock_client.delete_script_config.assert_awaited_once_with("morning_routine")
-        mock_watcher.assert_awaited_once()
-        _, watcher_entity_id = mock_watcher.call_args[0]
-        assert watcher_entity_id == "script.morning_routine"
-
-
-# ---------------------------------------------------------------------------
-# Mutation-path parity for automations / scripts (KP13 #1397 third-pass): the
-# 404 → RESOURCE_NOT_FOUND mapping in ``_classify_api_status`` already routed
-# correctly, but without the ``available_*_ids`` payload + list-tool
-# suggestion that sibling sites surface. The fix wires
-# ``_raise_*_not_found`` into the set/remove except chains so the mutation
-# path matches the GET path one-for-one.
-# ---------------------------------------------------------------------------
-
-
-def _api_404(message: str) -> Any:
-    """Shorthand for an HA REST 404 the helpers should map to RESOURCE_NOT_FOUND."""
-    from ha_mcp.client.rest_client import HomeAssistantAPIError
-
-    return HomeAssistantAPIError(message, status_code=404)
-
-
-class TestSetAutomationMissingSurfacesAvailableIds:
-    """Update path: ``ha_config_set_automation(entity_id=..., config=...)``
-    naming an automation nothing resolves must surface ``RESOURCE_NOT_FOUND``
-    with ``available_automation_ids`` before anything is written, never a
-    creation under that name.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = client.token = None
-        client._resolve_automation_id = AsyncMock(
-            side_effect=_api_404("Failed to resolve automation automation.missing")
-        )
-        client.upsert_automation_config = AsyncMock()
-        # Entity registry list for available_automation_ids payload.
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"entity_id": "automation.morning_routine"},
-                    {"entity_id": "automation.evening_routine"},
-                ],
-            }
-        )
-        return client
-
-    @pytest.fixture
-    def tools(self, mock_client):
-        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
-
-        return AutomationConfigTools(mock_client)
-
-    async def test_update_with_missing_entity_id_surfaces_available_ids(
-        self, tools, mock_client
-    ):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_set_automation(
-                entity_id="automation.missing",
-                config={
-                    "alias": "X",
-                    "trigger": [{"platform": "time", "at": "07:00:00"}],
-                    "action": [{"service": "light.turn_on"}],
-                },
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data.get("automation_id") == "automation.missing"
-        assert error_data.get("available_automation_ids") == [
-            "automation.morning_routine",
-            "automation.evening_routine",
-        ]
-        assert any(
-            "ha_search(domain_filter='automation')" in s
-            for s in _all_suggestions(error_data["error"])
-        )
-        mock_client.upsert_automation_config.assert_not_called()
-
-
-class TestRemoveAutomationMissingSurfacesAvailableIds:
-    """Delete path: ``ha_config_remove_automation(entity_id=...)`` against a
-    no-longer-existing automation must surface ``RESOURCE_NOT_FOUND`` with
-    ``available_automation_ids``, before any delete is sent.
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = client.token = None
-        client._resolve_automation_id = AsyncMock(
-            side_effect=_api_404("Failed to resolve automation automation.missing")
-        )
-        client.get_states = AsyncMock(return_value=[])
-        client.delete_automation_config = AsyncMock(
-            side_effect=_api_404("Automation not found: automation.missing")
-        )
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"entity_id": "automation.morning_routine"},
-                    {"entity_id": "automation.evening_routine"},
-                ],
-            }
-        )
-        return client
-
-    @pytest.fixture
-    def tools(self, mock_client):
-        from ha_mcp.tools.tools_config_automations import AutomationConfigTools
-
-        return AutomationConfigTools(mock_client)
-
-    async def test_remove_with_missing_entity_id_surfaces_available_ids(
-        self, tools, mock_client
-    ):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_automation(entity_id="automation.missing")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data.get("automation_id") == "automation.missing"
-        assert error_data.get("available_automation_ids") == [
-            "automation.morning_routine",
-            "automation.evening_routine",
-        ]
-        mock_client.delete_automation_config.assert_not_awaited()
-
-
-class TestSetScriptMissingSurfacesAvailableIds:
-    """Update path: ``ha_config_set_script(script_id=..., config=...)`` with
-    a 404 from the REST upsert must surface ``RESOURCE_NOT_FOUND`` with
-    ``available_script_ids`` (bare form, no ``script.`` prefix).
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.get_services = AsyncMock(return_value={})
-        client.get_states = AsyncMock(return_value=[])
-        client.upsert_script_config = AsyncMock(
-            side_effect=_api_404("Script not found: missing_script")
-        )
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"entity_id": "script.morning_routine"},
-                    {"entity_id": "script.evening_routine"},
-                ],
-            }
-        )
-        return client
-
-    @pytest.fixture
-    def tools(self, mock_client):
-        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-
-        return ConfigScriptTools(mock_client)
-
-    async def test_update_with_missing_script_id_surfaces_available_ids(
-        self, tools, mock_client
-    ):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_set_script(
-                script_id="missing_script",
-                config={
-                    "alias": "X",
-                    "sequence": [{"delay": {"seconds": 1}}],
-                },
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data.get("script_id") == "missing_script"
-        assert error_data.get("available_script_ids") == [
-            "morning_routine",
-            "evening_routine",
-        ]
-        assert any(
-            "ha_search(domain_filter='script')" in s
-            for s in _all_suggestions(error_data["error"])
-        )
-
-
-class TestRemoveScriptMissingSurfacesAvailableIds:
-    """Delete path: ``ha_config_remove_script(script_id=...)`` against a
-    no-longer-existing script must surface ``RESOURCE_NOT_FOUND`` with
-    ``available_script_ids`` (bare form).
-    """
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.delete_script_config = AsyncMock(
-            side_effect=_api_404("Script not found: missing_script")
-        )
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"entity_id": "script.morning_routine"},
-                    {"entity_id": "script.evening_routine"},
-                ],
-            }
-        )
-        return client
-
-    @pytest.fixture
-    def tools(self, mock_client):
-        from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-
-        return ConfigScriptTools(mock_client)
-
-    async def test_remove_with_missing_script_id_surfaces_available_ids(
-        self, tools, mock_client
-    ):
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_config_remove_script(script_id="missing_script")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data.get("script_id") == "missing_script"
-        assert error_data.get("available_script_ids") == [
-            "morning_routine",
-            "evening_routine",
-        ]
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert body["available_script_ids"] == []
+
+
+@pytest.mark.parametrize("script_id", ["morning_routine", "script.morning_routine"])
+async def test_get_script_takes_the_entity_id_or_the_bare_key(
+    scripts: ConfigScriptTools, script_id: str
+) -> None:
+    """``ha_search`` hands out entity_ids; feeding one back must read the script."""
+    result = await scripts.ha_config_get_script(script_id=script_id)
+
+    assert result["script_id"] == "morning_routine"
+    assert result["config"]["alias"] == "Morning routine"
+
+
+@pytest.mark.parametrize(
+    ("tool", "kwargs"),
+    [
+        pytest.param("ha_config_get_script", {}, id="get"),
+        pytest.param(
+            "ha_config_set_script", {"config": {"sequence": _SEQUENCE}}, id="set"
+        ),
+        pytest.param("ha_config_remove_script", {}, id="remove"),
+    ],
+)
+async def test_bare_script_prefix_is_an_invalid_parameter(
+    hass: HomeAssistant, scripts: ConfigScriptTools, tool: str, kwargs: dict[str, Any]
+) -> None:
+    """``script.`` is empty once the prefix is stripped: an input error, not a
+    missing script, and nothing is written or removed."""
+    body = await rejected_call_body(
+        getattr(scripts, tool)(script_id="script.", **kwargs)
+    )
+
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert await _stored_script_keys(hass) == set(_SCRIPTS)
+
+
+async def test_set_script_with_the_entity_id_updates_the_bare_key(
+    hass: HomeAssistant, scripts: ConfigScriptTools
+) -> None:
+    """Not a new ``script.morning_routine`` storage key beside the script."""
+    await scripts.ha_config_set_script(
+        script_id="script.morning_routine",
+        config={"alias": "Morning routine", "sequence": _SEQUENCE},
+        wait=False,
+    )
+
+    stored = await hass.async_add_executor_job(
+        load_yaml_dict, hass.config.path("scripts.yaml")
+    )
+    assert set(stored) == set(_SCRIPTS)
+    assert stored["morning_routine"]["sequence"] == _SEQUENCE
+
+
+async def test_remove_script_with_the_entity_id_removes_the_script(
+    hass: HomeAssistant, scripts: ConfigScriptTools
+) -> None:
+    """The removal is waited for on the script's own entity, so it is gone
+    when the call returns."""
+    result = await scripts.ha_config_remove_script(script_id="script.morning_routine")
+
+    assert result["success"] is True
+    assert "warnings" not in result
+    assert hass.states.get("script.morning_routine") is None
+    assert await _stored_script_keys(hass) == {"evening_routine"}

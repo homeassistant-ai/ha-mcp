@@ -180,6 +180,7 @@ async def test_reporter_dashboard_edits_and_conflicts(  # noqa: PLR0915
         )
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_native_dashboard_backend_measurements(
     mcp_client, ha_client, record_property
@@ -290,6 +291,7 @@ async def test_native_dashboard_backend_measurements(
         )
 
 
+@pytest.mark.component_topology
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["patch", "config"])
 async def test_native_concurrent_dashboard_edits_have_one_winner(

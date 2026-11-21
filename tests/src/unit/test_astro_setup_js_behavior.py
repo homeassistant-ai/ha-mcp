@@ -39,14 +39,13 @@ import pytest
 
 from ._astro_setup_wizard import (
     WIZARD_DATA,
-    _assert_clean_init,
     _build_wizard_dom,
     _click,
     _section_has_hidden_class,
     bundle_setup_script,
     load_wizard_vars,
 )
-from ._js_harness import module_exports, run_script
+from ._js_harness import _assert_clean_init, module_exports, run_script
 
 
 @pytest.fixture(scope="module")
@@ -981,8 +980,7 @@ _SPARK_LEGACY_WHY = "Why legacy OAuth mode"
 _COPILOT_HTTP_TITLE = "Copilot CLI Configuration (HTTP)"
 _COPILOT_STDIO_TITLE = "Copilot CLI Configuration (STDIO)"
 _COPILOT_CLIENT_ID_CALLOUT = (
-    "Client ID required: ha_auth registers one automatically (2.0.0+); "
-    "legacy as fallback"
+    "Client ID required: ha_auth registers one automatically; legacy as fallback"
 )
 
 

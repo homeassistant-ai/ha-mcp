@@ -1,988 +1,605 @@
-"""Unit tests for ha_get_overview system_info builder."""
+"""``ha_get_overview``: system_info, ``fields=`` projection and server metadata.
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+The tool runs over the server's own client against a real ``hass``; every
+config, notification and repairs answer comes from Core.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components import persistent_notification
+from homeassistant.const import __version__
+from homeassistant.core import HomeAssistant
+from homeassistant.core_config import async_process_ha_core_config
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.tools.tools_search import register_search_tools
+from ha_mcp import settings_ui, update_check
+from ha_mcp._vendor.fastmcp import Client, FastMCP
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.mcp.types import Implementation
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.config import reset_global_settings
+from ha_mcp.tool_catalog import CatalogMode, catalog_endpoint
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import SearchTools, register_search_tools
+
+from ._real_server import build_server
+from ._update_check_sources import PyPI
+from ._update_check_sources import pypi as pypi
+
+SIDECAR_URL = "http://127.0.0.1:8099/private_abc/settings"
 
 
-class TestHaGetOverviewSystemInfo:
-    """Test system_info field assembly in ha_get_overview at detail_level='full'."""
+@pytest.fixture
+async def answering(hass: HomeAssistant, core_client: HomeAssistantClient) -> None:
+    """Load the integrations that answer the registry, notification and
+    repairs reads of the overview."""
+    for domain in ("config", "persistent_notification", "repairs"):
+        assert await async_setup_component(hass, domain, {})
 
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures registered tool functions."""
-        mcp = MagicMock()
-        self.registered_tools = {}
 
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
+@pytest.fixture
+def smart(core_client: HomeAssistantClient) -> SmartSearchTools:
+    return SmartSearchTools(client=core_client)
 
-        mcp.add_tool = capture_add_tool
-        return mcp
 
-    @pytest.fixture
-    def mock_client(self):
-        """Create a mock Home Assistant client with default-empty config."""
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={})
-        client.send_websocket_message = AsyncMock(return_value={"success": False})
-        return client
+@pytest.fixture
+def tools(core_client: HomeAssistantClient, smart: SmartSearchTools) -> SearchTools:
+    return SearchTools(core_client, smart)
 
-    @pytest.fixture
-    def mock_smart_tools(self):
-        """Create a mock smart_tools that returns a minimal success result."""
-        smart = MagicMock()
-        smart.get_system_overview = AsyncMock(return_value={"success": True})
-        return smart
 
-    @pytest.fixture
-    def overview_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        """Register search tools and return the ha_get_overview function."""
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_get_overview"]
+@pytest.fixture
+def full_collection(smart: SmartSearchTools) -> Iterator[AsyncMock]:
+    """A spy on the entity-wide collection; it still runs."""
+    with patch.object(
+        smart, "get_system_overview", wraps=smart.get_system_overview
+    ) as spy:
+        yield spy
 
-    @pytest.mark.asyncio
-    async def test_allowlist_external_dirs_missing_key_yields_none(
-        self, mock_client, overview_tool
+
+@pytest.fixture
+def config_read(core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
+    """A spy on the config read; Core still answers it."""
+    with patch.object(core_client, "get_config", wraps=core_client.get_config) as spy:
+        yield spy
+
+
+@pytest.fixture
+def config_unanswered(core_client: HomeAssistantClient) -> Iterator[None]:
+    """The config read gets no answer at all."""
+    with patch.object(
+        core_client,
+        "get_config",
+        side_effect=HomeAssistantConnectionError("config unavailable"),
     ):
-        """When HA config omits the key entirely, the field is None — not [].
+        yield
 
-        Distinguishes 'HA didn't expose the key' from 'HA reported an empty
-        allowlist' for security-sensitive agent reasoning. Locks in the contract
-        so a future refactor cannot silently switch the default back to [].
-        """
-        mock_client.get_config = AsyncMock(return_value={})
 
-        result = await overview_tool(detail_level="full")
+def _no_sidecar(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("ha_mcp.stdio_settings_sidecar.live_sidecar_url", lambda: None)
 
-        system_info = result["system_info"]
-        assert "allowlist_external_dirs" in system_info
-        assert system_info["allowlist_external_dirs"] is None
 
-    @pytest.mark.asyncio
-    async def test_allowlist_external_dirs_passes_through_list_value(
-        self, mock_client, overview_tool
+def _sidecar_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "ha_mcp.stdio_settings_sidecar.live_sidecar_url", lambda: SIDECAR_URL
+    )
+
+
+def _http_mounted(monkeypatch: pytest.MonkeyPatch, prefix: str | None) -> None:
+    _no_sidecar(monkeypatch)
+    monkeypatch.setattr("ha_mcp.settings_ui.get_http_settings_prefix", lambda: prefix)
+
+
+# system_info
+
+
+async def test_full_detail_reports_the_configured_allowlist(
+    hass: HomeAssistant, tools: SearchTools, tmp_path: Path
+) -> None:
+    """An agent reasoning about which paths it may touch sees the external
+    directories Home Assistant is configured to allow."""
+    await async_process_ha_core_config(
+        hass, {"allowlist_external_dirs": [str(tmp_path)]}
+    )
+
+    result = await tools.ha_get_overview(detail_level="full", fields=["system_info"])
+
+    allowlist = result["system_info"]["allowlist_external_dirs"]
+    assert str(tmp_path) in allowlist
+    assert set(allowlist) == hass.config.allowlist_external_dirs
+
+
+async def test_minimal_detail_leaves_out_the_allowlist(
+    hass: HomeAssistant, tools: SearchTools, tmp_path: Path
+) -> None:
+    await async_process_ha_core_config(
+        hass, {"allowlist_external_dirs": [str(tmp_path)]}
+    )
+
+    result = await tools.ha_get_overview(fields=["system_info"])
+
+    assert "allowlist_external_dirs" not in result["system_info"]
+
+
+# fields= projection
+
+
+@pytest.mark.parametrize("mode", ["full", "search"])
+async def test_tool_discovery_hint_follows_the_connection_catalog(
+    tools: SearchTools, answering: None, mode: CatalogMode
+) -> None:
+    """Only a search connection is told to discover tools with
+    ha_search_tools; a full-catalog connection has no such tool."""
+    with catalog_endpoint(mode):
+        result = await tools.ha_get_overview()
+    assert ("tool_discovery" in result) is (mode == "search")
+
+
+async def test_unprojected_overview_returns_every_section(
+    tools: SearchTools, answering: None
+) -> None:
+    result = await tools.ha_get_overview()
+
+    assert result["success"] is True
+    assert "system_info" in result
+    assert "domain_stats" in result
+
+
+async def test_single_field_projection_drops_every_other_section(
+    tools: SearchTools, answering: None
+) -> None:
+    result = await tools.ha_get_overview(fields=["system_info"])
+
+    assert result["success"] is True
+    assert result["system_info"]["version"] == __version__
+    for key in (
+        "domain_stats",
+        "area_analysis",
+        "domains",
+        "entity_summary",
+        "total_entities",
+        "repair_count",
     ):
-        """When HA config exposes the key, the list value passes through unchanged."""
-        mock_client.get_config = AsyncMock(
-            return_value={"allowlist_external_dirs": ["/media", "/share"]}
-        )
-
-        result = await overview_tool(detail_level="full")
-
-        assert result["system_info"]["allowlist_external_dirs"] == [
-            "/media",
-            "/share",
-        ]
-
-    @pytest.mark.asyncio
-    async def test_allowlist_external_dirs_omitted_at_minimal_detail_level(
-        self, mock_client, overview_tool
-    ):
-        """The field must not appear in system_info when detail_level != 'full'."""
-        mock_client.get_config = AsyncMock(
-            return_value={"allowlist_external_dirs": ["/media"]}
-        )
-
-        result = await overview_tool(detail_level="minimal")
-
-        assert "allowlist_external_dirs" not in result["system_info"]
-
-
-class TestHaGetOverviewFieldsProjection:
-    """fields= projects the response to the requested top-level keys.
-
-    Pins the contract from issue #1199: callers that only need one section
-    (e.g. system_info) can request it via fields= and receive a response
-    that omits all other top-level keys.
-    """
-
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
-
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(
-            return_value={"version": "2026.5.0", "location_name": "Home"}
-        )
-        client.send_websocket_message = AsyncMock(return_value={"success": False})
-        return client
-
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart = MagicMock()
-        smart.get_system_overview = AsyncMock(
-            return_value={
-                "success": True,
-                "domain_stats": {"light": {"count": 3}},
-                "area_analysis": {},
-            }
-        )
-        return smart
-
-    @pytest.fixture
-    def overview_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_get_overview"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("mode", ["full", "search"])
-    async def test_tool_discovery_hint_follows_the_connection_catalog(
-        self, overview_tool, mode
-    ):
-        """Only a search connection is told to discover tools with
-        ha_search_tools; a full-catalog connection has no such tool."""
-        from ha_mcp.tool_catalog import catalog_endpoint
-
-        with catalog_endpoint(mode):
-            result = await overview_tool()
-        assert ("tool_discovery" in result) is (mode == "search")
-
-    @pytest.mark.asyncio
-    async def test_fields_none_returns_full_response(self, overview_tool):
-        """fields=None (default) returns the full response — no projection."""
-        result = await overview_tool()
-        assert "success" in result
-        assert "system_info" in result
-        assert "domain_stats" in result
-
-    @pytest.mark.asyncio
-    async def test_fields_single_key_projects_correctly(self, overview_tool):
-        """fields=["system_info"] keeps only system_info (+ success always)."""
-        result = await overview_tool(fields=["system_info"])
-        assert result["success"] is True
-        assert "system_info" in result
-        assert result["system_info"]["version"] == "2026.5.0"
-        # All other top-level keys must be absent.
-        for key in (
-            "domain_stats",
-            "area_analysis",
-            "domains",
-            "entity_summary",
-            "total_entities",
-            "repair_count",
-        ):
-            assert key not in result, f"unexpected key {key!r} survived projection"
-
-    @pytest.mark.asyncio
-    async def test_system_info_projection_skips_full_overview_collection(
-        self, overview_tool, mock_client, mock_smart_tools
-    ):
-        """A narrow response must also produce a narrow HA-side workload."""
-        result = await overview_tool(fields=["system_info"])
-
-        assert result["system_info"]["version"] == "2026.5.0"
-        mock_client.get_config.assert_awaited_once()
-        mock_client.send_websocket_message.assert_not_awaited()
-        mock_smart_tools.get_system_overview.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_independent_sections_skip_full_overview_collection(
-        self, overview_tool, mock_client, mock_smart_tools
-    ):
-        """Config, notifications, and repairs use only their own collectors."""
-
-        async def dispatch(message):
-            if message["type"] == "persistent_notification/get":
-                return {
-                    "success": True,
-                    "result": [
-                        {
-                            "notification_id": "test",
-                            "title": "Test",
-                            "message": "Body",
-                        }
-                    ],
-                }
-            if message["type"] == "repairs/list_issues":
-                return {"success": True, "result": {"issues": []}}
-            raise AssertionError(f"unexpected command: {message['type']}")
-
-        mock_client.send_websocket_message.side_effect = dispatch
-
-        result = await overview_tool(
-            fields=["system_info", "notifications", "repair_count"]
-        )
-
-        assert {
-            "success",
-            "system_info",
-            "notifications",
-            "repair_count",
-        } <= set(result)
-        mock_client.get_config.assert_awaited_once()
-        assert mock_client.send_websocket_message.await_count == 2
-        mock_smart_tools.get_system_overview.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_domain_projection_still_uses_full_overview(
-        self, overview_tool, mock_smart_tools
-    ):
-        """Documented entity-derived fields retain the full assembly path."""
-        result = await overview_tool(fields=["domain_stats"])
-
-        assert result["domain_stats"] == {"light": {"count": 3}}
-        mock_smart_tools.get_system_overview.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_fields_multiple_keys(self, overview_tool):
-        """Mixed independent/entity fields use the full path before projection."""
-        result = await overview_tool(fields=["system_info", "domain_stats"])
-        assert "system_info" in result
-        assert result["domain_stats"] == {"light": {"count": 3}}
-        assert "area_analysis" not in result
-
-    @pytest.mark.asyncio
-    async def test_fields_success_always_included(self, overview_tool):
-        """success is always present even when the caller omits it from fields."""
-        result = await overview_tool(fields=["domain_stats"])
-        assert "success" in result
-
-    @pytest.mark.asyncio
-    async def test_unsupported_domains_field_does_not_trigger_full_overview(
-        self, overview_tool, mock_smart_tools
-    ):
-        result = await overview_tool(fields=["domains"])
-
-        assert result["success"] is True
-        assert "domains" not in result
-        warning = result["warnings"][0]
-        assert "domains" in warning
-        assert "system_info" in warning
-        assert "notifications" in warning
-        assert "repairs" in warning
-        mock_smart_tools.get_system_overview.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_requested_notifications_warn_when_disabled(
-        self, overview_tool, mock_client, mock_smart_tools
-    ):
-        result = await overview_tool(
-            fields=["notifications"], include_notifications=False
-        )
-
-        assert result["success"] is True
-        assert "notifications" not in result
-        assert result["warnings"] == [
-            "notifications omitted: include_notifications=False"
-        ]
-        mock_client.send_websocket_message.assert_not_awaited()
-        mock_smart_tools.get_system_overview.assert_not_awaited()
-
-    @pytest.mark.parametrize("field", ["partial", "warnings"])
-    @pytest.mark.asyncio
-    async def test_diagnostic_projection_uses_full_overview(
-        self, field, overview_tool, mock_smart_tools
-    ):
-        await overview_tool(fields=[field])
-
-        mock_smart_tools.get_system_overview.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_fields_unknown_key_silently_absent(self, overview_tool):
-        """Requesting a non-existent key silently produces no entry — no error."""
-        result = await overview_tool(fields=["nonexistent_key"])
-        assert result["success"] is True
-        assert "nonexistent_key" not in result
-
-    @pytest.mark.asyncio
-    async def test_unknown_key_does_not_trigger_full_overview(
-        self, overview_tool, mock_smart_tools
-    ):
-        result = await overview_tool(fields=["nonexistent_key"])
-
-        assert result["success"] is True
-        mock_smart_tools.get_system_overview.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_independent_system_info_failure_degrades_with_context(
-        self, overview_tool, mock_client, mock_smart_tools
-    ):
-        mock_client.get_config.side_effect = RuntimeError("config unavailable")
-
-        result = await overview_tool(fields=["system_info"])
-
-        assert result["success"] is True
-        assert "system_info" not in result
-        assert result["warnings"] == ["system info unavailable: config unavailable"]
-        mock_smart_tools.get_system_overview.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_later_collector_runs_after_system_info_failure(
-        self, overview_tool, mock_client, mock_smart_tools
-    ):
-        mock_client.get_config.side_effect = RuntimeError("config unavailable")
-        mock_client.send_websocket_message.return_value = {
-            "success": True,
-            "result": {"issues": []},
-        }
-
-        result = await overview_tool(fields=["system_info", "repair_count"])
-
-        assert result["success"] is True
-        assert result["repair_count"] == 0
-        assert result["warnings"] == ["system info unavailable: config unavailable"]
-        mock_client.send_websocket_message.assert_awaited_once_with(
-            {"type": "repairs/list_issues"}
-        )
-        mock_smart_tools.get_system_overview.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_notification_rejection_degrades_with_warning(
-        self, overview_tool, mock_client, mock_smart_tools
-    ):
-        mock_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": {"message": "notifications disabled"},
-        }
-
-        result = await overview_tool(fields=["notifications"])
-
-        assert result["success"] is True
-        assert result["notifications"] == []
-        assert result["warnings"] == [
-            "notifications unavailable: notifications disabled"
-        ]
-        mock_smart_tools.get_system_overview.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_repairs_error_projection_returns_rejection(
-        self, overview_tool, mock_client, mock_smart_tools
-    ):
-        mock_client.send_websocket_message.return_value = {
-            "success": False,
-            "error": {"message": "repairs unavailable"},
-        }
-
-        result = await overview_tool(fields=["repairs_error"])
-
-        assert result["success"] is True
-        assert result["repairs_error"] == (
-            "Could not fetch repairs: repairs unavailable"
-        )
-        assert "warnings" not in result
-        mock_smart_tools.get_system_overview.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_bad_fields_integer_raises_tool_error(self, overview_tool):
-        """fields=123 raises ToolError with VALIDATION_FAILED + parameter='fields'.
-
-        Pins the early-validate raise path (``tools_search.py`` ha_get_overview)
-        so a regression dropping the try/except still surfaces a regression.
-        """
-        import json
-
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError) as exc_info:
-            await overview_tool(fields=123)
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "VALIDATION_FAILED"
-        assert error.get("parameter") == "fields"
-
-    @pytest.mark.asyncio
-    async def test_bad_json_fields_raises_tool_error(self, overview_tool):
-        """fields='[\"' (malformed JSON) raises ToolError."""
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError):
-            await overview_tool(fields='["')
-
-
-class TestHaGetOverviewSystemSummaryVersion:
-    """Tests for system_summary["version"] enrichment from HA config (issue #1199)."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
-
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_smart_tools_with_summary(self):
-        """smart_tools returns a result that includes a system_summary sub-dict."""
-        smart = MagicMock()
-        smart.get_system_overview = AsyncMock(
-            return_value={
-                "success": True,
-                "system_summary": {"entity_count": 10},
-            }
-        )
-        return smart
-
-    @pytest.fixture
-    def overview_tool_with_version(self, mock_mcp, mock_smart_tools_with_summary):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={"version": "2026.5.3"})
-        client.send_websocket_message = AsyncMock(return_value={"success": False})
-        register_search_tools(
-            mock_mcp, client, smart_tools=mock_smart_tools_with_summary
-        )
-        return self.registered_tools["ha_get_overview"]
-
-    @pytest.fixture
-    def overview_tool_config_fails(self, mock_mcp, mock_smart_tools_with_summary):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(side_effect=RuntimeError("connection refused"))
-        client.send_websocket_message = AsyncMock(return_value={"success": False})
-        register_search_tools(
-            mock_mcp, client, smart_tools=mock_smart_tools_with_summary
-        )
-        return self.registered_tools["ha_get_overview"]
-
-    @pytest.fixture
-    def overview_tool_version_none(self, mock_mcp, mock_smart_tools_with_summary):
-        """Config returns successfully but version key is absent."""
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={})  # version key missing
-        client.send_websocket_message = AsyncMock(return_value={"success": False})
-        register_search_tools(
-            mock_mcp, client, smart_tools=mock_smart_tools_with_summary
-        )
-        return self.registered_tools["ha_get_overview"]
-
-    @pytest.mark.asyncio
-    async def test_version_populated_from_config(self, overview_tool_with_version):
-        """system_summary["version"] reflects the HA version from config."""
-        result = await overview_tool_with_version()
-        assert result["system_summary"]["version"] == "2026.5.3"
-
-    @pytest.mark.asyncio
-    async def test_version_unknown_on_config_failure(self, overview_tool_config_fails):
-        """system_summary["version"] is "unknown" when config fetch raises."""
-        result = await overview_tool_config_fails()
-        assert "system_summary" in result
-        assert result["system_summary"]["version"] == "unknown"
-
-    @pytest.mark.asyncio
-    async def test_version_unknown_when_config_omits_key(
-        self, overview_tool_version_none
-    ):
-        """system_summary["version"] is "unknown" when config has no version key."""
-        result = await overview_tool_version_none()
-        assert result["system_summary"]["version"] == "unknown"
-
-
-class TestHaGetOverviewSettingsUrl:
-    """Pin the stdio sidecar URL surfacing in ha_get_overview (issue #863).
-
-    The ``settings_url`` field is the ONLY path the LLM ever sees the
-    URL through — a regression that silently emits an empty string (or
-    inverts the conditional) would route users to a broken bookmark
-    without test failure. Mirrors the system_info test scaffolding so
-    the file's pacing stays consistent.
-    """
-
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
-
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={})
-        client.send_websocket_message = AsyncMock(return_value={"success": False})
-        return client
-
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart = MagicMock()
-        smart.get_system_overview = AsyncMock(return_value={"success": True})
-        return smart
-
-    @pytest.fixture
-    def overview_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_get_overview"]
-
-    @pytest.mark.asyncio
-    async def test_settings_url_surfaced_when_sidecar_running(
-        self, overview_tool, monkeypatch
-    ):
-        """Sidecar URL file present → field appears verbatim in the result."""
-        url = "http://127.0.0.1:8099/private_abc/settings"
-        monkeypatch.setattr(
-            "ha_mcp.stdio_settings_sidecar.live_sidecar_url",
-            lambda: url,
-        )
-        result = await overview_tool(detail_level="minimal")
-        assert result.get("settings_url") == url
-
-    @pytest.mark.asyncio
-    async def test_settings_url_omitted_when_no_sidecar(
-        self, overview_tool, monkeypatch
-    ):
-        """No URL file → ``settings_url`` MUST NOT be in the result.
-
-        Strict ``not in`` rather than ``== None`` so a future regression
-        that emits ``settings_url=""`` or ``settings_url=None`` to every
-        overview call is caught.
-        """
-        monkeypatch.setattr(
-            "ha_mcp.stdio_settings_sidecar.live_sidecar_url",
-            lambda: None,
-        )
-        result = await overview_tool(detail_level="minimal")
-        assert "settings_url" not in result
-
-    @pytest.mark.asyncio
-    async def test_settings_url_survives_fields_projection(
-        self, overview_tool, monkeypatch
-    ):
-        """``settings_url`` MUST be returned even when ``fields=`` filters
-        the rest of the payload.
-
-        A less-attentive LLM that minimizes payload via
-        ``fields=["system_info"]`` (or any narrow projection) would
-        otherwise lose the URL silently — and the LLM cannot hand the
-        user a URL it never receives. Pinning the post-projection
-        emission keeps ``settings_url`` discoverable regardless of how
-        the caller scopes the overview response.
-        """
-        url = "http://127.0.0.1:8099/private_abc/settings"
-        monkeypatch.setattr(
-            "ha_mcp.stdio_settings_sidecar.live_sidecar_url",
-            lambda: url,
-        )
-        result = await overview_tool(fields=["system_info"])
-        assert result.get("settings_url") == url
-        # system_info is still projected; settings_url is the only
-        # extra survivor (plus the always-retained success/warnings).
-        assert "system_info" in result
-
-    @pytest.mark.asyncio
-    async def test_settings_url_hint_when_http_mounted(
-        self, overview_tool, monkeypatch
-    ):
-        """No sidecar URL but HTTP settings mounted → a hint points at the
-        page (issue #1458).
-
-        In standalone HTTP/Docker modes the server can't know its
-        externally reachable host, so it emits a ``settings_url_hint`` that
-        references the mount path + startup logs rather than a guessed URL.
-        """
-        monkeypatch.setattr(
-            "ha_mcp.stdio_settings_sidecar.live_sidecar_url", lambda: None
-        )
-        monkeypatch.setattr(
-            "ha_mcp.settings_ui.get_http_settings_prefix", lambda: "/mcp"
-        )
-        result = await overview_tool(detail_level="minimal")
-        assert "settings_url" not in result
-        assert "/mcp/settings" in result.get("settings_url_hint", "")
-
-    @pytest.mark.asyncio
-    async def test_no_settings_fields_without_sidecar_or_http_mount(
-        self, overview_tool, monkeypatch
-    ):
-        """No sidecar URL and no HTTP mount (stdio with the sidecar disabled)
-        → neither settings field is emitted."""
-        monkeypatch.setattr(
-            "ha_mcp.stdio_settings_sidecar.live_sidecar_url", lambda: None
-        )
-        monkeypatch.setattr("ha_mcp.settings_ui.get_http_settings_prefix", lambda: None)
-        result = await overview_tool(detail_level="minimal")
-        assert "settings_url" not in result
-        assert "settings_url_hint" not in result
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("rejected_secret", ["", "/private_{token}"])
-    async def test_rejected_registration_clears_stale_http_hint(
-        self, overview_tool, monkeypatch, rejected_secret
-    ):
-        """A rejected later registration must not advertise an older server."""
-        from ha_mcp import settings_ui
-
-        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
-        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        monkeypatch.setattr(
-            "ha_mcp.stdio_settings_sidecar.live_sidecar_url", lambda: None
-        )
-        monkeypatch.setattr(settings_ui, "_http_settings_prefix", None)
-        monkeypatch.setattr(settings_ui, "_http_settings_mounted", False)
-
-        mcp = MagicMock()
-        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
-        settings_ui.register_settings_routes(mcp, MagicMock(), secret_path="/old")
+        assert key not in result, f"unexpected key {key!r} survived projection"
+
+
+async def test_system_info_projection_reads_only_the_config(
+    tools: SearchTools,
+    answering: None,
+    config_read: AsyncMock,
+    sent: AsyncMock,
+    full_collection: AsyncMock,
+) -> None:
+    """A narrow response must also produce a narrow Home Assistant workload."""
+    result = await tools.ha_get_overview(fields=["system_info"])
+
+    assert result["system_info"]["version"] == __version__
+    config_read.assert_awaited_once()
+    sent.assert_not_awaited()
+    full_collection.assert_not_awaited()
+
+
+async def test_independent_sections_read_only_their_own_commands(
+    hass: HomeAssistant,
+    tools: SearchTools,
+    answering: None,
+    config_read: AsyncMock,
+    sent: AsyncMock,
+    full_collection: AsyncMock,
+) -> None:
+    persistent_notification.async_create(
+        hass, "Body", title="Test", notification_id="test"
+    )
+
+    result = await tools.ha_get_overview(
+        fields=["system_info", "notifications", "repair_count"]
+    )
+
+    assert [n["notification_id"] for n in result["notifications"]] == ["test"]
+    assert result["repair_count"] == 0
+    assert "system_info" in result
+    config_read.assert_awaited_once()
+    assert sorted(call.args[0]["type"] for call in sent.await_args_list) == [
+        "persistent_notification/get",
+        "repairs/list_issues",
+    ]
+    full_collection.assert_not_awaited()
+
+
+async def test_entity_field_projection_runs_the_full_collection(
+    hass: HomeAssistant,
+    tools: SearchTools,
+    answering: None,
+    full_collection: AsyncMock,
+) -> None:
+    for name in ("one", "two", "three"):
+        hass.states.async_set(f"light.{name}", "on")
+
+    result = await tools.ha_get_overview(fields=["domain_stats"])
+
+    assert result["domain_stats"]["light"]["count"] == 3
+    full_collection.assert_awaited_once()
+
+
+async def test_mixed_projection_keeps_only_the_requested_sections(
+    hass: HomeAssistant, tools: SearchTools, answering: None
+) -> None:
+    hass.states.async_set("light.one", "on")
+
+    result = await tools.ha_get_overview(fields=["system_info", "domain_stats"])
+
+    assert "system_info" in result
+    assert result["domain_stats"]["light"]["count"] == 1
+    assert "area_analysis" not in result
+
+
+async def test_domains_field_warns_and_skips_the_full_collection(
+    tools: SearchTools, full_collection: AsyncMock
+) -> None:
+    """``domains`` is not a response key; the warning names the sections a
+    narrow request can ask for instead of collecting every entity."""
+    result = await tools.ha_get_overview(fields=["domains"])
+
+    assert result["success"] is True
+    assert "domains" not in result
+    warning = result["warnings"][0]
+    for name in ("domains", "system_info", "notifications", "repairs"):
+        assert name in warning
+    full_collection.assert_not_awaited()
+
+
+async def test_requested_notifications_warn_when_disabled(
+    tools: SearchTools, sent: AsyncMock, full_collection: AsyncMock
+) -> None:
+    result = await tools.ha_get_overview(
+        fields=["notifications"], include_notifications=False
+    )
+
+    assert result["success"] is True
+    assert "notifications" not in result
+    assert result["warnings"] == ["notifications omitted: include_notifications=False"]
+    sent.assert_not_awaited()
+    full_collection.assert_not_awaited()
+
+
+async def test_warnings_projection_runs_the_full_collection(
+    tools: SearchTools, answering: None, full_collection: AsyncMock
+) -> None:
+    """A caller asking only for ``warnings`` gets the entity collection's
+    warnings, not only the narrow sections'."""
+    await tools.ha_get_overview(fields=["warnings"])
+
+    full_collection.assert_awaited_once()
+
+
+async def test_unknown_field_is_absent_and_skips_the_full_collection(
+    tools: SearchTools, full_collection: AsyncMock
+) -> None:
+    result = await tools.ha_get_overview(fields=["nonexistent_key"])
+
+    assert result["success"] is True
+    assert "nonexistent_key" not in result
+    full_collection.assert_not_awaited()
+
+
+async def test_unanswered_config_read_degrades_system_info_with_warning(
+    tools: SearchTools, config_unanswered: None, full_collection: AsyncMock
+) -> None:
+    result = await tools.ha_get_overview(fields=["system_info"])
+
+    assert result["success"] is True
+    assert "system_info" not in result
+    assert result["warnings"] == ["system info unavailable: config unavailable"]
+    full_collection.assert_not_awaited()
+
+
+async def test_repairs_still_read_after_system_info_failure(
+    tools: SearchTools,
+    answering: None,
+    config_unanswered: None,
+    sent: AsyncMock,
+    full_collection: AsyncMock,
+) -> None:
+    result = await tools.ha_get_overview(fields=["system_info", "repair_count"])
+
+    assert result["success"] is True
+    assert result["repair_count"] == 0
+    assert result["warnings"] == ["system info unavailable: config unavailable"]
+    sent.assert_awaited_once_with({"type": "repairs/list_issues"})
+    full_collection.assert_not_awaited()
+
+
+async def test_rejected_notifications_read_warns_instead_of_reporting_none(
+    tools: SearchTools, full_collection: AsyncMock
+) -> None:
+    """Without the persistent_notification integration Core rejects the
+    read; the overview says so rather than reporting no notifications."""
+    result = await tools.ha_get_overview(fields=["notifications"])
+
+    assert result["success"] is True
+    assert result["notifications"] == []
+    [warning] = result["warnings"]
+    assert warning.startswith("notifications unavailable: ")
+    assert "Unknown command" in warning
+    full_collection.assert_not_awaited()
+
+
+async def test_rejected_repairs_read_is_returned_by_repairs_error_projection(
+    hass: HomeAssistant, tools: SearchTools, full_collection: AsyncMock
+) -> None:
+    assert await async_setup_component(hass, "config", {})
+
+    result = await tools.ha_get_overview(fields=["repairs_error"])
+
+    assert result["success"] is True
+    assert result["repairs_error"].startswith("Could not fetch repairs: ")
+    assert "Unknown command" in result["repairs_error"]
+    assert "warnings" not in result
+    full_collection.assert_not_awaited()
+
+
+async def test_non_list_fields_is_rejected_as_validation_failure(
+    tools: SearchTools,
+) -> None:
+    fields: Any = 123
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_get_overview(fields=fields)
+
+    error = json.loads(str(exc_info.value))
+    assert error["error"]["code"] == "VALIDATION_FAILED"
+    assert error.get("parameter") == "fields"
+
+
+# system_summary version
+
+
+async def test_system_summary_carries_the_running_version(
+    tools: SearchTools, answering: None
+) -> None:
+    result = await tools.ha_get_overview()
+
+    assert result["system_summary"]["version"] == __version__
+
+
+async def test_system_summary_version_unknown_when_config_unanswered(
+    tools: SearchTools, answering: None, config_unanswered: None
+) -> None:
+    result = await tools.ha_get_overview()
+
+    assert result["system_summary"]["version"] == "unknown"
+
+
+# settings page (issues #863, #1458)
+
+
+async def test_settings_url_surfaced_when_sidecar_running(
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _sidecar_running(monkeypatch)
+
+    result = await tools.ha_get_overview()
+
+    assert result.get("settings_url") == SIDECAR_URL
+
+
+async def test_settings_url_omitted_when_no_sidecar(
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Strict ``not in``: an empty or null ``settings_url`` on every call
+    would hand the user a broken link."""
+    _no_sidecar(monkeypatch)
+
+    result = await tools.ha_get_overview()
+
+    assert "settings_url" not in result
+
+
+async def test_settings_url_survives_fields_projection(
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent that narrows the overview with ``fields=`` can still hand the
+    user the settings URL."""
+    _sidecar_running(monkeypatch)
+
+    result = await tools.ha_get_overview(fields=["system_info"])
+
+    assert result.get("settings_url") == SIDECAR_URL
+    assert "system_info" in result
+
+
+async def test_settings_url_hint_when_http_mounted(
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Standalone HTTP cannot know its external host, so it points at the
+    mount path instead of guessing a URL."""
+    _http_mounted(monkeypatch, "/mcp")
+
+    result = await tools.ha_get_overview()
+
+    assert "settings_url" not in result
+    assert "/mcp/settings" in result.get("settings_url_hint", "")
+
+
+async def test_no_settings_fields_without_sidecar_or_http_mount(
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _http_mounted(monkeypatch, None)
+
+    result = await tools.ha_get_overview()
+
+    assert "settings_url" not in result
+    assert "settings_url_hint" not in result
+
+
+@pytest.mark.parametrize("rejected_secret", ["", "/private_{token}"])
+async def test_rejected_registration_clears_stale_http_hint(
+    tools: SearchTools,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    rejected_secret: str,
+) -> None:
+    """A rejected later registration must not advertise an older server."""
+    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    _no_sidecar(monkeypatch)
+    server = build_server(monkeypatch, core_client)
+    settings_ui.reset_http_settings_state()
+    try:
+        settings_ui.register_settings_routes(FastMCP("old"), server, secret_path="/old")
         assert settings_ui.get_http_settings_prefix() == "/old"
-
         settings_ui.register_settings_routes(
-            MagicMock(), MagicMock(), secret_path=rejected_secret
+            FastMCP("new"), server, secret_path=rejected_secret
         )
-        assert settings_ui.get_http_settings_prefix() is None
 
-        result = await overview_tool(detail_level="minimal")
+        result = await tools.ha_get_overview()
+
         assert "settings_url_hint" not in result
-
-    @pytest.mark.asyncio
-    async def test_settings_url_hint_normalizes_trailing_slash(
-        self, overview_tool, monkeypatch
-    ):
-        """A prefix with a trailing slash must not yield ``//settings``.
-
-        ``MCP_SECRET_PATH`` flows unnormalized, so ``/mcp/`` is a reachable
-        prefix; the hint uses ``rstrip('/')`` to collapse it.
-        """
-        monkeypatch.setattr(
-            "ha_mcp.stdio_settings_sidecar.live_sidecar_url", lambda: None
-        )
-        monkeypatch.setattr(
-            "ha_mcp.settings_ui.get_http_settings_prefix", lambda: "/mcp/"
-        )
-        result = await overview_tool(detail_level="minimal")
-        hint = result.get("settings_url_hint", "")
-        assert "/mcp/settings" in hint
-        assert "/mcp//settings" not in hint
-
-    @pytest.mark.asyncio
-    async def test_settings_url_hint_survives_fields_projection(
-        self, overview_tool, monkeypatch
-    ):
-        """Like ``settings_url``, the HTTP hint is emitted post-projection so a
-        narrow ``fields=`` request still surfaces it."""
-        monkeypatch.setattr(
-            "ha_mcp.stdio_settings_sidecar.live_sidecar_url", lambda: None
-        )
-        monkeypatch.setattr(
-            "ha_mcp.settings_ui.get_http_settings_prefix", lambda: "/mcp"
-        )
-        result = await overview_tool(fields=["system_info"])
-        assert "system_info" in result
-        assert "/mcp/settings" in result.get("settings_url_hint", "")
+    finally:
+        settings_ui.reset_http_settings_state()
 
 
-class TestHaGetOverviewReadOnlyMode:
-    """Read Only Mode (#1569) is surfaced in ha_get_overview only while
-    the flag is on, and like ``settings_url`` it survives ``fields=``
-    projection so a minimized overview still teaches the LLM the mode is
-    on. Mirrors the settings_url test scaffolding."""
+async def test_settings_url_hint_normalizes_trailing_slash(
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``MCP_SECRET_PATH`` is not normalized, so ``/mcp/`` must not yield
+    ``//settings``."""
+    _http_mounted(monkeypatch, "/mcp/")
 
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
+    result = await tools.ha_get_overview()
 
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={})
-        client.send_websocket_message = AsyncMock(return_value={"success": False})
-        return client
-
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart = MagicMock()
-        smart.get_system_overview = AsyncMock(return_value={"success": True})
-        return smart
-
-    @pytest.fixture
-    def overview_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_get_overview"]
-
-    @staticmethod
-    def _patch_read_only(monkeypatch, *, on: bool) -> None:
-        from types import SimpleNamespace
-
-        monkeypatch.setattr(
-            "ha_mcp.tool_catalog.get_global_settings",
-            # ha_get_overview reads the catalog mode before the read-only
-            # re-read — stub both.
-            lambda: SimpleNamespace(enable_tool_search=False),
-        )
-        monkeypatch.setattr(
-            "ha_mcp.read_only.get_global_settings",
-            lambda: SimpleNamespace(read_only_mode=on),
-        )
-
-    @pytest.mark.asyncio
-    async def test_read_only_keys_absent_when_flag_off(
-        self, overview_tool, monkeypatch
-    ):
-        """Mode off → neither ``read_only_mode`` nor ``read_only_mode_hint``
-        appears (strict ``not in`` so a regression emitting them to every
-        overview is caught)."""
-        self._patch_read_only(monkeypatch, on=False)
-        result = await overview_tool(detail_level="minimal")
-        assert "read_only_mode" not in result
-        assert "read_only_mode_hint" not in result
-
-    @pytest.mark.asyncio
-    async def test_read_only_keys_present_and_survive_fields_projection(
-        self, overview_tool, monkeypatch
-    ):
-        """Mode on → the pair is emitted AND survives a narrow
-        ``fields=["system_info"]`` projection, like ``settings_url``."""
-        self._patch_read_only(monkeypatch, on=True)
-        result = await overview_tool(fields=["system_info"])
-        assert "system_info" in result
-        assert result.get("read_only_mode") is True
-        assert "Read Only Mode is ON" in result.get("read_only_mode_hint", "")
+    hint = result.get("settings_url_hint", "")
+    assert "/mcp/settings" in hint
+    assert "/mcp//settings" not in hint
 
 
-class TestHaGetOverviewHaMcpUpdate:
-    """ha_get_overview surfaces the MCP server's own update status."""
+async def test_settings_url_hint_survives_fields_projection(
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _http_mounted(monkeypatch, "/mcp")
 
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
+    result = await tools.ha_get_overview(fields=["system_info"])
 
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
-
-        mcp.add_tool = capture_add_tool
-        return mcp
-
-    @pytest.fixture
-    def mock_client(self):
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={})
-        client.send_websocket_message = AsyncMock(return_value={"success": False})
-        return client
-
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart = MagicMock()
-        smart.get_system_overview = AsyncMock(return_value={"success": True})
-        return smart
-
-    @pytest.fixture
-    def overview_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_get_overview"]
-
-    @pytest.mark.asyncio
-    async def test_ha_mcp_update_present_and_survives_projection(
-        self, overview_tool, monkeypatch
-    ):
-        """When a notice applies, ``ha_mcp_update`` is emitted AND survives a
-        narrow ``fields=["system_info"]`` projection (like ``settings_url`` /
-        ``read_only_mode``) so a minimal overview still surfaces it."""
-        from ha_mcp import update_check
-
-        monkeypatch.setattr(
-            update_check,
-            "get_update_field",
-            AsyncMock(
-                return_value={
-                    "current": "7.8.0",
-                    "latest": "7.9.0",
-                    "update_available": True,
-                }
-            ),
-        )
-        result = await overview_tool(fields=["system_info"])
-        assert "system_info" in result
-        assert result["ha_mcp_update"] == {
-            "current": "7.8.0",
-            "latest": "7.9.0",
-            "update_available": True,
-        }
-
-    @pytest.mark.asyncio
-    async def test_ha_mcp_update_absent_when_check_not_applicable(
-        self, overview_tool, monkeypatch
-    ):
-        """No notice (dev/unknown/opt-out → ``get_update_field`` returns None) →
-        the key is omitted entirely, not emitted as null."""
-        from ha_mcp import update_check
-
-        monkeypatch.setattr(
-            update_check, "get_update_field", AsyncMock(return_value=None)
-        )
-        result = await overview_tool(detail_level="minimal")
-        assert "ha_mcp_update" not in result
-
-    @pytest.mark.asyncio
-    async def test_mcp_client_survives_projection(self, overview_tool):
-        """The calling client's protocol and capabilities are always reported,
-        even on a narrow projection, so diagnosing a client needs no extra call."""
-        result = await overview_tool(fields=["system_info"])
-        assert result["mcp_client"] == {
-            "protocol_version": "unknown",
-            "client_info": {},
-            "capabilities": None,
-        }
-
-    @pytest.mark.asyncio
-    async def test_mcp_client_reports_the_calling_request(self, overview_tool):
-        from ha_mcp._vendor.mcp_types import ClientCapabilities, ElicitationCapability
-
-        session = SimpleNamespace(
-            client_params=SimpleNamespace(
-                client_info=SimpleNamespace(
-                    name="openai-mcp", version="1.0.0", title=""
-                )
-            ),
-            client_capabilities=ClientCapabilities(elicitation=ElicitationCapability()),
-        )
-        ctx = SimpleNamespace(
-            session=session,
-            request_context=SimpleNamespace(
-                protocol_version="2026-07-28", session=session
-            ),
-        )
-        result = await overview_tool(fields=["system_info"], ctx=ctx)
-        assert result["mcp_client"] == {
-            "protocol_version": "2026-07-28",
-            "client_info": {"name": "openai-mcp", "version": "1.0.0", "title": ""},
-            "capabilities": ["elicitation.form"],
-        }
+    assert "system_info" in result
+    assert "/mcp/settings" in result.get("settings_url_hint", "")
 
 
-class TestHaGetOverviewAlwaysEmittedKeys:
-    """Keys advertised in the ``fields=`` docstring must always be in
-    the result so ``fields=[<key>]`` never trips the ``project_fields``
-    typo-guard warning on a clean instance.
+# Read Only Mode (#1569)
 
-    Regression coverage for the LLM complaint that ``notifications`` /
-    ``repairs`` were "not in available keys" on an HA instance with no
-    active alerts — the docstring promised them but the code emitted
-    them only when non-empty.
-    """
 
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
+async def test_read_only_keys_absent_when_flag_off(tools: SearchTools) -> None:
+    """Strict ``not in``, so emitting them on every overview is caught."""
+    result = await tools.ha_get_overview()
 
-        def capture_add_tool(method):
-            name = (
-                method.__fastmcp__.name
-                if hasattr(method, "__fastmcp__")
-                else method.__name__
-            )
-            self.registered_tools[name] = method
+    assert "read_only_mode" not in result
+    assert "read_only_mode_hint" not in result
 
-        mcp.add_tool = capture_add_tool
-        return mcp
 
-    @pytest.fixture
-    def mock_client_empty_ws(self):
-        """Client whose WS calls all return success with empty lists."""
-        client = MagicMock()
-        client.base_url = "http://localhost:8123"
-        client.get_config = AsyncMock(return_value={})
+async def test_read_only_keys_present_and_survive_fields_projection(
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A minimized overview still tells the agent writes are blocked."""
+    monkeypatch.setenv("READ_ONLY_MODE", "true")
+    reset_global_settings()
 
-        async def empty_ws(msg):
-            if msg.get("type") == "persistent_notification/get":
-                return {"success": True, "result": []}
-            if msg.get("type") == "repairs/list_issues":
-                return {"success": True, "result": {"issues": []}}
-            return {"success": True, "result": []}
+    result = await tools.ha_get_overview(fields=["system_info"])
 
-        client.send_websocket_message = AsyncMock(side_effect=empty_ws)
-        return client
+    assert "system_info" in result
+    assert result.get("read_only_mode") is True
+    assert "Read Only Mode is ON" in result.get("read_only_mode_hint", "")
 
-    @pytest.fixture
-    def mock_smart_tools(self):
-        smart = MagicMock()
-        smart.get_system_overview = AsyncMock(return_value={"success": True})
-        return smart
 
-    @pytest.fixture
-    def overview_tool(self, mock_mcp, mock_client_empty_ws, mock_smart_tools):
-        register_search_tools(
-            mock_mcp, mock_client_empty_ws, smart_tools=mock_smart_tools
-        )
-        return self.registered_tools["ha_get_overview"]
+# the server's own update status and the calling client
 
-    @pytest.mark.asyncio
-    async def test_notifications_emitted_as_empty_list_when_none(self, overview_tool):
-        result = await overview_tool(detail_level="minimal")
-        assert result["notifications"] == []
-        assert result["notification_count"] == 0
 
-    @pytest.mark.asyncio
-    async def test_repairs_emitted_as_empty_list_when_none(self, overview_tool):
-        result = await overview_tool(detail_level="minimal")
-        assert result["repairs"] == []
-        assert result["repair_count"] == 0
+async def test_ha_mcp_update_present_and_survives_projection(
+    tools: SearchTools, monkeypatch: pytest.MonkeyPatch, pypi: PyPI
+) -> None:
+    monkeypatch.delenv(update_check.DISABLE_ENV, raising=False)
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0")
+    pypi.publish("ha-mcp", "7.9.0")
 
-    @pytest.mark.asyncio
-    async def test_fields_projection_returns_empty_lists_without_warning(
-        self, overview_tool
-    ):
-        """``fields=["notifications","repairs"]`` on a clean instance must
-        return both as empty lists, with no ``warnings`` entry complaining
-        about missing keys.
-        """
-        result = await overview_tool(fields=["notifications", "repairs"])
-        assert result["notifications"] == []
-        assert result["repairs"] == []
-        # project_fields() appends a "not found in response" warning when
-        # the requested key is absent. The whole point of the empty-list
-        # default is to keep this warning silent on a clean instance.
-        warnings = result.get("warnings") or []
-        joined = " ".join(str(w) for w in warnings)
-        assert "notifications" not in joined
-        assert "repairs" not in joined
+    result = await tools.ha_get_overview(fields=["system_info"])
+
+    assert "system_info" in result
+    notice = result["ha_mcp_update"]
+    assert (notice["current"], notice["latest"], notice["update_available"]) == (
+        "7.8.0",
+        "7.9.0",
+        True,
+    )
+    assert pypi.asked == ["ha-mcp"]
+
+
+async def test_ha_mcp_update_absent_when_check_opted_out(tools: SearchTools) -> None:
+    """With ``HA_MCP_DISABLE_UPDATE_CHECK`` set (as every unit test runs) the
+    key is omitted entirely, not emitted as null."""
+    result = await tools.ha_get_overview()
+
+    assert "ha_mcp_update" not in result
+
+
+async def test_mcp_client_reports_the_calling_client_through_projection(
+    core_client: HomeAssistantClient,
+) -> None:
+    """Diagnosing a client needs no extra call: even a narrow overview names
+    the client and the capabilities it declared."""
+    mcp = FastMCP("overview")
+    register_search_tools(
+        mcp, core_client, smart_tools=SmartSearchTools(client=core_client)
+    )
+
+    async def elicit(*_args: Any) -> None:
+        return None
+
+    async with Client(
+        mcp,
+        client_info=Implementation(name="openai-mcp", version="1.0.0"),
+        elicitation_handler=elicit,
+    ) as client:
+        call = await client.call_tool("ha_get_overview", {"fields": ["system_info"]})
+
+    reported = call.structured_content["mcp_client"]
+    assert reported["client_info"] == {
+        "name": "openai-mcp",
+        "version": "1.0.0",
+        "title": "",
+    }
+    assert "elicitation.form" in reported["capabilities"]
+    assert reported["protocol_version"] != "unknown"
+
+
+# keys the fields= docstring promises
+
+
+async def test_notifications_emitted_as_empty_list_when_none(
+    tools: SearchTools, answering: None
+) -> None:
+    result = await tools.ha_get_overview()
+
+    assert result["notifications"] == []
+    assert result["notification_count"] == 0
+
+
+async def test_fields_projection_returns_empty_lists_without_warning(
+    tools: SearchTools, answering: None
+) -> None:
+    """On a clean instance both keys are present, so the projection's
+    "not found in response" warning stays silent."""
+    result = await tools.ha_get_overview(fields=["notifications", "repairs"])
+
+    assert result["notifications"] == []
+    assert result["repairs"] == []
+    joined = " ".join(str(w) for w in result.get("warnings") or [])
+    assert "notifications" not in joined
+    assert "repairs" not in joined

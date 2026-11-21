@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "已儲存工具路徑",
     "advanced.code_mode_saved_tools_path.help": "用於在重新啟動之間保存自訂工具的 JSON 檔案。",
     "advanced.extra_yaml_write_keys.label": "額外的 YAML 寫入金鑰",
-    "advanced.extra_yaml_write_keys.help": "除了內建的頂層鍵之外，ha_config_set_yaml 還可以為此安裝中的 YAML 優先整合（例如 alert2）寫入額外的頂層鍵。每行輸入一個鍵，或用逗號分隔鍵。重新定義 Home Assistant 自身信任邊界的鍵永遠無法被新增且將被忽略。需要自訂元件 1.2.4 或更新版本。",
+    "advanced.extra_yaml_write_keys.help": "此安裝中適用於 YAML 優先整合（例如 alert2）的額外頂層鍵，ha_config_set_yaml 除了內建鍵之外亦可寫入這些鍵。每行輸入一個鍵，或以逗號分隔多個鍵。重新定義 Home Assistant 自身信任邊界的鍵永遠無法新增，並會遭到忽略。",
     "advanced.redact_app_option_keys.label": "要修訂的額外應用程式選項金鑰",
     "advanced.redact_app_option_keys.help": "針對其結構描述將機密儲存為純文字（例如 backup_password）的應用程式，指定要像密碼欄位一樣進行修訂的應用程式（附加元件）選項名稱。多個名稱請用逗號或新行分隔。名稱適用於所有應用程式；若要限制為單一應用程式，請寫成 app_slug:name。命名選項群組會涵蓋其中的所有選項。僅在啟用「修訂機密」時使用。預設為空白。",
     "advanced.sidecar_pin_port.label": "設定 UI sidecar 連接埠",
@@ -727,11 +727,7 @@
     },
     "ha_get_entity": {
       "title": "取得實體",
-      "description": "取得一個或多個實體的實體註冊表資訊。"
-    },
-    "ha_get_entity_exposure": {
-      "title": "取得實體暴露狀態",
-      "description": "取得實體暴露設定 - 列出全部或取得特定實體的設定。"
+      "description": "取得實體註冊表項目，若未指定實體則取得註冊表設定與公開的實體。"
     },
     "ha_get_hacs_info": {
       "title": "取得 HACS 資訊",
@@ -762,8 +758,8 @@
       "description": "取得一個或多個實體的目前狀態、狀態與屬性（燈光、開關、感測器、恆溫器、遮陽簾、鎖、fa"
     },
     "ha_get_system_health": {
-      "title": "取得系統健康狀態 (包含 ZHA/Z-Wave/整合診斷)",
-      "description": "取得 Home Assistant 系統健康狀態，包含 Zigbee (ZHA)、Z-Wave JS 以及每個整合的診斷傾印。"
+      "title": "取得系統健康狀態（包含 ZHA/Z-Wave/Thread/Matter 網路）",
+      "description": "取得 Home Assistant 系統健康狀態，包含 Zigbee (ZHA)、Z-Wave JS、Thread 與 Matter 網路。"
     },
     "ha_get_todo": {
       "title": "取得待辦事項",
@@ -779,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "列出樓層與區域",
-      "description": "依層級升冪排序列出樓層，每個樓層巢狀包含指派的區域，外加沒有樓層的區域。"
+      "description": "列出 Home Assistant 中保持的樓層順序，每個樓層都巢狀包含其指定的區域，以及沒有樓層的區域。"
     },
     "ha_list_services": {
       "title": "列出可用服務",
@@ -874,8 +870,8 @@
       "description": "透過名稱、網域或區域搜尋實體（燈光、感測器、開關、恆溫器等）— 以及自動化/手稿/s 內部"
     },
     "ha_set_area_or_floor": {
-      "title": "建立或更新區域或樓層",
-      "description": "建立或更新 Home Assistant 區域或樓層。"
+      "title": "建立、更新或重新排序區域或樓層",
+      "description": "建立、更新或重新排序 Home Assistant 的區域或樓層。"
     },
     "ha_set_device": {
       "title": "設定裝置",
@@ -883,7 +879,7 @@
     },
     "ha_set_entity": {
       "title": "設定實體",
-      "description": "更新實體註冊表中的實體屬性。"
+      "description": "更新實體註冊表項目，若未指定 entity_id 則更新全註冊表設定。"
     },
     "ha_set_integration": {
       "title": "設定整合",

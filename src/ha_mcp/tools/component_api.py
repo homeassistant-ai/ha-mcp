@@ -6,7 +6,7 @@ that let the server answer read queries (search, config-get, overview, ...)
 from HA's live registries in a single round-trip, instead of the multi-fetch
 REST/WS pipelines the server uses today.
 
-Because the component ships over HACS on its own release cadence, a given
+Because the component ships through the Marketplace on its own cadence, a given
 install may be at any version — old (no WS surface at all), new (full surface),
 or somewhere in between. This module negotiates that with a single cached
 ``ha_mcp_tools/info`` probe per client:
@@ -77,6 +77,10 @@ DEVICE_REGISTRY_CHILD_SEMANTICS = "device_registry_child_semantics"
 # friendly_name alone, and the server says so where that changes the answer.
 ENTITY_COMPOSED_NAME = "entity_composed_name"
 
+# Additive flag on entity_enrich: each entity carries the name Core composes
+# (as under ENTITY_COMPOSED_NAME) as ``full_name``.
+ENTITY_ENRICH_FULL_NAME = "entity_enrich_full_name"
+
 # Negative (None) caps entries expire after this many seconds of monotonic
 # time, so a component installed / upgraded mid-session is re-probed and
 # adopted instead of being pinned to "absent" for the whole process lifetime
@@ -98,7 +102,7 @@ _NEGATIVE_CACHE_TTL_S = 300.0
 _TRANSIENT_NEGATIVE_CACHE_TTL_S = 30.0
 
 
-def _monotonic() -> float:
+def monotonic() -> float:
     """Monotonic clock read, isolated so tests can advance it deterministically."""
     return time.monotonic()
 
@@ -123,13 +127,6 @@ class ComponentCaps:
     capabilities: frozenset[str]
     limits: dict[str, Any]
     timezone: str | None = None
-    # Whether the tools entry's filesystem/YAML HA services are registered.
-    # Additive ``info`` field (2.1.0, #2292): since the server entry also
-    # registers the WS surface (#2289), caps-present no longer implies those
-    # services exist; ``None`` means a component too old to report it (where
-    # the old implication still holds — only the tools entry registered
-    # ``info`` there).
-    tools_services: bool | None = None
 
 
 # Weak-keyed by client so the negotiated caps self-evict when the client is
@@ -178,11 +175,6 @@ _PROBE_FAILURES: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary
 # a fire tool can stop before sending with the same rejected token; read callers
 # keep treating the probe as best-effort.
 _PROBE_AUTH_REJECTED: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
-
-
-def component_probe_auth_failed(client: Any) -> bool:
-    """True when the latest capability probe was rejected as unauthorized."""
-    return _per_user(client) in _PROBE_AUTH_REJECTED
 
 
 def component_probe_auth_kind(client: Any) -> str | None:
@@ -277,7 +269,7 @@ def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
         if _probed_connection_current(client):
             return True, cached
         return False, None
-    now = _monotonic()
+    now = monotonic()
     stored_at = _NEGATIVE_CACHE_TS.get(client)
     if stored_at is not None and (now - stored_at) < _NEGATIVE_CACHE_TTL_S:
         return True, cached
@@ -302,7 +294,7 @@ def _store_caps(client: Any, caps: ComponentCaps | None) -> None:
     _CAPS_CACHE[client] = caps
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
     if caps is None:
-        _NEGATIVE_CACHE_TS[client] = _monotonic()
+        _NEGATIVE_CACHE_TS[client] = monotonic()
     else:
         _NEGATIVE_CACHE_TS.pop(client, None)
 
@@ -340,7 +332,7 @@ def _store_transient_negative(client: Any, caps: ComponentCaps | None = None) ->
     """
     _CAPS_CACHE[client] = caps
     _NEGATIVE_CACHE_TS.pop(client, None)
-    _TRANSIENT_NEGATIVE_TS[client] = _monotonic()
+    _TRANSIENT_NEGATIVE_TS[client] = monotonic()
 
 
 def _parse_caps(response: Any) -> ComponentCaps | None:
@@ -364,7 +356,6 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
     except TypeError, ValueError:
         schema_version = 0
     raw_timezone = result.get("timezone")
-    raw_tools_services = result.get("tools_services")
     return ComponentCaps(
         schema_version=schema_version,
         component_version=str(result.get("component_version", "")),
@@ -373,11 +364,6 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
         # Additive info field: a component too old to report it (or an unset
         # time_zone) leaves this None; a non-string value is ignored likewise.
         timezone=raw_timezone if isinstance(raw_timezone, str) else None,
-        # Additive info field (#2292): non-bool (including absent, on a
-        # pre-2.1.0 component) stays None.
-        tools_services=raw_tools_services
-        if isinstance(raw_tools_services, bool)
-        else None,
     )
 
 
@@ -620,11 +606,42 @@ def webhook_auth(info: InfoResult | None) -> str | None:
     return auth if isinstance(auth, str) else None
 
 
+COMPONENT_VIA_MARKETPLACE = "via the Marketplace and restart Home Assistant."
 # Said wherever a response is poorer for want of a component command.
 COMPONENT_INSTALL_HINT = (
-    "Install or update the ha_mcp_tools component via HACS (the Marketplace "
-    "on Home Assistant 2026.11+) and restart Home Assistant."
+    f"Install or update the ha_mcp_tools component {COMPONENT_VIA_MARKETPLACE}"
 )
+
+
+# Said where a state's last_reported comes from REST rather than the component.
+REST_LAST_REPORTED_WARNING = (
+    "last_reported comes from Home Assistant's REST API, which can keep an "
+    "older time while an entity reports an unchanged state "
+    "(home-assistant/core#181392); the ha_mcp_tools component serves the live "
+    f"value. {COMPONENT_INSTALL_HINT}"
+)
+
+
+def component_unusable_warning(caps: ComponentCaps | None, without: str) -> str:
+    """Why a read came without the component's part, and how to get it.
+
+    ``caps`` is None when no component answered (install it); otherwise the
+    component predates the command (update it).
+    """
+    if caps is None:
+        return (
+            f"No ha_mcp_tools component answered, so {without}. "
+            f"Install it {COMPONENT_VIA_MARKETPLACE}"
+        )
+    return (
+        f"The ha_mcp_tools component is too old, so {without}. "
+        f"Update it {COMPONENT_VIA_MARKETPLACE}"
+    )
+
+
+def component_unasked_warning(exc: ComponentDiscoveryError, without: str) -> str:
+    """A read that could not ask the component whether it serves its part."""
+    return f"The ha_mcp_tools component could not be asked ({exc}), so {without}."
 
 
 async def component_serves(client: Any, capability: str) -> bool:

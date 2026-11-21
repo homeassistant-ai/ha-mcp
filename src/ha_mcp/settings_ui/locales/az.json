@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Yadda saxlanmış alətlərin yolu",
     "advanced.code_mode_saved_tools_path.help": "Fərdi alətləri yenidən başladılmalar arasında saxlamaq üçün istifadə olunan JSON faylı.",
     "advanced.extra_yaml_write_keys.label": "Yazmağa icazə verilən əlavə YAML açarları",
-    "advanced.extra_yaml_write_keys.help": "Bu quraşdırmada əsasən YAML ilə işləyən inteqrasiyalar (məs. alert2) üçün ha_config_set_yaml alətinin daxili açarlara əlavə olaraq yaza biləcəyi yuxarı səviyyəli açarlar. Hər sətirdə bir açar daxil edin və ya açarları vergüllə ayırın. Home Assistant-ın öz etibar sərhədini yenidən müəyyən edən açarlar heç vaxt əlavə edilə bilməz və nəzərə alınmır. Fərdi komponentin 1.2.4 və ya daha yeni versiyası tələb olunur.",
+    "advanced.extra_yaml_write_keys.help": "Bu quraşdırmada YAML-first inteqrasiyaları üçün (məsələn, alert2) daxili açarlardan əlavə ha_config_set_yaml tərəfindən yazıla bilən əlavə əsas səviyyəli açarlar. Hər sətirə bir açar daxil edin və ya açarları vergüllə ayırın. Home Assistant-ın öz etibar sərhədini yenidən müəyyən edən açarlar heç vaxt əlavə edilə bilməz və nəzərə alınmır.",
     "advanced.redact_app_option_keys.label": "Gizlədiləcək əlavə tətbiq seçim açarları",
     "advanced.redact_app_option_keys.help": "Sxemi sirri düz mətn kimi saxlayan tətbiqlər üçün (məsələn, backup_password) şifrə sahələri kimi gizlədiləcək Tətbiq (əlavə) seçim adları. Adları vergül və ya yeni sətirlərlə ayırın. Ad bütün tətbiqlərə şamil edilir; onu bir tətbiqlə məhdudlaşdırmaq üçün app_slug:name yazın. Seçim qrupunun adlandırılması ondakı hər bir seçimi əhatə edir. Yalnız Məxfiliklərin Gizlədilməsi (Redact Secrets) aktiv olduqda istifadə olunur. Defolt olaraq boşdur.",
     "advanced.sidecar_pin_port.label": "Parametrlər interfeysinin köməkçi proses portu",
@@ -758,11 +758,7 @@
     },
     "ha_get_entity": {
       "title": "Obyekti al",
-      "description": "Bir və ya bir neçə obyekt üçün obyekt reyestrindəki məlumatları alın."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Obyektin əlçatanlıq parametrlərini al",
-      "description": "Obyektlərin əlçatanlıq parametrlərini alın: hamısını siyahı şəklində göstərin və ya konkret obyektin parametrlərini alın."
+      "description": "Obyekt reyestri qeydlərini və ya obyekt olmadıqda reyestr ayarlarını və istifadəyə verilmiş obyektləri əldə edin."
     },
     "ha_get_hacs_info": {
       "title": "HACS məlumatlarını al",
@@ -793,8 +789,8 @@
       "description": "Bir və ya bir neçə obyektin (işıqlar, açarlar, sensorlar, iqlim cihazları, örtüklər, kilidlər, ventilyatorlar) cari vəziyyəti, halı və atributları haqqında məlumat alın."
     },
     "ha_get_system_health": {
-      "title": "Sistemin işləkliyini al (ZHA/Z-Wave/inteqrasiya diaqnostikası daxil olmaqla)",
-      "description": "Zigbee (ZHA), Z-Wave JS və hər inteqrasiyaya aid diaqnostika məlumatları daxil olmaqla, Home Assistant sisteminin işləkliyi haqqında məlumat alın."
+      "title": "Sistem Sağlamlığını əldə edin (ZHA/Z-Wave/Thread/Matter şəbəkələri daxil olmaqla)",
+      "description": "Zigbee (ZHA), Z-Wave JS, Thread və Matter şəbəkələri daxil olmaqla Home Assistant sistem sağlamlığını əldə edin."
     },
     "ha_get_todo": {
       "title": "Tapşırıqları al",
@@ -810,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Mərtəbə və sahələri siyahı şəklində göstər",
-      "description": "Mərtəbələri səviyyəyə görə artan sıra ilə, hər mərtəbəyə təyin edilmiş sahələri onun daxilində, mərtəbəsi olmayan sahələri isə ayrıca siyahı şəklində göstərin."
+      "description": "Home Assistant-ın saxladığı ardıcıllıqla mərtəbələri siyahıya alır, hər biri üçün təyin olunmuş zonalar iç-içə yerləşir, üstəgəl mərtəbəsi olmayan zonalar."
     },
     "ha_list_services": {
       "title": "Mövcud xidmətləri siyahı şəklində göstər",
@@ -905,8 +901,8 @@
       "description": "Obyektləri (işıqlar, sensorlar, açarlar, iqlim cihazları və s.) ada, domenə və ya sahəyə görə axtarın — HƏMÇİNİN avtomatlaşdırmaların, skriptlərin və səhnələrin daxilində axtarış edin."
     },
     "ha_set_area_or_floor": {
-      "title": "Sahə və ya mərtəbə yarat və ya yenilə",
-      "description": "Home Assistant sahəsi və ya mərtəbəsi yaradın və ya yeniləyin."
+      "title": "Zonaları və ya Mərtəbələri Yaradın, Yeniləyin və ya Yenidən Sıralayın",
+      "description": "Home Assistant zonalarını və ya mərtəbələrini yaradın, yeniləyin və ya yenidən sıralayın."
     },
     "ha_set_device": {
       "title": "Cihazı təyin et",
@@ -914,7 +910,7 @@
     },
     "ha_set_entity": {
       "title": "Obyekti təyin et",
-      "description": "Obyekt reyestrində obyektin xüsusiyyətlərini yeniləyin."
+      "description": "Obyekt reyestri qeydlərini və ya entity_id olmadıqda reyestr miqyasında ayarları yeniləyin."
     },
     "ha_set_integration": {
       "title": "İnteqrasiyanı təyin et",

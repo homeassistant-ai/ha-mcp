@@ -23,8 +23,8 @@ from ..client.rest_client import (
 from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..errors import ErrorCode, create_error_response
 from .backup_snapshot import (
-    _BACKUP_MAX_WAIT_S,
-    _BACKUP_PROGRESS_INTERVAL_S,
+    BACKUP_MAX_WAIT_S,
+    BACKUP_PROGRESS_INTERVAL_S,
     _automatic_backup_settings,
     _backup_contents,
     _dedicated_ws,
@@ -98,7 +98,7 @@ async def _send_restore(
                 )
                 try:
                     message = await asyncio.wait_for(
-                        queue.get(), timeout=_BACKUP_PROGRESS_INTERVAL_S
+                        queue.get(), timeout=BACKUP_PROGRESS_INTERVAL_S
                     )
                 except TimeoutError:
                     continue
@@ -114,7 +114,7 @@ async def _send_restore(
         collector = asyncio.create_task(_collect())
         # A Supervisor restore can run for minutes before Core goes down.
         await ws_client.send_command(
-            "backup/restore", _wait_timeout=_BACKUP_MAX_WAIT_S, **params
+            "backup/restore", _wait_timeout=BACKUP_MAX_WAIT_S, **params
         )
         return None
     except HomeAssistantCommandNotSent:
@@ -136,7 +136,7 @@ async def _send_restore(
         if isinstance(err, HomeAssistantCommandTimeout):
             return (
                 "Home Assistant took the restore but did not answer within "
-                f"{_BACKUP_MAX_WAIT_S} seconds; it may still be running. "
+                f"{BACKUP_MAX_WAIT_S} seconds; it may still be running. "
                 "Check its state before retrying."
             )
         return (

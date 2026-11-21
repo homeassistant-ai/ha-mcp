@@ -46,7 +46,7 @@ def _unavailable(error: str) -> dict[str, Any]:
     return {"status": "unavailable", "error": error}
 
 
-def _core() -> SimpleNamespace:
+def core_parts() -> SimpleNamespace:
     """Core's automation parts this bridge uses.
 
     A part a Core build lacks is None; the action that needs it answers
@@ -77,9 +77,7 @@ def _core() -> SimpleNamespace:
         },
         entity_registry=getattr(er, "async_get", None),
         issue_registry=getattr(ir, "async_get", None),
-        # Defined on the package through Core 2026.10 and in const from 2026.11.
-        component_key=getattr(automation, "DATA_COMPONENT", None)
-        or getattr(const, "DATA_COMPONENT", None),
+        component_key=getattr(const, "DATA_COMPONENT", None),
         references={
             name: getattr(automation, f"{name}_in_automation", None)
             for name in _REFERENCES
@@ -229,7 +227,7 @@ async def async_automation_config(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
     _require(msg)
-    core = _core()
+    core = core_parts()
     try:
         return await _HANDLERS[msg["action"]](hass, core, msg)
     except Exception as err:

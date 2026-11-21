@@ -82,6 +82,8 @@ automatically on the next clean start.
 | `oauth_client_id` | OAuth Client ID (auto-generated if blank) | `""` |
 | `oauth_client_secret` | OAuth Client Secret (auto-generated if blank) | `""` |
 | `regenerate_oauth_creds` | One-shot: wipe stored OAuth creds and generate fresh ones on next start | `false` |
+| `oauth_redirect_allowlist` | **Allowed OAuth callback URLs.** None mode only: the callbacks the sign-in redirect may go to; replaces the built-in list when set (see [OAuth callbacks in none mode](#oauth-callbacks-in-none-mode)) | unset (built-in list) |
+| `oauth_allow_any_callback` | **Allow any OAuth callback URL.** None mode only: turns the callback list off | `false` |
 | `debug_logging` | **Beta.** Log every inbound request to the Home Assistant log to confirm a client is reaching the server | `false` |
 
 > The OAuth options are hidden by default. Toggle **Show unused optional configuration options** at the bottom of the app's Configuration tab to reveal them. `debug_logging` is shown on the main Configuration page (it is not one of the hidden options).
@@ -139,11 +141,26 @@ If you want a real auth layer on top of the URL secret, turn on **Enable OAuth (
 
 The proxy has three live OAuth behaviors. When OAuth protection is enabled, choose one of the two protected modes with **OAuth Mode (Beta)**:
 
-- **None mode (OAuth protection off)** — the secret webhook URL remains the only credential. OAuth discovery, stateless registration, and an invisible public-PKCE exchange are available for client compatibility, but the resulting token is not checked by the webhook.
+- **None mode (OAuth protection off)** — the secret webhook URL remains the only credential. OAuth discovery, stateless registration, and an invisible public-PKCE exchange are available for client compatibility, but the resulting token is not checked by the webhook. The sign-in redirect only goes to a listed callback; see [OAuth callbacks in none mode](#oauth-callbacks-in-none-mode).
 - **`ha_auth` (recommended, the default for a first-time enable)** — Home Assistant itself is the authorization server. You sign in with your Home Assistant account and **leave the connector's OAuth fields blank** (Claude.ai auto-detects **Sign in now** or **Sign in when needed**, plus **Use Claude's published identity** — keep both). No Client ID or Client Secret, works with any hostname/URL, and no Home Assistant restart is needed to enable or disable it.
 - **`legacy` (deprecated)** — the previous flow, where the app generates a Client ID + Secret you paste into the connector.
 
 > **Upgrading? Your OAuth setup is not changed.** If you already used the legacy flow (you set a Client ID/Secret, or the app stored one), leaving **OAuth Mode** unset keeps you on **legacy** — nothing breaks. New/first-time enables default to **ha_auth**. Switching modes is an explicit action (set **OAuth Mode**) and, because Claude.ai binds the auth mode per connector, requires **deleting and re-adding your MCP connector**.
+
+##### OAuth callbacks in none mode
+
+With OAuth protection off, anyone can open the authorize endpoint without signing in, so it only redirects to a callback on a list; otherwise your Home Assistant address could send a visitor to any site. The built-in list covers the common clients:
+
+- `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback` (Claude)
+- `http://localhost/callback` and `http://127.0.0.1/callback` (Claude Code)
+- `https://chatgpt.com/connector_platform_oauth_redirect` (ChatGPT)
+- `https://vertexaisearch.cloud.google.com/oauth-redirect` (Gemini Enterprise)
+
+A client whose callback is not listed stops on an error page (HTTP 400) that shows the callback address it asked for. Add that address under **Allowed OAuth callback URLs** (one of the hidden options) and restart the app. Setting the option **replaces** the built-in list, so include every callback you use, built-in ones included. A list saved empty refuses every callback; to go back to the built-in list, remove the option (**Edit in YAML** on the Configuration tab and delete the `oauth_redirect_allowlist` line, or **Reset to defaults**, which resets every option). Matching is exact, except that an `http` entry on a loopback address (such as `localhost` or `127.0.0.1`) matches any port, since native clients pick a free port per sign-in. Entries must be `https`, or `http` on a loopback address such as `localhost` or `127.0.0.1`, with no username/password and no `#fragment`; the app log names any entry it ignores.
+
+Some clients use a callback unique to each app or connector, which you must add yourself: ChatGPT app connectors (`https://chatgpt.com/connector/oauth/<id>`) and Copilot Studio (`https://global.consent.azure-apim.net/redirect/<connector>`).
+
+**Allow any OAuth callback URL** turns the list off and accepts any `https` or loopback `http` callback, as earlier versions did. It lets anyone use your Home Assistant address to redirect a visitor to a site of their choice, so leave it off unless you need it.
 
 ##### Recommended: sign in with Home Assistant (`ha_auth`)
 
@@ -199,7 +216,7 @@ All three behaviors advertise proxy-owned endpoints under `/api/mcp_proxy_dev/oa
 
 The same authorize/token URLs behave according to the active mode:
 
-- **None mode:** accepts any valid HTTPS or RFC 8252 loopback redirect, auto-approves without a page, and issues a cosmetic token. DCR registrations advertise only the authorization-code grant.
+- **None mode:** accepts only a redirect on the [callback list](#oauth-callbacks-in-none-mode), or any valid one with **Allow any OAuth callback URL** on, auto-approves without a page, and issues a cosmetic token. DCR registrations advertise only the authorization-code grant.
 - **`ha_auth`:** validates CIMD or signed DCR identities before sending the browser/token exchange into Home Assistant core. DCR advertises refresh for every registration: a forwarded token response comes back with its refresh token wrapped in a signed envelope naming the identity core bound it to, so loopback-callback and multi-origin clients refresh without re-authorizing. The proxy also fronts token revocation on its own scoped revocation endpoint, so a wrapped refresh token is unwrapped before Home Assistant sees it and is really revoked. Revocation accepts a wrapped token even when its signature no longer verifies — after the signing key rotates, which is what removing and re-adding the integration does — because possession of a token is the only authorization revoking it needs, and Home Assistant's own revocation endpoint is anonymous and idempotent. Sessions authorized before this version carry no envelope: they re-authorize once, then refresh normally.
 - **`legacy`:** serves the existing consent and credentialed token flow on the scoped URLs. The host-root `/authorize` and `/token` routes remain compatibility aliases but are not advertised; legacy does not advertise DCR.
 

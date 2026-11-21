@@ -1,308 +1,254 @@
 """The retries, request pacing and time budget of ``scripts/translate_locales.py``.
 
-Every retryable failure in ``_call_gemini``, a transport error as much as an
+Every retryable failure of an engine request, a transport error as much as an
 unusable answer, ends in one shared tail: stop after the fifth attempt, stop
-once the time budget is spent, otherwise wait and retry. The first tests drive
-it with a monkeypatched transport, through a transport error and a retryable
-HTTP status. The corrective retry ``_accept_or_retry`` asks for a rejected
-string runs only while the same budget lasts. Each chunk request is followed
-by a wait, answered or failed, while the budget lasts and the engine has not
-been given up on, and a run whose budget runs out between two requests stops
-there. Every test records the sleeps and runs on a stopped clock.
+once the time budget is spent, otherwise wait and retry. The corrective retry
+a rejected string gets runs only while the same budget lasts. Each request is
+followed by a wait, answered or failed, while the budget lasts and the engine
+has not been given up on, and a run whose budget runs out between two requests
+stops there.
+
+Each test runs the script's command line on a scratch repository, with the
+Gemini API answering at httpx's transport. The clock the budget reads stands
+still unless the engine spends the budget while it answers, and every wait is
+recorded rather than slept.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from typing import Any
+from collections.abc import Callable
 
+import httpx
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
-import translate_locales
+from ._locale_sync_repo import LocaleRepo, Request, answer
+from ._locale_sync_repo import repo as repo
 
-_NOW = 1e12  # no real monotonic clock gets here: losing the stop fails the tests
-
-
-@pytest.fixture
-def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Record every wait and stop the clock the time budget reads, so only
-    ``_deadline_in`` decides whether the budget is spent."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(translate_locales, "_DEADLINE", None)
-    monkeypatch.setattr(translate_locales.time, "monotonic", lambda: _NOW)
-    recorded: list[float] = []
-    monkeypatch.setattr(translate_locales.time, "sleep", recorded.append)
-    return recorded
+_HALLO = {"messages:greeting": "Hallo"}
+# Far longer than one request carries alongside anything else.
+_HUGE = "word " * 10_000
 
 
-def _deadline_in(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
-    """Put the time budget's deadline ``seconds`` from now (negative: spent)."""
-    monkeypatch.setattr(translate_locales, "_DEADLINE", _NOW + seconds)
+Step = Callable[[Request], httpx.Response]
+
+
+def _engine(repo: LocaleRepo, *steps: Step) -> list[int]:
+    """The engine answers request ``n`` with ``steps[n]``; the waits made
+    before each request are returned as they happen."""
+    waits_before: list[int] = []
+
+    def reply(request: Request) -> httpx.Response:
+        waits_before.append(len(repo.sleeps))
+        return steps[len(waits_before) - 1](request)
+
+    repo.engine.reply = reply
+    return waits_before
+
+
+def _respond(
+    response: httpx.Response | Exception, *, spend: LocaleRepo | None = None
+) -> Step:
+    """A step answering ``response``; with ``spend``, the budget runs out first."""
+
+    def step(_request: Request) -> httpx.Response:
+        if spend is not None:
+            spend.clock.spend_the_budget()
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    return step
+
+
+def _failure(run_err: str, key: str) -> str:
+    """The failure line the run reported for ``key``."""
+    [line] = [line.strip() for line in run_err.splitlines() if f"/{key}: " in line]
+    return line
 
 
 @pytest.mark.parametrize("failure", ["transport", "status"])
 def test_failed_attempts_wait_before_each_retry_but_not_after_the_last(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], failure: str
+    repo: LocaleRepo, failure: str
 ) -> None:
     """Both retryable failures share the tail. The fifth attempt ends the call
     even when the budget runs out during it, so the error names no budget."""
-    _deadline_in(monkeypatch, 3600)
-    waits_before: list[int] = []
-
-    def fails(*_args: Any, **_kwargs: Any) -> Any:
-        waits_before.append(len(sleeps))
-        if len(waits_before) == 5:
-            _deadline_in(monkeypatch, -1)
-        if failure == "transport":
-            raise translate_locales.httpx.ConnectError("name resolution failed")
-        return translate_locales.httpx.Response(503, text="unavailable")
-
-    monkeypatch.setattr(translate_locales.httpx, "post", fails)
-    with pytest.raises(SystemExit) as exc_info:
-        translate_locales._call_gemini("prompt")
-    assert "time budget" not in str(exc_info.value)
+    failed: httpx.Response | Exception = (
+        httpx.ConnectError("name resolution failed")
+        if failure == "transport"
+        else httpx.Response(503, text="unavailable")
+    )
+    waits_before = _engine(
+        repo, *([_respond(failed)] * 4), _respond(failed, spend=repo)
+    )
+    run = repo.run()
+    assert run.code == 2
+    assert "time budget" not in _failure(run.err, "greeting")
     assert waits_before == [0, 1, 2, 3, 4], "each retry follows one more wait"
-    assert len(sleeps) == 4, "no wait after the fifth attempt"
-    assert all(delay > 0 for delay in sleeps), "a retry must wait"
+    assert len(repo.sleeps) == 4, "no wait after the fifth attempt"
+    assert all(delay > 0 for delay in repo.sleeps), "a retry must wait"
 
 
-def test_spent_budget_stops_the_retries(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
-) -> None:
+def test_spent_budget_stops_the_retries(repo: LocaleRepo) -> None:
     """The budget can run out while an attempt is in flight; the tail must
     then stop instead of sleeping into another attempt."""
-    calls: list[int] = []
-
-    def times_out_past_the_deadline(*_args: Any, **_kwargs: Any) -> Any:
-        calls.append(1)
-        _deadline_in(monkeypatch, -1)
-        raise translate_locales.httpx.ReadTimeout("read timed out")
-
-    monkeypatch.setattr(translate_locales.httpx, "post", times_out_past_the_deadline)
-    with pytest.raises(
-        SystemExit, match=r"transport error: .*\(time budget exhausted; not retrying\)"
-    ):
-        translate_locales._call_gemini("prompt")
-    assert len(calls) == 1
-    assert sleeps == []
-
-
-@pytest.fixture
-def retries(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Stands in for the engine: records each retry prompt and answers it
-    with a valid translation of the one string these tests use."""
-    prompts: list[str] = []
-
-    def engine(prompt: str) -> dict[str, Any]:
-        prompts.append(prompt)
-        return {"messages:greeting": "Hallo"}
-
-    monkeypatch.setattr(translate_locales, "_call_gemini", engine)
-    return prompts
-
-
-def _accept(
-    results: dict[tuple[str, str], str],
-    failures: list[str],
-    translated: str | None = None,
-) -> set[tuple[str, str]]:
-    """Run ``_accept_or_retry`` on one string; by default the engine answered
-    it with nothing."""
-    failed: set[tuple[str, str]] = set()
-    item = translate_locales.WorkItem("de", "messages", "greeting", "Hello")
-    translate_locales._accept_or_retry(
-        "de", item, translated, results, failures, failed, "messages", frozenset()
-    )
-    return failed
+    _engine(repo, _respond(httpx.ReadTimeout("read timed out"), spend=repo))
+    run = repo.run()
+    assert run.code == 2
+    assert len(repo.engine.requests) == 1
+    assert "(time budget exhausted; not retrying)" in _failure(run.err, "greeting")
+    assert "transport error" in _failure(run.err, "greeting")
+    assert repo.sleeps == []
 
 
 def test_rejected_string_gets_one_retry_while_the_budget_lasts(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: list[str]
+    repo: LocaleRepo,
 ) -> None:
-    _deadline_in(monkeypatch, 3600)
-    results: dict[tuple[str, str], str] = {}
-    failed = _accept(results, [])
-    assert len(retries) == 1
-    assert "previous attempt was rejected" in retries[0]
-    assert len(sleeps) == 1, "the retry is paced like any other request"
-    assert sleeps[0] > 0, "a retry must wait"
-    assert results == {("messages", "greeting"): "Hallo"}
-    assert failed == set()
+    waits_before = _engine(
+        repo, _respond(answer({"messages:greeting": ""})), _respond(answer(_HALLO))
+    )
+    run = repo.run()
+    assert run.code == 0, run
+    assert [request.is_retry for request in repo.engine.requests] == [False, True]
+    assert waits_before == [0, 1]
+    assert len(repo.sleeps) == 2, "the retry is paced like any other request"
+    assert all(delay > 0 for delay in repo.sleeps), "a retry must wait"
+    assert repo.settings("de")["messages"]["greeting"] == "Hallo"
 
 
-def test_spent_budget_skips_the_validation_retry(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: list[str]
-) -> None:
+def test_spent_budget_skips_the_validation_retry(repo: LocaleRepo) -> None:
     """An answer can arrive after the deadline; each string it got wrong must
     then fail at once, without a retry call and its pacing wait."""
-    _deadline_in(monkeypatch, -1)
-    failures: list[str] = []
-    failed = _accept({}, failures)
-    assert retries == []
-    assert sleeps == []
-    assert failed == {("messages", "greeting")}
-    assert failures[0].endswith("(time budget exhausted; not retrying)")
+    _engine(repo, _respond(answer({"messages:greeting": ""}), spend=repo))
+    run = repo.run()
+    assert run.code == 2
+    assert len(repo.engine.requests) == 1
+    assert repo.sleeps == []
+    assert _failure(run.err, "greeting").endswith(
+        "(time budget exhausted; not retrying)"
+    )
 
 
-@pytest.mark.parametrize("deadline_in", [3600, -1])
+@pytest.mark.parametrize("budget_lasts", [True, False])
 def test_valid_answer_is_kept_without_a_retry_or_a_wait(
-    monkeypatch: pytest.MonkeyPatch,
-    sleeps: list[float],
-    retries: list[str],
-    deadline_in: float,
+    repo: LocaleRepo, budget_lasts: bool
 ) -> None:
-    """A valid answer, late or not, must not cost a retry or a 7 s wait."""
-    _deadline_in(monkeypatch, deadline_in)
-    results: dict[tuple[str, str], str] = {}
-    failed = _accept(results, [], translated="Hallo")
-    assert results == {("messages", "greeting"): "Hallo"}
-    assert failed == set()
-    assert retries == []
-    assert sleeps == []
+    """A valid answer, late or not, must not cost a retry or a 7 s wait of its
+    own: the only wait is the one pacing the request, while the budget lasts."""
+    _engine(repo, _respond(answer(_HALLO), spend=None if budget_lasts else repo))
+    run = repo.run()
+    assert run.code == 0, run
+    assert len(repo.engine.requests) == 1
+    assert repo.settings("de")["messages"]["greeting"] == "Hallo"
+    assert len(repo.sleeps) == (1 if budget_lasts else 0)
 
 
 def test_retry_answered_after_the_deadline_skips_its_pacing_wait(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], retries: list[str]
+    repo: LocaleRepo,
 ) -> None:
     """The retry can return after the deadline; its pacing wait then paces
     no request and only eats into the slack before the job timeout."""
-    _deadline_in(monkeypatch, 3600)
-    engine = translate_locales._call_gemini
-
-    def answers_past_the_deadline(prompt: str) -> dict[str, Any]:
-        _deadline_in(monkeypatch, -1)
-        return engine(prompt)
-
-    monkeypatch.setattr(translate_locales, "_call_gemini", answers_past_the_deadline)
-    results: dict[tuple[str, str], str] = {}
-    failed = _accept(results, [])
-    assert len(retries) == 1, "the retry ran"
-    assert results == {("messages", "greeting"): "Hallo"}
-    assert failed == set()
-    assert sleeps == []
+    _engine(
+        repo,
+        _respond(answer({"messages:greeting": ""})),
+        _respond(answer(_HALLO), spend=repo),
+    )
+    run = repo.run()
+    assert run.code == 0, run
+    assert repo.engine.requests[-1].is_retry, "the retry ran"
+    assert repo.settings("de")["messages"]["greeting"] == "Hallo"
+    assert len(repo.sleeps) == 1, "only the first request was paced"
 
 
 @pytest.mark.parametrize("crosses_deadline", [False, True])
 def test_failed_retry_fails_the_string_not_the_run(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], crosses_deadline: bool
+    repo: LocaleRepo, crosses_deadline: bool
 ) -> None:
     """A retry the engine fails must leave only its string failed; its wait
     still paces the next request while the budget lasts. A retry that failed
     after the deadline says the budget is spent, so the failure summary does
     not hide it."""
-    _deadline_in(monkeypatch, 3600)
-
-    def fails(_prompt: str) -> dict[str, Any]:
-        if crosses_deadline:
-            _deadline_in(monkeypatch, -1)
-        raise SystemExit("Gemini API call failed: HTTP 503")
-
-    monkeypatch.setattr(translate_locales, "_call_gemini", fails)
-    failures: list[str] = []
-    failed = _accept({}, failures)
-    assert failed == {("messages", "greeting")}
-    assert len(sleeps) == (0 if crosses_deadline else 1)
-    budget_note = failures[0].endswith("(retry failed; time budget exhausted)")
+    repo.write_settings(
+        "en",
+        {"greeting": "Hello", "farewell": "Goodbye"},
+        native_name="English",
+        tools=False,
+    )
+    _engine(
+        repo,
+        _respond(answer({"messages:greeting": "", "messages:farewell": "Tschüss"})),
+        _respond(httpx.Response(400), spend=repo if crosses_deadline else None),
+    )
+    run = repo.run()
+    assert run.code == 2
+    assert repo.settings("de")["messages"] == {"farewell": "Tschüss"}
+    assert len(repo.sleeps) == (1 if crosses_deadline else 2)
+    budget_note = _failure(run.err, "greeting").endswith(
+        "(retry failed; time budget exhausted)"
+    )
     assert budget_note is crosses_deadline
 
 
 @pytest.mark.parametrize("first_call_fails", [False, True])
-def test_each_chunk_request_is_paced_while_the_budget_lasts(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], first_call_fails: bool
+def test_each_request_is_paced_while_the_budget_lasts(
+    repo: LocaleRepo, first_call_fails: bool
 ) -> None:
-    """Unpaced chunk requests run into the engine's rate limit; while the
-    budget lasts, every chunk request must be followed by a wait, a failed one
-    too: it can end on a rate-limit answer."""
-    _deadline_in(monkeypatch, 3600)
-    monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
-    waits_before: list[int] = []
-
-    def engine(_prompt: str) -> dict[str, str]:
-        waits_before.append(len(sleeps))
-        if first_call_fails and len(waits_before) == 1:
-            raise SystemExit("Gemini API call failed: HTTP 429")
-        return {"messages:greeting": "Hallo", "messages:farewell": "Tschüss"}
-
-    monkeypatch.setattr(translate_locales, "_call_gemini", engine)
-    items = [
-        translate_locales.WorkItem("de", "messages", "greeting", "Hello"),
-        translate_locales.WorkItem("de", "messages", "farewell", "Goodbye"),
-    ]
-    _, failures, _, _ = translate_locales._translate_locale("de", items)
-    assert len(failures) == (1 if first_call_fails else 0)
-    assert waits_before == [0, 1], "a wait between the requests"
-    assert len(sleeps) == 2, "a wait after each request"
-    assert all(delay > 0 for delay in sleeps), "a chunk request must be paced"
-
-
-def test_a_chunk_call_failing_past_the_deadline_skips_its_pacing_wait(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
-) -> None:
-    """A failed chunk call can return after the deadline; its pacing wait then
-    paces no request, since the run stops on the budget."""
-    _deadline_in(monkeypatch, 3600)
-
-    def fails_past_the_deadline(_prompt: str) -> dict[str, str]:
-        _deadline_in(monkeypatch, -1)
-        raise SystemExit("Gemini API call failed: HTTP 503")
-
-    monkeypatch.setattr(translate_locales, "_call_gemini", fails_past_the_deadline)
-    items = [translate_locales.WorkItem("de", "messages", "greeting", "Hello")]
-    translate_locales._translate_locale("de", items)
-    assert sleeps == []
-
-
-def test_giving_up_on_the_engine_skips_the_pacing_wait(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
-) -> None:
-    """The failed call that gives up on the engine stops the run's engine
-    calls, so a wait after it would pace no request."""
-    _deadline_in(monkeypatch, 3600)
-    monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
-    calls: list[str] = []
-
-    def engine(prompt: str) -> dict[str, str]:
-        calls.append(prompt)
-        raise SystemExit("Gemini API call failed: HTTP 503")
-
-    monkeypatch.setattr(translate_locales, "_call_gemini", engine)
-    items = [
-        translate_locales.WorkItem("de", "messages", key, "Hello")
-        for key in ("one", "two", "three")
-    ]
-    _, _, _, dead = translate_locales._translate_locale("de", items)
-    assert dead
-    assert len(sleeps) == len(calls) - 1, "no wait after the give-up failure"
-
-
-def test_budget_spent_mid_run_keeps_the_answers_and_stops(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
-) -> None:
-    """The budget can run out between two requests for the same surface; the
-    strings already translated must be kept, and the run must stop with the
-    budget as its reason instead of waiting out the request pacing or calling
-    the engine again."""
-    _deadline_in(monkeypatch, 3600)
-    monkeypatch.setattr(translate_locales, "_MAX_CHARS_PER_REQUEST", 1)
-    prompts: list[str] = []
-
-    def answers_then_spends_the_budget(prompt: str) -> dict[str, Any]:
-        prompts.append(prompt)
-        _deadline_in(monkeypatch, -1)
-        return {"messages:greeting": "Hallo"}
-
-    monkeypatch.setattr(
-        translate_locales, "_call_gemini", answers_then_spends_the_budget
+    """Unpaced requests run into the engine's rate limit; while the budget
+    lasts, every request must be followed by a wait, a failed one too: it can
+    end on a rate-limit answer. Each surface goes out in a request of its
+    own, so a settings string and a component string make two."""
+    repo.write_component("en", {"farewell": "Goodbye"})
+    first = (
+        _respond(httpx.Response(400)) if first_call_fails else _respond(answer(_HALLO))
     )
-    items = [
-        translate_locales.WorkItem("de", "messages", "greeting", "Hello"),
-        translate_locales.WorkItem("de", "messages", "farewell", "Goodbye"),
-    ]
-    results, failures, failed, _ = translate_locales._translate_locale("de", items)
-    assert len(prompts) == 1
-    assert results == {("messages", "greeting"): "Hallo"}
-    assert failures[0] == "de: time budget exhausted — stopping this run"
-    assert failed == {("messages", "farewell")}
-    assert sleeps == []
+    waits_before = _engine(
+        repo, first, _respond(answer({"component:farewell": "Tschüss"}))
+    )
+    run = repo.run()
+    assert run.code == (2 if first_call_fails else 0), run
+    assert waits_before == [0, 1], "a wait between the requests"
+    assert len(repo.sleeps) == 2, "a wait after each request"
+    assert all(delay > 0 for delay in repo.sleeps), "a request must be paced"
+
+
+def test_a_request_failing_past_the_deadline_skips_its_pacing_wait(
+    repo: LocaleRepo,
+) -> None:
+    """A failed request can return after the deadline; its pacing wait then
+    paces no request, since the run stops on the budget."""
+    _engine(repo, _respond(httpx.Response(400), spend=repo))
+    assert repo.run().code == 2
+    assert repo.sleeps == []
+
+
+def test_giving_up_on_the_engine_skips_the_pacing_wait(repo: LocaleRepo) -> None:
+    """The failed request that gives up on the engine stops the run's engine
+    calls, so a wait after it would pace no request."""
+    repo.write_settings(
+        "en",
+        {key: f"{key} {_HUGE}" for key in ("one", "two", "three")},
+        native_name="English",
+        tools=False,
+    )
+    _engine(repo, *([_respond(httpx.Response(400))] * 3))
+    run = repo.run()
+    assert run.code == 2
+    assert "de/messages/three: not attempted" in run.err, "the engine was given up on"
+    assert len(repo.sleeps) == len(repo.engine.requests) - 1, (
+        "no wait after the give-up failure"
+    )
+
+
+def test_budget_spent_mid_run_keeps_the_answers_and_stops(repo: LocaleRepo) -> None:
+    """The budget can run out between two requests; the strings already
+    translated must be kept, and the run must stop with the budget as its
+    reason instead of waiting out the request pacing or calling the engine
+    again."""
+    repo.write_component("en", {"farewell": "Goodbye"})
+    _engine(repo, _respond(answer(_HALLO), spend=repo))
+    run = repo.run()
+    assert run.code == 2
+    assert len(repo.engine.requests) == 1
+    assert repo.settings("de")["messages"]["greeting"] == "Hallo"
+    assert "farewell" not in repo.component("de")
+    assert "de: time budget exhausted — stopping this run" in run.err
+    assert repo.sleeps == []

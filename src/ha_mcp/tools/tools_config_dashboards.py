@@ -42,6 +42,7 @@ from ..dashboard_screenshot.paths import (
     match_dashboard_view,
     resolve_dashboard_view,
 )
+from ..error_wording import hyphenated_url_path
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
@@ -83,10 +84,11 @@ from .dashboard_list_checks import (
 from .dashboard_read_errors import (
     DASHBOARD_FETCH_FAILED_PREFIX,
     DASHBOARD_LIST_SUGGESTION,
-    NO_STORED_CONFIG_MESSAGES,
     NO_STORED_CONFIG_NOTE,
+    config_not_found,
     is_no_stored_config_error,
     is_unknown_dashboard,
+    no_stored_config,
     raise_registry_read_error,
     raise_unresolved_delete,
     read_failure_code,
@@ -118,7 +120,7 @@ def _large_dashboard_replacement_warning(size: int) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
-class _DashboardScreenshotOptions:
+class DashboardScreenshotOptions:
     """Shared render options for get/set screenshot paths."""
 
     view_path: str | None = None
@@ -1132,8 +1134,8 @@ async def _lazy_resolve_and_retry(
     No-op when:
     - the response is not a failure (success=True or non-dict),
     - ``url_path`` is empty,
-    - the error message does not contain ``UNKNOWN_CONFIG_PREFIX``
-      (the substring miss),
+    - Core's code is not ``config_not_found``, or its message does not
+      name the identifier as unknown,
     - the resolver finds no match,
     - or the resolver itself raises (logged at WARNING).
 
@@ -1152,7 +1154,7 @@ async def _lazy_resolve_and_retry(
 
     err = response.get("error", {})
     err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-    if not is_unknown_dashboard(err_msg):
+    if not config_not_found(response) or not is_unknown_dashboard(err_msg):
         return url_path, response
 
     try:
@@ -1193,7 +1195,7 @@ def _attach_dashboard_render_paths(
         result.setdefault("warnings", []).extend(warnings)
 
 
-async def _attach_dashboard_render_paths_after_write(
+async def attach_dashboard_render_paths_after_write(
     client: Any,
     result: dict[str, Any],
     url_path: str,
@@ -1235,12 +1237,12 @@ async def _attach_dashboard_render_paths_after_write(
     return authoritative_config
 
 
-def _note_screenshot_ignored(
+def note_screenshot_ignored(
     result: dict[str, Any],
     *,
     include_screenshot: bool,
     full_page: bool = False,
-    options: _DashboardScreenshotOptions | None = None,
+    options: DashboardScreenshotOptions | None = None,
     mode: str,
 ) -> None:
     """Warn when get-mode-only options are passed to a mode that ignores them.
@@ -1251,8 +1253,8 @@ def _note_screenshot_ignored(
     inapplicable, so surface a ``warnings`` entry rather than dropping the
     request as a silent no-op (matches the warn-don't-fail contract the
     params document)."""
-    capture_options = options or _DashboardScreenshotOptions(full_page=full_page)
-    if include_screenshot or capture_options != _DashboardScreenshotOptions():
+    capture_options = options or DashboardScreenshotOptions(full_page=full_page)
+    if include_screenshot or capture_options != DashboardScreenshotOptions():
         result.setdefault("warnings", []).append(
             f"include_screenshot, view_path, and screenshot render options are "
             f"ignored in {mode} mode; call "
@@ -1267,7 +1269,7 @@ async def _capture_dashboard_screenshot_result(
     *,
     client: Any | None,
     config: dict[str, Any] | None,
-    options: _DashboardScreenshotOptions,
+    options: DashboardScreenshotOptions,
 ) -> ToolResult:
     """Render configured captures and attach their ordered MCP metadata."""
     from ..dashboard_screenshot import capture as screenshot_capture
@@ -1357,14 +1359,14 @@ async def _capture_dashboard_screenshot_result(
     raise AssertionError("unreachable: raise_tool_error always raises")
 
 
-async def _maybe_attach_screenshot(
+async def maybe_attach_screenshot(
     result: dict[str, Any],
     url_path: str | None,
     requested: bool,
     *,
     client: Any | None = None,
     config: dict[str, Any] | None = None,
-    options: _DashboardScreenshotOptions | None = None,
+    options: DashboardScreenshotOptions | None = None,
     full_page: bool = False,
     raise_on_failure: bool = False,
 ) -> dict[str, Any] | ToolResult:
@@ -1386,12 +1388,12 @@ async def _maybe_attach_screenshot(
     warning the caller may never inspect. A disabled feature flag is always a
     warning either way — it is an expected configuration state, not a failure.
     """
-    capture_options = options or _DashboardScreenshotOptions(full_page=full_page)
+    capture_options = options or DashboardScreenshotOptions(full_page=full_page)
     if options is not None and full_page and not capture_options.full_page:
         capture_options = replace(capture_options, full_page=True)
 
     if not requested:
-        defaults = _DashboardScreenshotOptions()
+        defaults = DashboardScreenshotOptions()
         if capture_options != defaults:
             result.setdefault("warnings", []).append(
                 "Screenshot render options are ignored because no screenshot "
@@ -1420,7 +1422,7 @@ async def _maybe_attach_screenshot(
     except ToolError as e:
         if raise_on_failure:
             raise
-        return _attach_screenshot_tool_error(result, e)
+        return attach_screenshot_tool_error(result, e)
     except Exception as e:
         # On the set path a screenshot failure must never break a write that
         # already committed, so catch everything non-ToolError (lazy import
@@ -1438,7 +1440,7 @@ async def _maybe_attach_screenshot(
         return result
 
 
-def _attach_screenshot_tool_error(
+def attach_screenshot_tool_error(
     result: dict[str, Any], error: ToolError
 ) -> dict[str, Any]:
     """Preserve a structured capture failure on an already-committed write."""
@@ -1703,7 +1705,7 @@ class DashboardConfigTools:
         """
         if describe:
             return await describe_card_response(self._client, card_type)
-        screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
+        screenshot_options = DashboardScreenshotOptions(view_path=view_path)
         criteria = _SearchCriteria(
             entity_id=entity_id, card_type=card_type, heading=heading, query=query
         )
@@ -1797,7 +1799,7 @@ class DashboardConfigTools:
         self,
         *,
         include_screenshot: bool,
-        screenshot_options: _DashboardScreenshotOptions,
+        screenshot_options: DashboardScreenshotOptions,
     ) -> dict[str, Any]:
         """``list_only=True`` mode: list every dashboard's metadata row.
 
@@ -1812,7 +1814,7 @@ class DashboardConfigTools:
             "dashboards": dashboards,
             "count": len(dashboards),
         }
-        _note_screenshot_ignored(
+        note_screenshot_ignored(
             list_result,
             include_screenshot=include_screenshot,
             options=screenshot_options,
@@ -1857,7 +1859,7 @@ class DashboardConfigTools:
             error_msg = response.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
-            if str(error_msg) in NO_STORED_CONFIG_MESSAGES:
+            if no_stored_config(response):
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_FAILED,
@@ -1871,7 +1873,7 @@ class DashboardConfigTools:
                 )
             raise_tool_error(
                 create_error_response(
-                    read_failure_code(str(error_msg)),
+                    read_failure_code(response),
                     f"Failed to get dashboard: {error_msg}",
                     suggestions=[
                         "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
@@ -1983,7 +1985,7 @@ class DashboardConfigTools:
         include_config: bool,
         list_only: bool,
         include_screenshot: bool,
-        screenshot_options: _DashboardScreenshotOptions,
+        screenshot_options: DashboardScreenshotOptions,
     ) -> dict[str, Any]:
         """Search cards, badges and header cards in one dashboard or all of them.
 
@@ -2062,7 +2064,7 @@ class DashboardConfigTools:
             notes.append("list_only was ignored because search parameters were given.")
         if notes:
             search_result.setdefault("warnings", []).extend(notes)
-        _note_screenshot_ignored(
+        note_screenshot_ignored(
             search_result,
             include_screenshot=include_screenshot,
             options=screenshot_options,
@@ -2155,7 +2157,7 @@ class DashboardConfigTools:
         force_reload: bool,
         view_path: str | None,
         include_screenshot: bool,
-        screenshot_options: _DashboardScreenshotOptions,
+        screenshot_options: DashboardScreenshotOptions,
     ) -> dict[str, Any] | ToolResult:
         """Get mode: return the full Lovelace config for a single dashboard.
 
@@ -2212,20 +2214,18 @@ class DashboardConfigTools:
         # except block).
         resolved_url_path[0] = url_path
 
-        # Check if request failed (after potential retry). On this legacy read
-        # (no component, or force_reload) Core's message is the only signal
-        # that the dashboard has no config.
+        # A legacy read distinguishes the two causes of config_not_found.
         error_msg: str | None = None
         if isinstance(response, dict) and not response.get("success", True):
             error = response.get("error", {})
             error_msg = str(
                 error.get("message", error) if isinstance(error, dict) else error
             )
-        stored_config = error_msg not in NO_STORED_CONFIG_MESSAGES
+        stored_config = not (isinstance(response, dict) and no_stored_config(response))
         if error_msg is not None and stored_config:
             raise_tool_error(
                 create_error_response(
-                    read_failure_code(error_msg),
+                    read_failure_code(response),
                     error_msg,
                     suggestions=[
                         "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
@@ -2257,7 +2257,7 @@ class DashboardConfigTools:
         original_url_path: str | None,
         view_path: str | None,
         include_screenshot: bool,
-        screenshot_options: _DashboardScreenshotOptions,
+        screenshot_options: DashboardScreenshotOptions,
         stored_config: bool = True,
     ) -> dict[str, Any] | ToolResult:
         """Shape + return the get-mode response for an already-fetched config.
@@ -2334,7 +2334,7 @@ class DashboardConfigTools:
         if not stored_config:
             get_result["message"] = NO_STORED_CONFIG_NOTE
 
-        return await _maybe_attach_screenshot(
+        return await maybe_attach_screenshot(
             get_result,
             url_path,
             include_screenshot,
@@ -2580,7 +2580,7 @@ class DashboardConfigTools:
             if patch is not None
             else ("python_transform" if python_transform is not None else "set")
         )
-        screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
+        screenshot_options = DashboardScreenshotOptions(view_path=view_path)
         try:
             # Reject an invalid view_path BEFORE committing the write. On the
             # return_screenshot path a screenshot failure is demoted to a
@@ -2861,7 +2861,7 @@ class DashboardConfigTools:
         MandatoryBPS: bool,
         *,
         return_screenshot: bool,
-        screenshot_options: _DashboardScreenshotOptions,
+        screenshot_options: DashboardScreenshotOptions,
     ) -> dict[str, Any] | ToolResult:
         """Execute python_transform mode and return the tool response."""
         if config_hash is None:
@@ -2944,7 +2944,7 @@ class DashboardConfigTools:
         MandatoryBPS: bool,
         *,
         return_screenshot: bool,
-        screenshot_options: _DashboardScreenshotOptions,
+        screenshot_options: DashboardScreenshotOptions,
     ) -> dict[str, Any] | ToolResult:
         """Apply structured edits in Core, or use the existing legacy save path."""
         if config_hash is None:
@@ -3028,7 +3028,7 @@ class DashboardConfigTools:
         MandatoryBPS: bool,
         *,
         return_screenshot: bool,
-        screenshot_options: _DashboardScreenshotOptions,
+        screenshot_options: DashboardScreenshotOptions,
         python_transform: str | None = None,
     ) -> dict[str, Any] | ToolResult:
         """Preserve public edit fields, authoritative paths, BPS and screenshots."""
@@ -3054,7 +3054,7 @@ class DashboardConfigTools:
         if edit["post_write_verified"]:
             _attach_dashboard_render_paths(result, url_path, edit["config"])
         await _attach_dashboard_skill(result, MandatoryBPS, self._client)
-        return await _maybe_attach_screenshot(
+        return await maybe_attach_screenshot(
             result,
             url_path,
             return_screenshot,
@@ -3114,10 +3114,8 @@ class DashboardConfigTools:
             error_msg = create_result.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
-            hyphenated = url_path.replace("_", "-")
-            suggestions = None
-            if "needs to contain a hyphen" in str(error_msg) and hyphenated != url_path:
-                suggestions = [f"Try '{hyphenated}' instead"]
+            hyphenated = hyphenated_url_path(str(error_msg), url_path)
+            suggestions = [f"Try '{hyphenated}' instead"] if hyphenated else None
             raise_tool_error(
                 create_error_response(
                     ws_failure_code(create_result),
@@ -3245,7 +3243,7 @@ class DashboardConfigTools:
         )
         return dashboard_exists, dashboard_id, metadata_updated, warning
 
-    async def _check_dashboard_replace_hash(
+    async def check_dashboard_replace_hash(
         self,
         url_path: str,
         config_hash: str | None,
@@ -3492,7 +3490,7 @@ class DashboardConfigTools:
 
         warning: str | None = None
         if dashboard_exists:
-            warning = await self._check_dashboard_replace_hash(
+            warning = await self.check_dashboard_replace_hash(
                 url_path, config_hash, config_dict
             )
 
@@ -3508,7 +3506,7 @@ class DashboardConfigTools:
     ) -> dict[str, Any] | None:
         """Reuse native verification without another dashboard fetch."""
         if native_result is None:
-            return await _attach_dashboard_render_paths_after_write(
+            return await attach_dashboard_render_paths_after_write(
                 self._client, result, url_path, render_config
             )
         for key in ("config_hash", "write_committed", "post_write_verified"):
@@ -3532,7 +3530,7 @@ class DashboardConfigTools:
         pre_resolved_from: str | None,
         pre_fetched_dashboards: list[dict[str, Any]] | None,
         return_screenshot: bool,
-        screenshot_options: _DashboardScreenshotOptions,
+        screenshot_options: DashboardScreenshotOptions,
         MandatoryBPS: bool,
     ) -> dict[str, Any] | ToolResult:
         """Execute config-replacement mode (create-or-update) and return the tool response."""
@@ -3626,7 +3624,7 @@ class DashboardConfigTools:
             result_dict, url_path, render_config, native_result
         )
         await _attach_dashboard_skill(result_dict, MandatoryBPS, self._client)
-        return await _maybe_attach_screenshot(
+        return await maybe_attach_screenshot(
             result_dict,
             url_path,
             return_screenshot,

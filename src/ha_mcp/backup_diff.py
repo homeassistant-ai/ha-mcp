@@ -7,11 +7,8 @@ Split out of ``backup_manager``, which imports what it uses from here.
 from __future__ import annotations
 
 import difflib
-import logging
 from io import StringIO
-from typing import Any, Literal, TypedDict
-
-logger = logging.getLogger(__name__)
+from typing import Any, Literal, NotRequired, TypedDict
 
 # Discriminator values for the snapshot ``kind`` marker and the
 # DiffResponse/DiffResponseText union. Typed as ``Literal`` so they satisfy
@@ -30,7 +27,7 @@ _MAX_DIFF_LINES = 400
 
 class DiffCounts(TypedDict):
     """Per-op-class tallies for a diff patch. ``total`` is the op count;
-    ``add + remove + replace`` equals it today (see ``_summarize_patch_counts``)."""
+    ``add + remove + replace`` equals it: those are the only ops the diff emits."""
 
     add: int
     remove: int
@@ -41,7 +38,8 @@ class DiffCounts(TypedDict):
 class DiffResponse(TypedDict):
     """Return shape of ``BackupManager.diff_snapshot``. Both the
     entity-present and ``entity_missing`` branches build this through
-    ``_build_diff_response`` so the key set can't drift between them."""
+    ``_build_diff_response`` so the key set can't drift between them;
+    ``warnings`` alone is left out when there is none."""
 
     kind: Literal["dict"]
     backup_name: str
@@ -53,6 +51,7 @@ class DiffResponse(TypedDict):
     counts: DiffCounts
     unchanged: bool
     truncated: bool
+    warnings: NotRequired[list[str]]  # what the comparison could not settle
 
 
 def _build_diff_response(
@@ -65,6 +64,7 @@ def _build_diff_response(
     patch: list[dict[str, Any]],
     counts: DiffCounts,
     truncated: bool,
+    warnings: list[str] | None = None,
 ) -> DiffResponse:
     """Assemble the diff return payload for either branch.
 
@@ -73,7 +73,7 @@ def _build_diff_response(
     ``entity_missing`` it is forced ``False``: the empty patch is an
     artefact of the absent target, not evidence of a match.
     """
-    return {
+    response: DiffResponse = {
         "kind": _DICT_KIND,
         "backup_name": name,
         "domain": domain,
@@ -85,6 +85,9 @@ def _build_diff_response(
         "unchanged": not entity_missing and counts["total"] == 0,
         "truncated": truncated,
     }
+    if warnings:
+        response["warnings"] = warnings
+    return response
 
 
 class DiffResponseText(TypedDict):
@@ -181,6 +184,13 @@ def _compute_json_patch(
     if truncated:
         del out[max_ops:]
     return truncated
+
+
+def json_equal(expected: Any, current: Any) -> bool:
+    """Equal as the restore preview compares them: type-sensitive (False is not 0)."""
+    patch: list[dict[str, Any]] = []
+    _compute_json_patch(expected, current, 1, patch)
+    return not patch
 
 
 def _diff_node(
@@ -285,23 +295,10 @@ def _pointer_segment(key: str) -> str:
 
 
 def _summarize_patch_counts(patch: list[dict[str, Any]]) -> DiffCounts:
-    """Tally op classes. ``add + remove + replace == total`` holds today
-    because ``_diff_node`` only emits those three ops; if a future change
-    starts emitting ``move``/``copy``/``test``, the class counts would sum
-    to less than ``total``. Warn on any unrecognized op so that drift is
-    visible instead of silently undercounting.
-    """
+    """Tally op classes; ``_diff_node`` emits only add, remove and replace."""
     classes: dict[str, int] = {"add": 0, "remove": 0, "replace": 0}
     for op in patch:
-        op_type = op.get("op")
-        if isinstance(op_type, str) and op_type in classes:
-            classes[op_type] += 1
-        else:
-            logger.warning(
-                "diff: unrecognized JSON-Patch op %r — not reflected in "
-                "per-class counts (add/remove/replace)",
-                op_type,
-            )
+        classes[op["op"]] += 1
     return {
         "add": classes["add"],
         "remove": classes["remove"],

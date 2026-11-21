@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "Pad voor opgeslagen tools",
     "advanced.code_mode_saved_tools_path.help": "JSON-bestand dat wordt gebruikt om aangepaste tools te behouden na herstarts.",
     "advanced.extra_yaml_write_keys.label": "Extra YAML-schrijfsleutels",
-    "advanced.extra_yaml_write_keys.help": "Extra sleutels op topniveau die ha_config_set_yaml kan schrijven naast de ingebouwde, voor YAML-first integraties op deze installatie (bijv. alert2). Voer één sleutel per regel in of scheid sleutels met komma's. Sleutels die de eigen vertrouwensgrens van Home Assistant herdefiniëren kunnen nooit worden toegevoegd en worden genegeerd. Vereist custom component 1.2.4 of nieuwere.",
+    "advanced.extra_yaml_write_keys.help": "Extra sleutels op het topniveau die ha_config_set_yaml kan wegschrijven naast de ingebouwde, voor YAML-gerichte integraties op deze installatie (bijv. alert2). Voer één sleutel per regel in of scheid sleutels met komma's. Sleutels die de eigen vertrouwensgrens van Home Assistant herdefiniëren, kunnen nooit worden toegevoegd en worden genegeerd.",
     "advanced.redact_app_option_keys.label": "Extra app-optiesleutels om te verbergen",
     "advanced.redact_app_option_keys.help": "Namen van app-opties (add-on) om te verbergen zoals wachtwoordvelden, voor apps waarvan het schema een geheim opslaat als platte tekst (bijvoorbeeld backup_password). Scheid namen met komma's of nieuwe regels. Een naam is van toepassing op elke app; schrijf app_slug:name om het te beperken tot één app. Het benoemen van een optiegroep dekt elke optie daarin. Alleen gebruikt wanneer Verberg geheimen aan staat. Standaard leeg.",
     "advanced.sidecar_pin_port.label": "Instellingen UI sidecar-poort",
@@ -727,11 +727,7 @@
     },
     "ha_get_entity": {
       "title": "Haal Entiteit op",
-      "description": "Haal entiteitsregisterinformatie op voor één of meer entiteiten."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Haal Entiteitsblootstelling op",
-      "description": "Haal entiteitsblootstellingsinstellingen op - lijst alle of haal instellingen op voor een specifieke entiteit."
+      "description": "Haal entiteitsregistervermeldingen op, of zonder een entiteit de registerinstellingen en blootgestelde entiteiten."
     },
     "ha_get_hacs_info": {
       "title": "Haal HACS Info op",
@@ -762,8 +758,8 @@
       "description": "Haal de huidige status, toestand en attributen op van één of meer entiteiten (lampen, schakelaars, sensoren, klimaat, covers, sloten, fa"
     },
     "ha_get_system_health": {
-      "title": "Haal Systeemgezondheid op (incl. ZHA/Z-Wave/integratiediagnostiek)",
-      "description": "Haal Home Assistant-systeemgezondheid op, inclusief Zigbee (ZHA), Z-Wave JS en diagnostische dumps per integratie."
+      "title": "Systeemstatus ophalen (incl. ZHA/Z-Wave/Thread/Matter-netwerken)",
+      "description": "Haal de systeemstatus van Home Assistant op, inclusief Zigbee (ZHA)-, Z-Wave JS-, Thread- en Matter-netwerken."
     },
     "ha_get_todo": {
       "title": "Haal Taken op",
@@ -779,7 +775,7 @@
     },
     "ha_list_floors_areas": {
       "title": "Lijst Verdiepingen en Gebieden",
-      "description": "Lijst verdiepingen gesorteerd op niveau oplopend, elk met hun toegewezen geneste gebieden, plus gebieden zonder verdieping."
+      "description": "Lijst verdiepingen in de volgorde waarin Home Assistant ze bijhoudt, elk met hun toegewezen ruimtes genest, plus ruimtes zonder verdieping."
     },
     "ha_list_services": {
       "title": "Lijst Beschikbare Services",
@@ -874,8 +870,8 @@
       "description": "Zoek naar entiteiten (lampen, sensoren, schakelaars, klimaat, etc.) op naam, domein of gebied — EN binnen automatisering/script/s"
     },
     "ha_set_area_or_floor": {
-      "title": "Gebied of Verdieping Aanmaken of Bijwerken",
-      "description": "Maak een Home Assistant gebied of verdieping aan of werk deze bij."
+      "title": "Ruimtes of verdiepingen aanmaken, bijwerken of herordenen",
+      "description": "Maak, werk of herorden Home Assistant-ruimtes of -verdiepingen bij."
     },
     "ha_set_device": {
       "title": "Apparaat Instellen",
@@ -883,7 +879,7 @@
     },
     "ha_set_entity": {
       "title": "Entiteit Instellen",
-      "description": "Werk entiteitseigenschappen bij in het entiteitregister."
+      "description": "Werk entiteitsregistervermeldingen bij, of zonder entity_id de registerbrede instellingen."
     },
     "ha_set_integration": {
       "title": "Integratie Instellen",

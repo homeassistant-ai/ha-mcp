@@ -40,10 +40,7 @@ from .tool_hints import write_hints
 from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import _assert_mcp_tools_available, call_mcp_tools_service
 from .util_helpers import unwrap_service_response
-from .yaml_extra_keys import (
-    assert_extra_yaml_keys_supported,
-    effective_extra_yaml_write_keys,
-)
+from .yaml_extra_keys import effective_extra_yaml_write_keys
 
 # YAML packages frequently include template sensors, command_line entities,
 # and mqtt templates — exactly where template misuse causes the most
@@ -406,13 +403,13 @@ class YamlConfigTools:
         off by default); writes of those keys to ``configuration.yaml`` are
         rejected; use the storage-mode tools.
 
-        Check ``post_action`` in the response: most keys need a full HA
-        restart. For ``themes/*.yaml`` this tool *performs* the reload itself
-        (``frontend.reload_themes``), so ``post_action`` is ``reload_performed``
-        (or ``reload_available`` plus ``reload_error`` if that reload failed).
-        For template, mqtt, group, automation, script, and scene it only
-        *advertises* the reload service (``post_action: reload_available`` with
-        a ``reload_service`` to call yourself); the edit is on disk but not yet
+        Check ``post_action`` in the response. For ``themes/*.yaml`` this tool
+        *performs* the reload itself (``frontend.reload_themes``), so
+        ``post_action`` is ``reload_performed`` (or ``reload_available`` plus
+        ``reload_error`` if that reload failed). For any other key it is
+        ``reload_available`` with the ``reload_service`` to call yourself when
+        Home Assistant has ``<key>.reload`` (the key's integration is loaded),
+        and ``restart_required`` otherwise; the edit is on disk but not yet
         live. Preserves YAML comments and HA tags (``!include``,
         ``!secret``) on round-trip; ``replace`` swaps the subtree as-is.
 
@@ -443,7 +440,6 @@ class YamlConfigTools:
             await _assert_mcp_tools_available(self._client)
 
             extra_keys = await effective_extra_yaml_write_keys(self._client, settings)
-            await assert_extra_yaml_keys_supported(self._client, extra_keys)
 
             # Build service data
             service_data: dict[str, Any] = {
@@ -453,9 +449,6 @@ class YamlConfigTools:
                 "disabled_packages_keys": disabled_keys,
                 "require_confirm": settings.enable_yaml_edit_confirm,
             }
-            # Only sent when the operator actually configured extra keys, so a
-            # component that predates the field keeps working unchanged for
-            # everyone else (its schema is strict and would reject the call).
             if extra_keys:
                 service_data["extra_allowed_keys"] = extra_keys
             if content is not None:

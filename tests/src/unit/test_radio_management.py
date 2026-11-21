@@ -1,635 +1,483 @@
-"""Unit tests for radio management: the ha_manage_radio dispatcher and the
-Matter diagnostics enrichment added to ha_get_device.
+"""``ha_manage_radio``'s dispatcher and its Matter actions, and the Matter
+diagnostics ``ha_get_device`` adds, on real Home Assistant Core.
 
-The per-radio handler modules (zwave/zigbee/thread) are exercised by their own
-tests once implemented; this module covers the dispatcher contract (action
-validation, required-param + destructive-confirm gates, entity resolution) and
-the Matter handler + enricher end to end against a mocked WebSocket client.
+Core's own ``matter`` integration answers every ``matter/*`` command, on the
+Matter server client Core's own tests replace (``_matter_radio_core.py``): a
+test reads back what the server was asked and gives the server's answers.
 """
 
+from __future__ import annotations
+
 import json
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import Iterator
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from matter_server.common.models import (
+    CommissioningParameters,
+    MatterSoftwareVersion,
+    UpdateSource,
+)
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_radio import HANDLERS, register_radio_tools
-from ha_mcp.tools.tools_registry import register_registry_tools
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.tools_radio import HANDLERS, RadioTools
+from ha_mcp.tools.tools_registry import RegistryTools
+
+from ._client_spies import sent_messages
+from ._command_faults import dropped_on, pooled_socket
+from ._matter_radio_core import (
+    HOME_ASSISTANT_FABRIC,
+    NODE_ID,
+    OTHER_CONTROLLER_FABRIC,
+    matter_server_client,
+    set_up_matter,
+)
+from ._tool_errors import error_body, error_of
+
+OFFERED_UPDATE = MatterSoftwareVersion(
+    vid=65521,
+    pid=32768,
+    software_version=2,
+    software_version_string="2.0",
+    firmware_information=None,
+    min_applicable_software_version=0,
+    max_applicable_software_version=1,
+    release_notes_url=None,
+    update_source=UpdateSource.MAIN_NET_DCL,
+)
 
 
-def _capture(register, mock_client):
-    """Register tools onto a mock MCP and return {tool_name: bound_method}."""
-    mock_mcp = MagicMock()
-    captured: dict = {}
-
-    def capture_add_tool(method):
-        fmcp = getattr(method, "__fastmcp__", None)
-        name = (fmcp.name if fmcp else None) or method.__name__
-        captured[name] = method
-
-    mock_mcp.add_tool = capture_add_tool
-    register(mock_mcp, mock_client)
-    return captured
+@pytest.fixture
+def software_update() -> MatterSoftwareVersion | None:
+    """The update the server offers the node; a test overrides it."""
+    return None
 
 
-def _client(routes: dict, *, record: list | None = None):
-    """Mock client whose send_websocket_message routes by message ``type``.
-
-    ``routes`` maps a ``type`` string to either a response dict or a callable
-    taking the message and returning/raising. ``record`` (if given) collects
-    every outgoing message for call assertions.
-    """
-    mock_client = MagicMock()
-
-    async def mock_ws(msg, **kwargs):
-        msg_type = msg.get("type", "") if isinstance(msg, dict) else ""
-        if record is not None:
-            record.append(msg)
-        handler = routes.get(msg_type)
-        if callable(handler):
-            return handler(msg)
-        if handler is not None:
-            return handler
-        return {"success": False, "error": f"Unknown type: {msg_type}"}
-
-    mock_client.send_websocket_message = AsyncMock(side_effect=mock_ws)
-    return mock_client
+@pytest.fixture
+def matter_server(software_update: MatterSoftwareVersion | None) -> Iterator[MagicMock]:
+    with matter_server_client() as client:
+        client.check_node_update.return_value = software_update
+        yield client
 
 
-def _matter_device(device_id: str = "m1"):
-    return {
-        "id": device_id,
-        "name": "Matter Bulb",
-        "name_by_user": None,
-        "manufacturer": "Acme",
-        "model": "Bulb",
-        "sw_version": "1.0",
-        "hw_version": None,
-        "serial_number": None,
-        "area_id": None,
-        "via_device_id": None,
-        "disabled_by": None,
-        "labels": [],
-        "config_entries": ["e1"],
-        "config_entry_id": "e1",
-        "connections": [],
-        "identifiers": [["matter", "deadbeef-1"]],
+@pytest.fixture
+async def config(hass: HomeAssistant) -> None:
+    """Core's ``config`` commands: config entries and the registries."""
+    assert await async_setup_component(hass, "config", {})
+
+
+@pytest.fixture
+async def device_id(hass: HomeAssistant, config: None, matter_server: MagicMock) -> str:
+    """The device Core's ``matter`` integration registers for the node."""
+    return await set_up_matter(hass)
+
+
+@pytest.fixture
+def radio(core_client: HomeAssistantClient) -> RadioTools:
+    return RadioTools(core_client)
+
+
+async def test_matter_device_gets_its_node_diagnostics(
+    core_client: HomeAssistantClient, device_id: str
+) -> None:
+    """``ha_get_device`` adds the node's diagnostics, its IP addresses under
+    their correct name although the server spells the field ``ip_adresses``."""
+    result = await RegistryTools(core_client).ha_get_device(device_id=device_id)
+
+    device = result["device"]
+    assert device["integration_type"] == "matter"
+    diagnostics = device["node_diagnostics"]
+    assert (diagnostics["network_type"], diagnostics["available"]) == ("thread", True)
+    assert diagnostics["active_fabric_index"] == HOME_ASSISTANT_FABRIC
+    assert diagnostics["ip_addresses"] == ["fe80::1"]
+
+
+async def test_matter_device_whose_diagnostics_get_no_answer_still_comes_back(
+    hass: HomeAssistant, core_client: HomeAssistantClient, device_id: str
+) -> None:
+    """The connection drops as the diagnostics are read: the device comes back
+    without them, and a warning names the skipped read."""
+    socket = await pooled_socket(core_client)
+
+    with dropped_on(hass, "matter/node_diagnostics", socket):
+        result = await RegistryTools(core_client).ha_get_device(device_id=device_id)
+
+    assert result["success"] is True
+    assert result["device"]["id"] == device_id
+    assert "node_diagnostics" not in result["device"]
+    assert [warning.split(":")[0] for warning in result["warnings"]] == [
+        "Matter node diagnostics unavailable"
+    ]
+
+
+async def test_diagnostics_report_the_nodes_ip_addresses_under_their_name(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="matter", action="diagnostics", device_id=device_id
+    )
+
+    assert out["diagnostics"]["network_type"] == "thread"
+    assert out["diagnostics"]["ip_addresses"] == ["fe80::1"]
+    assert "ip_adresses" not in out["diagnostics"]
+    matter_server.node_diagnostics.assert_awaited_once_with(node_id=NODE_ID)
+
+
+async def test_ping_returns_the_servers_reachability(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    matter_server.ping_node.return_value = {"fe80::1": True}
+
+    out = await radio.ha_manage_radio(
+        radio="matter", action="ping", device_id=device_id
+    )
+
+    assert out["reachability"] == {"fe80::1": True}
+    matter_server.ping_node.assert_awaited_once_with(node_id=NODE_ID)
+
+
+async def test_unknown_action_lists_the_supported_ones(radio: RadioTools) -> None:
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(radio="matter", action="nope", device_id="d1")
+
+    assert error_body(exc)["supported"] == sorted(HANDLERS["matter"].SUPPORTED)
+
+
+async def test_missing_required_params_are_all_named(radio: RadioTools) -> None:
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(radio="matter", action="set_wifi_credentials")
+
+    assert error_body(exc)["missing"] == ["network_name", "password"]
+
+
+@pytest.mark.parametrize(
+    ("radio_name", "action", "params"),
+    [
+        ("matter", "remove_fabric", None),
+        ("zigbee", "remove_device", None),
+        ("zigbee", "network_restore", {"backup": {"version": 1}}),
+        ("zigbee", "change_channel", {"new_channel": 25}),
+        ("zwave", "remove_device", None),
+        ("zwave", "hard_reset", None),
+    ],
+)
+async def test_a_destructive_action_without_confirm_sends_nothing(
+    core_client: HomeAssistantClient,
+    radio: RadioTools,
+    radio_name: Any,
+    action: str,
+    params: dict[str, Any] | None,
+) -> None:
+    """Each action the ``confirm`` parameter names as destructive is refused
+    without ``confirm=True``, before anything reaches Home Assistant."""
+    with sent_messages(core_client) as spy, pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio=radio_name, action=action, device_id="d1", params=params
+        )
+
+    assert "confirm=True" in error_of(exc)["message"]
+    assert spy.await_count == 0
+
+
+async def test_remove_fabric_refuses_home_assistants_own_fabric(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    """Without a fabric index, or with Home Assistant's own, the removal is
+    refused and points to ``ha_remove_device``; the node keeps every fabric."""
+    for params in (None, {"fabric_index": HOME_ASSISTANT_FABRIC}):
+        with pytest.raises(ToolError) as exc:
+            await radio.ha_manage_radio(
+                radio="matter",
+                action="remove_fabric",
+                device_id=device_id,
+                params=params,
+                confirm=True,
+            )
+        assert "ha_remove_device" in error_of(exc)["message"]
+
+    matter_server.remove_matter_fabric.assert_not_awaited()
+
+
+async def test_remove_fabric_removes_another_controllers_fabric(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="matter",
+        action="remove_fabric",
+        device_id=device_id,
+        params={"fabric_index": OTHER_CONTROLLER_FABRIC},
+        confirm=True,
+    )
+
+    assert out["fabric_index"] == OTHER_CONTROLLER_FABRIC
+    matter_server.remove_matter_fabric.assert_awaited_once_with(
+        node_id=NODE_ID, fabric_index=OTHER_CONTROLLER_FABRIC
+    )
+
+
+async def test_share_out_returns_the_pairing_codes(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    matter_server.open_commissioning_window.return_value = CommissioningParameters(
+        setup_pin_code=20202021,
+        setup_manual_code="3497-011-2332",
+        setup_qr_code="MT:Y3",
+    )
+
+    out = await radio.ha_manage_radio(
+        radio="matter", action="share_out", device_id=device_id
+    )
+
+    codes = out["commissioning"]
+    assert (codes["setup_manual_code"], codes["setup_qr_code"]) == (
+        "3497-011-2332",
+        "MT:Y3",
+    )
+    matter_server.open_commissioning_window.assert_awaited_once_with(node_id=NODE_ID)
+
+
+async def test_an_entity_id_targets_its_device(
+    core_client: HomeAssistantClient,
+    radio: RadioTools,
+    matter_server: MagicMock,
+    entity_registry: er.EntityRegistry,
+    device_id: str,
+) -> None:
+    """An entity_id is resolved to its device with Core's single-entity read,
+    not a dump of the whole registry, and the node is read."""
+    entity_id = er.async_entries_for_device(entity_registry, device_id)[0].entity_id
+
+    with sent_messages(core_client) as spy:
+        out = await radio.ha_manage_radio(
+            radio="matter", action="diagnostics", entity_id=entity_id
+        )
+
+    assert out["diagnostics"]["node_id"] == NODE_ID
+    sent = [call.args[0] for call in spy.call_args_list]
+    assert {"type": "config/entity_registry/get", "entity_id": entity_id} in sent
+    assert {"type": "matter/node_diagnostics", "device_id": device_id} in sent
+    assert not [msg for msg in sent if msg["type"] == "config/entity_registry/list"]
+
+
+@pytest.mark.parametrize("software_update", [OFFERED_UPDATE])
+async def test_firmware_update_installs_the_offered_version(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="matter", action="firmware_update", device_id=device_id
+    )
+
+    assert out["long_running"] is True
+    assert out["entity_id"].startswith("update.")
+    matter_server.update_node.assert_awaited_once_with(
+        node_id=NODE_ID, software_version=OFFERED_UPDATE.software_version
+    )
+
+
+async def test_commission_commissions_over_bluetooth_by_default(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    """A commission with only a code asks the server for a full commissioning,
+    not the network-only one Core would otherwise default to."""
+    out = await radio.ha_manage_radio(
+        radio="matter", action="commission", params={"code": "MT:Y3.13OTB00KA0648G00"}
+    )
+
+    assert (out["action"], out["long_running"]) == ("commission", True)
+    matter_server.commission_with_code.assert_awaited_once_with(
+        "MT:Y3.13OTB00KA0648G00", network_only=False
+    )
+
+
+async def test_commission_on_network_sends_the_pin(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="matter", action="commission_on_network", params={"pin": 20202021}
+    )
+
+    assert (out["action"], out["long_running"]) == ("commission_on_network", True)
+    matter_server.commission_on_network.assert_awaited_once_with(20202021, ip_addr=None)
+
+
+async def test_interview_reinterviews_the_node(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(
+        radio="matter", action="interview", device_id=device_id
+    )
+
+    assert (out["action"], out["long_running"]) == ("interview", True)
+    matter_server.interview_node.assert_awaited_once_with(node_id=NODE_ID)
+
+
+async def test_set_thread_hands_the_dataset_to_the_server(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    await radio.ha_manage_radio(
+        radio="matter",
+        action="set_thread",
+        params={"thread_operation_dataset": "0e080000000000010000"},
+    )
+
+    matter_server.set_thread_operational_dataset.assert_awaited_once_with(
+        "0e080000000000010000"
+    )
+
+
+async def test_set_wifi_credentials_hands_both_to_the_server(
+    radio: RadioTools, matter_server: MagicMock, device_id: str
+) -> None:
+    await radio.ha_manage_radio(
+        radio="matter",
+        action="set_wifi_credentials",
+        params={"network_name": "Home", "password": "secret"},
+    )
+
+    matter_server.set_wifi_credentials.assert_awaited_once_with(
+        ssid="Home", credentials="secret"
+    )
+
+
+async def test_network_status_names_the_matter_entry(
+    hass: HomeAssistant, radio: RadioTools, device_id: str
+) -> None:
+    out = await radio.ha_manage_radio(radio="matter", action="network_status")
+
+    [entry] = hass.config_entries.async_entries("matter")
+    assert out["config_entry_id"] == entry.entry_id
+    assert "diagnostics" in out["note"]
+
+
+async def test_network_status_without_matter_reports_it_unavailable(
+    radio: RadioTools, config: None
+) -> None:
+    out = await radio.ha_manage_radio(radio="matter", action="network_status")
+
+    assert out["available"] is False
+    assert out["warnings"]
+
+
+async def test_a_refused_admin_command_asks_for_an_administrator(
+    read_only_client: HomeAssistantClient, device_id: str
+) -> None:
+    with pytest.raises(ToolError) as exc:
+        await RadioTools(read_only_client).ha_manage_radio(
+            radio="matter", action="share_out", device_id=device_id
+        )
+
+    body = error_body(exc)
+    assert body["error"]["code"] == "AUTH_INSUFFICIENT_PERMISSIONS"
+    assert body["ha_error_code"] == "unauthorized"
+    assert body["ws_type"] == "matter/open_commissioning_window"
+    assert "administrator" in body["error"]["suggestion"]
+
+
+async def test_a_command_of_an_integration_not_set_up_says_it_is_unavailable(
+    radio: RadioTools, config: None
+) -> None:
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="matter", action="diagnostics", device_id="d1"
+        )
+
+    body = error_body(exc)
+    assert body["ha_error_code"] == "unknown_command"
+    assert body["error"]["message"].startswith(
+        "The matter integration or command is unavailable"
+    )
+    assert "supports" in body["error"]["suggestion"]
+
+
+async def test_another_refusal_carries_cores_reason(
+    radio: RadioTools, device_id: str
+) -> None:
+    """A refusal without a known next step fails with Core's own reason."""
+    with pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="matter", action="diagnostics", device_id="no-such-device"
+        )
+
+    body = error_body(exc)
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert body["ha_error_code"] == "node_not_found"
+    assert "no-such-device" in body["error"]["message"]
+
+
+async def test_every_supported_action_reaches_its_handler(
+    radio: RadioTools, config: None
+) -> None:
+    """Every action a radio lists reaches a branch of its handler, never the
+    "unhandled" fall-through, given every parameter any action requires. Core
+    has none of the radios set up, so most answers are its refusals."""
+    params = {
+        name: 1
+        for handler in HANDLERS.values()
+        for spec in handler.SUPPORTED.values()
+        for name in spec.required
+    }
+    for radio_name, handler in HANDLERS.items():
+        for action in handler.SUPPORTED:
+            try:
+                await radio.ha_manage_radio(
+                    radio=radio_name,
+                    action=action,
+                    device_id="d1",
+                    params=dict(params),
+                    confirm=True,
+                )
+            except ToolError as exc:
+                # A handler that raised something of its own is a bug, not a refusal.
+                code = json.loads(str(exc))["error"]["code"]
+                assert code != "INTERNAL_ERROR", f"{radio_name}/{action}: {exc}"
+                assert "unhandled" not in str(exc), f"{radio_name}/{action}"
+                assert "requires:" not in str(exc), f"{radio_name}/{action}"
+
+
+async def test_an_entity_core_does_not_know_is_not_found(
+    core_client: HomeAssistantClient, radio: RadioTools, config: None
+) -> None:
+    with sent_messages(core_client) as spy, pytest.raises(ToolError) as exc:
+        await radio.ha_manage_radio(
+            radio="matter", action="diagnostics", entity_id="light.ghost"
+        )
+
+    error = error_of(exc)
+    assert error["code"] == "ENTITY_NOT_FOUND"
+    assert "light.ghost" in error["message"]
+    assert spy.call_args_list[0].args[0] == {
+        "type": "config/entity_registry/get",
+        "entity_id": "light.ghost",
     }
 
 
-_MATTER_ENTRIES = {"success": True, "result": [{"entry_id": "e1", "domain": "matter"}]}
-_NO_LINKED_DEVICES = {"success": True, "result": {"linked_devices": []}}
-
-_DIAG = {
-    "node_id": 1,
-    "network_type": "THREAD",
-    "node_type": "END_DEVICE",
-    "network_name": "my-thread",
-    # Upstream NodeDiagnostics misspells this field (single 'd'); the mock must
-    # match reality so the enricher's corrected lookup is actually exercised.
-    "ip_adresses": ["fe80::1"],
-    "mac_address": "aa:bb",
-    "available": True,
-    "active_fabrics": [{"fabric_index": 2, "fabric_id": 99}],
-    "active_fabric_index": 2,
-}
-
-
-# --------------------------------------------------------------------------- #
-# Matter enrichment in ha_get_device
-# --------------------------------------------------------------------------- #
-
-
-class TestMatterEnrichment:
-    @pytest.mark.asyncio
-    async def test_matter_device_gets_node_diagnostics(self):
-        device = _matter_device()
-        client = _client(
-            {
-                "config_entries/get": _MATTER_ENTRIES,
-                "config/device_registry/list": {"success": True, "result": [device]},
-                "config/entity_registry/list": {"success": True, "result": []},
-                "config/device_registry/list_linked_devices": _NO_LINKED_DEVICES,
-                "matter/node_diagnostics": {"success": True, "result": _DIAG},
-            }
-        )
-        captured = _capture(register_registry_tools, client)
-        result = await captured["ha_get_device"](device_id="m1")
-
-        dev = result["device"]
-        assert dev["integration_type"] == "matter"
-        assert dev["node_diagnostics"]["network_type"] == "THREAD"
-        assert dev["node_diagnostics"]["available"] is True
-        assert dev["node_diagnostics"]["active_fabric_index"] == 2
-        # Regression: IPs come through despite the upstream 'ip_adresses' typo.
-        assert dev["node_diagnostics"]["ip_addresses"] == ["fe80::1"]
-
-    @pytest.mark.asyncio
-    async def test_matter_enrichment_oserror_still_returns_device(self):
-        device = _matter_device()
-
-        def boom(_msg):
-            raise OSError("Network unreachable")
-
-        client = _client(
-            {
-                "config_entries/get": _MATTER_ENTRIES,
-                "config/device_registry/list": {"success": True, "result": [device]},
-                "config/entity_registry/list": {"success": True, "result": []},
-                "config/device_registry/list_linked_devices": _NO_LINKED_DEVICES,
-                "matter/node_diagnostics": boom,
-            }
-        )
-        captured = _capture(register_registry_tools, client)
-        result = await captured["ha_get_device"](device_id="m1")
-
-        assert result["success"] is True
-        assert "node_diagnostics" not in result["device"]
-
-
-# --------------------------------------------------------------------------- #
-# ha_manage_radio dispatcher + Matter handler
-# --------------------------------------------------------------------------- #
-
-
-class TestManageRadioDispatcher:
-    @pytest.mark.asyncio
-    async def test_matter_diagnostics(self):
-        client = _client(
-            {"matter/node_diagnostics": {"success": True, "result": _DIAG}}
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(radio="matter", action="diagnostics", device_id="m1")
-        assert out["success"] is True
-        assert out["radio"] == "matter"
-        assert out["diagnostics"]["network_type"] == "THREAD"
-        # Normalized from the upstream "ip_adresses" typo (matches ha_get_device).
-        assert out["diagnostics"]["ip_addresses"] == ["fe80::1"]
-        assert "ip_adresses" not in out["diagnostics"]
-
-    @pytest.mark.asyncio
-    async def test_matter_ping(self):
-        client = _client(
-            {"matter/ping_node": {"success": True, "result": {"fe80::1": True}}}
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(radio="matter", action="ping", device_id="m1")
-        assert out["reachability"] == {"fe80::1": True}
-
-    @pytest.mark.asyncio
-    async def test_unknown_action_lists_supported(self):
-        client = _client({})
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="nope", device_id="m1")
-        assert "diagnostics" in str(exc.value)  # supported list surfaced
-
-    @pytest.mark.asyncio
-    async def test_missing_required_param(self):
-        client = _client({})
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="commission")  # missing code
-        assert "code" in str(exc.value)
-
-    @pytest.mark.asyncio
-    async def test_destructive_requires_confirm(self):
-        client = _client({})
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="remove_fabric", device_id="m1")
-        assert "confirm" in str(exc.value).lower()
-
-    @pytest.mark.asyncio
-    async def test_remove_fabric_own_or_missing_index_errors(self):
-        # _DIAG.active_fabric_index == 2; removing HA's own fabric (or omitting
-        # fabric_index) must be refused with guidance toward ha_remove_device.
-        client = _client(
-            {"matter/node_diagnostics": {"success": True, "result": _DIAG}}
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(
-                radio="matter", action="remove_fabric", device_id="m1", confirm=True
-            )
-        assert "ha_remove_device" in str(exc.value)
-
-    @pytest.mark.asyncio
-    async def test_remove_fabric_other_index_removed(self):
-        record: list = []
-        client = _client(
-            {
-                "matter/node_diagnostics": {"success": True, "result": _DIAG},
-                "matter/remove_matter_fabric": {"success": True, "result": {}},
-            },
-            record=record,
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(
-            radio="matter",
-            action="remove_fabric",
-            device_id="m1",
-            params={"fabric_index": 1},  # a DIFFERENT controller's fabric
-            confirm=True,
-        )
-        assert out["fabric_index"] == 1
-        removed = [m for m in record if m["type"] == "matter/remove_matter_fabric"]
-        assert removed and removed[0]["fabric_index"] == 1
-
-    @pytest.mark.asyncio
-    async def test_share_out_returns_codes(self):
-        codes = {
-            "setup_pin_code": 1234,
-            "setup_manual_code": "111-22",
-            "setup_qr_code": "MT:ABC",
-        }
-        client = _client(
-            {"matter/open_commissioning_window": {"success": True, "result": codes}}
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(radio="matter", action="share_out", device_id="m1")
-        assert out["commissioning"]["setup_manual_code"] == "111-22"
-
-    @pytest.mark.asyncio
-    async def test_entity_id_resolves_to_device(self):
-        record: list = []
-        client = _client(
-            {
-                "config/entity_registry/get": {
-                    "success": True,
-                    "result": {"entity_id": "light.m", "device_id": "m1"},
-                },
-                "matter/node_diagnostics": {"success": True, "result": _DIAG},
-            },
-            record=record,
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(radio="matter", action="diagnostics", entity_id="light.m")
-        assert out["diagnostics"]["network_type"] == "THREAD"
-        # Resolution uses the targeted single-entity get, not a full-list pull.
-        reg = [m for m in record if m["type"] == "config/entity_registry/get"]
-        assert reg and reg[0]["entity_id"] == "light.m"
-        assert not any(m["type"] == "config/entity_registry/list" for m in record)
-        diag = [m for m in record if m["type"] == "matter/node_diagnostics"]
-        assert diag and diag[0]["device_id"] == "m1"
-
-    @pytest.mark.asyncio
-    async def test_firmware_update_installs_update_entity(self):
-        svc: list = []
-        client = _client(
-            {
-                "config/entity_registry/list": {
-                    "success": True,
-                    "result": [
-                        {
-                            "entity_id": "update.bulb_fw",
-                            "device_id": "m1",
-                            "platform": "matter",
-                        }
-                    ],
-                }
-            }
-        )
-
-        async def fake_call_service(domain, service, data=None, return_response=False):
-            svc.append((domain, service, data))
-            return {"success": True}
-
-        client.call_service = AsyncMock(side_effect=fake_call_service)
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(radio="matter", action="firmware_update", device_id="m1")
-
-        assert out["entity_id"] == "update.bulb_fw"
-        assert svc == [("update", "install", {"entity_id": "update.bulb_fw"})]
-
-    # ---- commission --------------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_commission_forwards_code_and_network_only(self):
-        record: list = []
-        client = _client(
-            {"matter/commission": {"success": True, "result": {"node_id": 5}}},
-            record=record,
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(
-            radio="matter", action="commission", params={"code": "MT:CODE"}
-        )
-        assert out["action"] == "commission"
-        assert out["long_running"] is True
-        assert out["result"] == {"node_id": 5}
-        sent = next(m for m in record if m["type"] == "matter/commission")
-        assert sent["code"] == "MT:CODE"
-        # network_only defaults to False — and a literal False is forwarded
-        # (ws_call only drops None fields).
-        assert sent["network_only"] is False
-
-    @pytest.mark.asyncio
-    async def test_commission_on_network_forwards_pin(self):
-        record: list = []
-        client = _client(
-            {"matter/commission_on_network": {"success": True, "result": {}}},
-            record=record,
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(
-            radio="matter",
-            action="commission_on_network",
-            params={"pin": "12345678"},
-        )
-        assert out["action"] == "commission_on_network"
-        assert out["long_running"] is True
-        sent = next(m for m in record if m["type"] == "matter/commission_on_network")
-        assert sent["pin"] == "12345678"
-        assert "ip_addr" not in sent  # None field dropped by ws_call
-
-    @pytest.mark.asyncio
-    async def test_commission_on_network_requires_pin(self):
-        radio = _capture(register_radio_tools, _client({}))["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="commission_on_network")
-        assert "pin" in str(exc.value)
-
-    # ---- interview ---------------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_interview_forwards_device_id(self):
-        record: list = []
-        client = _client(
-            {"matter/interview_node": {"success": True, "result": {}}}, record=record
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(radio="matter", action="interview", device_id="m1")
-        assert out["action"] == "interview"
-        assert out["long_running"] is True
-        sent = next(m for m in record if m["type"] == "matter/interview_node")
-        assert sent["device_id"] == "m1"
-
-    # ---- set_thread --------------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_set_thread_forwards_dataset(self):
-        record: list = []
-        client = _client(
-            {"matter/set_thread": {"success": True, "result": {}}}, record=record
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(
-            radio="matter",
-            action="set_thread",
-            params={"thread_operation_dataset": "0e080000"},
-        )
-        assert out["action"] == "set_thread"
-        sent = next(m for m in record if m["type"] == "matter/set_thread")
-        assert sent["thread_operation_dataset"] == "0e080000"
-
-    @pytest.mark.asyncio
-    async def test_set_thread_requires_dataset(self):
-        radio = _capture(register_radio_tools, _client({}))["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="set_thread")
-        assert "thread_operation_dataset" in str(exc.value)
-
-    # ---- set_wifi_credentials ----------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_set_wifi_credentials_forwards_both(self):
-        record: list = []
-        client = _client(
-            {"matter/set_wifi_credentials": {"success": True, "result": {}}},
-            record=record,
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(
-            radio="matter",
-            action="set_wifi_credentials",
-            params={"network_name": "Home", "password": "secret"},
-        )
-        assert out["action"] == "set_wifi_credentials"
-        sent = next(m for m in record if m["type"] == "matter/set_wifi_credentials")
-        assert sent["network_name"] == "Home"
-        assert sent["password"] == "secret"
-
-    @pytest.mark.asyncio
-    async def test_set_wifi_credentials_requires_name_and_password(self):
-        radio = _capture(register_radio_tools, _client({}))["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="set_wifi_credentials")
-        msg = str(exc.value)
-        assert "network_name" in msg
-        assert "password" in msg
-
-    # ---- network_status ----------------------------------------------------- #
-    @pytest.mark.asyncio
-    async def test_network_status_loaded_returns_note(self):
-        client = _client(
-            {
-                "config_entries/get": {
-                    "success": True,
-                    "result": [{"domain": "matter", "entry_id": "e1"}],
-                }
-            }
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(radio="matter", action="network_status")
-        assert out["success"] is True
-        assert out["config_entry_id"] == "e1"
-        assert "note" in out
-
-    @pytest.mark.asyncio
-    async def test_network_status_integration_not_found(self):
-        client = _client({"config_entries/get": {"success": True, "result": []}})
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        out = await radio(radio="matter", action="network_status")
-        assert out["available"] is False
-        assert out["warnings"]
-
-    # ---- firmware_update no entity ------------------------------------------ #
-    @pytest.mark.asyncio
-    async def test_firmware_update_no_update_entity(self):
-        client = _client(
-            {
-                "config/entity_registry/list": {
-                    "success": True,
-                    "result": [{"entity_id": "light.m1", "device_id": "m1"}],
-                }
-            }
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="firmware_update", device_id="m1")
-        assert "update entity" in str(exc.value).lower()
-
-
-# --------------------------------------------------------------------------- #
-# Dispatcher contract: ws_call failure surfacing, SUPPORTED<->handle drift,
-# and entity resolution.
-# --------------------------------------------------------------------------- #
-
-
-# Superset of every required-param name across all radio handlers, so require()
-# passes for every action and handle() is actually exercised (the drift check
-# relies on reaching the handler body, not the require gate). Extra keys are
-# ignored by each handler's args.get() lookups.
-_CONTRACT_PARAMS: dict = {
-    # matter
-    "code": "MT:CODE",
-    "pin": "12345678",
-    "thread_operation_dataset": "0e080000",
-    "network_name": "Net",
-    "password": "secret",
-    # zigbee
-    "group_name": "G",
-    "group_ids": [1],
-    "group_id": 1,
-    "members": [{"ieee": "aa:bb", "endpoint_id": 1}],
-    "source_ieee": "aa:bb",
-    "target_ieee": "cc:dd",
-    "endpoint_id": 1,
-    "cluster_id": 6,
-    "attribute": "on_off",
-    "value": 1,
-    "command": 0,
-    "command_type": "server",
-    "backup": {"backup": "payload"},
-    "new_channel": 20,
-    # thread
-    "dataset_id": "d1",
-    "channel": 20,
-    "source": "Google",
-    "tlv": "0e080000",
-    # zwave
-    "property": 5,
-}
-
-
-def _permissive_client():
-    """Client that succeeds for any WS type and any service call.
-
-    ``otbr/info`` returns a non-empty border-router map so the Thread per-OTBR
-    actions resolve an extended_address and reach their dedicated branches
-    instead of short-circuiting on integration_not_found.
-    """
-    mock_client = MagicMock()
-
-    async def mock_ws(msg, **kwargs):
-        msg_type = msg.get("type", "") if isinstance(msg, dict) else ""
-        if msg_type == "otbr/info":
-            return {"success": True, "result": {"otbr-1": {"channel": 15}}}
-        return {"success": True, "result": {}}
-
-    mock_client.send_websocket_message = AsyncMock(side_effect=mock_ws)
-    mock_client.call_service = AsyncMock(return_value={})
-    return mock_client
-
-
-class TestRadioDispatcherContract:
-    @pytest.mark.parametrize(
-        "ha_code,expected_code,suggestion",
-        [
-            ("unauthorized", "AUTH_INSUFFICIENT_PERMISSIONS", "administrator"),
-            ("not_found", "RESOURCE_NOT_FOUND", "device"),
-            ("not_loaded", "SERVICE_CALL_FAILED", "integration"),
-            ("unknown_command", "SERVICE_CALL_FAILED", "supports"),
-        ],
-    )
-    async def test_ha_failure_codes_offer_the_relevant_next_step(
-        self, ha_code: str, expected_code: str, suggestion: str
-    ) -> None:
-        """Radio failures retain HA's verdict and give an actionable remedy."""
-        client = _client(
-            {
-                "matter/node_diagnostics": {
-                    "success": False,
-                    "error": "Command failed",
-                    "error_code": ha_code,
-                }
-            }
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="diagnostics", device_id="m1")
-        body = json.loads(str(exc.value))
-        assert body["error"]["code"] == expected_code
-        assert body["ha_error_code"] == ha_code
-        assert body["device_id"] == "m1"
-        assert body["ws_type"] == "matter/node_diagnostics"
-        assert suggestion in body["error"]["suggestion"].lower()
-
-    @pytest.mark.asyncio
-    async def test_ws_call_failure_surfaces_tool_error(self):
-        # A primary WS command reporting success=False must surface as a
-        # ToolError (SERVICE_CALL_FAILED), carrying HA's error text.
-        client = _client(
-            {"matter/node_diagnostics": {"success": False, "error": "boom"}}
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="diagnostics", device_id="m1")
-        assert "boom" in str(exc.value)
-
-    @pytest.mark.asyncio
-    async def test_every_supported_action_is_handled(self):
-        # SUPPORTED<->handle drift guard: every action in every handler's
-        # SUPPORTED must reach a real branch in handle(), never the terminal
-        # "unhandled <radio> action" AssertionError (the dispatcher re-wraps
-        # that AssertionError as an INTERNAL_ERROR ToolError carrying the text).
-        for radio_name, handler in HANDLERS.items():
-            for action in handler.SUPPORTED:
-                client = _permissive_client()
-                tool = _capture(register_radio_tools, client)["ha_manage_radio"]
-                try:
-                    await tool(
-                        radio=radio_name,
-                        action=action,
-                        device_id="d1",
-                        params=dict(_CONTRACT_PARAMS),
-                        confirm=True,
-                    )
-                except ToolError as exc:
-                    msg = str(exc)
-                    assert "unhandled" not in msg, (
-                        f"{radio_name}/{action} fell through handle(): {msg}"
-                    )
-                    # A "requires:" error means _CONTRACT_PARAMS lacks a
-                    # newly-added required arg, so handle() was never reached
-                    # and the drift check above is vacuous for this action.
-                    assert "requires:" not in msg, (
-                        f"{radio_name}/{action} needs a required arg absent from "
-                        f"_CONTRACT_PARAMS; add it: {msg}"
-                    )
-
-    @pytest.mark.asyncio
-    async def test_resolve_entity_device_not_found(self):
-        # An entity_id the registry doesn't contain -> ENTITY_NOT_FOUND. The
-        # targeted get returns success=False for an unknown entity_id.
-        record: list = []
-        client = _client(
-            {"config/entity_registry/get": {"success": False, "error": "not_found"}},
-            record=record,
-        )
-        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
-        with pytest.raises(ToolError) as exc:
-            await radio(radio="matter", action="diagnostics", entity_id="light.ghost")
-        msg = str(exc.value)
-        assert "light.ghost" in msg
-        assert "not found" in msg.lower()
-        # Uses the targeted get keyed by the requested entity_id.
-        reg = [m for m in record if m["type"] == "config/entity_registry/get"]
-        assert reg and reg[0]["entity_id"] == "light.ghost"
-
-
-@pytest.mark.asyncio
-async def test_resolve_entity_device_connection_failure_not_entity_not_found():
-    """A transport-shaped registry-get failure must surface as a connection
-    error, never ENTITY_NOT_FOUND (issue #1832 review)."""
-    client = _client(
-        {
-            "config/entity_registry/get": {
-                "success": False,
-                "error": "Failed to connect to Home Assistant WebSocket",
-            }
-        },
-    )
-    radio = _capture(register_radio_tools, client)["ha_manage_radio"]
+async def test_a_lookup_core_refuses_is_not_a_missing_entity(
+    core_client: HomeAssistantClient, radio: RadioTools, config: None
+) -> None:
+    """Core's schema refuses this id; that says nothing about the entity."""
     with pytest.raises(ToolError) as exc:
-        await radio(radio="matter", action="diagnostics", entity_id="light.real")
-    msg = str(exc.value)
-    assert "CONNECTION_FAILED" in msg
-    assert "ENTITY_NOT_FOUND" not in msg
+        await radio.ha_manage_radio(
+            radio="matter", action="diagnostics", entity_id="not an entity id"
+        )
+
+    body = error_body(exc)
+    assert body["error"]["code"] != "ENTITY_NOT_FOUND"
+    assert body["ha_error_code"] == "invalid_format"
+
+
+async def test_an_unreachable_home_assistant_is_not_a_missing_entity(
+    unreachable_client: HomeAssistantClient,
+) -> None:
+    """When Home Assistant cannot be reached the entity lookup fails as a
+    connection failure, never as an entity that does not exist (#1832)."""
+    with pytest.raises(ToolError) as exc:
+        await RadioTools(unreachable_client).ha_manage_radio(
+            radio="matter", action="diagnostics", entity_id="light.real"
+        )
+
+    assert error_of(exc)["code"] == "CONNECTION_FAILED"

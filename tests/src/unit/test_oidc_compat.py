@@ -7,10 +7,12 @@ import inspect
 import json
 import logging
 import time
+from typing import Any
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from key_value.aio.adapters.pydantic import PydanticAdapter
 from key_value.aio.stores.memory import MemoryStore
 from pydantic import AnyUrl
 from starlette.applications import Starlette
@@ -19,7 +21,6 @@ from starlette.testclient import TestClient
 
 from ha_mcp._vendor.fastmcp.server.auth.oauth_proxy.models import (
     JTIMapping,
-    ProxyDCRClient,
     RefreshTokenMetadata,
     UpstreamTokenSet,
 )
@@ -30,10 +31,12 @@ from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationParams
 from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 from ha_mcp.auth.oidc_compat import HaMcpOIDCProxy
 
+CALLBACK = "http://127.0.0.1:8765/callback"
+
 
 @pytest.fixture
-def oidc_proxy(monkeypatch: pytest.MonkeyPatch) -> HaMcpOIDCProxy:
-    """Create a real proxy while replacing only external OIDC discovery."""
+def store(monkeypatch: pytest.MonkeyPatch) -> MemoryStore:
+    """The proxies' client storage, with only external OIDC discovery replaced."""
     configuration = OIDCConfiguration(
         issuer="https://idp.example.com",
         authorization_endpoint="https://idp.example.com/authorize",
@@ -45,27 +48,45 @@ def oidc_proxy(monkeypatch: pytest.MonkeyPatch) -> HaMcpOIDCProxy:
         scopes_supported=["openid", "profile", "email", "offline_access"],
     )
     monkeypatch.setattr(
-        HaMcpOIDCProxy,
+        OIDCProxy,
         "get_oidc_configuration",
         lambda self, config_url, strict, timeout_seconds: configuration,
     )
-    return HaMcpOIDCProxy(
-        config_url="https://idp.example.com/.well-known/openid-configuration",
-        client_id="ha-mcp",
-        client_secret="test-client-secret",
-        base_url="https://mcp.example.com",
-        required_scopes=["openid"],
-        client_storage=MemoryStore(),
-        jwt_signing_key="test-jwt-signing-key",
-        require_authorization_consent="external",
-        enable_cimd=False,
-    )
+    return MemoryStore()
+
+
+def _proxy_settings(store: MemoryStore) -> dict[str, Any]:
+    """The entrypoint's proxy settings, persisting into ``store``."""
+    return {
+        "config_url": "https://idp.example.com/.well-known/openid-configuration",
+        "client_id": "ha-mcp",
+        "client_secret": "test-client-secret",
+        "base_url": "https://mcp.example.com",
+        "client_storage": store,
+        "jwt_signing_key": "test-jwt-signing-key",
+        "require_authorization_consent": "external",
+        "enable_cimd": False,
+    }
+
+
+@pytest.fixture
+def oidc_proxy(store: MemoryStore) -> HaMcpOIDCProxy:
+    """A real proxy with the OIDC entrypoint's scopes; a test runs
+    ``setup_scope_compatibility()`` itself, as the entrypoint does next."""
+    return HaMcpOIDCProxy(**_proxy_settings(store), required_scopes=["openid"])
+
+
+@pytest.fixture
+def plain_proxy(store: MemoryStore) -> OIDCProxy:
+    """FastMCP's own proxy over the same storage: what a release without the
+    compatibility layer persisted, and what is stored as it is read back."""
+    return OIDCProxy(**_proxy_settings(store), required_scopes=["openid"])
 
 
 def _registration_request(scope: str | None) -> Request:
     """Build an MCP dynamic-client-registration request with an optional scope."""
-    body = {
-        "redirect_uris": ["http://127.0.0.1:8765/callback"],
+    body: dict[str, object] = {
+        "redirect_uris": [CALLBACK],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
     }
@@ -126,7 +147,6 @@ def test_setup_keeps_openid_required_and_default_without_dcr_allow_list(
 
     assert oidc_proxy.required_scopes == ["openid"]
     assert oidc_proxy.client_registration_options.default_scopes == ["openid"]
-    assert oidc_proxy._default_scope_str == "openid"
     assert oidc_proxy.client_registration_options.valid_scopes is None
 
 
@@ -174,7 +194,9 @@ def test_setup_rejects_wrong_upstream_default_scope_string(
     oidc_proxy: HaMcpOIDCProxy,
 ) -> None:
     """Compatibility setup must fail if FastMCP changes its upstream default."""
-    oidc_proxy._default_scope_str = "profile"
+    assert oidc_proxy.client_registration_options is not None
+    oidc_proxy.update_default_scopes(["profile"])
+    oidc_proxy.client_registration_options.default_scopes = ["openid"]
 
     with pytest.raises(
         RuntimeError,
@@ -213,7 +235,7 @@ async def test_dcr_accepts_explicit_optional_oidc_scopes(
 
 @pytest.mark.asyncio
 async def test_dcr_and_authorize_add_openid_to_optional_only_scope(
-    oidc_proxy: HaMcpOIDCProxy,
+    oidc_proxy: HaMcpOIDCProxy, plain_proxy: OIDCProxy
 ) -> None:
     """Required scopes survive DCR and a later subset authorization request."""
     oidc_proxy.setup_scope_compatibility()
@@ -223,7 +245,7 @@ async def test_dcr_and_authorize_add_openid_to_optional_only_scope(
     assert payload["scope"] == "openid profile"
     client_id = payload["client_id"]
     assert isinstance(client_id, str)
-    persisted = await oidc_proxy._client_store.get(key=client_id)
+    persisted = await plain_proxy.get_client(client_id)
     assert persisted is not None
     assert persisted.scope == "openid profile"
 
@@ -233,7 +255,7 @@ async def test_dcr_and_authorize_add_openid_to_optional_only_scope(
             state="client-state",
             scopes=["profile"],
             code_challenge="client-code-challenge",
-            redirect_uri=AnyUrl("http://127.0.0.1:8765/callback"),
+            redirect_uri=AnyUrl(CALLBACK),
             redirect_uri_provided_explicitly=True,
         ),
     )
@@ -253,28 +275,22 @@ async def test_dcr_without_scope_still_defaults_to_openid(
     assert payload["scope"] == "openid"
 
 
+def _client(client_id: str, scope: str) -> OAuthClientInformationFull:
+    """A dynamic-client registration with ``scope``."""
+    return OAuthClientInformationFull(
+        client_id=client_id, redirect_uris=[AnyUrl(CALLBACK)], scope=scope
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_client_migrates_and_persists_legacy_scope_once(
-    oidc_proxy: HaMcpOIDCProxy,
+    oidc_proxy: HaMcpOIDCProxy, plain_proxy: OIDCProxy, store: MemoryStore
 ) -> None:
     """A persisted pre-fix client missing openid is repaired on its first load."""
     oidc_proxy.setup_scope_compatibility()
-    await oidc_proxy._client_store.put(
-        key="legacy-client",
-        value=ProxyDCRClient(
-            client_id="legacy-client",
-            redirect_uris=[AnyUrl("http://127.0.0.1:8765/callback")],
-            scope="profile email",
-            token_endpoint_auth_method="none",
-        ),
-    )
+    await plain_proxy.register_client(_client("legacy-client", "profile email"))
 
-    original_put = oidc_proxy._client_store.put
-    with patch.object(
-        oidc_proxy._client_store,
-        "put",
-        new=AsyncMock(wraps=original_put),
-    ) as put_spy:
+    with patch.object(store, "put", new=AsyncMock(wraps=store.put)) as put_spy:
         migrated = await oidc_proxy.get_client("legacy-client")
         unchanged = await oidc_proxy.get_client("legacy-client")
 
@@ -283,31 +299,20 @@ async def test_get_client_migrates_and_persists_legacy_scope_once(
     assert unchanged is not None
     assert unchanged.scope == "openid profile email"
     put_spy.assert_awaited_once()
-    persisted = await oidc_proxy._client_store.get(key="legacy-client")
+    persisted = await plain_proxy.get_client("legacy-client")
     assert persisted is not None
     assert persisted.scope == "openid profile email"
 
 
 @pytest.mark.asyncio
 async def test_get_client_does_not_rewrite_compliant_persisted_client(
-    oidc_proxy: HaMcpOIDCProxy,
+    oidc_proxy: HaMcpOIDCProxy, store: MemoryStore
 ) -> None:
     """A persisted client that already has openid must remain byte-for-byte scoped."""
     oidc_proxy.setup_scope_compatibility()
-    await oidc_proxy.register_client(
-        OAuthClientInformationFull(
-            client_id="current-client",
-            redirect_uris=["http://127.0.0.1:8765/callback"],
-            scope="profile openid email",
-        )
-    )
+    await oidc_proxy.register_client(_client("current-client", "profile openid email"))
 
-    original_put = oidc_proxy._client_store.put
-    with patch.object(
-        oidc_proxy._client_store,
-        "put",
-        new=AsyncMock(wraps=original_put),
-    ) as put_spy:
+    with patch.object(store, "put", new=AsyncMock(wraps=store.put)) as put_spy:
         client = await oidc_proxy.get_client("current-client")
 
     assert client is not None
@@ -317,23 +322,11 @@ async def test_get_client_does_not_rewrite_compliant_persisted_client(
 
 @pytest.mark.asyncio
 async def test_get_client_rejects_unexpected_persisted_client_type(
-    oidc_proxy: HaMcpOIDCProxy,
+    oidc_proxy: HaMcpOIDCProxy, plain_proxy: OIDCProxy
 ) -> None:
     """Persisted migration must fail if FastMCP stops returning its DCR model."""
-    await oidc_proxy._client_store.put(
-        key="unexpected-client",
-        value=ProxyDCRClient(
-            client_id="unexpected-client",
-            redirect_uris=[AnyUrl("http://127.0.0.1:8765/callback")],
-            scope="profile",
-            token_endpoint_auth_method="none",
-        ),
-    )
-    unexpected = OAuthClientInformationFull(
-        client_id="unexpected-client",
-        redirect_uris=["http://127.0.0.1:8765/callback"],
-        scope="profile",
-    )
+    await plain_proxy.register_client(_client("unexpected-client", "profile"))
+    unexpected = _client("unexpected-client", "profile")
 
     with (
         patch.object(
@@ -349,27 +342,34 @@ async def test_get_client_rejects_unexpected_persisted_client_type(
         await oidc_proxy.get_client("unexpected-client")
 
 
-async def _store_access_token(
-    proxy: HaMcpOIDCProxy,
-    *,
-    scopes: list[str],
-) -> str:
-    """Create a real FastMCP JWT backed by a stored upstream token set."""
+async def _access_token_proxy(
+    store: MemoryStore, scopes: list[str]
+) -> tuple[HaMcpOIDCProxy, str]:
+    """A set-up proxy and a real FastMCP JWT it issued over an upstream token
+    granted ``scopes``, as a sign-in leaves them in the proxy's storage."""
     now = time.time()
     upstream_token = "upstream-access-token"
     upstream_token_id = "upstream-token-id"
     access_jti = "fastmcp-access-jti"
-    proxy._token_validator = StaticTokenVerifier(
-        tokens={
-            upstream_token: {
-                "client_id": "access-client",
-                "scopes": scopes,
-                "expires_at": int(now) + 3600,
-            }
-        },
-        required_scopes=proxy.required_scopes,
+    proxy = HaMcpOIDCProxy(
+        **_proxy_settings(store),
+        token_verifier=StaticTokenVerifier(
+            tokens={
+                upstream_token: {
+                    "client_id": "access-client",
+                    "scopes": scopes,
+                    "expires_at": int(now) + 3600,
+                }
+            },
+            required_scopes=["openid"],
+        ),
     )
-    await proxy._upstream_token_store.put(
+    proxy.setup_scope_compatibility()
+    await PydanticAdapter[UpstreamTokenSet](
+        key_value=store,
+        pydantic_model=UpstreamTokenSet,
+        default_collection="mcp-upstream-tokens",
+    ).put(
         key=upstream_token_id,
         value=UpstreamTokenSet(
             upstream_token_id=upstream_token_id,
@@ -389,7 +389,11 @@ async def _store_access_token(
             },
         ),
     )
-    await proxy._jti_mapping_store.put(
+    await PydanticAdapter[JTIMapping](
+        key_value=store,
+        pydantic_model=JTIMapping,
+        default_collection="mcp-jti-mappings",
+    ).put(
         key=access_jti,
         value=JTIMapping(
             jti=access_jti,
@@ -398,50 +402,53 @@ async def _store_access_token(
         ),
     )
     proxy.get_routes(mcp_path="/mcp")
-    return proxy.jwt_issuer.issue_access_token(
+    token = proxy.jwt_issuer.issue_access_token(
         client_id="access-client",
         scopes=scopes,
         jti=access_jti,
         expires_in=3600,
     )
+    return proxy, token
 
 
 @pytest.mark.asyncio
 async def test_load_access_token_rejects_legacy_token_missing_openid(
-    oidc_proxy: HaMcpOIDCProxy,
+    store: MemoryStore,
 ) -> None:
     """A live pre-fix access token must fail on its next MCP request."""
-    oidc_proxy.setup_scope_compatibility()
-    token = await _store_access_token(oidc_proxy, scopes=["profile"])
+    proxy, token = await _access_token_proxy(store, ["profile"])
 
-    loaded = await oidc_proxy.load_access_token(token)
+    loaded = await proxy.load_access_token(token)
 
     assert loaded is None
 
 
 @pytest.mark.asyncio
 async def test_load_access_token_keeps_compliant_token_working(
-    oidc_proxy: HaMcpOIDCProxy,
+    store: MemoryStore,
 ) -> None:
     """A FastMCP access token with required scopes must remain usable."""
-    oidc_proxy.setup_scope_compatibility()
-    token = await _store_access_token(oidc_proxy, scopes=["openid", "profile"])
+    proxy, token = await _access_token_proxy(store, ["openid", "profile"])
 
-    loaded = await oidc_proxy.load_access_token(token)
+    loaded = await proxy.load_access_token(token)
 
     assert loaded is not None
     assert loaded.scopes == ["openid", "profile"]
 
 
 async def _store_refresh_token(
-    proxy: HaMcpOIDCProxy,
+    store: MemoryStore,
     *,
     token: str,
     client_id: str,
     scopes: list[str],
 ) -> None:
-    """Store refresh-token metadata for compatibility-guard tests."""
-    await proxy._refresh_token_store.put(
+    """Store refresh-token metadata as an issued refresh token leaves it."""
+    await PydanticAdapter[RefreshTokenMetadata](
+        key_value=store,
+        pydantic_model=RefreshTokenMetadata,
+        default_collection="mcp-refresh-tokens",
+    ).put(
         key=hashlib.sha256(token.encode()).hexdigest(),
         value=RefreshTokenMetadata(
             client_id=client_id,
@@ -455,17 +462,14 @@ async def _store_refresh_token(
 @pytest.mark.asyncio
 async def test_load_refresh_token_rejects_legacy_token_missing_openid(
     oidc_proxy: HaMcpOIDCProxy,
+    store: MemoryStore,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A legacy refresh token cannot perpetuate a session without required scopes."""
     oidc_proxy.setup_scope_compatibility()
-    client = OAuthClientInformationFull(
-        client_id="legacy-client",
-        redirect_uris=["http://127.0.0.1:8765/callback"],
-        scope="openid profile",
-    )
+    client = _client("legacy-client", "openid profile")
     await _store_refresh_token(
-        oidc_proxy,
+        store,
         token="legacy-refresh-token",
         client_id="legacy-client",
         scopes=["profile"],
@@ -482,17 +486,13 @@ async def test_load_refresh_token_rejects_legacy_token_missing_openid(
 
 @pytest.mark.asyncio
 async def test_load_refresh_token_keeps_compliant_token_working(
-    oidc_proxy: HaMcpOIDCProxy,
+    oidc_proxy: HaMcpOIDCProxy, store: MemoryStore
 ) -> None:
     """The compatibility guard must not reject refresh tokens that contain openid."""
     oidc_proxy.setup_scope_compatibility()
-    client = OAuthClientInformationFull(
-        client_id="current-client",
-        redirect_uris=["http://127.0.0.1:8765/callback"],
-        scope="openid profile",
-    )
+    client = _client("current-client", "openid profile")
     await _store_refresh_token(
-        oidc_proxy,
+        store,
         token="current-refresh-token",
         client_id="current-client",
         scopes=["openid", "profile"],

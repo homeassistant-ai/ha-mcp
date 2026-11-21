@@ -49,8 +49,9 @@ When HA MCP Tools advertises the `dashboard_edit` capability, storage dashboard
 edits use Home Assistant's own Lovelace API in-process. Structured patches combine
 loading, hash comparison, editing, saving, and readback in one WebSocket command.
 Python continues to run in HA-MCP's existing sandbox; its final comparison, save,
-and readback use the same native command. Component-less and older-component
-installations use the existing WebSocket path, including for structured patches.
+and readback use the same native command. Without the component, or when it
+does not advertise `dashboard_edit`, edits take the WebSocket path, including
+structured patches.
 No File & YAML services permission is needed for this capability. A failed or
 malformed capability probe stops the config edit before saving; it does not
 establish that the component is absent. Failed discovery is cached for 30 seconds;

@@ -1,1 +1,1 @@
-"""HACS (Home Assistant Community Store) E2E tests."""
+"""Marketplace store tool E2E tests (``ha_get_hacs_info``, ``ha_manage_hacs``)."""

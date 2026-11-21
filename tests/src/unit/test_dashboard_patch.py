@@ -264,7 +264,7 @@ def test_malformed_patch_is_rejected(apply_patch, patch) -> None:
 
 
 def test_empty_patch_is_an_independent_copy(apply_patch) -> None:
-    config = {"views": [{"cards": []}]}
+    config: dict[str, Any] = {"views": [{"cards": []}]}
     result = apply_patch(config, [])
     assert result == config
     result["views"][0]["cards"].append("new")
@@ -275,7 +275,7 @@ def test_operation_count_limit_accepts_100_and_rejects_101(apply_patch) -> None:
     operation = {"op": "add", "path": "/cards/-", "value": "card"}
     result = apply_patch({"cards": []}, [operation] * 100)
     assert result == {"cards": ["card"] * 100}
-    config = {"cards": []}
+    config: dict[str, Any] = {"cards": []}
     with pytest.raises(ValueError):
         apply_patch(config, [operation] * 101)
     assert config == {"cards": []}

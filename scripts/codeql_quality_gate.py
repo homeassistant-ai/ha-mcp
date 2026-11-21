@@ -28,10 +28,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-# Findings under these path prefixes are dropped before gating. These are
-# vendored / third-party trees we do not own and ruff already excludes them
-# (see ``extend-exclude`` in pyproject.toml). Keep this in sync with that list.
+# Findings under these path prefixes are dropped before gating; ruff excludes
+# them too (see ``extend-exclude`` in pyproject.toml). Keep this in sync with
+# that list.
 PATHS_IGNORE: tuple[str, ...] = (
+    # The Home Assistant configuration E2E sessions boot from, with the
+    # third-party custom components it seeds.
     "tests/initial_test_state/",
     # Vendored websockets (synced by scripts/vendor_websockets.py from the
     # pin in src/ha_mcp/_vendor/requirements.txt) — upstream's code, not
@@ -73,15 +75,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "Cross-invocation use: a failed download records its time; the next "
         "_async_dom call reads it to enforce the retry cooldown.",
     ),
-    (
-        "py/unused-global-variable",
-        "tests/src/unit/_embedded_stubs.py",
-        "_INSTALLED",
-        "",
-        "Cross-invocation use: install() sets the module-level flag under a "
-        "'global' declaration so a second call returns early. CodeQL's "
-        "single-pass dead-store analysis misses the next-call read at the top "
-        "of install(), so the assignment looks dead.",
+    *(
+        (
+            "py/unused-global-variable",
+            "tests/src/unit/_config_flow_core.py",
+            name,
+            "",
+            "Cross-module use: helper module of the config flow tests; the "
+            "test_config_flow_*.py modules import and read it.",
+        )
+        for name in ("MANIFEST_VERSION", "STRINGS_COMMON", "GERMAN_COMMON")
     ),
     # NOTE: CodeQL emits the same generic message for every instance of
     # py/ineffectual-statement, so the entries below carry a code substring:
@@ -139,43 +142,12 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
-        "tests/src/unit/test_websocket_client.py",
-        "This statement has no effect",
-        "await task",
-        "False positive on the bare 'await task' inside pytest.raises in "
-        "test_send_command_cancellation_drops_the_pending_future: awaiting "
-        "the cancelled send_command task IS the effect (it drives the task to "
-        "completion and raises the CancelledError the context manager "
-        "asserts).",
-    ),
-    (
-        "py/ineffectual-statement",
-        "tests/src/unit/test_websocket_client.py",
-        "This statement has no effect",
-        "await first",
-        "False positive on the bare 'await first' inside pytest.raises in "
-        "test_a_second_connect_is_not_torn_down_by_the_first: awaiting the "
-        "cancelled first connect attempt IS the effect (it drives the "
-        "attempt through its cleanup and raises the CancelledError the "
-        "context manager asserts).",
-    ),
-    (
-        "py/ineffectual-statement",
-        "tests/src/unit/test_websocket_client.py",
-        "This statement has no effect",
-        "await second",
-        "False positive on the bare 'await second' inside pytest.raises in "
-        "test_a_second_connect_is_not_torn_down_by_the_first: the second "
-        "attempt is cancelled to end the test, and awaiting it is what "
-        "drives that cancellation to completion.",
-    ),
-    (
-        "py/ineffectual-statement",
         "tests/src/unit/test_ha_search_dashboard_leg_failure.py",
         "This statement has no effect",
         "await call",
         "False positive on the bare 'await call' inside pytest.raises in "
-        "test_parent_cancellation_settles_the_dashboard_leg: awaiting the "
+        "test_parent_cancellation_settles_the_dashboard_leg and "
+        "test_parent_cancellation_during_fallback_settle_propagates: awaiting the "
         "cancelled ha_search task IS the effect (it drives the call to "
         "completion and raises the CancelledError the context manager "
         "asserts).",
@@ -274,35 +246,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "the cross-module import, so the declaration looks dead.",
     ),
     (
-        "py/unused-global-variable",
-        "tests/src/unit/_error_log_structured_fixtures.py",
-        "_SAMPLE_LOG",
-        "",
-        "Cross-module use: this module is the fixture leaf of the structured "
-        "error-log test split, so the literal is imported and read by "
-        "test_tools_utility_error_log_structured.py. CodeQL's single-file "
-        "analysis misses the cross-module import.",
-    ),
-    *(
-        (
-            "py/unused-global-variable",
-            "tests/src/unit/_error_log_structured_fixtures.py",
-            name,
-            "",
-            "Cross-module use: fixture leaf module; read by "
-            "test_tools_utility_error_log_structured.py.",
-        )
-        for name in (
-            "_EMPTY_LOG",
-            "_UNPARSEABLE_LOG",
-            "_UNSORTED_LOG",
-            "_OUT_OF_ORDER_LOG",
-            "_NESTED_PAREN_THREAD_LOG",
-            "_ANSI_LOG",
-            "_TRACEBACK_LOG",
-        )
-    ),
-    (
         "py/unused-import",
         "tests/src/e2e/conftest.py",
         "_collection_data_dir",
@@ -332,20 +275,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "allowed in a conftest below the root directory.",
     ),
     (
-        "py/import-and-import-from",
-        "tests/src/unit/test_translate_locales.py",
-        "Module 'translate_locales' is imported with both",
-        "import translate_locales",
-        "Both forms are load-bearing in this one file. The module object is "
-        "what the monkeypatch sites need — translate_locales.time, .httpx and "
-        "._call_gemini are replaced per test, twenty-three attributes in all — "
-        "while the from-imports name the API under test at seventy call sites. "
-        "Collapsing either direction requalifies those without making anything "
-        "clearer. The pair predates this entry and is unchanged from master; "
-        "it began reporting once scripts/ gained a second module importing "
-        "translate_locales, which is what lets the extractor resolve the name.",
-    ),
-    (
         "py/catch-base-exception",
         "homeassistant-addon/start.py",
         "BaseException",
@@ -361,7 +290,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "",
         "Intentional: the stdio exit routing must see BaseExceptions (e.g. the "
         "re-raised CancelledError from the #1544 hard-stop path) so they leave "
-        "via _force_exit — reaching interpreter finalization with the SDK's "
+        "via force_exit — reaching interpreter finalization with the SDK's "
         "stdin reader parked is the issue #2027 SIGABRT. The exception is "
         "logged before the forced exit.",
     ),
@@ -390,6 +319,19 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "",
         "False positive on _wait_for_backup's return-in-the-loop vs raise "
         "shape: after the loop it always goes through raise_tool_error, typed "
+        "'-> NoReturn' (see helpers.py), so there is no implicit None return "
+        "for CodeQL's heuristic to have correctly caught. mypy already "
+        "confirms this file is clean under that typing.",
+    ),
+    # NOTE: same PATH-WIDE caveat as the server.py entry above — re-audit if
+    # provision.py grows genuinely mixed-returns functions.
+    (
+        "py/mixed-returns",
+        "src/ha_mcp/dashboard_screenshot/provision.py",
+        "Mixing implicit and explicit returns",
+        "",
+        "False positive on _discover_engine_via_supervisor's return-in-the-try "
+        "vs raise shape: every other path ends in raise_tool_error, typed "
         "'-> NoReturn' (see helpers.py), so there is no implicit None return "
         "for CodeQL's heuristic to have correctly caught. mypy already "
         "confirms this file is clean under that typing.",
@@ -499,6 +441,15 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "Interactive test-environment helper printing the seeded throwaway "
         "credentials of the disposable HA test container (tests/test_constants.py). "
         "Printing them for copy-paste is the tool's purpose.",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
+        "tests/src/unit/_core_setup.py",
+        "as clear text",
+        "",
+        "Test helper writing Core's secrets.yaml under the test's temporary "
+        "config directory; the values are throwaway strings the tests check "
+        "the component redacts.",
     ),
     (
         "py/clear-text-storage-sensitive-data",
@@ -626,15 +577,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/incomplete-url-substring-sanitization",
-        "tests/src/unit/test_oauth.py",
-        "may be at an arbitrary position",
-        "",
-        "Test assertion, not URL validation: checks that the consent HTML "
-        "displays the redirect host to the user.",
-    ),
-    (
-        "py/incomplete-url-substring-sanitization",
-        "tests/src/unit/test_oauth_legacy_component.py",
+        "tests/src/unit/test_oauth_legacy_views.py",
         "may be at an arbitrary position",
         "",
         "Test assertion, not URL validation: the XSS-escape test checks the "
@@ -741,11 +684,6 @@ def classify(
     findings.sort(key=lambda f: (f[2], f[0], f[1]))
     suppressed.sort(key=lambda f: (f[2], f[0], f[1]))
     return findings, suppressed
-
-
-def load_findings(sarif_path: Path) -> list[tuple[str, int, str, str]]:
-    """Return the sorted list of gating (file, line, rule_id, message) findings."""
-    return classify(sarif_path)[0]
 
 
 def render(findings: list[tuple[str, int, str, str]]) -> str:

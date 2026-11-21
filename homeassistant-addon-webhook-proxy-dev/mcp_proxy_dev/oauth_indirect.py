@@ -8,14 +8,13 @@ client identities into the same-origin form accepted by core.
 MIRROR: this module is the near-verbatim twin of
 ``custom_components/ha_mcp_tools/oauth_ha_auth.py``. Keep behavioural changes
 on the two sides in step. This pair has exactly TWO intended deltas. The
-loopback, redirect-shape, and base64url helpers are imported from ``oauth.py``
-here and from ``oauth_legacy.py`` in the component. And ``core_listener_url``
-lives only here: it copies the component's ``loopback_url.derive_loopback_url``,
-which the token forward uses there and this app cannot import.
-Those definitions are equivalent today, ``_LOOPBACK_HOSTNAMES`` and
-``_AUTHORITY_CHARS_RE`` included — named here so it is noticed if that ever
-stops being true. Everything else that differs is drift, including the deltas
-the sibling ``oauth_dcr.py`` pair legitimately carries (the
+base64url helpers are imported from ``oauth.py`` here and from
+``oauth_legacy.py`` in the component; those definitions are equivalent today,
+named here so it is noticed if that ever stops being true. And
+``core_listener_url`` lives only here: it copies the component's
+``loopback_url.derive_loopback_url``, which the token forward uses there and
+this app cannot import. Everything else that differs is drift, including the
+deltas the sibling ``oauth_dcr.py`` pair legitimately carries (the
 ``hass.data[DOMAIN]`` layout, the ``_addon_alive`` gate): neither appears in
 either file of THIS pair.
 
@@ -49,18 +48,14 @@ from urllib.parse import ParseResult, urlparse, urlunparse
 import aiohttp
 from homeassistant.core import HomeAssistant
 
-from .oauth import (
-    _b64url_decode,
-    _b64url_encode,
-    _is_loopback_host,
-    _is_valid_redirect_uri,
-)
+from .oauth import _b64url_decode, _b64url_encode
 from .oauth_dcr import (
     _refresh_identity_is_reproducible,
     canonical_origin_url,
     client_redirect_uris,
     normalized_origin,
 )
+from .oauth_redirect_allowlist import _is_loopback_host, _is_valid_redirect_uri
 
 _LOGGER = logging.getLogger(__name__)
 

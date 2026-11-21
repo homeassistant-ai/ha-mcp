@@ -9,6 +9,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from ..error_wording import unknown_entity
+
 # All ws_* modules log through the websocket_api logger, so one logger
 # setting covers the whole command surface.
 _LOGGER = logging.getLogger(__package__)
@@ -28,17 +30,25 @@ def _async_get_entity_settings(hass: HomeAssistant, entity_id: str) -> Any:
     return async_get_entity_settings(hass, entity_id)
 
 
-def _is_unknown_entity_error(exc: Exception) -> bool:
-    """True for core's ``HomeAssistantError('Unknown entity')`` from the settings helper.
+def _async_get_assistant_settings(hass: HomeAssistant) -> dict[str, Any]:
+    """core's ``async_get_assistant_settings`` for each assistant core knows.
 
-    The type alone is too wide: core raises a plain ``HomeAssistantError`` for
-    other faults too, so the message is also required to carry ``unknown entity``
-    (case-insensitive). A store-read failure that raises a bare
-    ``HomeAssistantError`` therefore propagates instead of being silently reported
-    as not-exposed; the audit guardrail (junk id → not-exposed default) still
-    matches because that raise carries the ``Unknown entity`` message.
+    ``{assistant: {entity_id: settings_mapping}}`` over core's own
+    ``KNOWN_ASSISTANTS``, covering registry entities and the exposed-entities
+    store alike. A seam tests replace.
     """
-    return isinstance(exc, HomeAssistantError) and "unknown entity" in str(exc).lower()
+    from homeassistant.components.homeassistant.exposed_entities import (
+        KNOWN_ASSISTANTS,
+        async_get_assistant_settings,
+    )
+
+    return {a: async_get_assistant_settings(hass, a) for a in KNOWN_ASSISTANTS}
+
+
+def _is_unknown_entity_error(exc: Exception) -> bool:
+    """Core's "Unknown entity" from the settings helper; any other
+    ``HomeAssistantError``, a failed store read included, propagates."""
+    return unknown_entity(exc)
 
 
 def _assist_should_expose(hass: HomeAssistant, entity_id: str) -> bool:

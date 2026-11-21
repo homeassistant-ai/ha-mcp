@@ -1,30 +1,45 @@
 """``core_client``: the server's Home Assistant client on a real ``hass``.
 
-Kept out of ``conftest.py``, which predates the private-access check and is
-listed for it, so every rule in ``tests/AGENTS.md`` applies to these fixtures.
-``conftest.py`` loads this module as a pytest plugin.
+``conftest.py`` loads these real-Core client fixtures as a pytest plugin.
 """
 
 from __future__ import annotations
 
+import random
 import socket
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from homeassistant.core import HomeAssistant
 
+    from ha_mcp.backup_manager import BackupManager
     from ha_mcp.client.rest_client import HomeAssistantClient
 
 
+_PORTS = random.SystemRandom()
+
+
 def free_port() -> int:
-    """A loopback port nothing listens on once the probe lets it go."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port: int = probe.getsockname()[1]
-    return port
+    """A loopback port nothing listens on once the probe lets it go.
+
+    Picked below every OS's ephemeral range, which port 0 draws from: an
+    outgoing connection of a parallel test could take that port before the
+    test binds it.
+    """
+    while True:
+        port = _PORTS.randrange(20000, 32768)
+        with socket.socket() as probe:
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
 
 
 def refused_url() -> str:
@@ -96,3 +111,69 @@ async def component_core_client(
 
     websocket_api.async_register_commands(hass)
     return core_client
+
+
+@pytest.fixture
+async def backup_manager(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path
+) -> BackupManager:
+    """The auto-backup manager of ``core_client``, unthrottled, writing under
+    ``tmp_path``, on a ``hass`` with Core's ``config`` commands."""
+    from types import SimpleNamespace
+
+    from homeassistant.setup import async_setup_component
+
+    from ha_mcp.backup_manager import get_backup_manager
+
+    assert await async_setup_component(hass, "config", {})
+    settings = SimpleNamespace(
+        enable_auto_backup=True,
+        auto_backup_throttle_minutes=0,
+        auto_backup_retain_per_entity=5,
+        auto_backup_dir=str(tmp_path),
+    )
+    return get_backup_manager(core_client, settings)
+
+
+@pytest.fixture
+def sent(core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
+    """A spy on ``core_client``'s WebSocket send: it calls through, so Core
+    answers, and a test can count or forbid a command."""
+    from ._client_spies import sent_messages
+
+    with sent_messages(core_client) as spy:
+        yield spy
+
+
+@pytest.fixture
+async def second_client(
+    core_client: HomeAssistantClient,
+) -> AsyncIterator[HomeAssistantClient]:
+    """Another client of the same Home Assistant, as a second user's would be."""
+    from ha_mcp.client.rest_client import HomeAssistantClient
+
+    client = HomeAssistantClient(
+        base_url=core_client.base_url,
+        token=core_client.token,
+        verify_ssl=False,
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+@pytest.fixture
+async def unreachable_client(
+    hass_access_token: str, socket_enabled: None
+) -> AsyncIterator[HomeAssistantClient]:
+    """A client whose Home Assistant refuses every connection."""
+    from ha_mcp.client.rest_client import HomeAssistantClient
+
+    client = HomeAssistantClient(
+        base_url=refused_url(), token=hass_access_token, verify_ssl=False
+    )
+    try:
+        yield client
+    finally:
+        await client.close()

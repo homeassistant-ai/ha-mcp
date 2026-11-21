@@ -3,11 +3,13 @@
 The implementation is split across sibling modules to keep each unit
 focused (see issue #925):
 
-- ``_search_config``: shared constants and pure helpers
-- ``_search_base``: attributes shared across mixins + registry-list helper
-- ``_search_deep``: ``deep_search`` (config-definition search)
-- ``_search_overview``: ``get_system_overview``
-- ``_search_entities``: ``smart_entity_search`` + ``get_entities_by_area``
+- ``_config``: shared constants and pure helpers
+- ``_base``: attributes shared across mixins + registry-list helper
+- ``_deep``, ``_scenes``, ``_flow_helpers``, ``_scoring``: ``deep_search``
+  (config-definition search)
+- ``_overview``: ``get_system_overview``
+- ``_entities``: ``smart_entity_search`` + ``get_entities_by_area``
+- ``fetch``, ``graph``: config fetches and the related-entity graph
 """
 
 import logging
@@ -31,6 +33,7 @@ from ._config import (
 from ._deep import DeepSearchMixin
 from ._entities import EntitySearchMixin
 from ._overview import SystemOverviewMixin
+from .fetch import record_first_failure, summarize_fetch_error
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +46,16 @@ class SmartSearchTools(DeepSearchMixin, SystemOverviewMixin, EntitySearchMixin):
         client: HomeAssistantClient | None = None,
         fuzzy_threshold: int = 60,
         clock: Callable[[], float] | None = None,
+        config_timeout: float = INDIVIDUAL_CONFIG_TIMEOUT,
     ):
         """Initialize with Home Assistant client.
 
         ``clock`` times the config-fetch budget; ``None`` reads
-        ``time.perf_counter``.
+        ``time.perf_counter``. ``config_timeout`` bounds each per-id config
+        fetch in seconds of real time.
         """
         self.clock = clock
+        self.config_timeout = config_timeout
         # Always load settings for configuration access
         self.settings = get_global_settings()
 

@@ -109,6 +109,7 @@ async def _assert_collision_refused(
 @pytest.mark.helper
 @pytest.mark.cleanup
 class TestTemplateDeletedHelperRecovery:
+    @pytest.mark.component_topology
     @pytest.mark.parametrize("template_type", ["sensor", "binary_sensor"])
     @pytest.mark.parametrize("collision", [False, True], ids=["renamed", "occupied"])
     @pytest.mark.parametrize("delete_route", ["entry", "alias"])

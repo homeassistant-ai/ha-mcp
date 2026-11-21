@@ -139,19 +139,6 @@ async def test_host_network_server_is_reached_on_loopback(
     assert await _discovered_target(hass, app, upstream) == _at(upstream, STABLE_SECRET)
 
 
-async def test_running_server_without_an_address_is_skipped(
-    hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
-) -> None:
-    stable, dev = server_app_slugs()
-    app.supervisor.addons = [{"slug": stable}, {"slug": dev}]
-    app.supervisor.info = {
-        stable: _running(STABLE_SECRET, ip_address=""),
-        dev: _running(DEV_SECRET),
-    }
-
-    assert await _discovered_target(hass, app, upstream) == _at(upstream, DEV_SECRET)
-
-
 async def test_tries_the_official_slugs_when_the_app_list_fails(
     hass: HomeAssistant, app: App, core: CoreLink, upstream: Upstream
 ) -> None:

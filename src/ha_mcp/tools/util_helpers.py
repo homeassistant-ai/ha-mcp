@@ -8,13 +8,15 @@ import logging
 import posixpath
 import urllib.parse
 from collections.abc import Mapping
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    HomeAssistantError,
 )
+from .helpers import core_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -70,18 +72,47 @@ def websocket_error_message(error: Any) -> str:
     return str(error)
 
 
-def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
-    """Summarize a ``frontend/get_themes`` result into names plus defaults.
+async def search_related(
+    client: Any, item_type: str, item_id: str, warnings: list[str]
+) -> dict[str, Any] | None:
+    """Core's ``search/related`` answer for one item, the Related set its UI shows.
 
-    Returns theme NAMES, not the full per-theme CSS variable dicts (installed
-    community themes can carry hundreds of variables; listings are a
-    discovery/verify surface, not a content dump).
+    None, with the reason in ``warnings``, when Core does not answer it.
     """
-    themes_value = raw_themes.get("themes") or {}
-    theme_names = sorted(themes_value.keys() if isinstance(themes_value, dict) else [])
+    try:
+        result = await client.send_websocket_message(
+            {"type": "search/related", "item_type": item_type, "item_id": item_id}
+        )
+    except HomeAssistantError as e:
+        warnings.append(f"related unavailable: {e}")
+        return None
+    if not result.get("success"):
+        reason = core_error_message(result.get("error") or "request failed")
+        warnings.append(f"related unavailable: {reason}")
+        return None
+    return cast(dict[str, Any], result["result"])
+
+
+def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
+    """Summarize a ``frontend/get_themes`` result into names, modes and defaults.
+
+    Returns theme NAMES and the mode names of each theme's ``modes`` block, not
+    the full per-theme CSS variable dicts (installed community themes can carry
+    hundreds of variables; listings are a discovery/verify surface, not a
+    content dump).
+    """
+    themes_value = raw_themes.get("themes")
+    if not isinstance(themes_value, dict):
+        themes_value = {}
+    theme_names = sorted(themes_value)
     return {
         "themes": theme_names,
         "count": len(theme_names),
+        "modes": {
+            name: sorted(theme["modes"])
+            for name, theme in sorted(themes_value.items())
+            if "modes" in theme
+        },
         "default_theme": raw_themes.get("default_theme"),
         "default_dark_theme": raw_themes.get("default_dark_theme"),
     }
@@ -94,7 +125,7 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
     {"changed_states": [...], "service_response": {...}}.
     Returns service_response if present and is a dict, otherwise the original result.
 
-    Deliberately NOT the same rule as ``ServiceTools._split_return_response_envelope``,
+    Deliberately NOT the same rule as ``service_response.split_return_response_envelope``,
     which powers ha_call_service: that one returns the response whatever its type and
     reports the whole reply only when the key is absent. The two disagree solely for a
     NON-DICT ``service_response`` (this helper hands back the envelope, the split hands
@@ -113,9 +144,8 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
 # lat-long). Both raw WebSocket surfaces enforce it through `raw_ws_refusal()`
 # below, so they stay in lockstep. Registry deletion on HA Core is `remove`
 # (not `delete`) for devices and entities; ha_remove_device / ha_remove_entity
-# emit it. Device `remove_config_entry` stays blocked: every Core that has it
-# removes devices through it, as the only command before 2026.9 and as a
-# deprecated alias of `remove` until Core drops it in 2027.9.
+# emit it. Device `remove_config_entry` stays blocked: Core keeps it as a
+# deprecated alias of `remove` until 2027.9.
 BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
     {
         "config/core/update",
@@ -459,43 +489,6 @@ def merge_visibility_warnings(
     if warnings:
         response.setdefault("warnings", []).extend(warnings)
     return response
-
-
-# Error strings produced by the pooled WebSocket path when the transport (not
-# the command) fails: the manager's connect raise, send timeouts, and socket
-# drops. Callers that attach domain-specific suggestions match on these so an
-# HA restart is not presented as a domain problem (issue #1832 review).
-#
-# Since #1947 ``send_websocket_message`` raises on a dead transport rather than
-# collapsing it into ``{"success": False, "error": ...}``, so these signatures
-# now only have to catch transport-shaped text that reaches a caller by another
-# route (a component-side error frame, or an error string threaded through a
-# response body). They are kept as a belt-and-braces match, not as the primary
-# detection path.
-WS_CONNECTION_SIGNATURES = (
-    "failed to connect",
-    "timed out",
-    "timeout",
-    "connection closed",
-    # reset_connection: "WebSocket connection to Home Assistant closed while
-    # waiting for a response" — "connection closed" is not adjacent there.
-    "closed while waiting",
-    # listener close reason: "connection dropped without a close frame".
-    "connection dropped",
-    "disconnected",
-    "not connected",
-    "not authenticated",
-)
-
-
-def is_connection_error_message(error_msg: Any) -> bool:
-    """True when a pooled-WS failure payload is connection/transport-shaped.
-
-    Accepts any payload shape: HA error frames can carry a dict (or None)
-    in the error slot, so the value is stringified before matching.
-    """
-    lowered = str(error_msg).lower()
-    return any(sig in lowered for sig in WS_CONNECTION_SIGNATURES)
 
 
 async def list_visible_registry_ids(

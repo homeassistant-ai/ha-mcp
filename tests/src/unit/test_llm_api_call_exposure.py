@@ -8,37 +8,38 @@ every forwarded call rather than taken from that list.
 from __future__ import annotations
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 from custom_components.ha_mcp_tools import llm_api
 
-from ._llm_api_helpers import (
-    CoreToolResult,
-    fake_session,
-    llm_context,
-    make_hass,
-    tool_entry,
+from ._llm_api_server import (
+    SECRET_PATH,
+    ServedTool,
+    call,
+    mirrored_tool,
+    payload,
+    serve,
 )
 
-_URL = "http://127.0.0.1:9584/private_x"
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 
 @pytest.mark.parametrize("via_call_tool", [False, True])
 async def test_tool_hidden_after_the_list_was_built_is_refused(
-    monkeypatch: pytest.MonkeyPatch, via_call_tool: bool
+    hass: HomeAssistant, via_call_tool: bool
 ) -> None:
-    monkeypatch.setattr(llm_api.llm, "ToolResult", CoreToolResult, raising=False)
-    session = fake_session(monkeypatch, tools=[tool_entry("ha_search", exposed=False)])
-    if via_call_tool:
-        tool = llm_api.HaMcpCallTool(_URL, {"ha_search"})
-        tool_input = llm_api.llm.ToolInput(
-            "ha_call_tool", {"name": "ha_search", "arguments": {}}
-        )
-    else:
-        tool = llm_api.HaMcpTool("ha_search", "Search", {"_converted": {}}, _URL)
-        tool_input = llm_api.llm.ToolInput("ha_search", {"query": "kitchen"})
+    async with serve([ServedTool("ha_search", exposed=False)]) as server:
+        tool: llm_api.HaMcpCallTool | llm_api.HaMcpTool
+        if via_call_tool:
+            url = f"http://127.0.0.1:{server.port}{SECRET_PATH}"
+            tool = llm_api.HaMcpCallTool(url, {"ha_search"})
+            args = {"name": "ha_search", "arguments": {}}
+        else:
+            tool = mirrored_tool(server.port)
+            args = {"query": "kitchen"}
 
-    out = await tool.async_call(make_hass(), tool_input, llm_context())
+        out = await call(hass, tool, args)
 
-    session.call_tool.assert_not_awaited()
+    assert server.calls == []
     assert out.error is True
-    assert out.data["error"] == "Unknown tool 'ha_search'."
+    assert payload(out)["error"] == "Unknown tool 'ha_search'."

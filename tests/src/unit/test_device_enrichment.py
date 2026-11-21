@@ -21,17 +21,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import zigpy.config
-import zigpy.device
-import zigpy.state
-import zigpy.types
-import zigpy.zdo.types as zdo_t
-from homeassistant.components.zha import const as zha_const
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
-from zigpy.application import ControllerApplication
 from zwave_js_server.const import NodeStatus
 
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
@@ -39,6 +32,8 @@ from ha_mcp.tools import tools_registry
 from ha_mcp.tools.tools_registry import RegistryTools
 
 from ._client_spies import sent_messages
+from ._zha_core import IEEE, RadioWithoutHardware, set_up_zha
+from ._zha_core import zigbee_network as build_zigbee_network
 from ._zwave_js import (
     HOME_ID,
     NODE_ID,
@@ -46,9 +41,6 @@ from ._zwave_js import (
     set_up_zwave_js,
     zwave_js_server_connection,
 )
-
-_IEEE = "00:11:22:33:44:55:66:77"
-_COORDINATOR_IEEE = "00:15:8d:00:02:32:4f:32"
 
 
 @pytest.fixture(autouse=True)
@@ -179,123 +171,30 @@ async def test_pre_provisioned_zwave_device_gets_no_node_id(
     ]
 
 
-class _RadioWithoutHardware(ControllerApplication):
-    """zigpy's application with its radio I/O doing nothing, as Core's
-    ``_FakeApp``: the network, devices and link quality are zigpy's own."""
-
-    async def add_endpoint(self, descriptor: zdo_t.SimpleDescriptor) -> None:
-        pass
-
-    async def connect(self) -> None:
-        pass
-
-    async def disconnect(self) -> None:
-        pass
-
-    async def force_remove(self, dev: zigpy.device.Device) -> None:
-        pass
-
-    async def load_network_info(self, *, load_devices: bool = False) -> None:
-        pass
-
-    async def permit_ncp(self, time_s: int = 60) -> None:
-        pass
-
-    async def permit_with_link_key(
-        self, node: zigpy.types.EUI64, link_key: zigpy.types.KeyData, time_s: int = 60
-    ) -> None:
-        pass
-
-    async def reset_network_info(self) -> None:
-        pass
-
-    async def send_packet(self, packet: zigpy.types.ZigbeePacket) -> None:
-        pass
-
-    async def start_network(self) -> None:
-        pass
-
-    async def write_network_info(
-        self, *, network_info: zigpy.state.NetworkInfo, node_info: zigpy.state.NodeInfo
-    ) -> None:
-        pass
-
-
 @pytest.fixture
-def zigbee_network() -> _RadioWithoutHardware:
-    """A coordinator and one end device heard at LQI 200, RSSI -45 dBm."""
-    app = _RadioWithoutHardware(
-        {
-            zigpy.config.CONF_DATABASE: None,
-            zigpy.config.CONF_DEVICE: {zigpy.config.CONF_DEVICE_PATH: "/dev/null"},
-            zigpy.config.CONF_STARTUP_ENERGY_SCAN: False,
-            zigpy.config.CONF_NWK_BACKUP_ENABLED: False,
-            zigpy.config.CONF_TOPO_SCAN_ENABLED: False,
-            zigpy.config.CONF_OTA: {zigpy.config.CONF_OTA_ENABLED: False},
-        }
-    )
-    coordinator_ieee = zigpy.types.EUI64.convert(_COORDINATOR_IEEE)
-    app.state.node_info.nwk = zigpy.types.NWK(0x0000)
-    app.state.node_info.ieee = coordinator_ieee
-    app.state.network_info.pan_id = zigpy.types.PanId(0x1234)
-    app.state.network_info.extended_pan_id = zigpy.types.ExtendedPanId(coordinator_ieee)
-    app.state.network_info.channel = zigpy.types.uint8_t(15)
-    coordinator = app.add_device(ieee=coordinator_ieee, nwk=zigpy.types.NWK(0x0000))
-    coordinator.node_desc = zdo_t.NodeDescriptor(
-        logical_type=zdo_t.LogicalType.Coordinator
-    )
-    coordinator.add_endpoint(1)
-    device = app.add_device(
-        ieee=zigpy.types.EUI64.convert(_IEEE), nwk=zigpy.types.NWK(0xB79C)
-    )
-    device.node_desc = zdo_t.NodeDescriptor(logical_type=zdo_t.LogicalType.EndDevice)
-    device.lqi = 200
-    device.rssi = -45
-    return app
+def zigbee_network() -> RadioWithoutHardware:
+    return build_zigbee_network()
 
 
 @pytest.fixture
 async def zha(
-    hass: HomeAssistant, zigbee_network: _RadioWithoutHardware
+    hass: HomeAssistant, zigbee_network: RadioWithoutHardware
 ) -> MockConfigEntry:
-    """Core's ``zha`` integration on ``zigbee_network``, as Core's
-    ``setup_zha`` fixture sets it up."""
-    entry = MockConfigEntry(
-        version=5,
-        domain=zha_const.DOMAIN,
-        data={
-            zigpy.config.CONF_DEVICE: {
-                zigpy.config.CONF_DEVICE_PATH: "/dev/ttyUSB0",
-                zigpy.config.CONF_DEVICE_BAUDRATE: 115200,
-                zigpy.config.CONF_DEVICE_FLOW_CONTROL: "hardware",
-            },
-            zha_const.CONF_RADIO_TYPE: "ezsp",
-        },
-    )
-    entry.add_to_hass(hass)
-    with patch(
-        "bellows.zigbee.application.ControllerApplication.new",
-        return_value=zigbee_network,
-    ):
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-    return entry
+    return await set_up_zha(hass, zigbee_network)
 
 
 async def test_zha_device_gets_ieee_address_and_radio_metrics(
     hass: HomeAssistant, tools: RegistryTools, zha: MockConfigEntry
 ) -> None:
     """ZHA lists the coordinator too; the device gets its own link quality."""
-    dev = dr.async_get(hass).async_get_device_by_identifier(
-        ("zha", _IEEE), zha.entry_id
-    )
+    dev = dr.async_get(hass).async_get_device_by_identifier(("zha", IEEE), zha.entry_id)
     assert dev is not None
 
     result = await tools.ha_get_device(device_id=dev.id)
 
     device = result["device"]
     assert device["integration_type"] == "zha"
-    assert device["ieee_address"] == _IEEE
+    assert device["ieee_address"] == IEEE
     assert device["radio_metrics"] == {"lqi": 200, "rssi": -45}
     # A radio read that succeeded leaves the answer without warnings.
     assert "warnings" not in result
@@ -306,10 +205,10 @@ async def test_zha_device_gets_ieee_address_and_radio_metrics(
     [
         (
             "zha",
-            _IEEE,
+            IEEE,
             "enrich_zha_metrics",
             "zha/devices",
-            ("ieee_address", _IEEE),
+            ("ieee_address", IEEE),
             "radio_metrics",
             "ZHA radio metrics",
         ),

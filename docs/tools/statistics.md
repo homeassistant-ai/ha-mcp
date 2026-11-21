@@ -41,14 +41,8 @@ Statistics types go directly to Core, including `last_reset` and future types.
 Omitting `statistic_types` uses Core's defaults; the response reports types
 observed in the returned rows.
 
-Reset timestamps use a supplementary native query in the stored unit when
-conversion is possible: affected Core versions otherwise convert timestamps
-along with numeric values. Queries are grouped by native unit class and stored
-unit. Core converter metadata handles missing unit classes for both default
-and explicit conversions, and avoids extra queries for unchanged classes.
-Without that metadata, a query using unchanged default units can recover resets
-without inferring a converter. If the timestamp cannot be recovered, `last_reset` is omitted with a
-warning; other values remain available.
+Reset timestamps come from the same query as the values: Core converts the
+numeric values to the requested unit and leaves `last_reset` as stored.
 
 A reported null display unit is a known unitless result, including conversions
 from percent. `core_options` passes additional native recorder options, such as

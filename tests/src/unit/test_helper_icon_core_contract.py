@@ -1,381 +1,244 @@
-"""Where a storage helper's icon and other registry fields go, and what is
-reported when its entity is missing, against the answers Core sends.
+"""Where a storage helper's icon goes, and what is reported when its entity
+cannot be found, on a real ``hass`` through the server's own client.
 
-The fakes and the autouse ``_no_component`` fixture are imported from
-``test_zone_tools_core_contract.py``: every test runs through Core's WebSocket
-commands unless it patches the component calls itself.
+With the ``ha_mcp_tools`` component the tools read Core's own helper schemas:
+person and tag declare no icon field, input_boolean does. Without the
+component no schema is read, so an icon goes to the entity registry.
 """
 
+from __future__ import annotations
+
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools.config_helpers.create import _execute_create_simple_helper
-from ha_mcp.tools.config_helpers.update import _execute_update_simple_helper
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.config_helpers.listing import listed_items
+from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ha_mcp.tools.tools_zones import ZoneTools
 
-from .test_zone_tools_core_contract import (
-    _FETCH_SCHEMAS,
-    HOME_STATE,
-    OFFICE,
-    REGISTRY_BLOCKED,
-    _client,
-    _no_component,  # noqa: F401 - pytest fixture
-    _sent,
-    registered,  # noqa: F401 - pytest fixture
-    removed,  # noqa: F401 - pytest fixture
-)
-
-LAMP = {
-    "entity_id": "input_boolean.lamp",
-    "platform": "input_boolean",
-    "unique_id": "lamp",
-}
-# Core's person and tag fields, as the component serves them: no icon among them.
-_PERSON_SCHEMAS = {
-    "person": {
-        action: [{"name": f} for f in ("name", "user_id", "device_trackers", "picture")]
-        for action in ("create", "update")
-    }
-}
-_TAG_SCHEMAS = {
-    "tag": {
-        "create": [{"name": f} for f in ("tag_id", "name", "description")],
-        "update": [{"name": f} for f in ("name", "description")],
-    }
-}
+from ._backup_target_identity_core import create_named, entity_of, move_entity
+from ._command_faults import dropped_on, pooled_socket
+from ._helper_tool_core import set_up
+from ._helper_tool_core import tools as tools
+from ._zone_icon_core import icon_of
 
 
-class TestIconFollowsCoresSchema:
-    """An icon goes where Core's schema for the type keeps it.
+async def stored(client: HomeAssistantClient, helper_type: str, item_id: str) -> Any:
+    """The stored item ``item_id`` as ``<type>/list`` lists it."""
+    listed = await client.send_websocket_message({"type": f"{helper_type}/list"})
+    assert listed["success"], listed
+    return next(i for i in listed_items(listed["result"]) if i["id"] == item_id)
 
-    A zone stores its icon, as the zone dialog writes it (#3001); person and
-    tag have no icon field in Core's schemas, so their icon goes to the entity
-    registry. A created person's, tag's or zone's entity is looked up in the
-    registry.
-    """
 
-    async def test_zone_create_stores_the_icon_in_the_zone(self) -> None:
-        """The Zones editor shows only the stored icon. The new zone "Home" is
-        zone.home_2: the built-in home zone holds zone.home."""
-        home = {**OFFICE, "id": "home", "name": "Home"}
-        client = _client(
-            {
-                "zone/create": {"success": True, "result": home},
-                "config/entity_registry/list": {
-                    "success": True,
-                    "result": [
-                        {
-                            "entity_id": "zone.home_2",
-                            "platform": "zone",
-                            "unique_id": "home",
-                        }
-                    ],
-                },
-            },
-            states={"zone.home": HOME_STATE},
-        )
+async def test_a_created_zone_named_home_is_named_by_its_own_entity_id(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The built-in home zone holds zone.home, so Core names the new zone
+    "Home" zone.home_2: zone.home would point the caller at the home zone."""
+    for domain in ("config", "zone"):
+        assert await async_setup_component(hass, domain, {})
 
-        result = await ZoneTools(client).ha_set_zone(
-            name="Home", latitude=52.5, longitude=13.4, icon="mdi:house"
-        )
-
-        (create,) = _sent(client, "zone/create")
-        assert create["icon"] == "mdi:house"
-        assert _sent(client, "config/entity_registry/update") == []
-        assert result["entity_id"] == "zone.home_2"
-
-    @pytest.mark.parametrize(
-        "failure",
-        [REGISTRY_BLOCKED, HomeAssistantConnectionError("403 socket closed")],
-        ids=["failure reply", "dropped connection"],
+    result = await ZoneTools(core_client).ha_set_zone(
+        name="Home", latitude=52.5, longitude=13.4, wait=False
     )
-    async def test_a_failed_registry_read_after_create_is_a_warning(
-        self, failure: Any
-    ) -> None:
-        """The helper exists: an error would make a retrying caller create it
-        twice."""
-        client = _client(
-            {
-                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
-                "config/entity_registry/list": failure,
-            }
+
+    assert result["entity_id"] == "zone.home_2"
+    assert entity_of(er.async_get(hass), "zone", result["zone_id"]) == "zone.home_2"
+
+
+@pytest.mark.parametrize(
+    "answered", [True, False], ids=["failure reply", "dropped connection"]
+)
+async def test_a_failed_registry_read_after_create_is_a_warning(
+    hass: HomeAssistant, core_client: HomeAssistantClient, answered: bool
+) -> None:
+    """The helper exists: an error would make a retrying caller create it
+    twice. Without ``config`` Core refuses the registry read as an unknown
+    command."""
+    domains = ["input_boolean"] if answered else ["config", "input_boolean"]
+    for domain in domains:
+        assert await async_setup_component(hass, domain, {})
+    tools = HelperConfigTools(core_client)
+
+    if answered:
+        result = await tools.ha_config_set_helper(
+            helper_type="input_boolean", name="Lamp", icon="mdi:lamp", wait=False
         )
+    else:
+        socket = await pooled_socket(core_client)
+        with dropped_on(hass, "config/entity_registry/list", socket):
+            result = await tools.ha_config_set_helper(
+                helper_type="input_boolean", name="Lamp", icon="mdi:lamp", wait=False
+            )
 
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
-            result = await _execute_create_simple_helper(
-                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
-                False, False, {},
-            )  # fmt: skip
+    assert result["success"] is True
+    assert "could not be read" in result["warnings"][0]
+    assert (await stored(core_client, "input_boolean", "lamp"))["name"] == "Lamp"
 
-        assert result["success"] is True
-        assert "could not be read" in result["warnings"][0]
-        assert "403" in result["warnings"][0]
 
-    async def test_a_category_without_its_entity_is_named_as_not_applied(self) -> None:
-        client = _client(
-            {
-                "person/create": {"success": True, "result": {"id": "anna"}},
-                "config/entity_registry/list": {"success": True, "result": []},
-            }
-        )
+@pytest.mark.parametrize(
+    ("helper_type", "name"), [("person", "Anna"), ("tag", "Front door")]
+)
+async def test_an_icon_core_has_no_field_for_goes_to_the_entity_registry(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    helper_type: str,
+    name: str,
+) -> None:
+    """Person and tag have no icon field in Core's schemas: the entity shows
+    the registry icon."""
+    await set_up(hass, helper_type)
 
-        result = await _execute_create_simple_helper(
-            client, "person", "Anna", None, None, None, "family", False, False, {}
-        )  # fmt: skip
+    result = await HelperConfigTools(component_core_client).ha_config_set_helper(
+        helper_type=helper_type, name=name, icon="mdi:star", wait=False
+    )
 
-        assert "the category given were not applied" in result["warnings"][0]
+    assert icon_of(er.async_get(hass), result["entity_id"]) == "mdi:star"
+    item = await stored(component_core_client, helper_type, result["data"]["id"])
+    assert "icon" not in item
 
-    async def test_person_create_writes_the_icon_to_the_registry(self) -> None:
-        client = _client(
-            {
-                "person/create": {"success": True, "result": {"id": "anna"}},
-                "config/entity_registry/list": {
-                    "success": True,
-                    "result": [
-                        {
-                            "entity_id": "person.anna",
-                            "platform": "person",
-                            "unique_id": "anna",
-                        }
-                    ],
-                },
-            }
-        )
 
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=_PERSON_SCHEMAS)):
-            await _execute_create_simple_helper(
-                client, "person", "Anna", "mdi:account", None, None, None,
-                False, False, {},
-            )  # fmt: skip
+async def test_a_person_update_writes_the_icon_to_the_entity_registry(
+    hass: HomeAssistant, core_client: HomeAssistantClient, tools: HelperConfigTools
+) -> None:
+    await set_up(hass, "person")
+    person_id = await create_named(core_client, "person", "Anna")
+    entity_id = entity_of(er.async_get(hass), "person", person_id)
 
-        (create,) = _sent(client, "person/create")
-        assert "icon" not in create
-        assert (
-            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
-        )
+    await tools.ha_config_set_helper(
+        helper_type="person", helper_id=entity_id, icon="mdi:account", wait=False
+    )
 
-    async def test_tag_create_writes_the_icon_to_the_registry(self) -> None:
-        client = _client(
-            {
-                "tag/create": {"success": True, "result": {"id": "abc-1"}},
-                "config/entity_registry/list": {
-                    "success": True,
-                    "result": [
-                        {
-                            "entity_id": "tag.front_door",
-                            "platform": "tag",
-                            "unique_id": "abc-1",
-                        }
-                    ],
-                },
-            }
-        )
+    assert icon_of(er.async_get(hass), entity_id) == "mdi:account"
+    assert "icon" not in await stored(core_client, "person", person_id)
 
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=_TAG_SCHEMAS)):
-            await _execute_create_simple_helper(
-                client, "tag", "Front door", "mdi:nfc", None, None, None,
-                False, False, {},
-            )  # fmt: skip
 
-        (create,) = _sent(client, "tag/create")
-        assert "icon" not in create
-        assert _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:nfc"
+@pytest.mark.parametrize(
+    ("helper_type", "fields", "waited_on"),
+    [
+        # Unnamed: Core refuses to update a named tag without its entity.
+        ("tag", {"tag_id": "abc-1"}, False),
+        ("input_boolean", {"name": "Lamp"}, True),
+    ],
+    ids=["tag", "input_boolean"],
+)
+async def test_an_update_without_its_entity_names_what_was_not_applied(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    area_registry: ar.AreaRegistry,
+    helper_type: str,
+    fields: dict[str, Any],
+    waited_on: bool,
+) -> None:
+    """The entity's registry entry was removed: the area cannot be applied.
+    A tag update is never waited on, so a missing entity is no reason for it."""
+    await set_up(hass, helper_type)
+    created = await core_client.send_websocket_message(
+        {"type": f"{helper_type}/create", **fields}
+    )
+    assert created["success"], created
+    item_id = created["result"]["id"]
+    entity_registry.async_remove(entity_of(entity_registry, helper_type, item_id))
+    hall = area_registry.async_create("Hall")
 
-    async def test_person_update_leaves_the_icon_out_of_the_stored_item(self) -> None:
-        person = {"id": "anna", "name": "Anna", "device_trackers": []}
-        entry = {"entity_id": "person.anna", "platform": "person", "unique_id": "anna"}
-        client = _client(
-            {
-                "person/list": {
-                    "success": True,
-                    "result": {"storage": [person], "config": []},
-                },
-                "person/update": {"success": True, "result": person},
-                "config/entity_registry/get": {"success": True, "result": entry},
-            }
-        )
+    result = await HelperConfigTools(core_client).ha_config_set_helper(
+        helper_type=helper_type, helper_id=item_id, area_id=hall.id, wait=True
+    )
 
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=_PERSON_SCHEMAS)):
-            await _execute_update_simple_helper(
-                client, "person", "person.anna", "person.anna", None, "mdi:account",
-                None, None, None, False, False, {},
-            )  # fmt: skip
+    assert "the area given were not applied" in result["warnings"][0]
+    assert ("not waited on" in result["warnings"][0]) is waited_on
 
-        (update,) = _sent(client, "person/update")
-        assert "icon" not in update
-        assert (
-            _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:account"
-        )
 
-    async def test_component_person_create_sends_the_icon_as_a_registry_field(
-        self,
-    ) -> None:
-        write = AsyncMock(return_value=None)
-        with (
-            patch("ha_mcp.tools.config_helpers.create.write_helper_item", write),
-            patch(_FETCH_SCHEMAS, AsyncMock(return_value=_PERSON_SCHEMAS)),
-        ):
-            await _execute_create_simple_helper(
-                _client(
-                    {
-                        "person/create": {"success": True, "result": {"id": "anna"}},
-                        "config/entity_registry/list": {"success": True, "result": []},
-                    }
-                ), "person", "Anna", "mdi:account", None, None, None,
-                False, False, {},
-            )  # fmt: skip
+async def test_a_failed_registry_read_on_tag_update_is_a_warning(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Even with no registry field given, the missing entity_id is named.
+    Without ``config`` Core refuses the registry read as an unknown command."""
+    assert await async_setup_component(hass, "tag", {})
+    created = await core_client.send_websocket_message(
+        {"type": "tag/create", "tag_id": "abc-1", "name": "Front door"}
+    )
+    assert created["success"], created
 
-        assert "icon" not in write.call_args.args[3]
-        assert write.call_args.kwargs["registry"] == {"icon": "mdi:account"}
+    result = await HelperConfigTools(core_client).ha_config_set_helper(
+        helper_type="tag", helper_id="abc-1", name="Front", wait=False
+    )
 
-    async def test_tag_update_without_its_entity_is_a_warning(self) -> None:
-        tag = {"id": "abc-1", "name": "Front door"}
-        client = _client(
-            {
-                "tag/list": {"success": True, "result": [tag]},
-                "tag/update": {"success": True, "result": tag},
-                "config/entity_registry/list": {"success": True, "result": []},
-            }
-        )
+    assert "could not be read" in result["warnings"][0]
+    assert (await stored(core_client, "tag", "abc-1"))["name"] == "Front"
 
-        result = await _execute_update_simple_helper(
-            client, "tag", "abc-1", "abc-1", None, None,
-            "hall", None, None, True, False, {},
-        )  # fmt: skip
 
-        assert "the area given were not applied" in result["warnings"][0]
-        # A tag update is never waited on, so the missing entity is not why.
-        assert "not waited on" not in result["warnings"][0]
+async def test_an_icon_core_s_schema_declares_stays_in_the_stored_item(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """The helper dialog shows only the stored icon; a registry override
+    would hide every later change made there."""
+    await set_up(hass, "input_boolean")
 
-    async def test_a_failed_registry_read_on_tag_update_is_a_warning(self) -> None:
-        """Even with no registry field given, the missing entity_id is named."""
-        tag = {"id": "abc-1", "name": "Front door"}
-        client = _client(
-            {
-                "tag/list": {"success": True, "result": [tag]},
-                "tag/update": {"success": True, "result": tag},
-                "config/entity_registry/list": REGISTRY_BLOCKED,
-            }
-        )
+    result = await HelperConfigTools(component_core_client).ha_config_set_helper(
+        helper_type="input_boolean", name="Lamp", icon="mdi:lamp", wait=False
+    )
 
-        result = await _execute_update_simple_helper(
-            client, "tag", "tag.abc-1", "abc-1", "Front", None,
-            None, None, None, False, False, {},
-        )  # fmt: skip
+    item = await stored(component_core_client, "input_boolean", "lamp")
+    assert item["icon"] == "mdi:lamp"
+    assert icon_of(er.async_get(hass), result["entity_id"]) is None
 
-        assert "could not be read" in result["warnings"][0]
 
-    async def test_other_helpers_keep_the_icon_in_their_stored_item(self) -> None:
-        """Core's schema declares the icon: it stays in the stored item."""
-        client = _client(
-            {
-                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
-                "config/entity_registry/list": {"success": True, "result": [LAMP]},
-            }
-        )
-        schemas = {"input_boolean": {"create": [{"name": "name"}, {"name": "icon"}]}}
+async def test_without_the_component_an_icon_goes_to_the_entity_registry(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """No schema says where Core keeps the icon: the entity settings' place
+    is used, as the entity shows it."""
+    await set_up(hass, "input_boolean")
 
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=schemas)):
-            await _execute_create_simple_helper(
-                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
-                False, False, {},
-            )  # fmt: skip
+    result = await HelperConfigTools(core_client).ha_config_set_helper(
+        helper_type="input_boolean", name="Lamp", icon="mdi:lamp", wait=False
+    )
 
-        (create,) = _sent(client, "input_boolean/create")
-        assert create["icon"] == "mdi:lamp"
-        assert _sent(client, "config/entity_registry/update") == []
+    assert "icon" not in await stored(core_client, "input_boolean", "lamp")
+    assert icon_of(er.async_get(hass), result["entity_id"]) == "mdi:lamp"
 
-    async def test_an_icon_without_a_known_field_goes_to_the_registry(self) -> None:
-        """The create sends the icon where ``collection_icon`` routes it; its
-        cases are pinned in test_helper_icon_route."""
-        client = _client(
-            {
-                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
-                "config/entity_registry/list": {"success": True, "result": [LAMP]},
-            }
-        )
 
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
-            await _execute_create_simple_helper(
-                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
-                False, False, {},
-            )  # fmt: skip
+async def test_the_registry_icon_goes_to_the_new_helper_s_own_entity(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """A renamed helper holds input_boolean.lamp, so Core names the new one
+    input_boolean.lamp_2: <type>.<id> would give the icon to the other."""
+    await set_up(hass, "input_boolean")
+    other = await create_named(core_client, "input_boolean", "Other")
+    move_entity(entity_registry, "input_boolean", other, "input_boolean.lamp")
 
-        (create,) = _sent(client, "input_boolean/create")
-        assert "icon" not in create
-        assert _sent(client, "config/entity_registry/update")[0]["icon"] == "mdi:lamp"
+    result = await HelperConfigTools(core_client).ha_config_set_helper(
+        helper_type="input_boolean", name="Lamp", icon="mdi:lamp", wait=False
+    )
 
-    async def test_the_registry_icon_goes_to_the_new_helper_s_own_entity(self) -> None:
-        """A renamed helper holds input_boolean.lamp, so Core names the new one
-        input_boolean.lamp_2: <type>.<id> would give the icon to the other."""
-        renamed = {**LAMP, "unique_id": "other"}
-        created = {**LAMP, "entity_id": "input_boolean.lamp_2"}
-        client = _client(
-            {
-                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
-                "config/entity_registry/list": {
-                    "success": True,
-                    "result": [renamed, created],
-                },
-            }
-        )
+    assert result["entity_id"] == "input_boolean.lamp_2"
+    assert icon_of(entity_registry, "input_boolean.lamp_2") == "mdi:lamp"
+    assert icon_of(entity_registry, "input_boolean.lamp") is None
 
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
-            result = await _execute_create_simple_helper(
-                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
-                False, False, {},
-            )  # fmt: skip
 
-        (update,) = _sent(client, "config/entity_registry/update")
-        assert update["entity_id"] == "input_boolean.lamp_2"
-        assert result["entity_id"] == "input_boolean.lamp_2"
+async def test_a_cleared_icon_also_leaves_the_stored_item(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Clearing only the registry would bring an older stored icon back."""
+    await set_up(hass, "input_boolean")
+    lamp = await create_named(core_client, "input_boolean", "Lamp", icon="mdi:lamp")
+    entity_id = entity_of(entity_registry, "input_boolean", lamp)
+    entity_registry.async_update_entity(entity_id, icon="mdi:map")
 
-    async def test_an_icon_for_a_helper_without_a_registry_entry_is_not_applied(
-        self,
-    ) -> None:
-        """No entry proves which entity is the new helper's: nothing is written."""
-        renamed = {**LAMP, "unique_id": "other"}
-        client = _client(
-            {
-                "input_boolean/create": {"success": True, "result": {"id": "lamp"}},
-                "config/entity_registry/list": {"success": True, "result": [renamed]},
-            }
-        )
+    await HelperConfigTools(core_client).ha_config_set_helper(
+        helper_type="input_boolean", helper_id=entity_id, icon="", wait=False
+    )
 
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
-            result = await _execute_create_simple_helper(
-                client, "input_boolean", "Lamp", "mdi:lamp", None, None, None,
-                False, False, {},
-            )  # fmt: skip
-
-        assert _sent(client, "config/entity_registry/update") == []
-        assert any("icon given were not applied" in w for w in result["warnings"])
-
-    async def test_a_cleared_icon_also_leaves_the_stored_item(self) -> None:
-        """Clearing only the registry would bring an older stored icon back."""
-        stored = {"id": "lamp", "name": "Lamp", "icon": "mdi:lamp"}
-        entry = {
-            "entity_id": "input_boolean.lamp",
-            "platform": "input_boolean",
-            "unique_id": "lamp",
-        }
-        client = _client(
-            {
-                "input_boolean/list": {"success": True, "result": [stored]},
-                "input_boolean/update": {"success": True, "result": stored},
-                "config/entity_registry/get": {"success": True, "result": entry},
-            }
-        )
-
-        with patch(_FETCH_SCHEMAS, AsyncMock(return_value=None)):
-            await _execute_update_simple_helper(
-                client, "input_boolean", "input_boolean.lamp", "input_boolean.lamp",
-                None, "", None, None, None, False, False, {},
-            )  # fmt: skip
-
-        (update,) = _sent(client, "input_boolean/update")
-        assert "icon" not in update
-        assert _sent(client, "config/entity_registry/update")[0]["icon"] is None
+    assert "icon" not in await stored(core_client, "input_boolean", lamp)
+    assert icon_of(entity_registry, entity_id) is None

@@ -39,6 +39,7 @@ _sync_point_only = pytest.mark.skipif(
 
 def _load_sync():
     spec = importlib.util.spec_from_file_location("webhook_proxy_sync", SYNC_PATH)
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     # Register before exec so the module's @dataclass can resolve its own
     # __module__ (dataclasses looks it up in sys.modules during processing).
@@ -307,12 +308,14 @@ def _docs_text(flavor) -> str:
 
 
 def test_docs_banners_match_canonical():
-    """Each committed DOCS.md must carry exactly its flavor's canonical banner.
+    """Each committed DOCS.md must carry its flavor's canonical banner.
 
     The banner is identity, owned by DOCS_BANNERS in the sync script (like the
     start.py mutex constants). A hand edit to a committed banner without
     updating the constant would be silently reverted at the next promote/reset
-    — fail immediately instead.
+    — fail immediately instead. This checks presence only; the transform tests
+    below fail when a DOCS.md carries the banner other than once
+    (``transform_docs`` refuses any other count).
     """
     for flavor in (sync.STABLE, sync.DEV):
         text = _docs_text(flavor)
@@ -321,7 +324,6 @@ def test_docs_banners_match_canonical():
             f"{flavor.addon_dir}/DOCS.md banner diverged from "
             "DOCS_BANNERS in scripts/webhook_proxy_sync.py — edit them together"
         )
-        assert len(sync._DOCS_BANNER_RE.findall(text)) == 1
 
 
 def test_transform_docs_promote_direction():
@@ -435,6 +437,47 @@ def _assert_committed_equals_transform(tmp_path, direction, src, dst, bump=None)
         f"transform({src.addon_dir}) — regenerate it with "
         f"scripts/webhook_proxy_sync.py: {drifted}"
     )
+
+
+def _stage_both_trees(root: Path) -> None:
+    """Copy both committed app trees and the ruff config under ``root``."""
+    import shutil
+
+    for flavor in (sync.STABLE, sync.DEV):
+        shutil.copytree(
+            REPO_ROOT / flavor.addon_dir,
+            root / flavor.addon_dir,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+    shutil.copy2(REPO_ROOT / "pyproject.toml", root / "pyproject.toml")
+
+
+def test_promote_carries_a_sibling_module_with_its_tokens_renamed(tmp_path):
+    """start.py imports its sibling modules from the image root; a promote
+    that left one behind would ship a stable app that cannot start."""
+    _stage_both_trees(tmp_path)
+    (tmp_path / sync.DEV.addon_dir / "extra_module.py").write_text(
+        'STATE = "/config/.mcp_proxy_dev_state.json"\n', encoding="utf-8"
+    )
+
+    sync.sync("promote", bump="patch", root=tmp_path)
+
+    carried = tmp_path / sync.STABLE.addon_dir / "extra_module.py"
+    assert carried.read_text(encoding="utf-8") == (
+        'STATE = "/config/.mcp_proxy_state.json"\n'
+    )
+
+
+def test_promote_removes_a_module_the_source_no_longer_has(tmp_path):
+    """A module dev deleted must not linger in stable, where nothing keeps it
+    in step with the code that replaced it."""
+    _stage_both_trees(tmp_path)
+    stale = tmp_path / sync.STABLE.addon_dir / "retired_module.py"
+    stale.write_text("RETIRED = True\n", encoding="utf-8")
+
+    sync.sync("promote", bump="patch", root=tmp_path)
+
+    assert not stale.exists()
 
 
 @_sync_point_only

@@ -46,7 +46,7 @@ _LOGGER = logging.getLogger(__package__)
 # =============================================================================
 # ha_mcp_tools/helpers_list
 # =============================================================================
-def _do_helpers_list(
+def do_helpers_list(
     hass: HomeAssistant,
     params: dict[str, Any],
     *,
@@ -117,7 +117,7 @@ async def _helpers_list_prep(
     Only the flow-helper ``options`` are scrubbed, so the blocking ``secrets.yaml``
     read is skipped entirely when ``include_flow_helpers`` is false (perf gate,
     mirroring ``search``'s entity-only skip). The read runs in the executor via
-    :meth:`hass.async_add_executor_job`, keeping :func:`_do_helpers_list` a pure
+    :meth:`hass.async_add_executor_job`, keeping :func:`do_helpers_list` a pure
     in-memory read. See :func:`_load_secret_scrub`.
     """
     if not msg.get("include_flow_helpers", True):
@@ -497,21 +497,19 @@ def _notification_values(data: Any) -> list[Any]:
 
 
 def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Raw issue-registry entries (the server filters/projects them itself).
+    """The issues HA core's ``repairs/list_issues`` lists, with its fields.
 
-    ``ignored`` is derived from ``dismissed_version`` so the server's
-    ``filter_active_repairs`` (which keys off ``ignored``) works unchanged.
-
-    Inactive entries are skipped to match HA core's ``ws_list_issues``: on
-    restart the registry reloads each stored non-persistent issue as an
-    inactive stub (``active=False``), and it stays inactive until the
-    integration re-raises or deletes it.
+    The server filters and projects them itself, as it does core's reply.
+    Like ``ws_list_issues``, it skips inactive entries (the stubs a restart
+    reloads until the integration raises the issue again) and the ones the
+    registry hides (``async_is_hidden``: its config entry is disabled).
+    ``ignored`` is derived from ``dismissed_version``, as core's list does.
     """
     registry = _safe(ir.async_get, hass)
     issues = getattr(registry, "issues", None) if registry is not None else None
     out: list[dict[str, Any]] = []
     for issue in _mapping_values(issues):
-        if getattr(issue, "active", True) is False:
+        if getattr(issue, "active", True) is False or registry.async_is_hidden(issue):
             continue
         dismissed = getattr(issue, "dismissed_version", None)
         out.append(
@@ -521,7 +519,7 @@ def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "severity": _enum_value(getattr(issue, "severity", None)),
                 "translation_key": getattr(issue, "translation_key", None),
                 "translation_placeholders": _plainify(
-                    getattr(issue, "translation_placeholders", None) or {}
+                    getattr(issue, "translation_placeholders", None)
                 ),
                 "ignored": dismissed is not None,
                 "dismissed_version": dismissed,
@@ -530,7 +528,6 @@ def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "created": _iso(getattr(issue, "created", None)),
                 "issue_domain": getattr(issue, "issue_domain", None),
                 "learn_more_url": getattr(issue, "learn_more_url", None),
-                "active": getattr(issue, "active", None),
             }
         )
     return out
@@ -540,17 +537,13 @@ def _overview_repairs(hass: HomeAssistant) -> list[dict[str, Any]]:
 # ha_mcp_tools/states
 # =============================================================================
 def _do_states(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
-    """Return ``State.as_dict()`` for each requested entity_id + a ``missing`` list.
+    """Return each requested entity's state body + a ``missing`` list.
 
-    ``hass.states.get(id)`` is a pure O(1) in-memory dict read, and core's
-    ``State.as_dict()`` is exactly the serialization the REST ``/api/states/<id>``
-    endpoint emits — so a component-served record is byte-identical to the legacy
-    per-id REST fetch by construction (the WS transport JSON-encodes the same
-    datetimes to the same ISO strings the REST layer does). The body is returned
-    UNMODIFIED — never ``_plainify``'d — precisely so that byte-parity holds:
-    ``_plainify``'s ``str()`` would render a datetime with a space separator where
-    both REST and WS use ``isoformat``'s ``T``. No freshness or secrets concern:
-    state bodies are always live and carry no ``!secret`` plaintext. The server
+    ``hass.states.get(id)`` is a pure O(1) in-memory dict read. The body is
+    Core's ``State.as_dict()``, the REST ``/api/states/<id>`` serialization, with
+    the live ``last_reported`` (see ``_state_as_dict``). It is never
+    ``_plainify``'d: ``_plainify``'s ``str()`` would render a datetime with a
+    space separator where both REST and WS use ``isoformat``'s ``T``. State bodies carry no ``!secret`` plaintext. The server
     enforces its own ``MAX_ENTITIES`` cap before calling, so no per-frame guard is
     needed here (100 full states is well within one frame — ``overview`` already
     returns every state in one call).

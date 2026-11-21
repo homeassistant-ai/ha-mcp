@@ -1,536 +1,469 @@
-"""Zone tools against the answers Home Assistant actually sends (#2632).
+"""Zone tools on a real ``hass``, through the server's own client (#2632).
 
 Core reports a missing zone as ``not_found`` with the text "Unable to find
-zone_id <id>" (``helpers/collection.py``). A storage zone's id is its slugified
+zone_id <id>" (``helpers/collection.py``). A stored zone's id is its slugified
 name and its registry ``unique_id``; its entity_id also follows the name but is
 picked separately, so the two can differ (``zone.home_2`` for a zone named
-"Home"). The home zone and YAML zones have no ``unique_id`` and so no registry
-entry, and the home zone's state says ``editable: True``
-(``components/zone/__init__.py``).
+"Home"). The home zone has no ``unique_id`` and so no registry entry. Without
+Core's ``config`` integration the entity registry commands are unknown, and
+without ``zone`` so is ``zone/list``: those are Core's own failed reads.
 """
 
-import copy
+from __future__ import annotations
+
 import json
-from collections.abc import Iterator
+from contextlib import AbstractContextManager
+from functools import partial
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.zone.const import DATA_ZONE
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
+from custom_components.ha_mcp_tools import websocket_api as component_ws
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantAPIError,
-    HomeAssistantConnectionError,
-)
-from ha_mcp.tools.tools_zones import ZoneTools, _build_zone_result
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.tools import tools_zones
+from ha_mcp.tools.config_helpers import update as helper_update
+from ha_mcp.tools.tools_zones import ZoneTools
 
-OFFICE = {
-    "id": "office",
-    "name": "Office",
-    "latitude": 52.5,
-    "longitude": 13.4,
-    "radius": 100.0,
-    "passive": False,
-}
-OFFICE_ENTRY = {"entity_id": "zone.office", "platform": "zone", "unique_id": "office"}
-REGISTRY = [
-    OFFICE_ENTRY,
-    {"entity_id": "light.desk", "platform": "hue", "unique_id": "office"},
-]
-HOME_STATE = {
-    "entity_id": "zone.home",
-    "state": "1",
-    "attributes": {
-        "latitude": 52.0,
-        "longitude": 13.0,
-        "radius": 100,
-        "passive": False,
-        "persons": ["person.anna"],
-        "device_trackers": [],
-        "editable": True,
-        "icon": "mdi:home",
-        "friendly_name": "Home",
-    },
-}
-REGISTRY_BLOCKED = {
-    "success": False,
-    "error": "WebSocket request blocked (403 Forbidden)",
-    "error_code": None,
-}
+from ._backup_target_identity_core import create_named
+from ._client_spies import sent_messages
+from ._core_setup import with_config_component
+from ._receipt_faults import at_entity_wait, lose_state_reads, on_receipt
+from ._tool_errors import error_of
+
+WAITS = pytest.mark.parametrize("wait", [True, False], ids=["wait", "no-wait"])
+CALLS = pytest.mark.parametrize("call", ["remove", "update"])
+# What Core answers for a command of an integration that is not set up.
+UNKNOWN_COMMAND = "Unknown command"
 
 
-def _client(
-    replies: dict[str, Any] | None = None,
-    states: dict[str, dict[str, Any]] | None = None,
-) -> MagicMock:
-    """A client answering by WebSocket command type and entity_id."""
-    answers: dict[str, Any] = {
-        "config/entity_registry/list": {"success": True, "result": REGISTRY},
-        "zone/list": {"success": True, "result": [OFFICE]},
-        "zone/create": {"success": True, "result": OFFICE},
-        "zone/update": {"success": True, "result": OFFICE},
-        "zone/delete": {"success": True, "result": None},
-        "config/entity_registry/get": {"success": True, "result": OFFICE_ENTRY},
-        "config/entity_registry/update": {
-            "success": True,
-            "result": {"entity_entry": OFFICE_ENTRY},
-        },
-    }
-    answers.update(replies or {})
-    known = {"zone.office": {"entity_id": "zone.office", "attributes": {}}}
-    known.update(states or {})
-
-    async def send(message: dict[str, Any]) -> Any:
-        answer = answers[message["type"]]
-        if isinstance(answer, Exception):
-            raise answer
-        # A fresh copy each time, like a real reply: the tools write into results.
-        return copy.deepcopy(answer)
-
-    async def state(entity_id: str) -> dict[str, Any]:
-        if entity_id not in known:
-            raise HomeAssistantAPIError("Not found", status_code=404)
-        return known[entity_id]
-
-    client = MagicMock()
-    client.send_websocket_message = AsyncMock(side_effect=send)
-    client.get_entity_state = AsyncMock(side_effect=state)
-    client.get_states = AsyncMock(return_value=list(known.values()))
-    return client
-
-
-def _sent(client: MagicMock, kind: str) -> list[dict[str, Any]]:
-    return [
-        c.args[0]
-        for c in client.send_websocket_message.call_args_list
-        if c.args[0]["type"] == kind
-    ]
-
-
-def _error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
-    return json.loads(str(exc_info.value))["error"]  # type: ignore[no-any-return]
+async def _create(client: HomeAssistantClient, name: str = "Office") -> str:
+    """A stored zone called ``name``; its storage id."""
+    return await create_named(client, "zone", name, latitude=52.5, longitude=13.4)
 
 
 @pytest.fixture
-def removed() -> AsyncMock:
-    return AsyncMock(return_value=True)
+async def unregistered_client(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """``core_client`` on a Core holding zone "Office", without the ``config``
+    integration that serves the entity registry commands."""
+    assert await async_setup_component(hass, "zone", {})
+    await _create(core_client)
+    return core_client
 
 
 @pytest.fixture
-def registered() -> AsyncMock:
-    return AsyncMock(return_value=True)
+async def office_client(
+    hass: HomeAssistant, unregistered_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    """The same Core with the entity registry commands."""
+    return await with_config_component(hass, unregistered_client)
 
 
-_FETCH_SCHEMAS = "ha_mcp.tools.config_helpers.icon_route.fetch_helper_schemas"
+def _stored(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
+    """Core's stored zones by id."""
+    zones = hass.data[DATA_ZONE].storage_collection.async_items()
+    return {zone["id"]: zone for zone in zones}
 
 
-@pytest.fixture(autouse=True)
-def _no_component(removed: AsyncMock, registered: AsyncMock) -> Iterator[None]:
-    """Serve every call through Core's own WebSocket commands, without waiting."""
-    with (
-        patch(
-            "ha_mcp.tools.tools_zones.get_component_caps",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "ha_mcp.tools.config_helpers.update.read_stored_helper_item",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "ha_mcp.tools.config_helpers.create.write_helper_item",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(_FETCH_SCHEMAS, new=AsyncMock(return_value=None)),
-        patch(
-            "ha_mcp.tools.config_helpers.update.wait_for_entity_registered",
-            new=registered,
-        ),
-        patch(
-            "ha_mcp.tools.config_helpers.create.wait_for_entity_registered",
-            new=AsyncMock(return_value=True),
-        ),
-        patch("ha_mcp.tools.tools_zones.wait_for_entity_removed", new=removed),
-    ):
-        yield
+def _deleted_at_receipt(
+    hass: HomeAssistant, zone_id: str
+) -> AbstractContextManager[None]:
+    """Core removes ``zone_id`` as the tool's ``zone/delete`` reaches it, so
+    its own handler answers ``not_found``."""
+    collection = hass.data[DATA_ZONE].storage_collection
+    return on_receipt(
+        hass,
+        "zone/delete",
+        lambda msg: hass.async_create_task(collection.async_delete_item(zone_id)),
+    )
+
+
+def _sent(spy: AsyncMock, kind: str) -> list[dict[str, Any]]:
+    return [c.args[0] for c in spy.call_args_list if c.args[0]["type"] == kind]
+
+
+def _writes(spy: AsyncMock) -> list[dict[str, Any]]:
+    return _sent(spy, "zone/delete") + _sent(spy, "zone/update")
+
+
+async def _change(tools: ZoneTools, call: str, zone_id: str) -> None:
+    if call == "remove":
+        await tools.ha_remove_zone(zone_id=zone_id)
+    else:
+        await tools.ha_set_zone(zone_id=zone_id, radius=50)
 
 
 class TestZoneLookup:
-    async def test_core_not_found_on_delete_is_resource_not_found(self) -> None:
-        """The registry still lists the zone, but Core has already removed it."""
-        client = _client(
-            {
-                "zone/delete": {
-                    "success": False,
-                    "error": "Command failed: Unable to find zone_id office",
-                    "error_code": "not_found",
-                }
-            }
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id="office")
-
-        assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
-
-    @pytest.mark.parametrize("call", ["remove", "update"])
-    async def test_unknown_zone_is_resource_not_found_before_any_write(
-        self, call: str
+    async def test_a_zone_core_has_already_removed_is_resource_not_found(
+        self, hass: HomeAssistant, office_client: HomeAssistantClient
     ) -> None:
-        client = _client()
-        tools = ZoneTools(client)
+        """Core listed the zone, then removed it before the delete arrived."""
+        with (
+            _deleted_at_receipt(hass, "office"),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await ZoneTools(office_client).ha_remove_zone(zone_id="office")
+        await hass.async_block_till_done()
 
-        with pytest.raises(ToolError) as exc_info:
-            if call == "remove":
-                await tools.ha_remove_zone(zone_id="nope")
-            else:
-                await tools.ha_set_zone(zone_id="nope", radius=50)
+        assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
 
-        error = _error(exc_info)
+    @CALLS
+    async def test_unknown_zone_is_resource_not_found_before_any_write(
+        self, office_client: HomeAssistantClient, call: str
+    ) -> None:
+        with (
+            sent_messages(office_client) as spy,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _change(ZoneTools(office_client), call, "nope")
+
+        error = error_of(exc_info)
         assert error["code"] == "RESOURCE_NOT_FOUND"
         assert "ha_get_zone" in json.dumps(error)
-        assert not _sent(client, "zone/delete") and not _sent(client, "zone/update")
+        assert _writes(spy) == []
 
-    @pytest.mark.parametrize("call", ["remove", "update"])
+    @CALLS
     @pytest.mark.parametrize("zone_id", ["home", "zone.home"])
     async def test_home_zone_is_refused_as_not_stored(
-        self, call: str, zone_id: str
+        self, office_client: HomeAssistantClient, call: str, zone_id: str
     ) -> None:
-        """The home zone has a state but no registry entry: nothing is sent."""
-        client = _client(states={"zone.home": HOME_STATE})
-        tools = ZoneTools(client)
+        """Core's home zone has a state but no registry entry: nothing is sent."""
+        with (
+            sent_messages(office_client) as spy,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _change(ZoneTools(office_client), call, zone_id)
+
+        assert "not a stored zone" in error_of(exc_info)["message"]
+        assert _writes(spy) == []
+
+    async def test_a_zone_list_core_refuses_is_a_read_failure_not_a_missing_zone(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Core cannot list the stored zones: whether zone office exists is
+        unknown, not answered."""
+        assert await async_setup_component(hass, "config", {})
 
         with pytest.raises(ToolError) as exc_info:
-            if call == "remove":
-                await tools.ha_remove_zone(zone_id=zone_id)
-            else:
-                await tools.ha_set_zone(zone_id=zone_id, radius=50)
+            await ZoneTools(core_client).ha_remove_zone(zone_id="office")
 
-        assert "not a stored zone" in _error(exc_info)["message"]
-        assert not _sent(client, "zone/delete") and not _sent(client, "zone/update")
-
-    async def test_an_empty_state_reply_is_a_read_failure(self) -> None:
-        """A non-JSON reply comes back as {}: neither a zone nor its absence."""
-        client = _client(states={"zone.ghost": {}})
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id="ghost")
-
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "SERVICE_CALL_FAILED"
-        assert "Could not read the state" in error["message"]
+        assert UNKNOWN_COMMAND in error["message"]
 
-    async def test_a_failed_zone_list_is_a_read_failure_not_a_yaml_zone(self) -> None:
-        client = _client({"zone/list": {"success": False, "error": "timeout"}})
+    async def test_a_registry_entry_of_no_stored_zone_is_not_deleted(
+        self, office_client: HomeAssistantClient, entity_registry: er.EntityRegistry
+    ) -> None:
+        """The entry's unique_id names no stored zone: there is no zone to delete."""
+        ghost = entity_registry.async_get_or_create("zone", "zone", "ghost")
 
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id="office")
+        with (
+            sent_messages(office_client) as spy,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await ZoneTools(office_client).ha_remove_zone(zone_id=ghost.entity_id)
 
-        assert _error(exc_info)["code"] == "SERVICE_CALL_FAILED"
-        assert _sent(client, "zone/delete") == []
+        assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
+        assert _sent(spy, "zone/delete") == []
 
-    async def test_a_registry_entry_of_no_stored_zone_is_not_written(self) -> None:
-        """zone.ghost's unique_id names no stored zone, so its backup holds
-        nothing to restore."""
-        ghost = {"entity_id": "zone.ghost", "platform": "zone", "unique_id": "ghost"}
-        client = _client(
-            {"config/entity_registry/list": {"success": True, "result": [ghost]}}
-        )
+    async def test_a_bare_id_no_zone_has_deletes_no_zone_by_its_entity(
+        self,
+        hass: HomeAssistant,
+        office_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        """Zone office's entity was renamed zone.work: a repeated removal of
+        work must not delete office."""
+        entity_registry.async_update_entity("zone.office", new_entity_id="zone.work")
+        await hass.async_block_till_done()
 
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id="zone.ghost")
+        with (
+            sent_messages(office_client) as spy,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await ZoneTools(office_client).ha_remove_zone(zone_id="work")
 
-        assert _error(exc_info)["code"] == "RESOURCE_NOT_FOUND"
-        assert _sent(client, "zone/delete") == []
-
-    async def test_a_bare_id_no_zone_has_deletes_no_zone_by_its_entity(self) -> None:
-        """After zone work's removal zone.work is still office's entity: a
-        repeated removal of work would delete office."""
-        renamed = [{**OFFICE_ENTRY, "entity_id": "zone.work"}]
-        client = _client(
-            {"config/entity_registry/list": {"success": True, "result": renamed}},
-            states={"zone.work": {"entity_id": "zone.work", "attributes": {}}},
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id="work")
-
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "RESOURCE_NOT_FOUND"
         assert "not a stored zone" not in error["message"]
-        assert _sent(client, "zone/delete") == []
+        assert _sent(spy, "zone/delete") == []
 
-    async def test_a_bare_id_no_zone_has_points_to_the_entity_id(self) -> None:
-        client = _client(
-            {"config/entity_registry/list": {"success": True, "result": []}}
-        )
-
+    async def test_a_bare_id_no_zone_has_points_to_the_entity_id(
+        self, office_client: HomeAssistantClient
+    ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id="work")
+            await ZoneTools(office_client).ha_remove_zone(zone_id="work")
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         hints = [error.get("suggestion", ""), *error.get("suggestions", [])]
         assert any("full entity_id" in s for s in hints)
 
-    async def test_blocked_registry_read_is_not_a_missing_zone(self) -> None:
-        client = _client({"config/entity_registry/list": REGISTRY_BLOCKED})
-
+    async def test_an_unreadable_registry_is_not_a_missing_zone(
+        self, hass: HomeAssistant, unregistered_client: HomeAssistantClient
+    ) -> None:
         with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_remove_zone(zone_id="office")
+            await ZoneTools(unregistered_client).ha_remove_zone(zone_id="office")
 
-        error = _error(exc_info)
-        assert error["code"] != "RESOURCE_NOT_FOUND"
-        assert "403" in error["message"]
-        assert _sent(client, "zone/delete") == []
+        error = error_of(exc_info)
+        assert error["code"] == "SERVICE_CALL_FAILED"
+        assert UNKNOWN_COMMAND in error["message"]
+        assert "office" in _stored(hass)
 
     @pytest.mark.parametrize("zone_id", ["office", "zone.office"])
-    async def test_remove_by_zone_id_or_entity_id_deletes_the_storage_item(
-        self, zone_id: str
+    async def test_remove_by_zone_id_or_entity_id_deletes_the_stored_zone(
+        self, hass: HomeAssistant, office_client: HomeAssistantClient, zone_id: str
     ) -> None:
-        client = _client()
+        result = await ZoneTools(office_client).ha_remove_zone(zone_id=zone_id)
 
-        result = await ZoneTools(client).ha_remove_zone(zone_id=zone_id)
-
-        assert _sent(client, "zone/delete") == [
-            {"type": "zone/delete", "zone_id": "office"}
-        ]
+        assert "office" not in _stored(hass)
         assert result["entity_id"] == "zone.office"
 
     async def test_a_storage_id_wins_over_a_renamed_entity_of_the_same_text(
         self,
+        hass: HomeAssistant,
+        office_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
     ) -> None:
-        """Zone "office" was renamed to zone.work; zone "work" is zone.work_2."""
-        renamed = [
-            {"entity_id": "zone.work", "platform": "zone", "unique_id": "office"},
-            {"entity_id": "zone.work_2", "platform": "zone", "unique_id": "work"},
-        ]
-        work = {**OFFICE, "id": "work", "name": "Work"}
-        client = _client(
-            {
-                "config/entity_registry/list": {"success": True, "result": renamed},
-                "zone/list": {"success": True, "result": [OFFICE, work]},
-            }
-        )
+        """Zone office was renamed to zone.work; zone work is then zone.work_2."""
+        entity_registry.async_update_entity("zone.office", new_entity_id="zone.work")
+        await _create(office_client, "Work")
 
-        await ZoneTools(client).ha_remove_zone(zone_id="work")
+        await ZoneTools(office_client).ha_remove_zone(zone_id="work")
 
-        assert _sent(client, "zone/delete") == [
-            {"type": "zone/delete", "zone_id": "work"}
-        ]
+        assert set(_stored(hass)) == {"office"}
 
 
 class TestRemoveWait:
-    async def test_wait_false_skips_the_removal_check(self, removed: AsyncMock) -> None:
-        await ZoneTools(_client()).ha_remove_zone(zone_id="office", wait=False)
+    @WAITS
+    async def test_the_removal_is_waited_on_only_when_asked(
+        self, office_client: HomeAssistantClient, wait: bool
+    ) -> None:
+        real = tools_zones.wait_for_entity_removed
+        with patch.object(tools_zones, "wait_for_entity_removed", wraps=real) as waiter:
+            result = await ZoneTools(office_client).ha_remove_zone(
+                zone_id="office", wait=wait
+            )
 
-        removed.assert_not_awaited()
+        assert "warnings" not in result
+        if wait:
+            waiter.assert_awaited_once_with(office_client, "zone.office")
+        else:
+            waiter.assert_not_awaited()
 
     async def test_a_zone_still_present_after_the_wait_is_a_warning(
-        self, removed: AsyncMock
+        self, hass: HomeAssistant, office_client: HomeAssistantClient
     ) -> None:
-        removed.return_value = False
-
-        result = await ZoneTools(_client()).ha_remove_zone(zone_id="office")
+        with (
+            at_entity_wait(hass, lambda: hass.states.async_set("zone.office", "0")),
+            patch.object(
+                tools_zones,
+                "wait_for_entity_removed",
+                partial(tools_zones.wait_for_entity_removed, timeout=0.05),
+            ),
+        ):
+            result = await ZoneTools(office_client).ha_remove_zone(zone_id="office")
 
         assert result["success"] is True
         assert "still present" in result["warnings"][0]
 
-    async def test_a_failed_removal_check_is_a_warning(
-        self, removed: AsyncMock
+    async def test_a_removal_check_that_gets_no_answer_is_a_warning(
+        self,
+        hass: HomeAssistant,
+        office_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        removed.side_effect = HomeAssistantConnectionError("socket closed")
+        lose_state_reads(office_client, monkeypatch)
 
-        result = await ZoneTools(_client()).ha_remove_zone(zone_id="office")
+        result = await ZoneTools(office_client).ha_remove_zone(zone_id="office")
 
+        assert "office" not in _stored(hass)
         assert "verification failed" in result["warnings"][0]
 
+    @WAITS
     async def test_a_zone_without_an_entity_is_removed_without_a_guessed_one(
-        self, removed: AsyncMock
+        self,
+        hass: HomeAssistant,
+        office_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+        wait: bool,
     ) -> None:
         """zone.office would be named and waited on, though no registry entry
         links it to the zone."""
-        client = _client(
-            {"config/entity_registry/list": {"success": True, "result": []}}
-        )
+        entity_registry.async_remove("zone.office")
+        real = tools_zones.wait_for_entity_removed
 
-        result = await ZoneTools(client).ha_remove_zone(zone_id="office")
+        with patch.object(tools_zones, "wait_for_entity_removed", wraps=real) as waiter:
+            result = await ZoneTools(office_client).ha_remove_zone(
+                zone_id="office", wait=wait
+            )
 
-        assert _sent(client, "zone/delete") == [
-            {"type": "zone/delete", "zone_id": "office"}
-        ]
+        assert "office" not in _stored(hass)
         assert result["entity_id"] is None
-        assert "not waited on" in result["warnings"][0]
-        removed.assert_not_awaited()
-
-    async def test_without_wait_a_zone_without_an_entity_says_only_why(
-        self, removed: AsyncMock
-    ) -> None:
-        client = _client(
-            {"config/entity_registry/list": {"success": True, "result": []}}
-        )
-
-        result = await ZoneTools(client).ha_remove_zone(zone_id="office", wait=False)
-
-        assert result["warnings"] == ["Zone office had no entity in the registry."]
+        (warning,) = result["warnings"]
+        assert ("not waited on" in warning) is wait
+        waiter.assert_not_awaited()
 
     @pytest.mark.parametrize("deleted", [True, False], ids=["removed", "failed"])
     async def test_a_zone_without_an_entity_is_named_by_its_storage_id(
-        self, removed: AsyncMock, deleted: bool
+        self,
+        hass: HomeAssistant,
+        office_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+        deleted: bool,
     ) -> None:
         """Neither the reply nor the error says "zone None"."""
-        replies: dict[str, Any] = {
-            "config/entity_registry/list": {"success": True, "result": []}
-        }
-        if not deleted:
-            replies["zone/delete"] = {"success": False, "error": "boom"}
-        tools = ZoneTools(_client(replies))
+        entity_registry.async_remove("zone.office")
+        tools = ZoneTools(office_client)
 
         if deleted:
             message = (await tools.ha_remove_zone(zone_id="office"))["message"]
         else:
-            with pytest.raises(ToolError) as exc_info:
+            with (
+                _deleted_at_receipt(hass, "office"),
+                pytest.raises(ToolError) as exc_info,
+            ):
                 await tools.ha_remove_zone(zone_id="office")
-            message = _error(exc_info)["message"]
+            await hass.async_block_till_done()
+            message = error_of(exc_info)["message"]
 
         assert "office" in message and "None" not in message
 
 
 class TestZoneWrites:
-    async def test_update_by_entity_id_writes_the_zone_item(self) -> None:
-        client = _client()
+    async def test_update_by_entity_id_writes_the_stored_zone(
+        self, hass: HomeAssistant, office_client: HomeAssistantClient
+    ) -> None:
+        result = await ZoneTools(office_client).ha_set_zone(
+            zone_id="zone.office", radius=250
+        )
 
-        result = await ZoneTools(client).ha_set_zone(zone_id="zone.office", radius=250)
-
-        (update,) = _sent(client, "zone/update")
-        assert update["zone_id"] == "office"
-        assert update["radius"] == 250
+        assert _stored(hass)["office"]["radius"] == 250
         assert result["zone_id"] == "office"
         assert result["entity_id"] == "zone.office"
         assert result["updated_fields"] == ["radius"]
 
-    async def test_wait_false_skips_the_update_check(
-        self, registered: AsyncMock
+    @WAITS
+    async def test_the_update_is_waited_on_only_when_asked(
+        self, office_client: HomeAssistantClient, wait: bool
     ) -> None:
-        await ZoneTools(_client()).ha_set_zone(zone_id="office", radius=250, wait=False)
+        real = helper_update.wait_for_entity_registered
+        with patch.object(
+            helper_update, "wait_for_entity_registered", wraps=real
+        ) as waiter:
+            await ZoneTools(office_client).ha_set_zone(
+                zone_id="office", radius=250, wait=wait
+            )
 
-        registered.assert_not_awaited()
+        assert waiter.await_count == (1 if wait else 0)
 
-    async def test_create_leaves_defaults_to_core(self) -> None:
+    async def test_create_leaves_defaults_to_core(
+        self, office_client: HomeAssistantClient
+    ) -> None:
         """Core applies radius and passive defaults; the tool must not pin its own."""
-        client = _client()
+        with sent_messages(office_client) as spy:
+            await ZoneTools(office_client).ha_set_zone(
+                name="School", latitude=52.5, longitude=13.4
+            )
 
-        await ZoneTools(client).ha_set_zone(
-            name="Office", latitude=52.5, longitude=13.4
-        )
-
-        (create,) = _sent(client, "zone/create")
+        (create,) = _sent(spy, "zone/create")
         assert "radius" not in create
         assert "passive" not in create
 
     @pytest.mark.parametrize("zone_id", [None, "office"])
-    async def test_blank_name_is_refused(self, zone_id: str) -> None:
-        client = _client()
-
-        with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_set_zone(
+    async def test_blank_name_is_refused(
+        self, office_client: HomeAssistantClient, zone_id: str | None
+    ) -> None:
+        with (
+            sent_messages(office_client) as spy,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await ZoneTools(office_client).ha_set_zone(
                 name="  ", latitude=52.5, longitude=13.4, zone_id=zone_id
             )
 
-        assert "name cannot be blank" in _error(exc_info)["message"]
-        assert not _sent(client, "zone/create") and not _sent(client, "zone/update")
+        assert "name cannot be blank" in error_of(exc_info)["message"]
+        assert _sent(spy, "zone/create") == [] and _sent(spy, "zone/update") == []
 
 
 class TestListing:
-    async def test_without_component_lists_the_home_zone_and_entity_ids(self) -> None:
-        """Core's zone/list serves stored zones only; the home zone is in the states."""
-        client = _client(states={"zone.home": HOME_STATE})
-
-        result = await ZoneTools(client).ha_get_zone()
+    async def test_without_component_lists_the_home_zone_and_entity_ids(
+        self, hass: HomeAssistant, office_client: HomeAssistantClient
+    ) -> None:
+        """Core's zone/list serves stored zones only; the home zone is in the
+        states, whose ``editable`` attribute says True."""
+        result = await ZoneTools(office_client).ha_get_zone()
 
         by_id = {z["id"]: z for z in result["zones"]}
         assert by_id["office"]["entity_id"] == "zone.office"
         assert by_id["office"]["source"] == "storage"
-        assert by_id["home"]["entity_id"] == "zone.home"
-        assert by_id["home"]["source"] == "yaml"
-        assert by_id["home"]["editable"] is False
-        assert by_id["home"]["name"] == "Home"
+        home = by_id["home"]
+        assert (home["entity_id"], home["source"], home["editable"]) == (
+            "zone.home",
+            "yaml",
+            False,
+        )
+        assert home["name"] == hass.config.location_name
         assert "warnings" not in result
 
-    async def test_a_stored_zone_named_home_wins_over_the_home_zone(self) -> None:
-        stored_home = {**OFFICE, "id": "home", "name": "Home"}
-        client = _client(
-            {
-                "zone/list": {"success": True, "result": [stored_home]},
-                "config/entity_registry/list": {
-                    "success": True,
-                    "result": [
-                        {
-                            "entity_id": "zone.home_2",
-                            "platform": "zone",
-                            "unique_id": "home",
-                        }
-                    ],
-                },
-            },
-            states={"zone.home": HOME_STATE},
-        )
+    @pytest.mark.parametrize("path", ["core", "component"])
+    async def test_a_stored_zone_named_home_wins_over_the_home_zone(
+        self, hass: HomeAssistant, office_client: HomeAssistantClient, path: str
+    ) -> None:
+        """The home zone and a stored zone named Home both have the id "home"."""
+        await _create(office_client, "Home")
+        if path == "component":
+            component_ws.async_register_commands(hass)
 
-        result = await ZoneTools(client).ha_get_zone(zone_id="home")
+        result = await ZoneTools(office_client).ha_get_zone(zone_id="home")
 
         assert result["zone"]["entity_id"] == "zone.home_2"
 
-    def test_a_stored_zone_wins_whatever_the_row_order(self) -> None:
-        """The component lists zones in state-machine order, home zone first."""
-        home_row = {"id": "home", "entity_id": "zone.home", "editable": False}
-        stored = {"id": "home", "entity_id": "zone.home_2", "editable": True}
-
-        result = _build_zone_result([home_row, stored], "home")
-
-        assert result["zone"] is stored
-
-    async def test_a_zone_can_be_fetched_by_its_entity_id(self) -> None:
-        result = await ZoneTools(_client()).ha_get_zone(zone_id="zone.office")
+    async def test_a_zone_can_be_fetched_by_its_entity_id(
+        self, office_client: HomeAssistantClient
+    ) -> None:
+        result = await ZoneTools(office_client).ha_get_zone(zone_id="zone.office")
 
         assert result["zone"]["id"] == "office"
 
-    async def test_without_registry_stored_zones_are_not_listed_twice(self) -> None:
-        """No zone state can be matched to its stored zone without the registry."""
-        client = _client(
-            {"config/entity_registry/list": REGISTRY_BLOCKED},
-            states={"zone.home": HOME_STATE},
-        )
-
-        result = await ZoneTools(client).ha_get_zone()
+    async def test_without_registry_stored_zones_are_not_listed_twice(
+        self, unregistered_client: HomeAssistantClient
+    ) -> None:
+        """No zone state can be matched to its stored zone without the
+        registry; the listing names what it leaves out, and why."""
+        result = await ZoneTools(unregistered_client).ha_get_zone()
 
         assert [z["id"] for z in result["zones"]] == ["office"]
-        assert "'home'" in result["warnings"][0] and "403" in result["warnings"][0]
+        (warning,) = result["warnings"]
+        assert "'home'" in warning
+        assert "icons set in the entity registry" in warning
+        assert UNKNOWN_COMMAND in warning
 
-    async def test_without_registry_the_listing_names_the_missing_icons(self) -> None:
-        client = _client({"config/entity_registry/list": REGISTRY_BLOCKED})
-
-        result = await ZoneTools(client).ha_get_zone()
-
-        assert "icons set in the entity registry" in result["warnings"][0]
-
-    async def test_without_states_the_home_zone_is_named_as_missing(self) -> None:
-        client = _client(states={"zone.home": HOME_STATE})
-        client.get_states.side_effect = HomeAssistantConnectionError("socket closed")
-
-        result = await ZoneTools(client).ha_get_zone()
+    async def test_without_states_the_home_zone_is_named_as_missing(
+        self, office_client: HomeAssistantClient
+    ) -> None:
+        with patch.object(
+            office_client,
+            "get_states",
+            AsyncMock(side_effect=HomeAssistantConnectionError("states down")),
+        ):
+            result = await ZoneTools(office_client).ha_get_zone()
 
         assert [z["id"] for z in result["zones"]] == ["office"]
         assert "'home'" in result["warnings"][0]
 
     async def test_a_zone_missing_from_an_incomplete_listing_is_not_absent(
-        self,
+        self, unregistered_client: HomeAssistantClient
     ) -> None:
-        client = _client(
-            {"config/entity_registry/list": REGISTRY_BLOCKED},
-            states={"zone.home": HOME_STATE},
-        )
-
         with pytest.raises(ToolError) as exc_info:
-            await ZoneTools(client).ha_get_zone(zone_id="home")
+            await ZoneTools(unregistered_client).ha_get_zone(zone_id="home")
 
-        error = _error(exc_info)
+        error = error_of(exc_info)
         assert error["code"] == "SERVICE_CALL_FAILED"
-        assert "403" in error["message"]
+        assert UNKNOWN_COMMAND in error["message"]

@@ -7,8 +7,8 @@ ha-mcp-oauth with DEVENV_OAUTH, or embedded server) or HAOS
 (external, embedded or app). It writes the local targets to tunnel to
 DEVENV_TARGETS and keeps the instance up. The standalone and embedded servers
 run in developer mode, so a branch is iterated on with the same tools as on any
-live HA: ha_dev_manage_server (update_source) for the embedded server, HACS for
-the component, ha_restart. The app is updated by installing the branch's build
+live HA: ha_dev_manage_server (update_source) for the embedded server, the
+Marketplace for the component, ha_restart. The app is updated by installing the branch's build
 from an app repository (stage_app_repo.py; docs/dev-ha-env.md, step 5).
 
 Status lines (STATUS {...}) go to the job log.
@@ -219,8 +219,8 @@ class Instance:
             )
 
     def update_component(self) -> None:
-        """Replace the HAOS component with the branch's, as HACS does, and
-        restart Core."""
+        """Replace the HAOS component with the branch's, as the Marketplace
+        does, and restart Core."""
         supervisor_data(
             f"homeassistant/{COMPONENT.as_posix()}",
             tar_dir(SRC / COMPONENT, COMPONENT.name),

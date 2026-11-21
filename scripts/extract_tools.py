@@ -4,7 +4,7 @@
 Parses tool source files statically to extract names, tags, annotations,
 descriptions, and parameter schemas. Produces:
   - site/src/data/tools.json  (for Astro site tool explorer)
-  - README.md update          (table between markers, badge count)
+  - README.md update          (table between markers, badge count and alt text)
 
 Usage:
     python scripts/extract_tools.py
@@ -152,10 +152,7 @@ def _joined_str_value(node: ast.JoinedStr, scope: ModuleScope) -> Any:
         resolved = _static_value(value.value, scope)
         if resolved is UNRESOLVED:
             return UNRESOLVED
-        convert = _CONVERSIONS.get(value.conversion)
-        if convert is None:
-            return UNRESOLVED
-        parts.append(convert(resolved))
+        parts.append(_CONVERSIONS[value.conversion](resolved))
     return "".join(parts)
 
 
@@ -225,6 +222,19 @@ def _import_source(path: Path, node: ast.ImportFrom) -> Path | None:
     return None
 
 
+def _imports_only_submodules(path: Path, node: ast.ImportFrom) -> bool:
+    """``from . import sibling`` binds modules, which hold no name to pull in;
+    reading the initializer for it walks the package again for every importer."""
+    if node.module is not None or node.level == 0:
+        return False
+    base = path.parents[node.level - 1]
+    return all(
+        (base / f"{alias.name}.py").is_file()
+        or (base / alias.name / "__init__.py").is_file()
+        for alias in node.names
+    )
+
+
 def _apply_imports(path: Path, tree: ast.Module, scope: ModuleScope) -> bool:
     """Pull imported constants and helpers into ``scope``.
 
@@ -233,7 +243,7 @@ def _apply_imports(path: Path, tree: ast.Module, scope: ModuleScope) -> bool:
     """
     hit_cycle = False
     for node in tree.body:
-        if not isinstance(node, ast.ImportFrom):
+        if not isinstance(node, ast.ImportFrom) or _imports_only_submodules(path, node):
             continue
         source = _import_source(path, node)
         if source is None:
@@ -896,6 +906,7 @@ def update_readme(tools: list[dict], *, content: str | None = None) -> str:
         )
 
     readme = re.sub(r"tools-[^-]+-blue", f"tools-{count}-blue", readme)
+    readme = re.sub(r'alt="\d+ Tools"', f'alt="{count} Tools"', readme)
     return readme
 
 

@@ -1,509 +1,587 @@
-"""Unit tests for tools_updates module."""
+"""``ha_manage_updates`` on a real ``hass``.
 
-from unittest.mock import AsyncMock, MagicMock
+Updates are entities of Core's ``update`` integration (``_tools_updates_core``);
+what the tool reads from GitHub, the Home Assistant blog and PyPI is served by
+respx.
+"""
 
-import httpx
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
 import pytest
+from homeassistant.components.update import UpdateEntityFeature
+from homeassistant.core import HomeAssistant
 
-from ha_mcp.tools.tools_updates import (
-    _extract_blog_content,
-    _get_monthly_versions_between,
-    _parse_breaking_changes_html,
-    _parse_patch_breaking_changes,
-    _parse_version,
-    _strip_html,
-    _supports_release_notes,
-    _try_raw_cdn,
+from ha_mcp import update_check
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+
+from ._tool_errors import error_of
+from ._tools_updates_core import (
+    CORE_UPDATE,
+    SoftwareUpdate,
+    Web,
+    core_release,
+    manage_updates,
+    set_up_updates,
 )
-from ha_mcp.tools.update_categories import categorize_update as _categorize_update
+from ._tools_updates_core import web as web
+
+INSTALLABLE = UpdateEntityFeature.INSTALL | UpdateEntityFeature.BACKUP
+BLOG = "https://www.home-assistant.io/blog/2025/12/03/release-202512/"
+RELEASE_URL = "https://github.com/owner/repo/releases/tag/v1.0.0"
+RAW = "https://raw.githubusercontent.com/owner/repo/v1.0.0/"
 
 
-class TestListUpdatesHaMcpUpdate:
-    """ha_manage_updates (list mode) surfaces the MCP server's own update status."""
+@pytest.fixture(autouse=True)
+def no_self_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The server's own PyPI check stays off unless a test turns it on."""
+    monkeypatch.setenv(update_check.DISABLE_ENV, "1")
 
-    @pytest.mark.asyncio
-    async def test_ha_mcp_update_present_when_available(self, monkeypatch):
-        from ha_mcp import update_check
-        from ha_mcp.tools.tools_updates import UpdateTools
 
-        monkeypatch.setattr(
-            update_check,
-            "get_update_field",
-            AsyncMock(
-                return_value={
-                    "current": "7.8.0",
-                    "latest": "7.9.0",
-                    "update_available": True,
-                }
-            ),
+async def listed(
+    hass: HomeAssistant, client: HomeAssistantClient, update: SoftwareUpdate
+) -> dict[str, Any]:
+    """The one listed update, as ``list`` reports it."""
+    await set_up_updates(hass, update)
+    result = await manage_updates(client)
+    [entry] = result["updates"]
+    return dict(entry)
+
+
+async def core_analysis(
+    hass: HomeAssistant, client: HomeAssistantClient, installed: str, latest: str
+) -> dict[str, Any]:
+    """``get`` with release analysis on a Core update from ``installed`` to ``latest``."""
+    await set_up_updates(
+        hass,
+        SoftwareUpdate(
+            CORE_UPDATE, title="Home Assistant Core", installed=installed, latest=latest
+        ),
+    )
+    return await manage_updates(
+        client, action="get", entity_ids=[CORE_UPDATE], include_release_notes=True
+    )
+
+
+class TestServerOwnUpdate:
+    """``list`` also tells whether a newer ha-mcp is out."""
+
+    async def test_newer_server_release_is_reported(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        web: Web,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        for name in (update_check.DISABLE_ENV, "SUPERVISOR_TOKEN", "HA_MCP_EMBEDDED"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.8.0")
+        web.serve(
+            "https://pypi.org/pypi/ha-mcp/json", json={"info": {"version": "7.9.0"}}
         )
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"entities": []}}
-        )
-        client.get_states = AsyncMock(return_value=[])
-        result = await UpdateTools(client).ha_manage_updates()
+        await set_up_updates(hass)
+
+        result = await manage_updates(core_client)
+
         assert result["ha_mcp_update"] == {
             "current": "7.8.0",
             "latest": "7.9.0",
             "update_available": True,
         }
 
-    @pytest.mark.asyncio
-    async def test_ha_mcp_update_absent_when_not_applicable(self, monkeypatch):
-        from ha_mcp import update_check
-        from ha_mcp.tools.tools_updates import UpdateTools
+    async def test_no_server_update_field_when_the_check_is_off(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await set_up_updates(hass)
 
-        monkeypatch.setattr(
-            update_check, "get_update_field", AsyncMock(return_value=None)
-        )
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"entities": []}}
-        )
-        client.get_states = AsyncMock(return_value=[])
-        result = await UpdateTools(client).ha_manage_updates()
+        result = await manage_updates(core_client)
+
         assert "ha_mcp_update" not in result
 
 
-class TestCategorizeUpdate:
-    """Test _categorize_update function."""
+class TestCategories:
+    """Each pending update is filed under the category the Updates page uses."""
 
-    def test_core_update_by_entity_id(self):
-        """Core updates are identified by entity_id."""
-        result = _categorize_update("update.home_assistant_core_update", {})
-        assert result == "core"
-
-    def test_core_without_home_assistant_in_title(self):
-        """Entity with 'core' but without 'home_assistant' in title is not categorized as core."""
-        # The logic requires BOTH 'core' in entity_id AND 'home_assistant' in title
-        # Note: 'home_assistant' (with underscore) must be present, not 'Home Assistant' (with space)
-        result = _categorize_update(
-            "update.some_core_entity", {"title": "Home Assistant Core Update"}
-        )
-        # This is 'other' because 'home_assistant' (underscore) is not in 'home assistant core update'
-        assert result == "other"
-
-    def test_os_update(self):
-        """OS updates are identified correctly."""
-        result = _categorize_update("update.home_assistant_operating_system", {})
-        assert result == "os"
-
-    def test_supervisor_update(self):
-        """Supervisor updates are identified correctly."""
-        result = _categorize_update("update.home_assistant_supervisor_update", {})
-        assert result == "supervisor"
-
-    @pytest.mark.parametrize("platform", ["hacs", "marketplace"])
-    def test_store_update_by_owning_integration(self, platform):
-        """A store repository's update is "hacs" whatever its entity_id says.
-
-        The Marketplace (Core 2026.11) names its entities after the repository
-        alone, so update.ha_mcp_custom_component carries no "hacs".
-        """
-        result = _categorize_update("update.ha_mcp_custom_component", {}, platform)
-        assert result == "hacs"
-
-    def test_addon_update_by_title(self):
-        """Add-on updates are identified by title."""
-        result = _categorize_update(
-            "update.some_addon_update", {"title": "Some Add-on"}
-        )
-        assert result == "addons"
-
-    def test_device_firmware_esphome(self):
-        """ESPHome device updates are categorized as devices."""
-        result = _categorize_update("update.esphome_device_firmware", {})
-        assert result == "devices"
-
-    def test_device_firmware_by_title(self):
-        """Device firmware updates are identified by title containing firmware."""
-        result = _categorize_update(
-            "update.slzb_06m_core", {"title": "SLZB-06M Core firmware"}
-        )
-        assert result == "devices"
-
-    def test_other_update(self):
-        """Unknown updates are categorized as other."""
-        result = _categorize_update("update.unknown_thing", {"title": "Unknown"})
-        assert result == "other"
-
-    def test_none_title_does_not_raise(self):
-        """Title attribute being None should not raise an error.
-
-        This test verifies the fix for issue #185 where update entities
-        with None values for title would cause:
-        'NoneType' object has no attribute 'lower'
-        """
-        # This should not raise AttributeError
-        result = _categorize_update("update.some_entity", {"title": None})
-        # Without a title, it should fall through to "other"
-        assert result == "other"
-
-    def test_missing_title_does_not_raise(self):
-        """Missing title attribute should not raise an error."""
-        result = _categorize_update("update.some_entity", {})
-        assert result == "other"
-
-    def test_none_title_with_entity_match(self):
-        """Entity ID matching should still work even with None title."""
-        result = _categorize_update(
-            "update.home_assistant_core_update", {"title": None}
-        )
-        assert result == "core"
-
-
-class TestSupportsReleaseNotes:
-    """Test _supports_release_notes function."""
-
-    def test_feature_flag_set(self):
-        """Returns True when release notes feature flag (16) is set."""
-        # Feature flag 16 = 0x10 = release notes support
-        result = _supports_release_notes("update.test", {"supported_features": 16})
-        assert result is True
-
-    def test_release_url_present(self):
-        """Returns True when release_url is present."""
-        result = _supports_release_notes(
-            "update.test",
-            {"release_url": "https://github.com/test/repo/releases/tag/v1.0"},
-        )
-        assert result is True
-
-    def test_both_present(self):
-        """Returns True when both feature flag and release_url are present."""
-        result = _supports_release_notes(
-            "update.test",
-            {
-                "supported_features": 16,
-                "release_url": "https://github.com/test/repo/releases/tag/v1.0",
-            },
-        )
-        assert result is True
-
-    def test_neither_present(self):
-        """Returns False when neither feature flag nor release_url is present."""
-        result = _supports_release_notes("update.test", {})
-        assert result is False
-
-    def test_other_features_only(self):
-        """Returns False when only other feature flags are set (not 16)."""
-        # Features 1=install, 2=specific_version, 4=progress, 8=backup
-        result = _supports_release_notes(
-            "update.test",
-            {"supported_features": 15},  # 1+2+4+8
-        )
-        assert result is False
-
-
-class TestParseVersion:
-    """Test _parse_version function."""
-
-    def test_standard_ha_version(self):
-        assert _parse_version("2025.11.3") == (2025, 11, 3)
-
-    def test_major_minor_only(self):
-        assert _parse_version("2025.11") == (2025, 11)
-
-    def test_empty_and_invalid(self):
-        assert _parse_version("") is None
-        assert _parse_version("beta") is None
-        assert _parse_version("2025.11.beta") is None
-
-    def test_version_comparison(self):
-        assert _parse_version("2025.10.0") < _parse_version("2025.11.0")  # type: ignore[operator]
-        assert _parse_version("2025.11.1") < _parse_version("2025.11.3")  # type: ignore[operator]
-
-
-class TestGetMonthlyVersionsBetween:
-    """Test _get_monthly_versions_between function."""
-
-    def test_single_month_gap(self):
-        assert _get_monthly_versions_between("2025.11.3", "2025.12.0") == ["2025.12.0"]
-
-    def test_multi_month_gap(self):
-        assert _get_monthly_versions_between("2025.10.3", "2026.2.1") == [
-            "2025.11.0",
-            "2025.12.0",
-            "2026.1.0",
-            "2026.2.0",
-        ]
-
-    def test_year_boundary(self):
-        assert _get_monthly_versions_between("2025.11.0", "2026.1.0") == [
-            "2025.12.0",
-            "2026.1.0",
-        ]
-
-    def test_same_month_returns_empty(self):
-        assert _get_monthly_versions_between("2025.11.0", "2025.11.3") == []
-        assert _get_monthly_versions_between("2025.11.0", "2025.11.0") == []
-
-    def test_invalid_versions_fallback(self):
-        assert _get_monthly_versions_between("bad", "2025.11.0") == ["2025.11.0"]
-
-
-class TestStripHtml:
-    """Test _strip_html function."""
-
-    def test_removes_tags(self):
-        assert _strip_html("<b>bold</b> text") == "bold text"
-
-    def test_preserves_structure(self):
-        result = _strip_html("<p>First</p><p>Second</p>")
-        assert "First" in result and "Second" in result and "\n" in result
-        result = _strip_html("<ul><li>One</li><li>Two</li></ul>")
-        assert "- One" in result and "- Two" in result
-
-    def test_edge_cases(self):
-        assert _strip_html("") == ""
-        assert _strip_html("just plain text") == "just plain text"
-
-
-class TestExtractBlogContent:
-    """Test _extract_blog_content function."""
-
-    def test_extracts_article_content(self):
-        html = "<nav>Nav</nav><article><h2>Release</h2><p>Great stuff</p></article><footer>F</footer>"
-        result = _extract_blog_content(html)
-        assert "Great stuff" in result and "Nav" not in result
-
-    def test_fallback_to_heading(self):
-        html = (
-            '<div>Nav</div><h1>Release</h1><p>Content</p><footer class="f">F</footer>'
-        )
-        assert "Content" in _extract_blog_content(html)
-
-    def test_strips_html_tags(self):
-        result = _extract_blog_content("<article><p><b>Bold</b> text</p></article>")
-        assert "<" not in result and "Bold" in result
-
-
-class TestParseBreakingChangesHtml:
-    """Test _parse_breaking_changes_html function."""
-
-    SAMPLE_HTML = (
-        '<h2 id="backward-incompatible-changes">Backward-incompatible changes</h2>'
-        "<h3>Tuya</h3><p>HVACMode converted to presets.</p>"
-        "<h3>Group</h3><p>Sensor group behavior changed.</p>"
-        '<h2 id="all-changes">All changes</h2>'
+    @pytest.mark.parametrize(
+        ("entity_id", "title", "category"),
+        [
+            pytest.param(CORE_UPDATE, None, "core", id="core"),
+            pytest.param(
+                "update.some_core_entity",
+                "Home Assistant Core Update",
+                "other",
+                id="core-in-id-but-not-home-assistant-core",
+            ),
+            pytest.param("update.home_assistant_operating_system", None, "os", id="os"),
+            pytest.param(
+                "update.home_assistant_supervisor_update", None, "supervisor", id="sv"
+            ),
+            pytest.param("update.some_addon_update", "Some Add-on", "addons", id="app"),
+            pytest.param("update.esphome_device_firmware", None, "devices", id="esp"),
+            pytest.param(
+                "update.slzb_06m_core",
+                "SLZB-06M Core firmware",
+                "devices",
+                id="firmware-title",
+            ),
+            pytest.param("update.unknown_thing", "Unknown", "other", id="other"),
+        ],
     )
+    async def test_update_lands_in_its_category(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        entity_id: str,
+        title: str | None,
+        category: str,
+    ) -> None:
+        entry = await listed(hass, core_client, SoftwareUpdate(entity_id, title=title))
 
-    def test_parses_entries(self):
-        result = _parse_breaking_changes_html(self.SAMPLE_HTML, "https://example.com")
-        assert result is not None
-        assert result["count"] == 2
-        names = [e["integration"] for e in result["entries"]]
-        assert "Tuya" in names and "Group" in names
+        assert entry["category"] == category
 
-    def test_entry_descriptions(self):
-        result = _parse_breaking_changes_html(self.SAMPLE_HTML, "https://example.com")
-        assert result is not None
-        tuya = next(e for e in result["entries"] if e["integration"] == "Tuya")
-        assert "HVACMode" in tuya["description"]
-
-    def test_no_section_returns_none(self):
-        assert _parse_breaking_changes_html("<h2>Other</h2>", "url") is None
-
-    def test_empty_section_returns_none(self):
-        html = '<h2 id="backward-incompatible-changes">BC</h2><h2 id="next">N</h2>'
-        assert _parse_breaking_changes_html(html, "url") is None
-
-
-class TestParsePatchBreakingChanges:
-    """Test _parse_patch_breaking_changes function."""
-
-    def test_parses_tagged_items(self):
-        body = (
-            "- Normal fix\n- Tuya fix ([tuya docs]) (breaking-change)\n- Another fix\n"
+    async def test_store_repository_update_is_hacs_whatever_its_entity_id(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """The Marketplace names its entities after the repository alone, so
+        update.ha_mcp_custom_component carries nothing the category could be
+        read from."""
+        await set_up_updates(
+            hass,
+            SoftwareUpdate("update.ha_mcp_custom_component"),
+            integration="marketplace",
         )
-        result = _parse_patch_breaking_changes(body, "2025.11.1")
-        assert result is not None
-        assert result["count"] == 1
-        assert result["entries"][0]["integration"] == "tuya"
-        assert "2025.11.1" in result["source_url"]
 
-    def test_no_breaking_changes(self):
-        assert _parse_patch_breaking_changes("- Normal fix\n", "2025.11.1") is None
+        result = await manage_updates(core_client)
 
-    def test_integration_extraction(self):
-        body = "- Fix ([vesync documentation]) (breaking-change)\n"
-        result = _parse_patch_breaking_changes(body, "2025.11.2")
-        assert result is not None and result["entries"][0]["integration"] == "vesync"
-
-    def test_unknown_when_no_docs_link(self):
-        body = "- Some change (breaking-change)\n"
-        result = _parse_patch_breaking_changes(body, "2025.11.2")
-        assert result is not None and result["entries"][0]["integration"] == "unknown"
-
-    def test_case_insensitive(self):
-        body = "- Fix ([hue docs]) (Breaking-Change)\n"
-        result = _parse_patch_breaking_changes(body, "2025.11.1")
-        assert result is not None and result["count"] == 1
+        assert [u["entity_id"] for u in result["categories"]["hacs"]] == [
+            "update.ha_mcp_custom_component"
+        ]
 
 
-class TestTryRawCdn:
-    """Unit tests for _try_raw_cdn loop behavior."""
+@pytest.mark.parametrize(
+    ("features", "release_url", "supported"),
+    [
+        pytest.param(UpdateEntityFeature.RELEASE_NOTES, None, True, id="feature"),
+        pytest.param(UpdateEntityFeature(0), RELEASE_URL, True, id="release-url"),
+        pytest.param(UpdateEntityFeature(0), None, False, id="neither"),
+        pytest.param(
+            UpdateEntityFeature.INSTALL
+            | UpdateEntityFeature.SPECIFIC_VERSION
+            | UpdateEntityFeature.PROGRESS
+            | UpdateEntityFeature.BACKUP,
+            None,
+            False,
+            id="only-other-features",
+        ),
+    ],
+)
+async def test_list_says_which_updates_have_release_notes(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    features: UpdateEntityFeature,
+    release_url: str | None,
+    supported: bool,
+) -> None:
+    update = SoftwareUpdate("update.thing", features=features, release_url=release_url)
 
-    def _make_http_client(self, responses: list) -> MagicMock:
-        """Build a fake httpx client whose .get() returns responses in order."""
-        client = MagicMock()
-        client.get = AsyncMock(side_effect=responses)
-        return client
+    entry = await listed(hass, core_client, update)
 
-    def _ok(self, text: str) -> MagicMock:
-        r = MagicMock()
-        r.status_code = 200
-        r.text = text
-        return r
-
-    def _not_found(self) -> MagicMock:
-        r = MagicMock()
-        r.status_code = 404
-        r.text = ""
-        return r
-
-    @pytest.mark.asyncio
-    async def test_returns_none_when_all_paths_404(self):
-        client = self._make_http_client([self._not_found()] * 5)
-        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
-        assert result is None
-        assert client.get.await_count == 5
-
-    @pytest.mark.asyncio
-    async def test_skips_short_content_and_returns_none(self):
-        short = self._ok("too short")
-        client = self._make_http_client([short] * 5)
-        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_exception_on_one_path_continues_to_next(self):
-        good = self._ok("x" * 100)
-        client = self._make_http_client([httpx.ConnectError("boom"), good])
-        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
-        assert result is not None
-        assert result["source"] == "github_raw"
-        assert client.get.await_count == 2
-
-    @pytest.mark.asyncio
-    async def test_returns_first_path_with_sufficient_content(self):
-        good = self._ok("y" * 100)
-        client = self._make_http_client([self._not_found(), good])
-        result = await _try_raw_cdn(client, "owner", "repo", "v1.0.0")
-        assert result is not None
-        assert result["notes"] == "y" * 100
-        assert client.get.await_count == 2
+    assert entry["supports_release_notes"] is supported
 
 
-class TestManageUpdatesDispatch:
-    """Write-action dispatch: category resolution, filtering, aggregation."""
+class TestReleaseNotes:
+    """``get`` returns an update's release notes from the first source that has them."""
 
-    @pytest.mark.asyncio
-    async def test_install_category_resolves_filters_and_dispatches(self, monkeypatch):
-        from ha_mcp import update_check
-        from ha_mcp.tools.tools_updates import UpdateTools
-
-        monkeypatch.setattr(
-            update_check, "get_update_field", AsyncMock(return_value=None)
+    async def test_notes_come_from_the_update_entity_first(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    ) -> None:
+        notes = "## 1.1.0\n- Faster startup"
+        await set_up_updates(
+            hass,
+            SoftwareUpdate(
+                "update.thing",
+                features=UpdateEntityFeature.RELEASE_NOTES,
+                release_url=RELEASE_URL,
+                notes=notes,
+            ),
         )
-        # Titles carry "Add-on" so _categorize_update buckets both as
-        # "addons"; addon_b is in_progress and must be filtered out.
-        states = [
+
+        result = await manage_updates(
+            core_client, action="get", entity_ids=["update.thing"]
+        )
+
+        assert (result["release_notes"], result["release_notes_source"]) == (
+            notes,
+            "websocket",
+        )
+        assert web.requested == []
+
+    async def test_hint_links_the_release_when_no_changelog_file_exists(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    ) -> None:
+        await set_up_updates(
+            hass, SoftwareUpdate("update.thing", release_url=RELEASE_URL)
+        )
+
+        result = await manage_updates(
+            core_client, action="get", entity_ids=["update.thing"]
+        )
+
+        assert "release_notes" not in result
+        assert result["release_notes_hint"] == (
+            "Release notes could not be fetched automatically. "
+            f"View them at: {RELEASE_URL}"
+        )
+        assert len([u for u in web.requested if u.startswith(RAW)]) == 5
+
+    async def test_a_changelog_too_short_to_be_notes_is_not_returned(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    ) -> None:
+        web.hosts["raw.githubusercontent.com"] = {"text": "too short"}
+        await set_up_updates(
+            hass, SoftwareUpdate("update.thing", release_url=RELEASE_URL)
+        )
+
+        result = await manage_updates(
+            core_client, action="get", entity_ids=["update.thing"]
+        )
+
+        assert "release_notes" not in result
+        assert "release_notes_hint" in result
+
+    @pytest.mark.parametrize("first_file", ["unreachable", "missing"])
+    async def test_changelog_is_read_from_the_next_file_when_one_fails(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        web: Web,
+        first_file: str,
+    ) -> None:
+        if first_file == "unreachable":
+            web.unreachable.add(RAW + "CHANGELOG.md")
+        changelog = "# Releases\n\n## v1.0.0\n- First stable release of the thing"
+        web.serve(RAW + "RELEASES.md", text=changelog)
+        await set_up_updates(
+            hass, SoftwareUpdate("update.thing", release_url=RELEASE_URL)
+        )
+
+        result = await manage_updates(
+            core_client, action="get", entity_ids=["update.thing"]
+        )
+
+        assert (result["release_notes"], result["release_notes_source"]) == (
+            changelog,
+            "github_raw",
+        )
+        assert [u for u in web.requested if u.startswith(RAW)] == [
+            RAW + "CHANGELOG.md",
+            RAW + "RELEASES.md",
+        ]
+
+
+class TestCoreReleaseAnalysis:
+    """``get`` with ``include_release_notes`` reads every monthly Core release
+    between the installed and the offered version."""
+
+    @pytest.mark.parametrize(
+        ("installed", "latest", "checked"),
+        [
+            pytest.param("2025.11.3", "2025.12.0", ["2025.12.0"], id="next-month"),
+            pytest.param(
+                "2025.10.3",
+                "2026.2.1",
+                ["2025.11.0", "2025.12.0", "2026.1.0", "2026.2.0"],
+                id="across-new-year",
+            ),
+            pytest.param("2025.11.0", "2025.11.3", [], id="same-month"),
+            pytest.param("2025.11", "2025.12.0", ["2025.12.0"], id="no-patch-part"),
+            pytest.param(
+                "2025.12.0b1", "2026.1.0", ["2026.1.0"], id="unreadable-installed"
+            ),
+        ],
+    )
+    async def test_every_monthly_release_in_between_is_checked(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        web: Web,
+        installed: str,
+        latest: str,
+        checked: list[str],
+    ) -> None:
+        web.hosts["api.github.com"] = {
+            "json": {"body": "- Fix ([hue docs]) (breaking-change)"}
+        }
+
+        result = await core_analysis(hass, core_client, installed, latest)
+
+        assert result["breaking_changes"]["versions_checked"] == checked
+
+    @pytest.mark.parametrize(
+        ("page", "content"),
+        [
+            pytest.param(
+                "<h1>Blog</h1><nav>Nav</nav><article><h2>Release</h2>"
+                "<p><b>Great</b> stuff</p><ul><li>One</li><li>Two</li></ul>"
+                "</article><aside>Related posts</aside><footer>F</footer>",
+                "Release\nGreat stuff\n\n- One\n- Two",
+                id="article",
+            ),
+            pytest.param(
+                '<div>Nav</div><h1>Release</h1><p>Content</p><footer class="f">F</footer>',
+                "Release\nContent",
+                id="from-the-heading",
+            ),
+            pytest.param("just plain text", "just plain text", id="plain-page"),
+        ],
+    )
+    async def test_blog_post_body_is_returned_as_plain_text(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        web: Web,
+        page: str,
+        content: str,
+    ) -> None:
+        web.serve(core_release("2025.12.0"), json={"body": BLOG})
+        web.serve(BLOG, text=page)
+
+        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
+
+        assert result["multi_version_release_notes"] == [
+            {"version": "2025.12.0", "content": content, "source_url": BLOG}
+        ]
+
+    async def test_an_empty_blog_post_adds_no_release_notes(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    ) -> None:
+        web.serve(core_release("2025.12.0"), json={"body": BLOG})
+        web.serve(BLOG, text="")
+
+        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
+
+        assert result["multi_version_release_notes"] == []
+        assert result["breaking_changes"]["versions_checked"] == ["2025.12.0"]
+
+    async def test_blog_breaking_changes_are_listed_per_integration(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    ) -> None:
+        web.serve(core_release("2025.12.0"), json={"body": BLOG})
+        web.serve(
+            BLOG,
+            text="<article>"
+            '<h2 id="backward-incompatible-changes">Backward-incompatible changes</h2>'
+            "<h3>Tuya</h3><p>HVACMode converted to presets.</p>"
+            "<h3>Group</h3><p>Sensor group behavior changed.</p>"
+            '<h2 id="all-changes">All changes</h2></article>',
+        )
+
+        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
+
+        assert result["breaking_changes"]["entries"] == [
             {
-                "entity_id": "update.addon_a",
-                "state": "on",
-                "attributes": {"title": "Add-on A", "in_progress": False},
+                "integration": "Tuya",
+                "description": "HVACMode converted to presets.",
+                "version": "2025.12.0",
             },
             {
-                "entity_id": "update.addon_b",
-                "state": "on",
-                "attributes": {"title": "Add-on B", "in_progress": True},
+                "integration": "Group",
+                "description": "Sensor group behavior changed.",
+                "version": "2025.12.0",
             },
         ]
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"entities": []}}
-        )
-        client.get_states = AsyncMock(return_value=states)
-        client.call_service = AsyncMock(return_value={"success": True})
+        assert result["breaking_changes"]["count"] == 2
 
-        result = await UpdateTools(client).ha_manage_updates(
-            action="install", categories=["addons"], backup=True
+    @pytest.mark.parametrize(
+        "page",
+        [
+            pytest.param("<article><h2>Other</h2><p>x</p></article>", id="no-section"),
+            pytest.param(
+                '<article><h2 id="backward-incompatible-changes">BC</h2>'
+                '<h2 id="next">N</h2></article>',
+                id="empty-section",
+            ),
+        ],
+    )
+    async def test_blog_without_breaking_changes_lists_none(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        web: Web,
+        page: str,
+    ) -> None:
+        web.serve(core_release("2025.12.0"), json={"body": BLOG})
+        web.serve(BLOG, text=page)
+
+        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
+
+        assert result["breaking_changes"] == {
+            "entries": [],
+            "count": 0,
+            "versions_checked": ["2025.12.0"],
+        }
+
+    @pytest.mark.parametrize(
+        ("line", "integration", "description"),
+        [
+            pytest.param(
+                "- Tuya fix ([tuya docs]) (breaking-change)",
+                "tuya",
+                "Tuya fix ([tuya docs])",
+                id="docs-link",
+            ),
+            pytest.param(
+                "- Fix ([vesync documentation]) (breaking-change)",
+                "vesync",
+                "Fix ([vesync documentation])",
+                id="documentation-link",
+            ),
+            pytest.param(
+                "- Some change (breaking-change)",
+                "unknown",
+                "Some change",
+                id="no-link",
+            ),
+            pytest.param(
+                "- Fix ([hue docs]) (Breaking-Change)",
+                "hue",
+                "Fix ([hue docs])",
+                id="any-case",
+            ),
+        ],
+    )
+    async def test_tagged_release_line_is_a_breaking_change(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        web: Web,
+        line: str,
+        integration: str,
+        description: str,
+    ) -> None:
+        body = f"- Normal fix\n{line}\n- Another fix\n"
+        web.serve(core_release("2025.12.0"), json={"body": body})
+
+        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
+
+        assert result["breaking_changes"]["entries"] == [
+            {
+                "integration": integration,
+                "description": description,
+                "version": "2025.12.0",
+            }
+        ]
+
+    async def test_release_without_tagged_lines_has_no_breaking_changes(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    ) -> None:
+        web.serve(core_release("2025.12.0"), json={"body": "- Normal fix\n"})
+
+        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
+
+        assert result["breaking_changes"] == {
+            "entries": [],
+            "count": 0,
+            "versions_checked": [],
+        }
+
+
+class TestBatchActions:
+    """install / skip act on each target and report every outcome."""
+
+    async def test_category_install_skips_updates_already_in_progress(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        idle = SoftwareUpdate("update.addon_a", title="Add-on A", features=INSTALLABLE)
+        busy = SoftwareUpdate(
+            "update.addon_b",
+            title="Add-on B",
+            features=INSTALLABLE | UpdateEntityFeature.PROGRESS,
+            in_progress=True,
+        )
+        await set_up_updates(hass, idle, busy)
+
+        result = await manage_updates(
+            core_client, action="install", categories=["addons"], backup=True
         )
 
-        client.call_service.assert_awaited_once_with(
-            "update", "install", {"entity_id": "update.addon_a", "backup": True}
-        )
-        assert (result["requested"], result["succeeded"], result["failed"]) == (
-            1,
-            1,
-            0,
-        )
-        assert result["results"][0]["success"] is True
+        assert (idle.installs, busy.installs) == ([(None, True)], [])
+        assert (result["requested"], result["succeeded"], result["failed"]) == (1, 1, 0)
+        assert result["results"] == [{"success": True, "entity_id": "update.addon_a"}]
 
-    @pytest.mark.asyncio
-    async def test_skip_mixed_existing_and_missing_aggregates(self, monkeypatch):
-        from ha_mcp import update_check
-        from ha_mcp.tools.tools_updates import UpdateTools
+    async def test_skip_reports_a_missing_entity_and_skips_the_rest(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await set_up_updates(hass, SoftwareUpdate("update.exists"))
 
-        monkeypatch.setattr(
-            update_check, "get_update_field", AsyncMock(return_value=None)
-        )
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"entities": []}}
-        )
-        client.get_states = AsyncMock(
-            return_value=[
-                {"entity_id": "update.exists", "state": "on", "attributes": {}}
-            ]
-        )
-        client.call_service = AsyncMock(return_value={"success": True})
-
-        result = await UpdateTools(client).ha_manage_updates(
-            action="skip", entity_ids=["update.exists", "update.missing"]
+        result = await manage_updates(
+            core_client, action="skip", entity_ids=["update.exists", "update.missing"]
         )
 
-        # The existence precheck routes the missing entity to a per-item
-        # ENTITY_NOT_FOUND result; only the real one reaches call_service.
-        client.call_service.assert_awaited_once_with(
-            "update", "skip", {"entity_id": "update.exists"}
-        )
-        assert (result["requested"], result["succeeded"], result["failed"]) == (
-            2,
-            1,
-            1,
-        )
+        state = hass.states.get("update.exists")
+        assert state is not None
+        assert state.attributes["skipped_version"] == "1.1.0"
+        assert (result["requested"], result["succeeded"], result["failed"]) == (2, 1, 1)
         assert result["success"] is False
-        failures = [r for r in result["results"] if not r.get("success")]
-        assert len(failures) == 1
-        assert failures[0]["entity_id"] == "update.missing"
+        [failure] = [r for r in result["results"] if not r.get("success")]
+        assert failure["entity_id"] == "update.missing"
+        assert failure["error"]["code"] == "ENTITY_NOT_FOUND"
 
-    @pytest.mark.asyncio
-    async def test_connection_error_propagates_out_of_batch(self, monkeypatch):
-        from ha_mcp import update_check
-        from ha_mcp.client.rest_client import HomeAssistantConnectionError
-        from ha_mcp.tools.tools_updates import UpdateTools
-
-        monkeypatch.setattr(
-            update_check, "get_update_field", AsyncMock(return_value=None)
-        )
-        client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": {"entities": []}}
-        )
-        client.get_states = AsyncMock(
-            return_value=[
-                {"entity_id": "update.exists", "state": "on", "attributes": {}}
-            ]
-        )
-        client.call_service = AsyncMock(
-            side_effect=HomeAssistantConnectionError("connection lost")
+    async def test_an_update_core_refuses_does_not_stop_the_batch(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await set_up_updates(
+            hass,
+            SoftwareUpdate("update.auto", auto_update=True),
+            SoftwareUpdate("update.manual"),
         )
 
-        with pytest.raises(Exception) as excinfo:
-            await UpdateTools(client).ha_manage_updates(
-                action="skip", entity_ids=["update.exists"]
+        result = await manage_updates(
+            core_client, action="skip", entity_ids=["update.auto", "update.manual"]
+        )
+
+        state = hass.states.get("update.manual")
+        assert state is not None
+        assert state.attributes["skipped_version"] == "1.1.0"
+        assert (result["requested"], result["succeeded"], result["failed"]) == (2, 1, 1)
+        [failure] = [r for r in result["results"] if not r.get("success")]
+        assert failure["entity_id"] == "update.auto"
+        assert failure["error"]["code"] == "SERVICE_CALL_FAILED"
+
+    async def test_lost_connection_ends_the_batch_with_a_connection_error(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await set_up_updates(
+            hass, SoftwareUpdate("update.first"), SoftwareUpdate("update.second")
+        )
+        with (
+            patch.object(
+                core_client,
+                "call_service",
+                AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
+            ) as call_service,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await manage_updates(
+                core_client, action="skip", entity_ids=["update.first", "update.second"]
             )
-        assert "connection" in str(excinfo.value).lower()
+
+        assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
+        assert call_service.await_count == 1
+
+
+async def test_get_names_an_update_entity_core_does_not_have(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core's 404 for the state is what marks the entity as missing."""
+    await set_up_updates(hass, SoftwareUpdate("update.exists"))
+
+    with pytest.raises(ToolError) as exc_info:
+        await manage_updates(core_client, action="get", entity_ids=["update.missing"])
+
+    error = error_of(exc_info)
+    assert error["code"] == "ENTITY_NOT_FOUND"
+    assert error["message"] == "Update entity not found: update.missing"

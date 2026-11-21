@@ -41,7 +41,6 @@ class ErrorCode(StrEnum):
 
     # Authentication errors
     AUTH_INVALID_TOKEN = "AUTH_INVALID_TOKEN"
-    AUTH_EXPIRED = "AUTH_EXPIRED"
     AUTH_INSUFFICIENT_PERMISSIONS = "AUTH_INSUFFICIENT_PERMISSIONS"
 
     # Entity errors
@@ -161,10 +160,6 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Generate a new long-lived access token in Home Assistant",
         "Check token has not been revoked",
     ],
-    ErrorCode.AUTH_EXPIRED: [
-        "The access token has expired",
-        "Generate a new long-lived access token in Home Assistant",
-    ],
     ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS: [
         "The access token does not have sufficient permissions",
         "Check token permissions in Home Assistant",
@@ -243,10 +238,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Report this issue if it persists",
     ],
     ErrorCode.COMPONENT_NOT_INSTALLED: [
-        (
-            "Install the required custom component via HACS (the Marketplace on "
-            "Home Assistant 2026.11+)"
-        ),
+        "Install the required custom component via the Marketplace",
         "Restart Home Assistant after installation",
     ],
 }
@@ -378,7 +370,6 @@ _ADDON_AUTH_INVALID_SUGGESTIONS: list[str] = [
 def create_auth_error(
     message: str,
     details: str | None = None,
-    expired: bool = False,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create an authentication error response.
@@ -386,26 +377,25 @@ def create_auth_error(
     On a Home Assistant add-on install (Supervisor-managed) the token is the
     Supervisor token rather than a user-editable HOMEASSISTANT_TOKEN, so the
     default token-centric suggestions don't apply. Substitute add-on-specific
-    guidance for an invalid token in that case (see issue #1694). Expired-token
-    errors keep the default guidance — token expiry is not the Supervisor-token
-    failure mode this swap targets.
+    guidance in that case (see issue #1694).
     """
-    code = ErrorCode.AUTH_EXPIRED if expired else ErrorCode.AUTH_INVALID_TOKEN
+    # Lazy import keeps this low-level module free of an import-time
+    # dependency on ._version; is_running_in_addon reads SUPERVISOR_TOKEN
+    # live so it reflects the current environment.
+    from ._version import is_embedded, is_running_in_addon
 
     suggestions: list[str] | None = None
-    if code is ErrorCode.AUTH_INVALID_TOKEN:
-        # Lazy import keeps this low-level module free of an import-time
-        # dependency on ._version; is_running_in_addon reads SUPERVISOR_TOKEN
-        # live so it reflects the current environment.
-        from ._version import is_embedded, is_running_in_addon
-
-        if is_embedded():
-            suggestions = _EMBEDDED_AUTH_INVALID_SUGGESTIONS
-        elif is_running_in_addon():
-            suggestions = _ADDON_AUTH_INVALID_SUGGESTIONS
+    if is_embedded():
+        suggestions = _EMBEDDED_AUTH_INVALID_SUGGESTIONS
+    elif is_running_in_addon():
+        suggestions = _ADDON_AUTH_INVALID_SUGGESTIONS
 
     return create_error_response(
-        code, message, details, suggestions=suggestions, context=context
+        ErrorCode.AUTH_INVALID_TOKEN,
+        message,
+        details,
+        suggestions=suggestions,
+        context=context,
     )
 
 

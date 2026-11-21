@@ -1,0 +1,11 @@
+{
+  "reason": "#3118 adds ten container_only Z-Wave tests (TestZwaveNetwork in tests/src/e2e/tools/test_radio_management.py): they run Core's zwave_js integration against a Z-Wave JS server in a sidecar container on Docker's bridge, which a HAOS VM does not reach. Every HAOS lane gains ten collection-time skips; the testcontainer lanes run them.",
+  "deltas": {
+    "haos": 10,
+    "haos_stdio": 10,
+    "haos_inaddon": 10,
+    "haos_embedded": 10,
+    "haos_embedded_no_tools": 10,
+    "haos_inaddon_no_tools": 10
+  }
+}

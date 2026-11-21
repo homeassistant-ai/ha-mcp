@@ -241,7 +241,7 @@ async def test_unsubscribe_treats_a_closed_socket_as_transport_loss(
     out of a waiter's cleanup it replaced the result the wait already had, e.g.
     turned a confirmed removal into a failed check. A socket closing before the
     answer fails the pending future with a connection error, which replaced
-    the repository the HACS registration wait had found.
+    the reload a ``config_entries/subscribe`` wait had seen.
     """
     caplog.set_level(logging.DEBUG, logger=WS_LOGGER)
     async with connected_ws(core_client) as client:

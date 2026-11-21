@@ -514,7 +514,7 @@
     "advanced.code_mode_saved_tools_path.label": "已保存工具路径",
     "advanced.code_mode_saved_tools_path.help": "用于在重启之间持久化自定义工具的 JSON 文件。",
     "advanced.extra_yaml_write_keys.label": "额外的 YAML 可写键",
-    "advanced.extra_yaml_write_keys.help": "此安装中面向 YAML 优先的集成（例如 alert2）除内置键外，ha_config_set_yaml 还可写入的额外顶级键。每行输入一个键或用逗号分隔键。重新定义 Home Assistant 自身信任边界的键永远无法添加且将被忽略。需要自定义组件 1.2.4 或更新版本。",
+    "advanced.extra_yaml_write_keys.help": "此安装中适用于 YAML 优先集成（例如 alert2）的、ha_config_set_yaml 除了内置键之外还可以写入的额外顶级键。每行输入一个键或用逗号分隔键。重新定义 Home Assistant 自身信任边界的键永远无法添加，并将被忽略。",
     "advanced.redact_app_option_keys.label": "要脱敏的额外应用选项键",
     "advanced.redact_app_option_keys.help": "要像密码字段一样进行脱敏的应用（加载项）选项名称，适用于其架构将机密存储为纯文本的应用（例如 backup_password）。使用逗号或换行符分隔名称。名称适用于所有应用；若要将其限制为一个应用，请编写 app_slug:name。命名选项组将涵盖其中的所有选项。仅在开启“Redact Secrets”时使用。默认留空。",
     "advanced.sidecar_pin_port.label": "设置界面旁路服务端口",
@@ -758,11 +758,7 @@
     },
     "ha_get_entity": {
       "title": "获取实体",
-      "description": "获取一个或多个实体的实体注册表信息。"
-    },
-    "ha_get_entity_exposure": {
-      "title": "获取实体暴露设置",
-      "description": "获取实体暴露（exposure）设置——列出全部或获取特定实体的设置。"
+      "description": "获取实体注册表条目，如果不指定实体，则获取注册表设置和公开的实体。"
     },
     "ha_get_hacs_info": {
       "title": "获取 HACS 信息",
@@ -793,8 +789,8 @@
       "description": "获取一个或多个实体的当前状态、state 与属性（灯光、开关、传感器、温控、覆盖件、锁、风扇等）。"
     },
     "ha_get_system_health": {
-      "title": "获取系统健康（含 ZHA/Z-Wave/集成诊断）",
-      "description": "获取 Home Assistant 系统健康状态，包含 Zigbee（ZHA）、Z-Wave JS 及各集成诊断转储。"
+      "title": "获取系统健康状况（包含 ZHA/Z-Wave/Thread/Matter 网络）",
+      "description": "获取 Home Assistant 系统健康状况，包含 Zigbee (ZHA)、Z-Wave JS、Thread 和 Matter 网络。"
     },
     "ha_get_todo": {
       "title": "获取待办",
@@ -810,7 +806,7 @@
     },
     "ha_list_floors_areas": {
       "title": "列出楼层与区域",
-      "description": "按楼层层级升序列出楼层，每层嵌套其所属区域，并包含未分配楼层的区域。"
+      "description": "按 Home Assistant 保持的顺序列出楼层，每个楼层都嵌套有分配给它们的区域，以及没有分配楼层的区域。"
     },
     "ha_list_services": {
       "title": "列出可用服务",
@@ -905,8 +901,8 @@
       "description": "通过名称、域或区域搜索实体（灯光、传感器、开关、温控等），并在一次调用中同时检索自动化/脚本/场景/辅助实体/仪表盘配置内部。"
     },
     "ha_set_area_or_floor": {
-      "title": "创建或更新区域或楼层",
-      "description": "创建或更新 Home Assistant 的区域或楼层。"
+      "title": "创建、更新或重新排序区域或楼层",
+      "description": "创建、更新或重新排序 Home Assistant 区域或楼层。"
     },
     "ha_set_device": {
       "title": "设置设备",
@@ -914,7 +910,7 @@
     },
     "ha_set_entity": {
       "title": "设置实体",
-      "description": "更新实体注册表中的实体属性。"
+      "description": "更新实体注册表条目，如果不指定 entity_id，则更新整个注册表的设置。"
     },
     "ha_set_integration": {
       "title": "设置集成",

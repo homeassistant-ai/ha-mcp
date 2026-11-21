@@ -1,197 +1,213 @@
-"""Core contracts must follow the registered validator, including future fields."""
+"""Core contracts follow the validator Core registered, including future fields.
 
+The commands are Core's own (``energy``, ``history``, the recorder), set up on
+a real ``hass``; the component's ``ha_mcp_tools/core_contract`` and its
+siblings run through Core's WebSocket API, and the server reads them with its
+own client.
+"""
+
+from contextlib import ExitStack
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+import voluptuous as vol
+from homeassistant.components import websocket_api as core_websocket_api
+from homeassistant.components.energy.data import EnergyManager
+from homeassistant.components.recorder import Recorder
+from homeassistant.components.recorder import statistics as recorder_statistics
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.typing import MockHAClientWebSocket
 
-from .test_component_ws_search import FakeHass
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import energy_preferences
+from ha_mcp.tools.core_contract import core_contract, validate_energy_proposal
+
+from ._component_core import ws_call, ws_result
+from ._core_client import refused_url
+
+ENERGY = "energy/save_prefs"
+CONTRACT = "ha_mcp_tools/core_contract"
 
 
-def test_proposal_uses_registered_schema_without_executing_handler() -> None:
-    from custom_components.ha_mcp_tools.core_contract import validate_request
+async def _no_prefs_saved(ws: MockHAClientWebSocket) -> bool:
+    reply = await ws_call(ws, "energy/get_prefs")
+    return reply["success"] is False and reply["error"]["code"] == "not_found"
 
-    hass = FakeHass()
-    handler = Mock(side_effect=AssertionError("validation must never execute a write"))
-    seen: list[dict[str, Any]] = []
 
-    def schema(value: dict[str, Any]) -> dict[str, Any]:
-        seen.append(value)
-        if "future_required" not in value:
-            raise ValueError("future_required is required")
-        return value
+async def test_validation_uses_the_registered_schema_and_never_saves(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+) -> None:
+    """A field a newer Core requires is enforced from Core's own validator,
+    and validating never runs the save handler."""
+    assert await async_setup_component(hass, "energy", {})
+    handler, schema = hass.data[core_websocket_api.DOMAIN][ENERGY]
+    core_websocket_api.async_register_command(
+        hass, ENERGY, handler, schema.extend({vol.Required("future_required"): list})
+    )
 
-    hass.data["websocket_api"] = {"energy/save_prefs": (handler, schema)}
-    invalid = validate_request(hass, "energy/save_prefs", {})
+    invalid = await ws_result(component_ws, CONTRACT, command=ENERGY, payload={})
+    valid = await ws_result(
+        component_ws, CONTRACT, command=ENERGY, payload={"future_required": []}
+    )
+
     assert invalid["valid"] is False
     assert "future_required" in str(invalid["errors"])
-    assert (
-        validate_request(hass, "energy/save_prefs", {"future_required": []})["valid"]
-        is True
-    )
-    assert seen[-1]["type"] == "energy/save_prefs"
-    handler.assert_not_called()
+    assert valid["valid"] is True
+    assert await _no_prefs_saved(component_ws)
 
 
 @pytest.mark.parametrize("payload", [{"id": 27}, {"type": "call_service"}])
-def test_contract_validation_cannot_override_transport(payload: dict[str, Any]) -> None:
-    from custom_components.ha_mcp_tools.core_contract import validate_request
-
-    with pytest.raises(ValueError, match="reserved"):
-        validate_request(FakeHass(), "energy/save_prefs", payload)
-
-
-def test_no_validator_means_unavailable_instead_of_success() -> None:
-    from custom_components.ha_mcp_tools.core_contract import validate_request
-
-    assert (
-        validate_request(FakeHass(), "energy/save_prefs", {})["status"] == "unavailable"
-    )
-
-
-def test_bridge_cannot_validate_arbitrary_commands() -> None:
-    from custom_components.ha_mcp_tools.core_contract import validate_request
-
-    with pytest.raises(ValueError, match="Unsupported"):
-        validate_request(FakeHass(), "call_service", {})
-
-
-@pytest.mark.asyncio
-async def test_uncertain_capability_discovery_is_not_reported_as_absence(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_a_payload_cannot_override_the_transport_fields(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    caplog: pytest.LogCaptureFixture,
+    payload: dict[str, Any],
 ) -> None:
-    from unittest.mock import AsyncMock
+    assert await async_setup_component(hass, "energy", {})
 
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-    from ha_mcp.tools import core_contract as module
+    reply = await ws_call(component_ws, CONTRACT, command=ENERGY, payload=payload)
 
-    monkeypatch.setattr(
-        module, "get_component_caps", AsyncMock(side_effect=RuntimeError("offline"))
-    )
-    with pytest.raises(ToolError, match="offline"):
-        await module.core_contract(Mock(), "energy/save_prefs", {})
+    assert reply["success"] is False
+    assert "id and type are reserved" in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_invalid_native_result_is_a_tool_error(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_an_unregistered_command_is_unavailable_not_valid(
+    component_ws: MockHAClientWebSocket,
 ) -> None:
-    from unittest.mock import AsyncMock
+    result = await ws_result(component_ws, CONTRACT, command=ENERGY, payload={})
 
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-    from ha_mcp.tools import core_contract as module
-
-    monkeypatch.setattr(
-        module,
-        "core_contract",
-        AsyncMock(
-            return_value={
-                "status": "validated",
-                "valid": False,
-                "errors": [{"path": ["future"], "message": "required"}],
-            }
-        ),
-    )
-    with pytest.raises(ToolError, match="future"):
-        await module.validate_energy_proposal(Mock(), {"future": []})
+    assert result["status"] == "unavailable"
 
 
-def test_missing_core_defaults_does_not_hide_available_schema(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_the_bridge_refuses_commands_outside_its_list(
+    component_ws: MockHAClientWebSocket,
 ) -> None:
-    from custom_components.ha_mcp_tools import core_contract as module
+    reply = await ws_call(component_ws, CONTRACT, command="call_service", payload={})
 
-    from .test_component_ws_search import vol
+    assert reply["success"] is False
+    assert reply["error"]["code"] == "invalid_format"
 
-    monkeypatch.setattr(
-        module, "_defaults", Mock(side_effect=AttributeError("Core changed"))
+
+async def test_failed_capability_discovery_is_an_error_not_absence(
+    hass_access_token: str, socket_enabled: None
+) -> None:
+    """A component that could not be asked is not a component that is absent."""
+    client = HomeAssistantClient(
+        base_url=refused_url(), token=hass_access_token, verify_ssl=False
     )
-    hass = FakeHass()
-    hass.data["websocket_api"] = {"energy/save_prefs": (Mock(), lambda value: value)}
-    execute = module.command_specs(vol)[0][1]
-    result = execute(hass, {"command": "energy/save_prefs"})
+    try:
+        with pytest.raises(ToolError, match="Could not obtain"):
+            await core_contract(client, ENERGY, {})
+    finally:
+        await client.close()
+
+
+async def test_a_proposal_core_rejects_is_a_tool_error(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    assert await async_setup_component(hass, "energy", {})
+
+    with pytest.raises(ToolError, match="energy_sources"):
+        await validate_energy_proposal(component_core_client, {"energy_sources": "x"})
+
+
+async def test_a_proposal_core_accepts_passes(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    assert await async_setup_component(hass, "energy", {})
+
+    result = await validate_energy_proposal(component_core_client, {})
+
+    assert (result["status"], result["valid"]) == ("validated", True)
+
+
+@pytest.mark.parametrize("defaults_fail", [False, True])
+async def test_missing_core_defaults_do_not_hide_the_schema(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    defaults_fail: bool,
+) -> None:
+    """Core's defaults are an extra; a Core without them still describes."""
+    assert await async_setup_component(hass, "energy", {})
+
+    with ExitStack() as stack:
+        if defaults_fail:
+            stack.enter_context(
+                patch.object(
+                    EnergyManager,
+                    "default_preferences",
+                    side_effect=AttributeError("Core changed"),
+                )
+            )
+        result = await ws_result(component_ws, CONTRACT, command=ENERGY)
+
     assert result["status"] == "available"
-    assert "default_preferences" not in result
+    assert ("default_preferences" in result) is not defaults_fail
 
 
-@pytest.mark.asyncio
-async def test_defaults_discovery_failure_keeps_unconfigured_prefs_readable(
+async def test_unconfigured_prefs_stay_readable_when_defaults_discovery_fails(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from unittest.mock import AsyncMock
-
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-    from ha_mcp.tools import energy_preferences as module
-
-    client = Mock()
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": False, "error": "Command failed: No prefs"}
-    )
+    """Core answers "No prefs" for an energy dashboard never configured."""
+    assert await async_setup_component(hass, "energy", {})
     monkeypatch.setattr(
-        module,
+        energy_preferences,
         "core_contract",
         AsyncMock(side_effect=ToolError("discovery unavailable")),
     )
-    result = await module.get_energy_prefs(client)
+
+    result = await energy_preferences.get_energy_prefs(component_core_client)
+
     assert result["success"] is True
     assert result["config"] == {}
     assert "unavailable" in result["note"]
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        "ha_mcp_tools/core_contract",
-        "ha_mcp_tools/statistics_units",
-        "ha_mcp_tools/integration_commands",
-    ],
-)
-@pytest.mark.parametrize(
-    "is_admin,has_user", [(False, True), (True, False), (True, True)]
-)
-def test_contract_commands_require_admin_before_preparation(
-    monkeypatch: pytest.MonkeyPatch, command: str, is_admin: bool, has_user: bool
+_CONTRACT_COMMANDS: dict[str, dict[str, Any]] = {
+    CONTRACT: {"command": "history/history_during_period"},
+    "ha_mcp_tools/statistics_units": {
+        "statistic_ids": ["sensor.energy"],
+        "units": {"energy": "kWh"},
+    },
+    "ha_mcp_tools/integration_commands": {"domain": "knx"},
+}
+
+
+@pytest.mark.parametrize("command", list(_CONTRACT_COMMANDS))
+@pytest.mark.parametrize("admin", [False, True])
+async def test_contract_commands_are_admin_only_before_any_preparation(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    component_ws_read_only: MockHAClientWebSocket,
+    command: str,
+    admin: bool,
 ) -> None:
-    from unittest.mock import AsyncMock
+    """A non-admin never reaches the recorder read behind statistics_units."""
+    ws = component_ws if admin else component_ws_read_only
+    real = recorder_statistics.async_list_statistic_ids
 
-    from custom_components.ha_mcp_tools import websocket_api as wsapi
+    with patch.object(
+        recorder_statistics, "async_list_statistic_ids", wraps=real
+    ) as read:
+        reply = await ws_call(ws, command, **_CONTRACT_COMMANDS[command])
 
-    from .test_component_ws_search import (
-        _FakeConnection,
-        _FakeWSApi,
-        _Unauthorized,
-        vol,
-    )
-
-    fake = _FakeWSApi()
-    monkeypatch.setattr(wsapi, "websocket_api", fake)
-    preparation = AsyncMock(return_value={"records": []})
-    monkeypatch.setattr(wsapi.core_contract, "statistics_metadata", preparation)
-    for schema, execute, prep in wsapi.core_contract.command_specs(vol):
-        fake.async_register_command(
-            FakeHass(), wsapi._build_handler(schema, execute, prep)
-        )
-    connection = _FakeConnection(is_admin=is_admin, has_user=has_user)
-    params = {
-        "ha_mcp_tools/core_contract": {"command": "history/history_during_period"},
-        "ha_mcp_tools/statistics_units": {
-            "statistic_ids": ["sensor.energy"],
-            "units": {"energy": "kWh"},
-        },
-        "ha_mcp_tools/integration_commands": {"domain": "knx"},
-    }[command]
-
-    def call() -> None:
-        fake.registered[command](
-            FakeHass(), connection, {"id": 1, "type": command, **params}
-        )
-
-    if is_admin and has_user:
-        call()
-        assert 1 in connection.results
-        if command.endswith("statistics_units"):
-            preparation.assert_awaited_once()
-    else:
-        with pytest.raises(_Unauthorized):
-            call()
-        preparation.assert_not_called()
+    assert reply["success"] is admin, reply
+    reads_statistics = admin and command.endswith("statistics_units")
+    assert read.await_count == (1 if reads_statistics else 0)
+    if not admin:
+        assert reply["error"]["code"] == "unauthorized"

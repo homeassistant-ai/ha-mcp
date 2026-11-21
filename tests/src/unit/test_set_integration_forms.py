@@ -310,7 +310,7 @@ async def test_set_integration_describes_the_subentry_form_behind_a_menu(
         )
 
     calls["start_config_subentry_flow"].assert_awaited_once_with(
-        entry.entry_id, "conversation", subentry_id="sub1", show_advanced_options=False
+        entry.entry_id, "conversation", subentry_id="sub1"
     )
     submitted = calls["submit_config_subentry_flow_step"]
     submitted.assert_awaited_once()

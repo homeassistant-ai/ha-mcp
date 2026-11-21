@@ -1,495 +1,405 @@
-"""Deleted Template helpers recreate without losing references or another entity."""
+"""Deleted Template helpers recreate without losing references or another entity.
 
-from copy import deepcopy
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+The helper is a Template sensor that Core's own config flow made, captured
+over the server's own client and then removed from Core; a restore recreates
+it through Core's real creation flow.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from collections.abc import Iterator
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.config_entries import (
+    SIGNAL_CONFIG_ENTRY_CHANGED,
+    ConfigEntry,
+    ConfigEntryChange,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import label_registry as lr
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp import backup_manager as bm
-from ha_mcp.client.rest_client import HomeAssistantConnectionError, HomeAssistantError
-from ha_mcp.tools import config_entry_flow
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 
-OPTIONS = {"name": "Example", "template_type": "sensor", "state": "{{ 12 }}"}
-ENTITY = {
-    "entity_id": "sensor.renamed_example",
-    "unique_id": "old-entry",
-    "name": "Custom name",
-    "original_name": "Example",
-}
+from ._backup_core import add_label
+from ._command_faults import received, unanswered
+from ._template_backup_core import manager as manager
+from ._template_backup_core import real_snapshot
+from ._template_backup_core import settings as settings
+from ._template_backup_core import template_entry as template_entry
+from ._template_helper_core import set_template_state, state_template
+from ._template_recovery_core import (
+    CUSTOM_NAME,
+    DOMAIN,
+    RENAMED,
+    DeletedTemplate,
+    edit_snapshot,
+    recreated_entry,
+)
+from ._template_recovery_core import deleted_template as deleted_template
+
+RENAME = "config/entity_registry/update"
 
 
 @pytest.fixture
-def recovery(tmp_path, monkeypatch):
-    state = SimpleNamespace(entries=[], registry=[], records=[], states=[])
+def creation_flow(component_core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
+    """A spy on opening a creation flow; Core still answers it."""
+    with patch.object(
+        component_core_client,
+        "start_config_flow",
+        wraps=component_core_client.start_config_flow,
+    ) as spy:
+        yield spy
 
-    async def send(client, message):
-        match message["type"]:
-            case "ha_mcp_tools/helpers_list":
-                return {
-                    "covered_types": ["template"],
-                    "helpers": deepcopy(state.records),
-                }
-            case "config/entity_registry/list":
-                return deepcopy(state.registry)
-            case "config/entity_registry/update":
-                row = next(
-                    r for r in state.registry if r["entity_id"] == message["entity_id"]
-                )
-                row["entity_id"] = message.get("new_entity_id", row["entity_id"])
-                row["name"] = message.get("name", row.get("name"))
-                return deepcopy(row)
-        raise AssertionError(message)
 
-    async def create(client, helper_type, options):
-        assert helper_type == "template"
-        # The creation flow answers its menu from template_type itself.
-        assert options == OPTIONS
-        state.entries.append({"entry_id": "new-entry", "domain": "template"})
-        state.records.append(
-            {
-                "entry_id": "new-entry",
-                "entity_id": "sensor.example",
-                "kind": "flow",
-                "helper_type": "template",
-                "options": deepcopy(OPTIONS),
-            }
-        )
-        state.registry.append(
-            {
-                **ENTITY,
-                "entity_id": "sensor.example",
-                "unique_id": "new-entry",
-                "config_entry_id": "new-entry",
-                "platform": "template",
-                "name": None,
-            }
-        )
-        return {"success": True, "entry_id": "new-entry"}
+def _entity(entity_registry: er.EntityRegistry, entry: ConfigEntry) -> er.RegistryEntry:
+    (row,) = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
+    return row
 
-    client = SimpleNamespace(
-        _request=AsyncMock(side_effect=lambda *_: deepcopy(state.entries)),
-        get_states=AsyncMock(side_effect=lambda: deepcopy(state.states)),
+
+def _take_saved_id(entity_registry: er.EntityRegistry) -> er.RegistryEntry:
+    """Another integration's entity registered under the snapshot's entity ID."""
+    occupant = entity_registry.async_get_or_create(
+        "sensor", "demo", "occupant", suggested_object_id=RENAMED.split(".")[1]
     )
-    settings = SimpleNamespace(
-        enable_auto_backup=True,
-        auto_backup_throttle_minutes=0,
-        auto_backup_retain_per_entity=1,
-        auto_backup_dir=str(tmp_path),
-    )
-    manager = bm.get_backup_manager(client, settings)
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=send))
-    creator = AsyncMock(side_effect=create)
-    native_create = config_entry_flow.recreate_flow_helper
-    monkeypatch.setattr(config_entry_flow, "recreate_flow_helper", creator)
-    config = {
-        "entry_id": "old-entry",
-        "options": deepcopy(OPTIONS),
-        "entities": [deepcopy(ENTITY)],
-    }
-    name = manager._write_snapshot("helper_template", "old-entry", config, "test").name
-    return SimpleNamespace(
-        manager=manager,
-        state=state,
-        create=creator,
-        name=name,
-        config=config,
-        native_create=native_create,
-    )
+    assert occupant.entity_id == RENAMED
+    return occupant
 
 
-async def test_recreates_deleted_helper_and_restores_renamed_reference(recovery):
-    original = recovery.manager.read_snapshot(recovery.name)
-    result = await recovery.manager.restore_snapshot(recovery.name)
-    assert result["entity_id"] == "new-entry"
-    assert result["original_entry_id"] == "old-entry"
+async def _refused(deleted: DeletedTemplate) -> bm.BackupRestoreError:
+    with pytest.raises(bm.BackupRestoreError) as caught:
+        await deleted.manager.restore_snapshot(deleted.name)
+    return caught.value
+
+
+async def test_deleted_template_comes_back_under_its_saved_entity_id_and_name(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    deleted_template: DeletedTemplate,
+    creation_flow: AsyncMock,
+) -> None:
+    manager = deleted_template.manager
+    original = manager.read_snapshot(deleted_template.name)
+
+    result = await manager.restore_snapshot(deleted_template.name)
+
+    entry = recreated_entry(hass)
     assert result["restore_mode"] == "recreated"
+    assert result["entity_id"] == entry.entry_id
+    assert result["original_entry_id"] == deleted_template.entry_id
     assert result["verification_status"] == "matched"
     assert result["safety_backup"] is None
-    assert recovery.state.registry[0]["entity_id"] == ENTITY["entity_id"]
-    assert recovery.state.registry[0]["name"] == "Custom name"
-    assert recovery.manager.read_snapshot(recovery.name) == original
-    recovery.create.assert_awaited_once()
+    assert "warnings" not in result["result"]
+    row = _entity(entity_registry, entry)
+    assert (row.entity_id, row.name) == (RENAMED, CUSTOM_NAME)
+    assert manager.read_snapshot(deleted_template.name) == original
+    creation_flow.assert_awaited_once()
+    assert hass.config_entries.flow.async_progress() == []
 
 
-@pytest.mark.parametrize("occupied", ["registry", "state"])
-async def test_collision_refuses_before_creating_and_preserves_occupant(
-    recovery, occupied
-):
-    occupant = {
-        "entity_id": ENTITY["entity_id"],
-        "config_entry_id": "other",
-        "unique_id": "other",
-    }
-    rows = recovery.state.registry if occupied == "registry" else recovery.state.states
-    rows.append(occupant)
-    with pytest.raises(bm.BackupRestoreError) as error:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert error.value.outcome["apply_status"] == "not_applied"
-    assert error.value.outcome["reason"] == "entity_id_collision"
-    assert rows == [occupant]
-    recovery.create.assert_not_awaited()
+@pytest.mark.parametrize("occupied_in", ["registry", "states"])
+async def test_occupied_saved_entity_id_refuses_before_creating(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    deleted_template: DeletedTemplate,
+    creation_flow: AsyncMock,
+    occupied_in: str,
+) -> None:
+    if occupied_in == "registry":
+        occupant = _take_saved_id(entity_registry)
+    else:
+        hass.states.async_set(RENAMED, "theirs")
+
+    error = await _refused(deleted_template)
+
+    assert error.outcome["apply_status"] == "not_applied"
+    assert error.outcome["reason"] == "entity_id_collision"
+    if occupied_in == "registry":
+        assert entity_registry.async_get(RENAMED) == occupant
+    else:
+        state = hass.states.get(RENAMED)
+        assert state is not None and state.state == "theirs"
+    creation_flow.assert_not_awaited()
+    assert not hass.config_entries.async_entries("template")
 
 
-async def test_component_absence_cannot_duplicate_existing_native_entry(recovery):
-    recovery.state.entries = [
-        {"entry_id": "old-entry", "domain": "template", "disabled_by": "user"}
-    ]
-    with pytest.raises(bm.BackupRestoreError) as error:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert error.value.outcome["reason"] == "entry_still_exists"
-    recovery.create.assert_not_awaited()
-
-
-@pytest.mark.parametrize("entries", [None, [None], [{"domain": "template"}]])
-async def test_ambiguous_native_listing_refuses_recreation(recovery, entries):
-    recovery.state.entries = entries
-    with pytest.raises(bm.BackupRestoreError) as error:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert error.value.outcome["apply_status"] == "not_applied"
-    recovery.create.assert_not_awaited()
-
-
-async def test_lost_creation_reply_is_unknown_and_never_retried(recovery):
-    recovery.create.side_effect = HomeAssistantError("reply lost")
-    with pytest.raises(bm.BackupRestoreError) as error:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert error.value.outcome["apply_status"] == "unknown"
-    assert error.value.outcome["reason"] == "creation_outcome_unknown"
-    recovery.create.assert_awaited_once()
-
-
-async def test_legacy_snapshot_recreates_with_explicit_reference_limit(recovery):
-    recovery.config.pop("entities")
-    path = recovery.manager._write_snapshot(
-        "helper_template", "old-entry", recovery.config, "test"
+async def test_entry_back_before_recreation_is_neither_duplicated_nor_edited(
+    hass: HomeAssistant,
+    deleted_template: DeletedTemplate,
+    component_core_client: HomeAssistantClient,
+    creation_flow: AsyncMock,
+) -> None:
+    """The entry comes back (a restore of Home Assistant, another client) right
+    after the restore found it absent: Core's own listing stops the recreation,
+    and no options flow edits the entry without a safety snapshot."""
+    manager = deleted_template.manager
+    handler = manager.handler_for(DOMAIN)
+    assert handler is not None
+    back = MockConfigEntry(
+        domain="template",
+        entry_id=deleted_template.entry_id,
+        options=manager.read_snapshot(deleted_template.name)["config"]["options"],
     )
-    result = await recovery.manager.restore_snapshot(path.name)
-    assert result["entity_id"] == "new-entry"
+
+    async def absent_then_back(client: Any, entity_id: str) -> Any:
+        current = await handler.fetch(client, entity_id)
+        back.add_to_hass(hass)
+        return current
+
+    manager.register(dataclasses.replace(handler, fetch=absent_then_back))
+
+    with patch.object(
+        component_core_client,
+        "start_options_flow",
+        wraps=component_core_client.start_options_flow,
+    ) as options_flow:
+        error = await _refused(deleted_template)
+
+    assert error.outcome["reason"] == "entry_still_exists"
+    assert error.outcome["apply_status"] == "not_applied"
+    creation_flow.assert_not_awaited()
+    options_flow.assert_not_awaited()
+    assert hass.config_entries.async_entries("template") == [back]
+
+
+async def test_a_flow_submission_with_no_reply_is_reported_unknown_and_not_retried(
+    hass: HomeAssistant,
+    deleted_template: DeletedTemplate,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first submission of the creation flow (its menu choice) gets no
+    reply: the tool cannot tell how far Core got, so it reports the creation
+    as unknown and sends nothing again."""
+    monkeypatch.setattr(
+        component_core_client,
+        "submit_config_flow_step",
+        submit := AsyncMock(side_effect=HomeAssistantConnectionError("reply lost")),
+    )
+
+    error = await _refused(deleted_template)
+
+    assert error.outcome["apply_status"] == "unknown"
+    assert error.outcome["reason"] == "creation_outcome_unknown"
+    assert error.outcome["restore_mode"] == "recreated"
+    assert error.outcome["original_entry_id"] == deleted_template.entry_id
+    submit.assert_awaited_once()
+    assert not hass.config_entries.async_entries("template")
+
+
+async def test_snapshot_without_entity_mapping_recreates_with_a_warning(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    deleted_template: DeletedTemplate,
+) -> None:
+    """A snapshot from before entity IDs were recorded still brings the helper
+    back, and says its entity may have a new ID."""
+    manager = deleted_template.manager
+    edit_snapshot(
+        manager.backup_dir / deleted_template.name,
+        lambda data: data["config"].pop("entities"),
+    )
+
+    result = await manager.restore_snapshot(deleted_template.name)
+
+    entry = recreated_entry(hass)
+    assert result["entity_id"] == entry.entry_id
     assert result["result"]["entity_ids_restored"] is False
     assert result["result"]["warnings"]
+    assert _entity(entity_registry, entry).entity_id != RENAMED
 
 
-async def test_capture_persists_only_entity_recovery_metadata(recovery):
-    recovery.state.records = [
-        {
-            "entry_id": "old-entry",
-            "entity_id": ENTITY["entity_id"],
-            "kind": "flow",
-            "helper_type": "template",
-            "options": OPTIONS,
-        }
-    ]
-    recovery.state.registry = [
-        {
-            **ENTITY,
-            "config_entry_id": "old-entry",
-            "platform": "template",
-            "labels": ["private"],
-            "device_id": "not-needed",
-        }
-    ]
-    snapshot = await bm._fetch_flow_helper(
-        recovery.manager._client, "old-entry", "template"
+async def test_capture_keeps_only_the_entity_fields_a_recreation_needs(
+    entity_registry: er.EntityRegistry,
+    label_registry: lr.LabelRegistry,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+) -> None:
+    """A label on the entity is not something recreation sets; it stays out."""
+    row = _entity(entity_registry, template_entry)
+    entity_registry.async_update_entity(
+        row.entity_id,
+        new_entity_id=RENAMED,
+        name=CUSTOM_NAME,
+        labels={add_label(label_registry, "Private")},
     )
-    assert snapshot["entities"] == [ENTITY]
+    row = _entity(entity_registry, template_entry)
 
+    path = await real_snapshot(manager, template_entry)
 
-@pytest.mark.parametrize("changed_options", [False, True])
-async def test_existing_entry_diff_only_previews_restorable_options(
-    recovery, changed_options
-):
-    options = {**OPTIONS, "state": "{{ 99 }}"} if changed_options else OPTIONS
-    recovery.state.records = [
+    assert manager.read_snapshot(path.name)["config"]["entities"] == [
         {
-            "entry_id": "old-entry",
-            "entity_id": "sensor.now_renamed",
-            "kind": "flow",
-            "helper_type": "template",
-            "options": options,
+            "entity_id": RENAMED,
+            "unique_id": row.unique_id,
+            "name": CUSTOM_NAME,
+            "original_name": row.original_name,
         }
     ]
-    recovery.state.registry = [
-        {
-            **ENTITY,
-            "entity_id": "sensor.now_renamed",
-            "name": "Renamed later",
-            "config_entry_id": "old-entry",
-        }
-    ]
-    diff = await recovery.manager.diff_snapshot(recovery.name)
-    assert diff["unchanged"] is not changed_options
+
+
+@pytest.mark.parametrize("options_changed", [False, True])
+async def test_diff_of_existing_template_ignores_entity_renames(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    manager: bm.BackupManager,
+    template_entry: ConfigEntry,
+    options_changed: bool,
+) -> None:
+    """A restore of an existing entry applies options only, so a later entity
+    rename is no difference to preview; an options edit is."""
+    path = await real_snapshot(manager, template_entry)
+    row = _entity(entity_registry, template_entry)
+    entity_registry.async_update_entity(
+        row.entity_id, new_entity_id="sensor.now_renamed", name="Renamed later"
+    )
+    if options_changed:
+        await set_template_state(hass, template_entry, "edited")
+
+    diff = await manager.diff_snapshot(path.name)
+    data, current = await manager.snapshot_comparison(path.name)
+
+    assert diff["kind"] == "dict"
+    assert diff["unchanged"] is not options_changed
     assert diff["patch"] == (
-        [{"op": "replace", "path": "/options/state", "value": "{{ 12 }}"}]
-        if changed_options
+        [{"op": "replace", "path": "/options/state", "value": state_template("saved")}]
+        if options_changed
         else []
     )
-    data, current = await recovery.manager.snapshot_comparison(recovery.name)
     assert "entities" not in data["config"]
     assert "entities" not in current
-    assert recovery.manager.read_snapshot(recovery.name)["config"]["entities"] == [
-        ENTITY
-    ]
+    assert manager.read_snapshot(path.name)["config"]["entities"]
 
 
-async def test_racing_collision_preserves_created_helper_and_reports_identity(recovery):
-    creator = recovery.create.side_effect
+async def test_saved_entity_id_taken_after_creation_keeps_both_helpers(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    deleted_template: DeletedTemplate,
+) -> None:
+    """Another entity takes the saved ID once the creation flow has made the
+    entry: the restore reports the new helper and leaves both entities alone."""
+    occupants: list[er.RegistryEntry] = []
 
-    async def race(*args, **kwargs):
-        result = await creator(*args, **kwargs)
-        recovery.state.registry.append(
-            {
-                "entity_id": ENTITY["entity_id"],
-                "unique_id": "other",
-                "config_entry_id": "other",
-            }
-        )
-        return result
+    @callback
+    def take_on_creation(change: ConfigEntryChange, entry: ConfigEntry) -> None:
+        if change == ConfigEntryChange.ADDED:
+            occupants.append(_take_saved_id(entity_registry))
 
-    recovery.create.side_effect = race
-    with pytest.raises(bm.BackupRestoreError) as error:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert error.value.outcome["apply_status"] == "applied"
-    assert error.value.outcome["entity_id"] == "new-entry"
-    assert error.value.outcome["original_entry_id"] == "old-entry"
-    assert error.value.outcome["reason"] == "entity_id_collision"
-    assert len(recovery.state.registry) == 2
-    assert recovery.state.registry[0]["entity_id"] == "sensor.example"
-    assert recovery.state.registry[1]["config_entry_id"] == "other"
-    assert recovery.manager.read_snapshot(recovery.name)
-    recovery.create.assert_awaited_once()
+    stop = async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, take_on_creation)
+    try:
+        error = await _refused(deleted_template)
+    finally:
+        stop()
 
-
-async def test_lost_rename_reply_preserves_created_identity_without_retry(
-    recovery, monkeypatch
-):
-    sender = bm._ws_send.side_effect
-
-    async def lost_reply(client, message):
-        result = await sender(client, message)
-        if message["type"] == "config/entity_registry/update":
-            raise HomeAssistantError("reply lost")
-        return result
-
-    send = AsyncMock(side_effect=lost_reply)
-    monkeypatch.setattr(bm, "_ws_send", send)
-    with pytest.raises(bm.BackupRestoreError) as error:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert error.value.outcome["apply_status"] == "applied"
-    assert error.value.outcome["entity_id"] == "new-entry"
-    assert error.value.outcome["verification_status"] == "unavailable"
-    assert error.value.outcome["reason"] == "entity_rename_outcome_unknown"
-    assert recovery.state.registry[0]["entity_id"] == ENTITY["entity_id"]
-    assert (
-        sum(
-            call.args[1]["type"] == "config/entity_registry/update"
-            for call in send.await_args_list
-        )
-        == 1
-    )
+    entry = recreated_entry(hass)
+    assert error.outcome["apply_status"] == "applied"
+    assert error.outcome["reason"] == "entity_id_collision"
+    assert error.outcome["entity_id"] == entry.entry_id
+    assert error.outcome["original_entry_id"] == deleted_template.entry_id
+    assert _entity(entity_registry, entry).entity_id != RENAMED
+    assert [entity_registry.async_get(RENAMED)] == occupants
+    assert deleted_template.manager.read_snapshot(deleted_template.name)
 
 
-@pytest.mark.parametrize(
-    "records",
-    [
-        [{"kind": "flow", "helper_type": "template"}],
-        [{"kind": "flow", "helper_type": "template", "entry_id": "other"}] * 2,
-    ],
-)
-async def test_ambiguous_component_listing_never_starts_creation(recovery, records):
-    recovery.state.records = records
-    with pytest.raises(bm.BackupRestoreError):
-        await recovery.manager.restore_snapshot(recovery.name)
-    recovery.create.assert_not_awaited()
+async def test_lost_rename_reply_reports_the_created_helper_without_retrying(
+    hass: HomeAssistant,
+    deleted_template: DeletedTemplate,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core gets the recreated entity's rename but its answer never arrives."""
+    async with unanswered(hass, RENAME, monkeypatch):
+        with received(hass, RENAME) as renames:
+            error = await _refused(deleted_template)
+
+    entry = recreated_entry(hass)
+    assert error.outcome["apply_status"] == "applied"
+    assert error.outcome["entity_id"] == entry.entry_id
+    assert error.outcome["verification_status"] == "unavailable"
+    assert error.outcome["reason"] == "entity_rename_outcome_unknown"
+    (rename,) = renames[RENAME]
+    assert rename["new_entity_id"] == RENAMED
 
 
-async def test_entry_reappearing_after_absence_check_is_never_updated(
-    recovery, monkeypatch
-):
-    fetch = AsyncMock(return_value=None)
-    monkeypatch.setattr(bm, "_fetch_flow_helper", fetch)
-    # The manager's handler already captured the original function; replace it
-    # to model absence during the safety decision and a reappearing native entry.
-    recovery.manager.register(
-        bm.DomainHandler("helper_template", fetch, bm._restore_flow_helper)
-    )
-    recovery.state.entries = [{"entry_id": "old-entry", "domain": "template"}]
-    updater = AsyncMock()
-    monkeypatch.setattr(config_entry_flow, "restore_config_entry_options", updater)
-    with pytest.raises(bm.BackupRestoreError) as error:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert error.value.outcome["reason"] == "entry_still_exists"
-    updater.assert_not_awaited()
-    recovery.create.assert_not_awaited()
+@pytest.mark.parametrize("mapping", ["foreign_unique_id", "non_string_name"])
+async def test_unusable_entity_mapping_refuses_before_creating(
+    hass: HomeAssistant,
+    deleted_template: DeletedTemplate,
+    creation_flow: AsyncMock,
+    mapping: str,
+) -> None:
+    """A hand-edited mapping whose entity the recreated entry cannot own, or
+    whose name is no name, is refused before Core is asked to create anything."""
+
+    def change(data: dict[str, Any]) -> None:
+        (row,) = data["config"]["entities"]
+        if mapping == "foreign_unique_id":
+            row["unique_id"] = "another-integration-entity"
+        else:
+            row["name"] = 5
+
+    edit_snapshot(deleted_template.manager.backup_dir / deleted_template.name, change)
+
+    error = await _refused(deleted_template)
+
+    assert error.outcome["reason"] == "invalid_snapshot"
+    assert error.outcome["apply_status"] == "not_applied"
+    creation_flow.assert_not_awaited()
+    assert not hass.config_entries.async_entries("template")
 
 
 @pytest.mark.parametrize(
-    "mapping",
+    ("options", "field"),
     [
-        [ENTITY, ENTITY],
-        [{**ENTITY, "unique_id": "other"}],  # not derived from the entry
-        [{**ENTITY, "name": 5}],
+        ({"icon": "mdi:gauge"}, "icon"),
+        ({"additional_options": {"icon": "mdi:gauge"}}, "additional_options.icon"),
     ],
+    ids=["top_level", "in_section"],
 )
-async def test_unsupported_snapshot_entity_mapping_refuses_creation(recovery, mapping):
-    recovery.config["entities"] = mapping
-    name = recovery.manager._write_snapshot(
-        "helper_template", "old-entry", recovery.config, "test"
-    ).name
-    with pytest.raises(bm.BackupRestoreError):
-        await recovery.manager.restore_snapshot(name)
-    recovery.create.assert_not_awaited()
-
-
-async def test_recreation_drives_native_template_menu_and_form(recovery, monkeypatch):
-    client = recovery.manager._client
-    client.start_config_flow = AsyncMock(
-        return_value={
-            "type": "menu",
-            "flow_id": "create-flow",
-            "step_id": "user",
-            "menu_options": ["sensor", "binary_sensor"],
-        }
+async def test_option_no_creation_form_takes_is_refused_before_creating(
+    hass: HomeAssistant,
+    deleted_template: DeletedTemplate,
+    options: dict[str, Any],
+    field: str,
+) -> None:
+    """Core's sensor form has no icon field, at the top or in its section, so
+    the restore names it and closes the flow unsubmitted."""
+    edit_snapshot(
+        deleted_template.manager.backup_dir / deleted_template.name,
+        lambda data: data["config"]["options"].update(options),
     )
-    submissions = []
 
-    async def submit(flow_id, payload):
-        assert flow_id == "create-flow"
-        submissions.append(payload)
-        if len(submissions) == 1:
-            assert payload == {"next_step_id": "sensor"}
-            return {
-                "type": "form",
-                "last_step": True,
-                "flow_id": "create-flow",
-                "step_id": "sensor",
-                "data_schema": [
-                    {"name": "name", "required": True, "type": "string"},
-                    {"name": "state", "required": True, "type": "string"},
-                ],
-            }
-        assert payload == {"name": "Example", "state": "{{ 12 }}"}
-        await recovery.create.side_effect(client, "template", OPTIONS)
-        return {
-            "type": "create_entry",
-            "result": {"entry_id": "new-entry", "title": "Example"},
-        }
+    error = await _refused(deleted_template)
 
-    client.submit_config_flow_step = AsyncMock(side_effect=submit)
-    client.abort_config_flow = AsyncMock()
-    monkeypatch.setattr(
-        config_entry_flow, "recreate_flow_helper", recovery.native_create
+    assert error.outcome["apply_status"] == "not_applied"
+    assert error.outcome["reason"] == "unsupported_fields"
+    assert error.outcome["fields"] == [field]
+    assert not hass.config_entries.async_entries("template")
+    assert hass.config_entries.flow.async_progress() == []
+
+
+async def test_options_core_stored_differently_leave_the_entity_unrenamed(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    deleted_template: DeletedTemplate,
+) -> None:
+    """Core keeps a state template given as a number as text: the created
+    entry differs from the snapshot, so its entity is not given the saved ID."""
+    edit_snapshot(
+        deleted_template.manager.backup_dir / deleted_template.name,
+        lambda data: data["config"]["options"].update(state=12),
     )
-    result = await recovery.manager.restore_snapshot(recovery.name)
-    assert result["entity_id"] == "new-entry"
-    assert len(submissions) == 2
-    assert "warnings" not in result["result"]
-    client.abort_config_flow.assert_not_awaited()
 
+    error = await _refused(deleted_template)
 
-def _native_recreation_flow(recovery, monkeypatch, schema, *, submit_error=None):
-    """Exercise the production create helper and walker with a native-shaped API."""
-    client = recovery.manager._client
-    client.start_config_flow = AsyncMock(
-        return_value={
-            "type": "menu",
-            "flow_id": "create-flow",
-            "step_id": "user",
-            "menu_options": ["sensor"],
-        }
-    )
-    form = {
-        "type": "form",
-        "last_step": True,
-        "flow_id": "create-flow",
-        "step_id": "sensor",
-        "data_schema": schema,
-    }
-
-    async def submit(flow_id, payload):
-        if payload == {"next_step_id": "sensor"}:
-            return deepcopy(form)
-        if submit_error is not None:
-            raise submit_error
-        # Registers the entry HA created, with the fixture's stored options.
-        await recovery.create.side_effect(client, "template", OPTIONS)
-        return {
-            "type": "create_entry",
-            "result": {"entry_id": "new-entry", "title": "Example"},
-        }
-
-    client.submit_config_flow_step = AsyncMock(side_effect=submit)
-    client.abort_config_flow = AsyncMock()
-    monkeypatch.setattr(
-        config_entry_flow, "recreate_flow_helper", recovery.native_create
-    )
-    return client
-
-
-@pytest.mark.parametrize("nested", [False, True])
-async def test_recreation_rejects_undeclared_snapshot_fields_before_create(
-    recovery, monkeypatch, nested
-):
-    recovery.config["options"]["additional_options"] = {"availability": "{{ false }}"}
-    name = recovery.manager._write_snapshot(
-        "helper_template", "old-entry", recovery.config, "test"
-    ).name
-    schema = [{"name": "name", "required": True}, {"name": "state", "required": True}]
-    if nested:
-        schema.append({"name": "additional_options", "schema": []})
-    client = _native_recreation_flow(recovery, monkeypatch, schema)
-
-    with pytest.raises(bm.BackupRestoreError) as caught:
-        await recovery.manager.restore_snapshot(name)
-
-    assert caught.value.outcome["apply_status"] == "not_applied"
-    assert caught.value.outcome["reason"] == "unsupported_fields"
-    assert caught.value.outcome["fields"] == [
-        "additional_options.availability" if nested else "additional_options"
-    ]
-    assert recovery.state.entries == []
-    assert recovery.state.registry == []
-    client.submit_config_flow_step.assert_awaited_once_with(
-        "create-flow", {"next_step_id": "sensor"}
-    )
-    client.abort_config_flow.assert_awaited_once_with("create-flow")
-
-
-async def test_recreation_verifies_created_options_before_rebinding_entity_id(
-    recovery, monkeypatch
-):
-    recovery.config["options"]["additional_options"] = {"availability": "{{ false }}"}
-    name = recovery.manager._write_snapshot(
-        "helper_template", "old-entry", recovery.config, "test"
-    ).name
-    schema = [
-        {"name": "name", "required": True},
-        {"name": "state", "required": True},
-        {"name": "additional_options", "schema": [{"name": "availability"}]},
-    ]
-    client = _native_recreation_flow(recovery, monkeypatch, schema)
-
-    with pytest.raises(bm.BackupRestoreError) as caught:
-        await recovery.manager.restore_snapshot(name)
-
-    assert caught.value.outcome["apply_status"] == "applied"
-    assert caught.value.outcome["verification_status"] == "mismatched"
-    assert recovery.state.registry[0]["entity_id"] == "sensor.example"
-    assert recovery.state.registry[0]["name"] is None
-    client.abort_config_flow.assert_not_awaited()
-
-
-async def test_recreation_lost_creation_reply_preserves_flow_for_reconciliation(
-    recovery, monkeypatch
-):
-    client = _native_recreation_flow(
-        recovery,
-        monkeypatch,
-        [{"name": "name", "required": True}, {"name": "state", "required": True}],
-        submit_error=HomeAssistantConnectionError("reply lost"),
-    )
-    with pytest.raises(bm.BackupRestoreError) as caught:
-        await recovery.manager.restore_snapshot(recovery.name)
-    assert caught.value.outcome["apply_status"] == "unknown"
-    assert client.submit_config_flow_step.await_count == 2
-    client.abort_config_flow.assert_not_awaited()
+    entry = recreated_entry(hass)
+    assert entry.options["state"] == "12"
+    assert error.outcome["apply_status"] == "applied"
+    assert error.outcome["verification_status"] == "mismatched"
+    row = _entity(entity_registry, entry)
+    assert row.entity_id != RENAMED
+    assert row.name is None

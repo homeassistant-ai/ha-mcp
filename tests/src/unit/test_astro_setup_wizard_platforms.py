@@ -14,13 +14,12 @@ from typing import Any
 import pytest
 
 from ._astro_setup_wizard import (
-    _assert_clean_init,
     _build_wizard_dom,
     _click,
     bundle_setup_script,
     load_wizard_vars,
 )
-from ._js_harness import run_script
+from ._js_harness import _assert_clean_init, run_script
 
 _CAPTURE = """
 document.body.dataset.configCode = (

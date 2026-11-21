@@ -575,15 +575,16 @@ async def _edits_diff(
             ],
         )
         return None  # unreachable: exception_to_structured_error always raises
-    warnings: list[str] = []
+    # A tool's warnings stand beside ``data``, not inside it.
+    warnings = list(diff.pop("warnings", [])) if diff["kind"] == "dict" else []
     if diff.get("entity_missing"):
         # ``restore_snapshot`` outcome on a missing entity is
         # domain-dependent: upsert paths (automation, script,
-        # dashboard) recreate it, but helper / label / category
-        # restores go through ``<domain>/update`` WS commands
-        # that expect the entity to exist and would surface a
-        # WS error if it does not. Hedge rather than promise
-        # one specific outcome.
+        # dashboard, label, category, area, floor, zone) recreate it,
+        # but a storage helper restored only through its
+        # ``<domain>/update`` WS command expects the entity to exist
+        # and would surface a WS error if it does not. Hedge rather
+        # than promise one specific outcome.
         warnings.append(
             "Entity is missing from HA; restore behaviour is "
             "domain-dependent (upsert paths recreate it; "

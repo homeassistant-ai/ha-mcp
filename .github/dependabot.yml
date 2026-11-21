@@ -51,6 +51,10 @@ updates:
       # there is no narrower update-type that holds the line.
       # Drop this entry when tools_code.py is ported to the pool API.
       - dependency-name: "pydantic-monty"
+      # Renovate moves the dev pin with the version the component installs
+      # (custom_components/ha_mcp_tools/card_runtime.py) in one update; a
+      # Dependabot bump of the dev pin alone would only fail the unit tests.
+      - dependency-name: "quickjs-ng"
       # A shared mcp stays on HA Core's 1.x line; ha-mcp's own 2.x SDK is
       # vendored under src/ha_mcp/_vendor.
       - dependency-name: "mcp"
@@ -78,6 +82,44 @@ updates:
       - dependency-name: "pyjwt"
       - dependency-name: "pyyaml"
       - dependency-name: "truststore"
+      # Dev pins that equal the dev group Core's integration manifests.
+      # scripts/sync_dev_integration_pins.py rewrites everything between the
+      # markers, and the matching pins in pyproject.toml, when Renovate bumps
+      # Core; a Dependabot bump of one alone would only fail the unit tests.
+      # core-integration-pins:start
+      - dependency-name: "aiohasupervisor"
+      - dependency-name: "aiousbwatcher"
+      - dependency-name: "av"
+      - dependency-name: "gazetteer-matcher"
+      - dependency-name: "ha-ffmpeg"
+      - dependency-name: "ha-silabs-firmware-client"
+      - dependency-name: "hass-nabucasa"
+      - dependency-name: "hassil"
+      - dependency-name: "home-assistant-frontend"
+      - dependency-name: "home-assistant-intents"
+      - dependency-name: "ical"
+      - dependency-name: "infrared-protocols"
+      - dependency-name: "knx-frontend"
+      - dependency-name: "knx-telegram-store"
+      - dependency-name: "matter-ble-proxy"
+      - dependency-name: "matter-python-client"
+      - dependency-name: "mutagen"
+      - dependency-name: "numpy"
+      - dependency-name: "openai"
+      - dependency-name: "pygbl"
+      - dependency-name: "pymicro-vad"
+      - dependency-name: "pyroute2"
+      - dependency-name: "pyspeex-noise"
+      - dependency-name: "python-otbr-api"
+      - dependency-name: "pyturbojpeg"
+      - dependency-name: "serialx"
+      - dependency-name: "universal-silabs-flasher"
+      - dependency-name: "xknx"
+      - dependency-name: "xknxproject"
+      - dependency-name: "zha"
+      - dependency-name: "zha-quirks"
+      - dependency-name: "zwave-js-server-python"
+      # core-integration-pins:end
     groups:
       # Group dev dependencies together
       dev-dependencies:

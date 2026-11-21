@@ -22,7 +22,7 @@ If you *do* run the app, you don't also need `uvx` — that would be a second, s
 
 | Feature | Built-in HA MCP | ha-mcp |
 |---------|-----------------|--------|
-| Tools | ~15 basic tools | 87 comprehensive tools |
+| Tools | ~15 basic tools | 86 comprehensive tools |
 | Focus | Device control | Full system administration |
 | Automations | Limited | Create, edit, debug, trace |
 | Dashboards | No | Full dashboard management |
@@ -462,7 +462,7 @@ Beta status: the OAuth flow is built against the MCP 2025-06-18 spec and tested 
 
 ChatGPT connectors require a URL reachable from the public internet. If your Home Assistant sits behind a firewall or CGNAT and you don't want to expose it, the community-maintained [OpenAI Tunnel for HA-MCP](https://github.com/norpol/hass-codex-tunnel-mcp) integration by [@norpol](https://github.com/norpol) is an outbound-only alternative:
 
-- It downloads, verifies, and supervises OpenAI's [`tunnel-client`](https://github.com/openai/tunnel-client) as a Home Assistant subprocess (installed as a HACS custom repository; Linux `amd64`/`aarch64` on HA OS / Supervised initially).
+- It downloads, verifies, and supervises OpenAI's [`tunnel-client`](https://github.com/openai/tunnel-client) as a Home Assistant subprocess (installed as a Marketplace custom repository; Linux `amd64`/`aarch64` on HA OS / Supervised initially).
 - The client connects your MCP server URL to an OpenAI-hosted tunnel, so ChatGPT, Codex, and other OpenAI products can reach it — no port forwarding, reverse proxy, or public URL needed.
 - Create a tunnel on the [Tunnels page](https://platform.openai.com/settings/organization/tunnels) and a runtime API key with **Tunnels Read** and **Tunnels Use** permissions on the [API keys page](https://platform.openai.com/settings/organization/api-keys), point the integration at your local ha-mcp URL, and add the ChatGPT connector using the same tunnel ID.
 
@@ -620,21 +620,21 @@ If tools stop responding or the connector appears disconnected in Claude.ai:
 6. **Don't forget to click *Connect* on the connector** — and, with OAuth enabled, click **Allow** on the consent page. Adding the connector alone does not complete the connection.
 7. **URL works in your browser but the LLM can't connect?** Your reverse proxy is filtering the AI client — see [Cloudflare: LLM can't connect](#cloudflare-llm-cant-connect-block-ai-training-bots) above (Cloudflare's "Block AI training bots" and geo/country blocking are the usual causes).
 
-### Google Gemini Spark: legacy mode is verified; ha_auth expected as of component 2.0.0
+### Google Gemini Spark: legacy mode is verified; ha_auth expected
 
 Gemini Spark's custom connected apps are OAuth-only, and they authenticate using a cross-origin redirect URI (a Client ID Metadata Document). Home Assistant core's native OAuth provider only fetches these from 2026.9 onward ([home-assistant/core#176286](https://github.com/home-assistant/core/pull/176286), fixing [#176282](https://github.com/home-assistant/core/issues/176282)); older cores reject Spark's authorization request with **"Invalid redirect URI"**.
 
-As of component 2.0.0, the HA-MCP component validates Client ID Metadata Documents itself and hands Home Assistant core an identity it accepts on any core version, so **ha_auth** mode is expected to work with Spark (live verification in progress). **Legacy** mode remains the verified fallback: a self-hosted authorization server with a static Client ID and Client Secret you paste into Spark's Advanced settings. One limitation of the automatic path: registrations without exactly one stable web redirect origin — multiple origins (as Spark's), loopback-only callbacks (CLI clients), or a mix — sign in normally but cannot refresh; the client must re-authorize when the token expires, which most handle automatically but some surface to the user. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) and pick **Gemini Spark** for the full walkthrough.
+The HA-MCP component validates Client ID Metadata Documents itself and hands Home Assistant core an identity it accepts on any core version, so **ha_auth** mode is expected to work with Spark (live verification in progress). **Legacy** mode remains the verified fallback: a self-hosted authorization server with a static Client ID and Client Secret you paste into Spark's Advanced settings. One limitation of the automatic path: registrations without exactly one stable web redirect origin — multiple origins (as Spark's), loopback-only callbacks (CLI clients), or a mix — sign in normally but cannot refresh; the client must re-authorize when the token expires, which most handle automatically but some surface to the user. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) and pick **Gemini Spark** for the full walkthrough.
 
 This page will be updated once ha_auth mode is verified end-to-end with Spark.
 
-### Copilot CLI: remote OAuth works with ha_auth as of component 2.0.0; legacy for older setups
+### Copilot CLI: remote OAuth works with ha_auth; legacy as a fallback
 
-Copilot CLI's remote MCP setup requires an OAuth **Client ID** — its `/mcp add` form won't accept a blank field — and it tries to get one via dynamic client registration. Before component 2.0.0, `ha_auth` mode advertised no registration endpoint, so that registration failed (`MCPOAuthError: Failed to register OAuth client`). As of 2.0.0 the component serves a registration endpoint in `ha_auth` mode, so registration succeeds; legacy mode remains the verified alternative if your setup predates it.
+Copilot CLI's remote MCP setup requires an OAuth **Client ID** — its `/mcp add` form won't accept a blank field — and it gets one via dynamic client registration, which the component serves in `ha_auth` mode.
 
-On component 2.0.0 or newer: keep **Authentication mode** on `ha_auth` — Copilot CLI registers automatically and signs in with your Home Assistant account. On older versions (or as a fallback): set **Authentication mode** to `legacy`, restart Home Assistant when the repair prompts you, and copy the generated **Client ID** and **Client Secret** from the entry's **Configure** screen into Copilot CLI's required fields.
+Keep **Authentication mode** on `ha_auth` — Copilot CLI registers automatically and signs in with your Home Assistant account. If registration fails: set **Authentication mode** to `legacy`, restart Home Assistant when the repair prompts you, and copy the generated **Client ID** and **Client Secret** from the entry's **Configure** screen into Copilot CLI's required fields.
 
-This is the same self-hosted authorization path used for [Google Gemini Spark](#google-gemini-spark-legacy-mode-is-verified-ha_auth-expected-as-of-component-200), which can also use it as a fallback.
+The legacy fallback is the same self-hosted authorization path used for [Google Gemini Spark](#google-gemini-spark-legacy-mode-is-verified-ha_auth-expected), which can also use it as a fallback.
 
 ### Test ha-mcp without configuring a client
 
@@ -707,11 +707,7 @@ Template helper edit backups and restores also require the component, using eith
 
 ### How do I install it?
 
-**Using HACS (recommended, Home Assistant 2026.8–2026.10):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or open **HACS**, search for **HA-MCP**, and **Download**. The main repository is already in the default catalog.
-
-**Using the Marketplace (Home Assistant 2026.11 or newer):** Open **Settings → Marketplace**, accept its first-run warning, search for **HA-MCP**, and **Install**. HA-MCP is in the default catalog; installing it and receiving updates do not require a GitHub connection or a custom repository. The repository link above also opens its Marketplace page.
-
-On Home Assistant 2026.7, use the manual install below and select **HA-MCP File & YAML Tools** with an external server. The in-process server requires 2026.8.0 or newer. Earlier Home Assistant versions cannot load the integration.
+**Using the Marketplace (recommended, Home Assistant 2026.11 or newer):** open [this Marketplace repository link](https://my.home-assistant.io/redirect/marketplace_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or open **Settings → Marketplace**, accept its first-run warning, search for **HA-MCP**, and **Install**. HA-MCP is in the default catalog; installing it and receiving updates do not require a GitHub connection or a custom repository.
 
 After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
 
@@ -728,16 +724,16 @@ Yes. The component is required, but the tools are also gated by feature flags fo
 
 The split is deliberate: YAML *reads* sit behind the filesystem flag, and only YAML *edits* need `ENABLE_YAML_CONFIG_EDITING`.
 
-The integration itself is in the HACS / Marketplace default catalog: search for **HA-MCP** (no feature flag required). On the Marketplace, first read and accept the warning in its UI; catalog installs and updates do not require a GitHub connection. Home Assistant keeps that acceptance per user, and HA-MCP may connect as a different user than you (the app connects as Supervisor), so after you have read the warning the agent asks you and accepts it for HA-MCP's own user. A GitHub connection is still needed if you choose a custom repository such as the `homeassistant-ai/ha-mcp-integration` distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
+The integration itself is in the Marketplace default catalog: search for **HA-MCP** (no feature flag required). First read and accept the warning in the Marketplace UI; catalog installs and updates do not require a GitHub connection. Home Assistant keeps that acceptance per user, and HA-MCP may connect as a different user than you (the app connects as Supervisor), so after you have read the warning the agent asks you and accepts it for HA-MCP's own user. A GitHub connection is still needed if you choose a custom repository such as the `homeassistant-ai/ha-mcp-integration` distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
 
 ### The store says "The ha_mcp_tools directory belongs to …" and HA-MCP will not update
 
 Two store records, `homeassistant-ai/ha-mcp` and the distribution mirror
 `homeassistant-ai/ha-mcp-integration`, are both marked installed, and both own
-`custom_components/ha_mcp_tools`. HACS allowed a download of the second one on
-top of the first (older ha-mcp servers suggested exactly that); the Marketplace
-in Home Assistant 2026.11 refuses to update either record, and refuses to
-uninstall one while any HA-MCP entry exists, disabled ones included.
+`custom_components/ha_mcp_tools`. Older stores allowed a download of the second
+one on top of the first (older ha-mcp servers suggested exactly that); the
+Marketplace refuses to update either record, and refuses to uninstall one while
+any HA-MCP entry exists, disabled ones included.
 
 Open **Settings → System → Repairs**. A current HA-MCP integration shows
 **HA-MCP is installed from two store listings**; submitting it keeps
@@ -754,7 +750,7 @@ either:
    dialog.
 2. Keep the entries: with Core stopped (`ha core stop` in a terminal app), set
    `"installed": false` on the duplicate record in
-   `/config/.storage/marketplace.repositories` (`hacs.repositories` on HACS),
+   `/config/.storage/marketplace.repositories`,
    start Core, then update the kept record.
 
 A mirror install that was never doubled needs none of this: it keeps updating
@@ -768,7 +764,7 @@ could be listed in the default catalog. The `homeassistant-ai/ha-mcp-integration
 mirror is still supported: it receives the same releases, and an install from
 it keeps updating from it.
 
-Two things differ on the Marketplace in Home Assistant 2026.11:
+Two things to know in the Marketplace:
 
 - The mirror is a custom repository, so its background update checks need a
   connected GitHub account and run every 48 hours. The catalog listing needs no

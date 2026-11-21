@@ -1,753 +1,372 @@
-"""Unit tests for FastMCP Context injection in long-running tools.
+"""Progress that long-running tools report through the FastMCP ``Context``.
 
-Each tool is verified twice:
-- legacy path: called with ``ctx=None`` (or omitted) — must work unchanged
-- progress path: called with a fake ``Context`` whose ``report_progress`` must be
-  awaited at the expected boundaries, while its MCP logging methods must stay
-  unused — protocol logging is deprecated as of MCP 2026-07-28 (SEP-2577) and
-  each call emits ``MCPDeprecationWarning`` (#2464)
-
-A third group of tests exercises the safe-emit wrapper: when ``ctx.report_progress``
-raises a transport error, the tool must still return its success payload.
+Each tool runs on the server's own client against a real ``hass`` and is
+handed a context that records what it reports. The tool must report its
+progress at each boundary and must not send MCP log messages: protocol
+logging is deprecated as of MCP 2026-07-28 (SEP-2577) and each call emits
+``MCPDeprecationWarning`` (#2464). A client that hangs up on a progress
+notification must not turn a finished tool call into an error.
 """
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 import pytest
+from homeassistant.components.recorder import Recorder
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
-from ha_mcp.tools.component_api import get_component_caps
+from ha_mcp._vendor.fastmcp import Context, FastMCP
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.backup import register_backup_tools
 from ha_mcp.tools.device_control import DeviceControlTools
-from ha_mcp.tools.hacs_backend import HACS_API
-from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_hacs import HacsTools
 from ha_mcp.tools.tools_history import HistoryTools
 from ha_mcp.tools.tools_traces import TraceTools
 
+from ._deep_search_core import search_tools
+from ._hacs_marketplace import CARD_ID, MAIN, MAIN_ID, set_up_marketplace, stored
+from ._operations import operations_without_listener as operations_without_listener
+from ._switched_states import Devices, set_up_devices
+from ._trace_fixtures import automation_run, store_runs
 
-def _make_ctx() -> MagicMock:
-    """Build a fake FastMCP Context.
+Step = tuple[float, float, str]
 
-    The log methods are ``AsyncMock``s so an accidental ``await ctx.info(...)``
-    is recorded rather than raising ``TypeError``."""
-    ctx = MagicMock()
-    ctx.report_progress = AsyncMock()
-    ctx.info = AsyncMock()
-    ctx.debug = AsyncMock()
-    ctx.warning = AsyncMock()
-    ctx.error = AsyncMock()
-    ctx.log = AsyncMock()
-    return ctx
 
+class ProgressLog:
+    """A FastMCP context that records what a tool reports through it.
 
-def _assert_no_protocol_logging(ctx: MagicMock) -> None:
-    """Fail if a tool sent a deprecated MCP log message through ``ctx``."""
-    for name in ("debug", "info", "warning", "error", "log"):
-        getattr(ctx, name).assert_not_called()
+    With ``failure`` every progress report raises it, as a client that hung up.
+    """
 
+    def __init__(self, failure: Exception | None = None) -> None:
+        self.reports: list[tuple[float, float | None, str | None]] = []
+        self.logged: list[tuple[Any, ...]] = []
+        self._failure = failure
 
-def _mock_ha_client() -> MagicMock:
-    """Minimal mock HomeAssistantClient sufficient for these unit paths."""
-    client = MagicMock()
-    # Credential-less, so get_component_caps skips its WebSocket probe. Set
-    # both explicitly: an unset MagicMock attribute is truthy.
-    client.base_url = None
-    client.token = None
-    client.verify_ssl = True
-    # add_timezone_metadata awaits get_config() — must be async.
-    client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-    return client
+    async def report_progress(
+        self, progress: float, total: float | None = None, message: str | None = None
+    ) -> None:
+        self.reports.append((progress, total, message))
+        if self._failure is not None:
+            raise self._failure
 
+    async def _log(self, *args: Any, **kwargs: Any) -> None:
+        self.logged.append(args)
 
-def _progress_messages(ctx: MagicMock) -> list[str]:
-    """Extract the ``message`` kwarg from every ``report_progress`` call."""
-    return [c.kwargs.get("message", "") for c in ctx.report_progress.await_args_list]
+    debug = info = warning = error = log = _log
 
+    @property
+    def context(self) -> Context:
+        return cast(Context, self)
 
-def _assert_progress_call(
-    call: Any,
-    *,
-    progress: float,
-    total: float,
-    message_contains: str,
-) -> None:
-    """Pin progress/total exactly and require a substring in ``message``."""
-    assert call.kwargs["progress"] == progress, call.kwargs
-    assert call.kwargs["total"] == total, call.kwargs
-    assert message_contains in call.kwargs["message"], call.kwargs
 
+def assert_reported(log: ProgressLog, expected: list[Step]) -> None:
+    """``log`` holds exactly ``expected``'s progress/total pairs, each message
+    containing the expected text, and no MCP log message."""
+    assert [(p, t) for p, t, _ in log.reports] == [(p, t) for p, t, _ in expected]
+    for (_, _, message), (_, _, part) in zip(log.reports, expected, strict=True):
+        assert part in (message or ""), log.reports
+    assert log.logged == []
 
-# ---------------------------------------------------------------------------
-# _mock_ha_client self-check: no live component WebSocket probe
-# ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_mock_ha_client_never_sends_its_token_to_a_real_host() -> None:
-    """The shared mock has no credentials, so the component probe never dials out."""
-    with patch(
-        "ha_mcp.tools.component_api.get_websocket_client", new=AsyncMock()
-    ) as connect:
-        assert await get_component_caps(_mock_ha_client()) is None
-    connect.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# smart_search.deep_search (the engine behind ha_search)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def smart_search_tools() -> SmartSearchTools:
-    client = _mock_ha_client()
-    # No entities → all phases short-circuit cleanly without further mocking.
-    client.get_states = AsyncMock(return_value=[])
-    # Helper phase issues input_*/list WebSocket calls; succeed with empty results.
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": []}
-    )
-    return SmartSearchTools(client=client)
-
-
-@pytest.mark.asyncio
-async def test_deep_search_works_without_ctx(
-    smart_search_tools: SmartSearchTools,
-) -> None:
-    """Legacy callers passing no ctx still get a normal result dict."""
-    result = await smart_search_tools.deep_search(
-        "anything", search_types=["helper"], limit=5
-    )
-    assert result["success"] is True
-    assert result["query"] == "anything"
-    assert "helpers" in result
-
-
-@pytest.mark.asyncio
-async def test_deep_search_emits_progress_with_ctx(
-    smart_search_tools: SmartSearchTools,
-) -> None:
-    """With a Context supplied, progress + info events are awaited."""
-    ctx = _make_ctx()
-    result = await smart_search_tools.deep_search(
-        "anything", search_types=["helper"], limit=5, ctx=ctx
-    )
-    assert result["success"] is True
-    _assert_no_protocol_logging(ctx)
-    # Initial progress + post-fetch + post-helper-phase
-    assert ctx.report_progress.await_count >= 3
-    calls = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        calls[0], progress=0, total=2, message_contains="fetching entity states"
-    )
-    _assert_progress_call(
-        calls[1], progress=1, total=2, message_contains="entity states"
-    )
-    # Final event should mention helpers and equal total_phases.
-    _assert_progress_call(
-        calls[-1], progress=2, total=2, message_contains="helpers searched"
-    )
-
-
-# ---------------------------------------------------------------------------
-# tools_history.HistoryTools.ha_get_history
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_ha_get_history_works_without_ctx() -> None:
-    """ha_get_history runs end-to-end with ctx omitted."""
-    client = _mock_ha_client()
-    history_tool = HistoryTools(client).ha_get_history
-
-    fake_result = {"success": True, "source": "history", "entities": []}
-
-    # Pooled transport (#1813): ha_get_history calls _fetch_history directly with
-    # the shared client; there is no per-call dedicated connect/disconnect.
-    with patch(
-        "ha_mcp.tools.tools_history._fetch_history",
-        new=AsyncMock(return_value=fake_result),
-    ):
-        result = await history_tool(entity_ids="sensor.test")
-
-    # ha_get_history wraps the inner _fetch_history result via add_timezone_metadata
-    # — the inner payload must round-trip unchanged under fields=None.
-    assert result["data"] == fake_result
-    assert "metadata" in result
-
-
-@pytest.mark.asyncio
-async def test_ha_get_history_emits_progress_with_ctx() -> None:
-    """ha_get_history emits at least the connect / query / done events."""
-    client = _mock_ha_client()
-    history_tool = HistoryTools(client).ha_get_history
-    ctx = _make_ctx()
-
-    fake_result = {"success": True, "source": "history", "entities": []}
-
-    with patch(
-        "ha_mcp.tools.tools_history._fetch_history",
-        new=AsyncMock(return_value=fake_result),
-    ):
-        result = await history_tool(entity_ids="sensor.test", ctx=ctx)
-
-    assert result["data"] == fake_result
-    assert "metadata" in result
-    _assert_no_protocol_logging(ctx)
-    # Three events: connect, query dispatch, completion (progress jumps 1 -> 3).
-    assert ctx.report_progress.await_count == 3
-    calls = ctx.report_progress.await_args_list
-    _assert_progress_call(calls[0], progress=0, total=3, message_contains="connecting")
-    _assert_progress_call(
-        calls[1], progress=1, total=3, message_contains="querying recorder (history)"
-    )
-    _assert_progress_call(
-        calls[2], progress=3, total=3, message_contains="recorder query complete"
-    )
-
-
-# ---------------------------------------------------------------------------
-# tools_traces.TraceTools.ha_get_automation_traces
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_ha_get_automation_traces_works_without_ctx() -> None:
-    """ha_get_automation_traces is callable without ctx."""
-    client = _mock_ha_client()
-    client.get_entity_state = AsyncMock(
-        return_value={"state": "on", "attributes": {"id": "abc"}}
-    )
-    # Pooled transport (#1813): the trace commands ride the shared client's
-    # send_websocket_message; there is no per-call dedicated connect/disconnect.
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": []}
-    )
-    trace_tool = TraceTools(client).ha_get_automation_traces
-
-    with patch(
-        "ha_mcp.tools.tools_traces._resolve_trace_item_id",
-        new=AsyncMock(return_value="abc"),
-    ):
-        result = await trace_tool(entity_id="automation.demo")
-
-    assert result["success"] is True
-    assert result["trace_count"] == 0
-
-
-@pytest.mark.asyncio
-async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
-    """ha_get_automation_traces emits info + at least 3 progress events."""
-    client = _mock_ha_client()
-    client.get_entity_state = AsyncMock(
-        return_value={"state": "on", "attributes": {"id": "abc"}}
-    )
-    # Return a non-empty trace list so we follow the standard "list" branch
-    # and skip the diagnostics gather, keeping the progress-event count
-    # deterministic at the expected 3. Pooled transport (#1813): the trace
-    # command rides the shared client's send_websocket_message.
-    client.send_websocket_message = AsyncMock(
-        return_value={
-            "success": True,
-            "result": [
-                {
-                    "run_id": "1.0",
-                    "timestamp": {
-                        "start": "2025-01-01T00:00:00+00:00",
-                        "finish": "2025-01-01T00:00:01+00:00",
-                    },
-                    "state": "stopped",
-                }
-            ],
-        }
-    )
-    trace_tool = TraceTools(client).ha_get_automation_traces
-    ctx = _make_ctx()
-
-    with patch(
-        "ha_mcp.tools.tools_traces._resolve_trace_item_id",
-        new=AsyncMock(return_value="abc"),
-    ):
-        result = await trace_tool(entity_id="automation.demo", ctx=ctx)
-
-    assert result["success"] is True
-    _assert_no_protocol_logging(ctx)
-    # Three events: resolve target (0), fetch list (1), final listed-N (3).
-    assert ctx.report_progress.await_count == 3
-    calls = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        calls[0], progress=0, total=3, message_contains="resolving trace target"
-    )
-    _assert_progress_call(
-        calls[1], progress=1, total=3, message_contains="fetching trace list"
-    )
-    _assert_progress_call(
-        calls[-1], progress=3, total=3, message_contains="listed 1 traces"
-    )
-
-
-# ---------------------------------------------------------------------------
-# tools_hacs.HacsTools.ha_get_hacs_info
-# ---------------------------------------------------------------------------
-
-
-async def _identity_timezone(_client: Any, data: dict[str, Any]) -> dict[str, Any]:
-    """Stand-in for add_timezone_metadata that doesn't hit the HA client."""
-    return data
-
-
-@pytest.mark.asyncio
-async def test_ha_get_hacs_info_search_works_without_ctx() -> None:
-    client = _mock_ha_client()
-    hacs_tool = HacsTools(client).ha_get_hacs_info
-
-    ws = AsyncMock()
-    ws.send_command = AsyncMock(return_value={"success": True, "result": []})
-
-    with (
-        patch(
-            "ha_mcp.tools.tools_hacs.detect_store_api",
-            new=AsyncMock(return_value=HACS_API),
-        ),
-        patch(
-            "ha_mcp.client.websocket_client.get_websocket_client",
-            new=AsyncMock(return_value=ws),
-        ),
-        patch(
-            "ha_mcp.tools.tools_hacs.add_timezone_metadata",
-            new=_identity_timezone,
-        ),
-    ):
-        result = await hacs_tool(action="search", query="anything")
-
-    assert result["success"] is True
-    assert result["total_matches"] == 0
-
-
-@pytest.mark.asyncio
-async def test_ha_get_hacs_info_search_emits_progress_with_ctx() -> None:
-    client = _mock_ha_client()
-    hacs_tool = HacsTools(client).ha_get_hacs_info
-    ctx = _make_ctx()
-
-    ws = AsyncMock()
-    ws.send_command = AsyncMock(return_value={"success": True, "result": []})
-
-    with (
-        patch(
-            "ha_mcp.tools.tools_hacs.detect_store_api",
-            new=AsyncMock(return_value=HACS_API),
-        ),
-        patch(
-            "ha_mcp.client.websocket_client.get_websocket_client",
-            new=AsyncMock(return_value=ws),
-        ),
-        patch(
-            "ha_mcp.tools.tools_hacs.add_timezone_metadata",
-            new=_identity_timezone,
-        ),
-    ):
-        result = await hacs_tool(action="search", query="anything", ctx=ctx)
-
-    assert result["success"] is True
-    _assert_no_protocol_logging(ctx)
-    # Four contiguous events: availability check (0), fetch list (1), filter (2), matched (3).
-    assert ctx.report_progress.await_count == 4
-    calls = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        calls[0], progress=0, total=3, message_contains="checking HACS availability"
-    )
-    _assert_progress_call(
-        calls[1], progress=1, total=3, message_contains="fetching HACS repository list"
-    )
-    _assert_progress_call(calls[2], progress=2, total=3, message_contains="filtering")
-    _assert_progress_call(calls[3], progress=3, total=3, message_contains="matched")
-
-
-# ---------------------------------------------------------------------------
-# device_control.DeviceControlTools.bulk_device_control (sequential)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_bulk_device_control_works_without_ctx() -> None:
-    """bulk_device_control runs without ctx in sequential mode."""
-    client = _mock_ha_client()
-    tools = DeviceControlTools(client=client)
-
-    async def fake_control(**kwargs: Any) -> dict[str, Any]:
-        return {
-            "command_sent": True,
-            "operation_id": f"op-{kwargs['entity_id']}",
-            "entity_id": kwargs["entity_id"],
-            "action": kwargs["action"],
-        }
-
-    tools.control_device_smart = AsyncMock(side_effect=fake_control)  # type: ignore[method-assign]
-
-    result = await tools.bulk_device_control(
-        operations=[
-            {"entity_id": "light.a", "action": "on"},
-            {"entity_id": "light.b", "action": "off"},
-        ],
-        parallel=False,
-    )
-
-    assert result["successful_commands"] == 2
-    assert len(result["operation_ids"]) == 2
-
-
-@pytest.mark.asyncio
-async def test_bulk_device_control_emits_progress_with_ctx_sequential() -> None:
-    """Sequential mode emits framing + one ``{entity} {action} dispatched`` event per op."""
-    client = _mock_ha_client()
-    tools = DeviceControlTools(client=client)
-    ctx = _make_ctx()
-
-    async def fake_control(**kwargs: Any) -> dict[str, Any]:
-        return {
-            "command_sent": True,
-            "operation_id": f"op-{kwargs['entity_id']}",
-            "entity_id": kwargs["entity_id"],
-            "action": kwargs["action"],
-        }
-
-    tools.control_device_smart = AsyncMock(side_effect=fake_control)  # type: ignore[method-assign]
-
-    result = await tools.bulk_device_control(
-        operations=[
-            {"entity_id": "light.a", "action": "on"},
-            {"entity_id": "light.b", "action": "off"},
-        ],
-        parallel=False,
-        ctx=ctx,
-    )
-
-    assert result["successful_commands"] == 2
-    _assert_no_protocol_logging(ctx)
-    # Initial dispatch + 2 per-op events + final completion = 4.
-    assert ctx.report_progress.await_count == 4
-    messages = _progress_messages(ctx)
-    assert messages[0] == "dispatching operations"
-    assert "light.a on dispatched" in messages
-    assert "light.b off dispatched" in messages
-    assert "dispatched 2 op(s)" in messages[-1]
-
-
-@pytest.mark.asyncio
-async def test_bulk_device_control_parallel_emits_dispatch_only() -> None:
-    """Parallel mode emits framing events but no per-op progress mid-flight."""
-    client = _mock_ha_client()
-    tools = DeviceControlTools(client=client)
-    ctx = _make_ctx()
-
-    async def fake_control(**kwargs: Any) -> dict[str, Any]:
-        return {
-            "command_sent": True,
-            "operation_id": f"op-{kwargs['entity_id']}",
-            "entity_id": kwargs["entity_id"],
-            "action": kwargs["action"],
-        }
-
-    tools.control_device_smart = AsyncMock(side_effect=fake_control)  # type: ignore[method-assign]
-
-    await tools.bulk_device_control(
-        operations=[
-            {"entity_id": "light.a", "action": "on"},
-            {"entity_id": "light.b", "action": "off"},
-        ],
-        parallel=True,
-        ctx=ctx,
-    )
-
-    _assert_no_protocol_logging(ctx)
-    # Parallel: dispatching (0) + completion event = 2 framing events.
-    assert ctx.report_progress.await_count == 2
-    calls = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        calls[0], progress=0, total=2, message_contains="dispatching operations"
-    )
-    _assert_progress_call(
-        calls[1], progress=2, total=2, message_contains="dispatched 2 op(s)"
-    )
-
-
-@pytest.mark.asyncio
-async def test_bulk_component_batch_progress_does_not_claim_confirmation() -> None:
-    """A batch with an op HA did not confirm is not announced as confirmed."""
-    client = _mock_ha_client()
-    tools = DeviceControlTools(client=client)
-    ctx = _make_ctx()
-    component_response = {
-        "results": [
-            {"command_sent": True, "confirmed": True},
-            {"command_sent": True, "confirmed": False},
-        ]
-    }
-    tools._bulk_via_component = AsyncMock(return_value=component_response)  # type: ignore[method-assign]
-    tools.control_device_smart = AsyncMock()  # type: ignore[method-assign]
-
-    result = await tools.bulk_device_control(
-        operations=[
-            {"entity_id": "light.a", "action": "on"},
-            {"entity_id": "light.b", "action": "off"},
-            # Skipped as invalid: progress/total must count only the two dispatched ops.
-            {"action": "on"},
-        ],
-        ctx=ctx,
-    )
-
-    assert result is component_response
-    tools.control_device_smart.assert_not_awaited()
-    _assert_no_protocol_logging(ctx)
-    # One completion event; the legacy "dispatching operations" framing is skipped.
-    (call,) = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        call,
-        progress=2,
-        total=2,
-        message_contains="dispatched via component; each op's result shows its outcome",
-    )
-    assert "confirmed" not in call.kwargs["message"], call.kwargs
-
-
-# ---------------------------------------------------------------------------
-# Branch-coverage tests for non-default search types / sources / paths
-# ---------------------------------------------------------------------------
+# --- deep_search (the engine behind ha_search) -------------------------------
 
 
 @pytest.mark.parametrize(
-    "search_type, expected_message_substr",
+    ("search_type", "phase_message"),
     [
         ("automation", "automations searched"),
         ("script", "scripts searched"),
+        ("scene", "scenes searched"),
         ("dashboard", "dashboards searched"),
         ("helper", "helpers searched"),
     ],
 )
-@pytest.mark.asyncio
-async def test_deep_search_emits_progress_per_search_type(
-    smart_search_tools: SmartSearchTools,
-    search_type: str,
-    expected_message_substr: str,
+async def test_deep_search_reports_each_search_phase(
+    core_client: HomeAssistantClient, search_type: str, phase_message: str
 ) -> None:
-    """Each search_type owns one phase-completion progress event, regardless of which type."""
-    ctx = _make_ctx()
-    # Empty get_states + empty WebSocket responses are enough to short-circuit
-    # every branch (no entities → empty automation/script lists; empty dashboard
-    # list → only the "default" entry, which returns no config under the mock).
-    result = await smart_search_tools.deep_search(
-        "anything", search_types=[search_type], limit=5, ctx=ctx
+    """A search reports the state fetch and then its one search phase."""
+    log = ProgressLog()
+
+    result = await search_tools(core_client).deep_search(
+        "anything", search_types=[search_type], limit=5, ctx=log.context
     )
 
     assert result["success"] is True
-    # 3 events: initial fetch (0), post-fetch (1), phase-done for the one search_type (2).
-    # Pinning the count guards against a regression that drops a per-branch emit.
-    assert ctx.report_progress.await_count == 3
-    calls = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        calls[0], progress=0, total=2, message_contains="fetching entity states"
-    )
-    _assert_progress_call(
-        calls[-1], progress=2, total=2, message_contains=expected_message_substr
+    assert_reported(
+        log,
+        [
+            (0, 2, "fetching entity states"),
+            (1, 2, "entity states"),
+            (2, 2, phase_message),
+        ],
     )
 
 
-@pytest.mark.asyncio
-async def test_ha_get_history_statistics_emits_progress() -> None:
-    """source="statistics" goes through _fetch_statistics with the same 3-event sequence."""
-    client = _mock_ha_client()
-    history_tool = HistoryTools(client).ha_get_history
-    ctx = _make_ctx()
-
-    fake_result = {"success": True, "source": "statistics", "entities": []}
-
-    with patch(
-        "ha_mcp.tools.tools_history._fetch_statistics",
-        new=AsyncMock(return_value=fake_result),
-    ):
-        result = await history_tool(
-            entity_ids="sensor.test", source="statistics", period="day", ctx=ctx
-        )
-
-    assert result["data"] == fake_result
-    assert "metadata" in result
-    assert ctx.report_progress.await_count == 3
-    messages = _progress_messages(ctx)
-    assert "querying recorder (statistics)" in messages[1]
-
-
-@pytest.mark.asyncio
-async def test_ha_get_automation_traces_run_id_detail_emits_progress() -> None:
-    """Detail branch (run_id provided) emits ``formatting trace`` at progress=3."""
-    client = _mock_ha_client()
-    client.get_entity_state = AsyncMock(
-        return_value={"state": "on", "attributes": {"id": "abc"}}
-    )
-    # Pooled transport (#1813): trace/get rides the shared client's
-    # send_websocket_message.
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": {"trace": "data"}}
-    )
-    trace_tool = TraceTools(client).ha_get_automation_traces
-    ctx = _make_ctx()
-
-    with (
-        patch(
-            "ha_mcp.tools.tools_traces._resolve_trace_item_id",
-            new=AsyncMock(return_value="abc"),
-        ),
-        patch(
-            "ha_mcp.tools.tools_traces._format_detailed_trace",
-            return_value={"success": True, "detail": True},
-        ),
-    ):
-        await trace_tool(entity_id="automation.demo", run_id="1.0", ctx=ctx)
-
-    assert ctx.report_progress.await_count == 3
-    calls = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        calls[1], progress=1, total=3, message_contains="fetching trace detail"
-    )
-    _assert_progress_call(
-        calls[2], progress=3, total=3, message_contains="formatting trace"
-    )
-
-
-@pytest.mark.asyncio
-async def test_ha_get_automation_traces_empty_diagnostics_emits_progress() -> None:
-    """Empty trace-list branch emits the diagnostic-gather (2) + diagnostics-complete (3) events."""
-    client = _mock_ha_client()
-    client.get_entity_state = AsyncMock(
-        return_value={"state": "on", "attributes": {"id": "abc"}}
-    )
-    # Empty trace list triggers the diagnostics branch. Pooled transport
-    # (#1813): trace/list rides the shared client's send_websocket_message.
-    client.send_websocket_message = AsyncMock(
-        return_value={"success": True, "result": []}
-    )
-    trace_tool = TraceTools(client).ha_get_automation_traces
-    ctx = _make_ctx()
-
-    with (
-        patch(
-            "ha_mcp.tools.tools_traces._resolve_trace_item_id",
-            new=AsyncMock(return_value="abc"),
-        ),
-        patch(
-            "ha_mcp.tools.tools_traces._gather_diagnostics",
-            new=AsyncMock(return_value=({"diagnostic": "info"}, [])),
-        ),
-    ):
-        result = await trace_tool(entity_id="automation.demo", ctx=ctx)
-
-    assert result["success"] is True
-    # Four progress events: connect (0), fetch list (1), no-traces (2), diagnostics complete (3).
-    assert ctx.report_progress.await_count == 4
-    calls = ctx.report_progress.await_args_list
-    _assert_progress_call(
-        calls[2],
-        progress=2,
-        total=3,
-        message_contains="no traces; gathering diagnostics",
-    )
-    _assert_progress_call(
-        calls[3], progress=3, total=3, message_contains="diagnostics complete"
-    )
-
-
-# ---------------------------------------------------------------------------
-# tools_backup.ha_manage_backup (#1861) — the tool is a nested-function
-# @mcp.tool closure inside register_backup_tools, not a class method like
-# every other tool above. Its unit tests (test_backup_delete.py,
-# test_backup_snapshot*.py) call the module-level create_backup /
-# restore_backup / delete_backup functions directly with an explicit
-# ctx= kwarg, which proves the plumbing but NOT that FastMCP actually
-# injects a live Context into ha_manage_backup's own signature when a
-# real client calls it. If injection silently failed, ctx would stay
-# None at the dispatcher and every progress heartbeat would be a no-op
-# while every other test still passed. FastMCP's signal that it claimed
-# a parameter for injection is excluding it from the tool's exposed
-# JSON schema — assert that here instead.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_ha_manage_backup_ctx_is_injected_not_exposed() -> None:
-    from ha_mcp._vendor.fastmcp import FastMCP
-    from ha_mcp.tools.backup import register_backup_tools
-
-    mcp = FastMCP("test")
-    register_backup_tools(mcp, _mock_ha_client())
-    tool = await mcp.get_tool("ha_manage_backup")
-    props = tool.parameters.get("properties", {})
-
-    assert "ctx" not in props, (
-        "ctx leaked into the exposed schema — FastMCP is not claiming it for "
-        "injection, so ha_manage_backup's progress heartbeats would silently "
-        "never fire for a real client"
-    )
-    # Sanity: real dispatch params ARE exposed, so the absence of "ctx" above
-    # isn't just an empty-schema false positive.
-    assert {"scope", "action", "confirm", "backup_id"} <= props.keys()
-
-
-# ---------------------------------------------------------------------------
-# safe_progress: transport errors must not mask successful tool results
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_safe_progress_swallows_transport_errors_in_deep_search(
-    smart_search_tools: SmartSearchTools,
+async def test_a_client_that_hangs_up_on_progress_still_gets_the_search(
+    core_client: HomeAssistantClient,
 ) -> None:
-    """If ctx.report_progress raises (transport error), the tool still returns success.
+    """A finished search is never turned into an error by a failed progress
+    notification."""
+    log = ProgressLog(ConnectionError("transport gone"))
 
-    A successful HA operation must never be converted to a ToolError because the
-    MCP client hung up on a progress notification.
-    """
-    ctx = _make_ctx()
-    ctx.report_progress = AsyncMock(side_effect=ConnectionError("transport gone"))
-
-    result = await smart_search_tools.deep_search(
-        "anything", search_types=["helper"], limit=5, ctx=ctx
+    result = await search_tools(core_client).deep_search(
+        "anything", search_types=["helper"], limit=5, ctx=log.context
     )
 
     assert result["success"] is True
     assert result["query"] == "anything"
-    # report_progress was attempted but raised every time; safe_progress swallowed.
-    assert ctx.report_progress.await_count >= 1
+    assert len(log.reports) == 3
 
 
-@pytest.mark.asyncio
-async def test_safe_progress_swallows_transport_errors_in_bulk_device_control() -> None:
-    """ctx.report_progress raising must not break bulk_device_control's return path."""
-    client = _mock_ha_client()
-    tools = DeviceControlTools(client=client)
-    ctx = _make_ctx()
-    ctx.report_progress = AsyncMock(side_effect=ConnectionError("transport gone"))
+# --- ha_get_history -----------------------------------------------------------
 
-    async def fake_control(**kwargs: Any) -> dict[str, Any]:
-        return {
-            "command_sent": True,
-            "operation_id": f"op-{kwargs['entity_id']}",
-            "entity_id": kwargs["entity_id"],
-            "action": kwargs["action"],
-        }
 
-    tools.control_device_smart = AsyncMock(side_effect=fake_control)  # type: ignore[method-assign]
+@pytest.mark.parametrize(
+    ("source", "extra"),
+    [("history", {}), ("statistics", {"period": "day"})],
+)
+async def test_history_reports_connect_query_and_completion(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    source: str,
+    extra: dict[str, Any],
+) -> None:
+    assert await async_setup_component(hass, "history", {})
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    log = ProgressLog()
 
-    result = await tools.bulk_device_control(
-        operations=[{"entity_id": "light.a", "action": "on"}],
-        parallel=False,
-        ctx=ctx,
+    result = await HistoryTools(core_client).ha_get_history(
+        entity_ids="sensor.test",
+        source=source,
+        start_time=start.isoformat(),
+        end_time=(start + timedelta(days=1)).isoformat(),
+        ctx=log.context,
+        **extra,
+    )
+
+    assert result["data"]["success"] is True
+    assert_reported(
+        log,
+        [
+            (0, 3, "connecting"),
+            (1, 3, f"querying recorder ({source})"),
+            (3, 3, "recorder query complete"),
+        ],
+    )
+
+
+# --- ha_get_automation_traces -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("runs", "selectors", "expected"),
+    [
+        pytest.param(
+            1,
+            {},
+            [
+                (0, 3, "resolving trace target"),
+                (1, 3, "fetching trace list"),
+                (3, 3, "listed 1 traces"),
+            ],
+            id="list",
+        ),
+        pytest.param(
+            1,
+            {"run_id": "r1"},
+            [
+                (0, 3, "resolving trace target"),
+                (1, 3, "fetching trace detail"),
+                (3, 3, "formatting trace"),
+            ],
+            id="detail",
+        ),
+        pytest.param(
+            0,
+            {},
+            [
+                (0, 3, "resolving trace target"),
+                (1, 3, "fetching trace list"),
+                (2, 3, "no traces; gathering diagnostics"),
+                (3, 3, "diagnostics complete"),
+            ],
+            id="no-runs-diagnostics",
+        ),
+    ],
+)
+async def test_traces_report_each_step_of_their_branch(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    runs: int,
+    selectors: dict[str, Any],
+    expected: list[Step],
+) -> None:
+    assert await async_setup_component(hass, "trace", {})
+    if runs:
+        await store_runs(hass, automation_run("r1", context_id="c1", item_id="demo"))
+    log = ProgressLog()
+
+    result = await TraceTools(core_client).ha_get_automation_traces(
+        entity_id="automation.demo", ctx=log.context, **selectors
+    )
+
+    assert result["success"] is True
+    assert_reported(log, expected)
+
+
+# --- ha_get_hacs_info ---------------------------------------------------------
+
+
+async def test_marketplace_search_reports_status_fetch_filter_and_match(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    aioclient_mock: AiohttpClientMocker,
+    hass_storage: dict[str, Any],
+) -> None:
+    entry = await set_up_marketplace(
+        hass,
+        aioclient_mock,
+        hass_storage,
+        {
+            CARD_ID: stored("piitaya/lovelace-mushroom", "plugin"),
+            MAIN_ID: stored(MAIN, "integration"),
+        },
+    )
+    log = ProgressLog()
+    try:
+        result = await HacsTools(core_client).ha_get_hacs_info(
+            action="search", query="mushroom", ctx=log.context
+        )
+    finally:
+        await hass.config_entries.async_unload(entry.entry_id)
+
+    matched = result["data"]["total_matches"]
+    assert matched >= 1
+    assert_reported(
+        log,
+        [
+            (0, 3, "reading the Marketplace status"),
+            (1, 3, "fetching the Marketplace repository list"),
+            (2, 3, "filtering"),
+            (3, 3, f"matched {matched} repositories"),
+        ],
+    )
+
+
+# --- bulk_device_control ------------------------------------------------------
+
+TWO_OPS = [
+    {"entity_id": "light.a", "action": "on"},
+    {"entity_id": "light.b", "action": "off"},
+]
+
+
+@pytest.fixture
+async def devices(hass: HomeAssistant) -> Devices:
+    return await set_up_devices(hass, {"light.a": "off", "light.b": "on"})
+
+
+@pytest.mark.usefixtures("devices")
+async def test_sequential_bulk_reports_each_dispatched_op(
+    core_client: HomeAssistantClient,
+) -> None:
+    log = ProgressLog()
+
+    result = await DeviceControlTools(core_client).bulk_device_control(
+        operations=[dict(op) for op in TWO_OPS], parallel=False, ctx=log.context
+    )
+
+    assert result["successful_commands"] == 2
+    assert_reported(
+        log,
+        [
+            (0, 2, "dispatching operations"),
+            (1, 2, "light.a on dispatched"),
+            (2, 2, "light.b off dispatched"),
+            (2, 2, "dispatched 2 op(s)"),
+        ],
+    )
+
+
+@pytest.mark.usefixtures("devices")
+async def test_parallel_bulk_reports_only_the_dispatch_and_its_end(
+    core_client: HomeAssistantClient,
+) -> None:
+    log = ProgressLog()
+
+    result = await DeviceControlTools(core_client).bulk_device_control(
+        operations=[dict(op) for op in TWO_OPS], parallel=True, ctx=log.context
+    )
+
+    assert result["successful_commands"] == 2
+    assert_reported(
+        log,
+        [(0, 2, "dispatching operations"), (2, 2, "dispatched 2 op(s)")],
+    )
+
+
+async def test_a_component_batch_with_an_unconfirmed_op_is_not_announced_confirmed(
+    component_core_client: HomeAssistantClient, devices: Devices
+) -> None:
+    """Progress counts only the dispatched ops and leaves each op's outcome to
+    its result."""
+    devices.behaviour["light.b"] = "stay"
+    log = ProgressLog()
+
+    result = await DeviceControlTools(component_core_client).bulk_device_control(
+        operations=[
+            *({**op, "timeout_seconds": 0} for op in TWO_OPS),
+            {"action": "on"},
+        ],
+        ctx=log.context,
+    )
+
+    assert [op["confirmed"] for op in result["results"][:2]] == [True, False]
+    assert_reported(
+        log,
+        [(2, 2, "dispatched via component; each op's result shows its outcome")],
+    )
+    (_, _, message) = log.reports[0]
+    assert "confirmed" not in (message or "")
+
+
+@pytest.mark.usefixtures("devices")
+async def test_a_client_that_hangs_up_on_progress_still_gets_every_op_dispatched(
+    core_client: HomeAssistantClient,
+) -> None:
+    """Each report is still attempted, and the dispatch result still returned."""
+    log = ProgressLog(ConnectionError("transport gone"))
+
+    result = await DeviceControlTools(core_client).bulk_device_control(
+        operations=[dict(TWO_OPS[0])], parallel=False, ctx=log.context
     )
 
     assert result["successful_commands"] == 1
-    assert result["operation_ids"] == ["op-light.a"]
-    # Sequential mode attempts dispatch (0) + per-op (1) + completion (2) = 3 emits.
-    # Each raises and is swallowed by safe_progress; verifying the count catches
-    # a regression that re-introduces a `if ctx is not None:` guard inside the loop.
-    assert ctx.report_progress.await_count == 3
-    _assert_no_protocol_logging(ctx)
+    assert len(result["operation_ids"]) == 1
+    assert len(log.reports) == 3
+    assert log.logged == []
+
+
+# --- ha_manage_backup ---------------------------------------------------------
+
+
+async def test_ha_manage_backup_takes_its_context_from_fastmcp_not_the_caller(
+    core_client: HomeAssistantClient,
+) -> None:
+    """``ha_manage_backup`` is a closure, not a class method like the tools
+    above. If FastMCP stopped claiming its ``ctx`` for injection, ``ctx`` would
+    show in the tool's schema and stay ``None`` for a real client, so every
+    backup progress heartbeat would silently never fire."""
+    mcp = FastMCP("test")
+    register_backup_tools(mcp, core_client)
+    tool = await mcp.get_tool("ha_manage_backup")
+    props = tool.parameters.get("properties", {})
+
+    assert "ctx" not in props
+    assert {"scope", "action", "confirm", "backup_id"} <= props.keys()

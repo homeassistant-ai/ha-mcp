@@ -17,7 +17,7 @@ from ..tools.component_helper_collections import (
 )
 from ..tools.config_helpers.describe import MAX_OPTIONS
 from ..tools.config_helpers.schemas import (
-    _SIMPLE_CONFIG_KEYS_DESCRIPTION,
+    SIMPLE_CONFIG_KEYS_DESCRIPTION,
     SIMPLE_HELPER_TYPES,
 )
 
@@ -103,9 +103,9 @@ class ComponentHelperSchemaTransform(Transform):
         parameters = deepcopy(tool.parameters)
         properties = parameters.get("properties", {})
         config = properties.get("config")
-        if config and _SIMPLE_CONFIG_KEYS_DESCRIPTION in config.get("description", ""):
+        if config and SIMPLE_CONFIG_KEYS_DESCRIPTION in config.get("description", ""):
             config["description"] = config["description"].replace(
-                _SIMPLE_CONFIG_KEYS_DESCRIPTION, render_core_keys(schemas)
+                SIMPLE_CONFIG_KEYS_DESCRIPTION, render_core_keys(schemas)
             )
         return tool.model_copy(update={"parameters": parameters})
 

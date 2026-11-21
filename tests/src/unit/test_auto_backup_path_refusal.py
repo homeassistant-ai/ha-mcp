@@ -5,7 +5,6 @@ gate, which is wider than the write gate, so a refused path fails there first.
 That must surface as the path refusal, not as a retryable
 ``BACKUP_CAPTURE_FAILED``, and without the read allowlist. Diffing, restoring
 or re-capturing a snapshot of such a path says the live file is unreadable.
-Kept out of ``test_backup_manager.py``, which is at its module-size baseline.
 """
 
 from __future__ import annotations
@@ -33,7 +32,9 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.auto_backup import PathNotAllowedError, with_auto_backup
 from ha_mcp.tools.backup_on_demand import capture_on_demand
 
-from ._backup_restore_helpers import backup_tool
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import manage_backup
+from ._backup_core import snapshot_manager as snapshot_manager
 from ._tool_errors import error_body
 
 READ_REFUSAL = "Path not allowed. Allowed paths: www/**, blueprints/**"
@@ -119,15 +120,6 @@ async def test_custom_path_is_suggested_only_where_it_can_be_added(
     assert ("add it" in json.dumps(error)) is offers_custom_path
 
 
-def _manager(err: BaseException) -> BackupManager:
-    """A real manager whose snapshot operations fail with ``err``."""
-    mgr = BackupManager(SimpleNamespace(), None)
-    raising = AsyncMock(side_effect=err)
-    for operation in ("diff_snapshot", "restore_snapshot"):
-        setattr(mgr, operation, raising)
-    return mgr
-
-
 def _capture_failure() -> MandatoryBackupError:
     # How maybe_snapshot(mandatory=True) wraps a refused live-file read.
     try:
@@ -147,12 +139,20 @@ def _capture_failure() -> MandatoryBackupError:
     ],
 )
 async def test_snapshot_of_a_refused_path_says_the_live_file_is_unreadable(
-    action: str, err: BaseException, monkeypatch: pytest.MonkeyPatch
+    action: str,
+    err: BaseException,
+    core_client: HomeAssistantClient,
+    snapshot_manager: BackupManager,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tool = backup_tool(monkeypatch, _manager(err))
+    # The server's own manager fails the snapshot operation with ``err``.
+    for operation in ("diff_snapshot", "restore_snapshot"):
+        monkeypatch.setattr(snapshot_manager, operation, AsyncMock(side_effect=err))
 
     with pytest.raises(ToolError) as exc:
-        await tool(scope="edits", action=action, backup_name="file-x")
+        await manage_backup(
+            core_client, scope="edits", action=action, backup_name="file-x"
+        )
 
     payload = error_body(exc)
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

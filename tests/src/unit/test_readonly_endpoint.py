@@ -2,12 +2,17 @@
 
 import asyncio
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pydantic import AnyHttpUrl
+from pytest_homeassistant.common import MockUser
 from starlette.testclient import TestClient
 
 from ha_mcp._vendor import fastmcp
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.http_transport import HttpTransportFastMCP
 from ha_mcp.read_only import ReadOnlyMiddleware, ReadOnlyToolsTransform
@@ -42,7 +47,7 @@ def _server():
         return "write succeeded"
 
     mcp.add_transform(ReadOnlyToolsTransform())
-    mcp.add_middleware(ReadOnlyMiddleware(list_tools=mcp.local_provider._list_tools))
+    mcp.add_middleware(ReadOnlyMiddleware(list_tools=mcp.local_provider.list_tools))
     return mcp, writes
 
 
@@ -100,13 +105,31 @@ def test_global_readonly_still_restricts_both_endpoints():
     assert writes == []
 
 
-def test_readonly_alias_keeps_oauth_authentication_and_discovery():
+async def test_readonly_alias_keeps_oauth_authentication_and_discovery():
     from ha_mcp.auth import HomeAssistantOAuthProvider
 
     mcp, writes = _server()
     provider = HomeAssistantOAuthProvider(base_url="https://testserver")
     mcp.auth = provider
-    token = provider._encode_token("test-ha-token")
+    from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
+    from ha_mcp.auth.provider import HomeAssistantAuthorizationCode
+
+    client_info = OAuthClientInformationFull(
+        client_id="readonly-client", redirect_uris=["http://localhost/callback"]
+    )
+    await provider.register_client(client_info)
+    code = HomeAssistantAuthorizationCode(
+        code="readonly-code",
+        client_id="readonly-client",
+        redirect_uri=AnyHttpUrl("http://localhost/callback"),
+        redirect_uri_provided_explicitly=True,
+        scopes=["homeassistant"],
+        expires_at=time.time() + 60,
+        code_challenge="challenge",
+        ha_token="test-ha-token",
+    )
+    provider.auth_codes[code.code] = code
+    token = (await provider.exchange_authorization_code(client_info, code)).access_token
     with TestClient(
         mcp.http_app(path="/mcp", stateless_http=True), base_url="https://testserver"
     ) as client:
@@ -248,11 +271,35 @@ def test_readonly_endpoint_under_root_path(prefix_in_path):
         assert writes == []
 
 
-def test_theme_guidance_observes_readonly_connection():
-    from ha_mcp.dashboard_screenshot.theme_guard import _read_only_mode
+@pytest.mark.parametrize("readonly", [False, True])
+async def test_theme_guidance_observes_readonly_connection(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    hass_admin_user: MockUser,
+    tmp_path,
+    monkeypatch,
+    readonly,
+):
+    from contextlib import nullcontext
+
+    from ha_mcp.dashboard_screenshot import theme_guard
+    from ha_mcp.dashboard_screenshot.theme_guard import EngineCredential, ThemeGuard
     from ha_mcp.read_only import read_only_request
 
-    assert _read_only_mode() is False
-    with read_only_request():
-        assert _read_only_mode() is True
-    assert _read_only_mode() is False
+    from ._dashboard_screenshot_theme_guard_core import (
+        Account,
+        render_report,
+        set_up_frontend,
+    )
+
+    await set_up_frontend(hass, tmp_path)
+    monkeypatch.setattr(theme_guard, "RESTORE_SETTLE_SECONDS", 0)
+    account = Account(
+        hass_admin_user,
+        EngineCredential(url=core_client.base_url, token=core_client.token),
+    )
+    guard = ThemeGuard.for_capture(account.credential, core_client)
+    with read_only_request() if readonly else nullcontext():
+        report = await render_report(hass, guard, account)
+    assert ("This connection is read-only" in report) is readonly
+    assert ("set_engine_theme" in report) is not readonly

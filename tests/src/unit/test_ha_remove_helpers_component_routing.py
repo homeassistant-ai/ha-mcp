@@ -1,744 +1,429 @@
-"""Routing tests for ``ha_remove_helpers_integrations`` (+ the set_helper wait
-poll) over the ``ha_mcp_tools`` component ``registry_lookup`` gate.
+"""Routing of ``ha_remove_helpers_integrations`` over the component's
+``registry_lookup``.
 
-Two helper paths resolve entities from the registry today:
+Deleting a storage helper by an entity_id that is not its storage id needs the
+entity's ``unique_id``: the legacy path reads ``config/entity_registry/get`` in a
+three-attempt retry loop, and with the component one
+``registry_lookup(entity_ids=[...])`` read replaces it. Deleting a flow helper
+needs every entity of its config entry: the legacy path reads the whole
+``config/entity_registry/list``, and ``registry_lookup(config_entry_id=...)``
+returns them scoped in one frame. Every miss of the component (no capability, a
+command it no longer knows, a timeout, a socket that cannot be opened) runs the
+legacy read for the same result.
 
-- The SIMPLE-helper delete resolves one entity's ``unique_id`` with a 3-attempt
-  exponential-backoff ``config/entity_registry/get`` loop. When the component
-  advertises ``registry_lookup``, ONE ``registry_lookup(entity_ids=[...])`` read
-  resolves it — the single read replaces the retry loop (the loop absorbed
-  registration LAG, not a WS-timing race), so the retry loop and its sleeps
-  are skipped entirely. A target that is a stored helper's id never reaches
-  it: the ``<type>/list`` read before it resolves the storage id first.
-- The FLOW-helper delete and the ``ha_config_set_helper`` post-create wait poll
-  both need EVERY entity for one ``config_entry_id`` and get them by dumping the
-  WHOLE ``config/entity_registry/list``. ``registry_lookup(config_entry_id=...)``
-  returns them scoped in one frame instead.
-
-These pin that: the component-served resolves never dump the registry NOR run the
-retry-loop sleeps, and every backend degradation (no caps, ``unknown_command`` →
-invalidate + fall back, a non-unknown command error, a malformed reply, AND a
-transport failure — both a ``HomeAssistantConnectionError`` off the frame and the
-same error from ``get_websocket_client()`` failing to establish the
-socket) still produces the byte-identical legacy result. The registry_lookup
-consumers' legacy reads ride the ``send_websocket_message`` bridge, so a
-transport failure falls back rather than propagating — and, crucially, letting it
-escape the SIMPLE resolve would skip its legacy retry loop entirely.
+The server's own client runs on a real ``hass``. Storage helpers are created
+through Core's commands, flow helpers are ``MockConfigEntry`` rows with their
+registry entities, and Core answers every read and performs the delete. A spy
+on the pooled socket records which reads the tool sent.
 """
 
 from __future__ import annotations
 
-import json
-from typing import Any
+import uuid
+from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-    HomeAssistantConnectionError,
-)
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import component_api, component_registry_lookup
-from ha_mcp.tools.config_helpers.flow import _wait_for_flow_entities
-from ha_mcp.tools.config_helpers.registry import _get_entities_for_config_entry
+from ha_mcp.tools.component_registry_lookup import (
+    fetch_entities_for_config_entry_via_component,
+    resolve_entities_via_component,
+)
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
-from ._component_routing_helpers import (
-    make_ws,
-    patch_ws,
-    patch_ws_establish_failure,
+from ._client_spies import sent_commands
+from ._routing_core import (
+    held_command,
+    invalidations,
+    pooled_socket,
+    sent_frames,
+    sent_types,
 )
+from ._tool_errors import error_of
 
-_CAPS_REGISTRY = {
-    "schema_version": 1,
-    "component_version": "1.2.0",
-    "capabilities": ["registry_lookup"],
-    "limits": {},
-}
+LOOKUP = "ha_mcp_tools/registry_lookup"
+ENTITY_GET = "config/entity_registry/get"
+ENTITY_DUMP = "config/entity_registry/list"
 
 
-def _row(
-    entity_id: str, *, unique_id: str, config_entry_id: str | None = None
-) -> dict[str, Any]:
-    """A ``registry_lookup`` row (the ``config/entity_registry/list`` shape)."""
-    return {
-        "entity_id": entity_id,
-        "unique_id": unique_id,
-        "config_entry_id": config_entry_id,
-    }
+class Button(NamedTuple):
+    storage_id: str
+    entity_id: str
 
 
-class RoutingClient:
-    """Credentialed HA client spy: tallies the legacy registry reads.
-
-    ``entity_get_calls`` counts the SIMPLE path's per-id
-    ``config/entity_registry/get`` reads; ``entity_list_calls`` counts the FLOW
-    path's whole-registry ``config/entity_registry/list`` dumps. Both stay 0 when
-    the component serves the read.
-    """
-
-    def __init__(
-        self,
-        *,
-        get_result: dict[str, Any] | None = None,
-        entities: list[dict[str, Any]] | None = None,
-    ) -> None:
-        self.base_url = "http://ha.local:8123"
-        self.token = "tok"
-        self.verify_ssl = False
-        # Reply for the SIMPLE-path config/entity_registry/get + FLOW-path
-        # get_entry_id_for_flow_helper get (kept legacy, single targeted read).
-        self._get_result = get_result
-        self._entities = list(entities or [])
-        self.entity_get_calls = 0
-        self.entity_list_calls = 0
-        self.delete_calls: list[dict[str, Any]] = []
-        self.deleted_entries: list[str] = []
-
-    async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
-        return {"state": "on"}
-
-    async def delete_config_entry(self, entry_id: str) -> dict[str, Any]:
-        self.deleted_entries.append(entry_id)
-        return {"require_restart": False}
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        if msg_type == "config/entity_registry/get":
-            self.entity_get_calls += 1
-            if self._get_result is not None:
-                return self._get_result
-            row = next(
-                (
-                    e
-                    for e in self._entities
-                    if e.get("entity_id") == msg.get("entity_id")
-                ),
-                None,
-            )
-            if row is None:
-                return {"success": False, "error": "not found"}
-            return {"success": True, "result": row}
-        if msg_type == "config/entity_registry/list":
-            self.entity_list_calls += 1
-            return {"success": True, "result": list(self._entities)}
-        if isinstance(msg_type, str) and msg_type.endswith("/delete"):
-            self.delete_calls.append(msg)
-            return {"success": True}
-        if isinstance(msg_type, str) and msg_type.endswith("/list"):
-            # No stored helper has the target as its id: the registry resolves it.
-            return {"success": True, "result": []}
-        raise AssertionError(f"unexpected ws message {msg_type!r}")
+class FlowHelper(NamedTuple):
+    entry_id: str
+    entity_ids: set[str]
+    target: str
 
 
-class DeleteFailsRoutingClient(RoutingClient):
-    """Like ``RoutingClient``, but every ``*/delete`` fails, so no test passes
-    by deleting anything."""
-
-    async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
-        msg_type = msg.get("type")
-        if isinstance(msg_type, str) and msg_type.endswith("/delete"):
-            self.delete_calls.append(msg)
-            return {"success": False, "error": "not found"}
-        return await super().send_websocket_message(msg)
+@pytest.fixture
+async def core(hass: HomeAssistant, core_client: HomeAssistantClient) -> None:
+    """Core's registry and config entry API and storage input_buttons."""
+    assert await async_setup_component(hass, "config", {})
+    assert await async_setup_component(hass, "input_button", {})
 
 
-@pytest.fixture(autouse=True)
-def _clear_caps_cache() -> Any:
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    component_api._NEGATIVE_CACHE_TS.clear()
-    yield
-    component_api._CAPS_CACHE.clear()
-    component_api._CAPS_LOCKS.clear()
-    component_api._NEGATIVE_CACHE_TS.clear()
+@pytest.fixture
+async def client(
+    core: None, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
+    return component_core_client
 
 
-def _lookup_calls(ws: Any) -> list[Any]:
-    return [
-        c
-        for c in ws.send_command.call_args_list
-        if c.args[0] == "ha_mcp_tools/registry_lookup"
-    ]
-
-
-# --- SIMPLE-helper delete: registry_lookup(entity_ids=...) resolve --------------
-
-
-@pytest.mark.asyncio
-async def test_simple_delete_resolves_via_component_no_retry_loop() -> None:
-    """A component-served resolve reads the unique_id in ONE
-    registry_lookup(entity_ids) frame — no per-id config/entity_registry/get and
-    no retry-loop sleep."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_result={
-            "entities": [_row("input_button.my_button", unique_id="uid-1")],
-            "missing": [],
-        },
+async def _button(hass: HomeAssistant, client: HomeAssistantClient) -> Button:
+    """A stored input_button whose entity was renamed away from its storage id,
+    so deleting it by entity_id needs the registry's unique_id."""
+    suffix = uuid.uuid4().hex[:8]
+    created = await client.send_websocket_message(
+        {"type": "input_button/create", "name": f"My Button {suffix}"}
     )
-    client = RoutingClient()
-    tools = IntegrationTools(client)
+    storage_id = created["result"]["id"]
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id("input_button", "input_button", storage_id)
+    assert entity_id is not None
+    renamed = f"input_button.renamed_{suffix}"
+    registry.async_update_entity(entity_id, new_entity_id=renamed)
+    await hass.async_block_till_done()
+    return Button(storage_id, renamed)
 
-    with (
-        patch_ws(ws, component_registry_lookup),
-        patch(
-            "ha_mcp.tools.tools_integrations.asyncio.sleep", new_callable=AsyncMock
-        ) as sleep_mock,
-    ):
-        resp = await tools.ha_remove_helpers_integrations(
-            target="input_button.my_button",
-            helper_type="input_button",
-            confirm=True,
-            wait=False,
-        )
+
+def _flow_helper(hass: HomeAssistant) -> FlowHelper:
+    """A min_max helper entry with three entities, and an entity of another entry."""
+    entry = MockConfigEntry(domain="min_max", title="Energy")
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    entity_ids = {
+        registry.async_get_or_create(
+            "sensor",
+            "min_max",
+            object_id,
+            config_entry=entry,
+            suggested_object_id=f"energy_{object_id}",
+        ).entity_id
+        for object_id in ("peak", "offpeak", "total")
+    }
+    other = MockConfigEntry(domain="min_max", title="Other")
+    other.add_to_hass(hass)
+    registry.async_get_or_create("sensor", "min_max", "other", config_entry=other)
+    return FlowHelper(entry.entry_id, entity_ids, "sensor.energy_peak")
+
+
+async def _remove_button(client: HomeAssistantClient, target: str) -> dict[str, Any]:
+    result: dict[str, Any] = await IntegrationTools(
+        client
+    ).ha_remove_helpers_integrations(
+        target=target, helper_type="input_button", confirm=True, wait=False
+    )
+    return result
+
+
+async def _remove_flow(client: HomeAssistantClient, target: str) -> dict[str, Any]:
+    result: dict[str, Any] = await IntegrationTools(
+        client
+    ).ha_remove_helpers_integrations(
+        target=target, helper_type="min_max", confirm=True, wait=False
+    )
+    return result
+
+
+async def _stored_buttons(client: HomeAssistantClient) -> list[str]:
+    listed = await client.send_websocket_message({"type": "input_button/list"})
+    return [item["id"] for item in listed["result"]]
+
+
+async def _assert_deleted_by_the_legacy_resolve(
+    client: HomeAssistantClient, button: Button, types: list[str]
+) -> None:
+    assert types.count(ENTITY_GET) == 1
+    assert button.storage_id not in await _stored_buttons(client)
+
+
+# --- storage helper: registry_lookup(entity_ids=...) --------------------------------
+
+
+async def test_a_storage_helper_is_resolved_by_one_component_read_and_deleted(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    button = await _button(hass, client)
+    socket = await pooled_socket(client)
+
+    with sent_commands(socket) as sent:
+        resp = await _remove_button(client, button.entity_id)
 
     assert resp["success"] is True
     assert resp["method"] == "websocket_delete"
-    assert resp["unique_id"] == "uid-1"
-    assert resp["entity_ids"] == ["input_button.my_button"]
-    # Resolved from the component; the legacy per-id get never ran.
-    assert client.entity_get_calls == 0
-    lookups = _lookup_calls(ws)
-    assert len(lookups) == 1
-    assert lookups[0].kwargs["entity_ids"] == ["input_button.my_button"]
-    # The delete used the component-resolved unique_id.
-    assert client.delete_calls[0]["input_button_id"] == "uid-1"
-    # Component read replaces the retry loop → no backoff sleep during resolve.
-    sleep_mock.assert_not_awaited()
+    assert resp["unique_id"] == button.storage_id
+    assert resp["entity_ids"] == [button.entity_id]
+    assert ENTITY_GET not in sent_types(sent)
+    assert sent_frames(sent, LOOKUP) == [{"entity_ids": [button.entity_id]}]
+    assert button.storage_id not in await _stored_buttons(client)
 
 
-@pytest.mark.asyncio
-async def test_simple_delete_capability_miss_uses_legacy_loop() -> None:
-    """Old component (info unknown_command) → legacy config/entity_registry/get
-    resolve; no registry_lookup frame is sent."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient(
-        entities=[_row("input_button.my_button", unique_id="uid-legacy")]
-    )
-    tools = IntegrationTools(client)
-
-    with patch_ws(ws, component_registry_lookup):
-        resp = await tools.ha_remove_helpers_integrations(
-            target="input_button.my_button",
-            helper_type="input_button",
-            confirm=True,
-            wait=False,
-        )
-
-    assert resp["success"] is True
-    assert resp["unique_id"] == "uid-legacy"
-    assert client.entity_get_calls == 1
-    assert _lookup_calls(ws) == []
-
-
-@pytest.mark.asyncio
-async def test_simple_delete_unknown_command_invalidates_and_falls_back() -> None:
-    """unknown_command on registry_lookup → invalidate caps + legacy resolve."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient(
-        entities=[_row("input_button.my_button", unique_id="uid-legacy")]
-    )
-    tools = IntegrationTools(client)
-
-    with patch_ws(ws, component_registry_lookup):
-        resp = await tools.ha_remove_helpers_integrations(
-            target="input_button.my_button",
-            helper_type="input_button",
-            confirm=True,
-            wait=False,
-        )
-
-    assert resp["success"] is True
-    assert resp["unique_id"] == "uid-legacy"
-    # The component command was tried, failed unknown_command → legacy get.
-    assert client.entity_get_calls == 1
-    # Caps invalidated so the next call re-probes.
-    assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_simple_delete_command_error_falls_back_keeps_caps() -> None:
-    """A non-unknown registry_lookup error (timeout) → legacy resolve WITHOUT
-    invalidating the still-advertised capability."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_exc=HomeAssistantCommandTimeout("slow"),
-    )
-    client = RoutingClient(
-        entities=[_row("input_button.my_button", unique_id="uid-legacy")]
-    )
-    tools = IntegrationTools(client)
-
-    with patch_ws(ws, component_registry_lookup):
-        resp = await tools.ha_remove_helpers_integrations(
-            target="input_button.my_button",
-            helper_type="input_button",
-            confirm=True,
-            wait=False,
-        )
-
-    assert resp["success"] is True
-    assert resp["unique_id"] == "uid-legacy"
-    assert client.entity_get_calls == 1
-    # A transient failure is not a downgrade — caps stay cached.
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_simple_delete_connection_error_falls_back_to_legacy() -> None:
-    """A HomeAssistantConnectionError from the component resolve falls back to the
-    legacy retry loop (which rides the WS bridge, so it does not die
-    identically) rather than propagating — an escaping error would SKIP the legacy
-    resolve entirely."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_exc=HomeAssistantConnectionError("socket down"),
-    )
-    client = RoutingClient(
-        entities=[_row("input_button.my_button", unique_id="uid-legacy")]
-    )
-    tools = IntegrationTools(client)
-
-    with patch_ws(ws, component_registry_lookup):
-        resp = await tools.ha_remove_helpers_integrations(
-            target="input_button.my_button",
-            helper_type="input_button",
-            confirm=True,
-            wait=False,
-        )
-
-    assert resp["success"] is True
-    assert resp["unique_id"] == "uid-legacy"
-    assert client.entity_get_calls == 1
-    # A transient connection error is not a downgrade — caps stay cached.
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_simple_delete_ws_establish_failure_falls_back_to_legacy() -> None:
-    """A failed establish in ``get_websocket_client()`` (after caps
-    are cached) falls back to the legacy retry loop, not a propagated error."""
-    caps_ws = make_ws("ha_mcp_tools/registry_lookup", info_result=_CAPS_REGISTRY)
-    client = RoutingClient(
-        entities=[_row("input_button.my_button", unique_id="uid-legacy")]
-    )
-    tools = IntegrationTools(client)
-
-    with patch_ws_establish_failure(
-        caps_ws,
-        component_registry_lookup,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
-    ):
-        resp = await tools.ha_remove_helpers_integrations(
-            target="input_button.my_button",
-            helper_type="input_button",
-            confirm=True,
-            wait=False,
-        )
-
-    assert resp["success"] is True
-    assert resp["unique_id"] == "uid-legacy"
-    assert client.entity_get_calls == 1
-    assert client in component_api._CAPS_CACHE
-
-
-@pytest.mark.parametrize("falsy_unique_id", ["", None])
-@pytest.mark.asyncio
-async def test_simple_delete_falsy_unique_id_degrades_like_missing(
-    falsy_unique_id: str | None,
+async def test_without_the_component_the_registry_resolves_the_storage_helper(
+    hass: HomeAssistant, core: None, core_client: HomeAssistantClient
 ) -> None:
-    """A component-served row where the entity IS registered but ``unique_id``
-    is falsy (empty string or None): no usable id is resolved, and with the
-    entity still present in state the exhausted-fallback ENTITY_NOT_FOUND is
-    raised — with path-accurate wording naming the component lookup rather
-    than "3 attempts". Nothing is deleted by the object id."""
-    row = {
-        "entity_id": "input_button.my_button",
-        "unique_id": falsy_unique_id,
-        "config_entry_id": None,
-    }
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_result={"entities": [row], "missing": []},
+    button = await _button(hass, core_client)
+    socket = await pooled_socket(core_client)
+
+    with sent_commands(socket) as sent:
+        resp = await _remove_button(core_client, button.entity_id)
+
+    assert resp["unique_id"] == button.storage_id
+    assert LOOKUP not in sent_types(sent)
+    await _assert_deleted_by_the_legacy_resolve(core_client, button, sent_types(sent))
+
+
+async def test_a_component_without_the_command_is_invalidated_and_core_resolves(
+    hass: HomeAssistant, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    button = await _button(hass, client)
+    assert await component_api.get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], LOOKUP)
+    socket = await pooled_socket(client)
+
+    with (
+        sent_commands(socket) as sent,
+        invalidations(component_registry_lookup) as invalidate,
+    ):
+        resp = await _remove_button(client, button.entity_id)
+
+    assert resp["unique_id"] == button.storage_id
+    await _assert_deleted_by_the_legacy_resolve(client, button, sent_types(sent))
+    invalidate.assert_called_once_with(client)
+
+
+async def test_a_timed_out_component_read_falls_back_and_keeps_the_capability(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    button = await _button(hass, client)
+    socket = await pooled_socket(client)
+
+    async with held_command(hass, client, LOOKUP):
+        with (
+            sent_commands(socket) as sent,
+            invalidations(component_registry_lookup) as invalidate,
+        ):
+            resp = await _remove_button(client, button.entity_id)
+
+    assert resp["unique_id"] == button.storage_id
+    await _assert_deleted_by_the_legacy_resolve(client, button, sent_types(sent))
+    invalidate.assert_not_called()
+
+
+async def test_an_unreachable_component_socket_falls_back_to_the_retry_loop(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """An escaping error would skip the legacy resolve entirely; the legacy
+    read rides the WebSocket bridge, not the component's socket."""
+    button = await _button(hass, client)
+    assert await component_api.get_component_caps(client) is not None
+    socket = await pooled_socket(client)
+
+    with (
+        patch.object(
+            component_registry_lookup,
+            "get_websocket_client",
+            AsyncMock(side_effect=HomeAssistantConnectionError("socket down")),
+        ),
+        sent_commands(socket) as sent,
+        invalidations(component_registry_lookup) as invalidate,
+    ):
+        resp = await _remove_button(client, button.entity_id)
+
+    assert resp["unique_id"] == button.storage_id
+    await _assert_deleted_by_the_legacy_resolve(client, button, sent_types(sent))
+    invalidate.assert_not_called()
+
+
+async def test_a_registered_entity_without_a_unique_id_is_never_deleted_by_guess(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The component finds the entity but no unique_id to delete it by: the
+    error names the one component read, not a three-attempt retry loop, and
+    no helper is deleted by its object id."""
+    stored = await _button(hass, client)
+    entity = er.async_get(hass).async_get_or_create(
+        "input_button", "flow_test", "", suggested_object_id="my_button"
     )
-    client = DeleteFailsRoutingClient()
-    tools = IntegrationTools(client)
+    hass.states.async_set(entity.entity_id, "unknown")
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
-        await tools.ha_remove_helpers_integrations(
-            target="input_button.my_button",
-            helper_type="input_button",
-            confirm=True,
-            wait=False,
-        )
+    with sent_commands(socket) as sent, pytest.raises(ToolError) as exc:
+        await _remove_button(client, entity.entity_id)
 
-    err = json.loads(str(excinfo.value))
-    assert err["error"]["code"] == "ENTITY_NOT_FOUND"
-    message = err["error"]["message"]
-    assert "Component registry lookup" in message
-    assert client.delete_calls == []
-    # Path-accurate: never claims a 3-attempt retry loop that never ran.
-    assert "3 attempts" not in message
-    # The component row served the resolve; no legacy per-id get ran.
-    assert client.entity_get_calls == 0
+    error = error_of(exc)
+    assert error["code"] == "ENTITY_NOT_FOUND"
+    assert "Component registry lookup" in error["message"]
+    assert "3 attempts" not in error["message"]
+    assert ENTITY_GET not in sent_types(sent)
+    assert await _stored_buttons(client) == [stored.storage_id]
 
 
-@pytest.mark.asyncio
-async def test_simple_delete_component_miss_with_a_state_is_not_reported_missing() -> (
-    None
-):
-    """zone.home through the component: the registry lookup misses it, yet it
-    has a state. It exists, so the caller must learn it is not
-    registry-managed, not that it was already deleted."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_result={"entities": [], "missing": ["zone.home"]},
-    )
-    client = DeleteFailsRoutingClient()
-    tools = IntegrationTools(client)
+async def test_an_entity_the_component_misses_but_core_has_is_not_reported_missing(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """zone.home has a state but no registry entry: the caller learns it is
+    not registry-managed, not that it was already deleted."""
+    assert await async_setup_component(hass, "zone", {})
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, component_registry_lookup), pytest.raises(ToolError) as excinfo:
-        await tools.ha_remove_helpers_integrations(
+    with sent_commands(socket) as sent, pytest.raises(ToolError) as exc:
+        await IntegrationTools(client).ha_remove_helpers_integrations(
             target="zone.home", helper_type="zone", confirm=True, wait=False
         )
 
-    err = json.loads(str(excinfo.value))
-    assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
-    assert client.entity_get_calls == 0
+    assert error_of(exc)["code"] == "RESOURCE_NOT_FOUND"
+    assert ENTITY_GET not in sent_types(sent)
 
 
-# --- FLOW-helper delete: registry_lookup(config_entry_id=...) sub-entities -------
+# --- flow helper: registry_lookup(config_entry_id=...) ------------------------------
 
 
-@pytest.mark.asyncio
-async def test_flow_delete_subentities_via_component_no_dump() -> None:
-    """The FLOW delete collects ALL sub-entities from one
-    registry_lookup(config_entry_id) frame — the whole-registry list is never
-    dumped."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_result={
-            "entities": [
-                _row("sensor.energy_peak", unique_id="p", config_entry_id="um_entry"),
-                _row(
-                    "sensor.energy_offpeak", unique_id="o", config_entry_id="um_entry"
-                ),
-                _row("select.energy_tariff", unique_id="t", config_entry_id="um_entry"),
-            ]
-        },
-    )
-    # Step 1 (get_entry_id_for_flow_helper) stays legacy: a single targeted get.
-    client = RoutingClient(
-        get_result={
-            "success": True,
-            "result": {"platform": "utility_meter", "config_entry_id": "um_entry"},
-        }
-    )
-    tools = IntegrationTools(client)
+async def test_a_flow_helpers_entities_come_from_one_component_read(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    helper = _flow_helper(hass)
+    socket = await pooled_socket(client)
 
-    with patch_ws(ws, component_registry_lookup):
-        resp = await tools.ha_remove_helpers_integrations(
-            target="sensor.energy_peak",
-            helper_type="utility_meter",
-            confirm=True,
-            wait=False,
-        )
+    with sent_commands(socket) as sent:
+        resp = await _remove_flow(client, helper.target)
 
     assert resp["success"] is True
     assert resp["method"] == "config_flow_delete"
-    assert resp["entry_id"] == "um_entry"
-    assert set(resp["entity_ids"]) == {
-        "sensor.energy_peak",
-        "sensor.energy_offpeak",
-        "select.energy_tariff",
-    }
-    # Sub-entities came from the component; the whole registry was never dumped.
-    assert client.entity_list_calls == 0
-    lookups = _lookup_calls(ws)
-    assert len(lookups) == 1
-    assert lookups[0].kwargs["config_entry_id"] == "um_entry"
-    assert client.deleted_entries == ["um_entry"]
+    assert resp["entry_id"] == helper.entry_id
+    assert set(resp["entity_ids"]) == helper.entity_ids
+    assert ENTITY_DUMP not in sent_types(sent)
+    assert sent_frames(sent, LOOKUP) == [{"config_entry_id": helper.entry_id}]
+    assert hass.config_entries.async_get_entry(helper.entry_id) is None
 
 
-@pytest.mark.asyncio
-async def test_flow_delete_capability_miss_uses_legacy_dump() -> None:
-    """Old component → the FLOW delete falls back to the whole-registry dump and
-    still finds every sub-entity."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
-    )
-    client = RoutingClient(
-        get_result={
-            "success": True,
-            "result": {"platform": "utility_meter", "config_entry_id": "um_entry"},
-        },
-        entities=[
-            _row("sensor.energy_peak", unique_id="p", config_entry_id="um_entry"),
-            _row("sensor.energy_offpeak", unique_id="o", config_entry_id="um_entry"),
-            # Noise on a different entry — excluded by the client-side filter.
-            _row("light.other", unique_id="x", config_entry_id="other"),
-        ],
-    )
-    tools = IntegrationTools(client)
+async def test_without_the_component_a_flow_helpers_entities_come_from_the_registry(
+    hass: HomeAssistant, core: None, core_client: HomeAssistantClient
+) -> None:
+    """The whole registry is read and only the entry's own entities kept."""
+    helper = _flow_helper(hass)
+    socket = await pooled_socket(core_client)
 
-    with patch_ws(ws, component_registry_lookup):
-        resp = await tools.ha_remove_helpers_integrations(
-            target="sensor.energy_peak",
-            helper_type="utility_meter",
-            confirm=True,
-            wait=False,
-        )
+    with sent_commands(socket) as sent:
+        resp = await _remove_flow(core_client, helper.target)
 
-    assert resp["success"] is True
-    assert set(resp["entity_ids"]) == {"sensor.energy_peak", "sensor.energy_offpeak"}
-    # The legacy whole-registry list served the sub-entities.
-    assert client.entity_list_calls == 1
-    assert _lookup_calls(ws) == []
+    assert set(resp["entity_ids"]) == helper.entity_ids
+    types = sent_types(sent)
+    assert types.count(ENTITY_DUMP) == 1
+    assert LOOKUP not in types
 
 
-# --- set_helper post-create wait poll rides the same shared helper --------------
-
-
-@pytest.mark.asyncio
-async def test_set_helper_wait_resolves_via_component_no_dump_no_sleep() -> None:
-    """The ha_config_set_helper create+wait poll resolves the new entry's entities
-    from one registry_lookup on the FIRST poll — no whole-registry dump and no
-    poll sleep."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_result={
-            "entities": [
-                _row("sensor.energy_peak", unique_id="p", config_entry_id="um_entry"),
-                _row(
-                    "sensor.energy_offpeak", unique_id="o", config_entry_id="um_entry"
-                ),
-            ]
-        },
-    )
-    client = RoutingClient()
+async def test_an_unreachable_component_socket_reads_the_registry_without_a_warning(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The flow-helper delete proceeds exactly as on an install without the
+    component."""
+    helper = _flow_helper(hass)
+    assert await component_api.get_component_caps(client) is not None
+    socket = await pooled_socket(client)
 
     with (
-        patch_ws(ws, component_registry_lookup),
+        patch.object(
+            component_registry_lookup,
+            "get_websocket_client",
+            AsyncMock(side_effect=HomeAssistantConnectionError("socket down")),
+        ),
+        sent_commands(socket) as sent,
+    ):
+        resp = await _remove_flow(client, helper.target)
+
+    assert set(resp["entity_ids"]) == helper.entity_ids
+    assert sent_types(sent).count(ENTITY_DUMP) == 1
+    assert not resp.get("warnings")
+
+
+async def test_an_unexpected_entity_read_failure_is_a_warning_naming_that_read(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """A fault that escapes the component read does not abort the delete; the
+    warning names ``registry_lookup``, the read that failed (F8)."""
+    helper = _flow_helper(hass)
+    socket = await pooled_socket(client)
+
+    with (
         patch(
-            "ha_mcp.tools.config_helpers.flow.asyncio.sleep", new_callable=AsyncMock
-        ) as sleep_mock,
+            "ha_mcp.tools.config_helpers.registry"
+            ".fetch_entities_for_config_entry_via_component",
+            side_effect=RuntimeError("boom"),
+        ),
+        sent_commands(socket) as sent,
     ):
-        entities, warnings = await _wait_for_flow_entities(
-            client, "um_entry", "create", wait=True
-        )
+        resp = await _remove_flow(client, helper.target)
 
-    assert {e["entity_id"] for e in entities} == {
-        "sensor.energy_peak",
-        "sensor.energy_offpeak",
-    }
-    assert warnings == []
-    assert client.entity_list_calls == 0
-    assert len(_lookup_calls(ws)) == 1
-    # Resolved on the first poll → the graduated-poll sleep never fired.
-    sleep_mock.assert_not_awaited()
-
-
-# --- component_registry_lookup seam functions (direct; error taxonomy) -----------------
-
-
-@pytest.mark.asyncio
-async def test_config_entry_lookup_unknown_command_invalidates_caps() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
+    assert resp["success"] is True
+    assert any(
+        f"registry_lookup failed for config_entry_id={helper.entry_id}" in w
+        for w in resp["warnings"]
     )
-    client = RoutingClient()
-    with patch_ws(ws, component_registry_lookup):
-        assert (
-            await component_registry_lookup.fetch_entities_for_config_entry_via_component(
-                client, "um_entry"
+    assert ENTITY_DUMP not in sent_types(sent)
+    assert hass.config_entries.async_get_entry(helper.entry_id) is None
+
+
+# --- the component_registry_lookup reads ----------------------------------------------
+
+
+@pytest.mark.parametrize("read", ["config_entry", "entities"])
+async def test_a_component_without_the_command_is_invalidated(
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    read: str,
+) -> None:
+    helper = _flow_helper(hass)
+    assert await component_api.get_component_caps(client) is not None
+    monkeypatch.delitem(hass.data["websocket_api"], LOOKUP)
+
+    result: object
+    with invalidations(component_registry_lookup) as invalidate:
+        if read == "config_entry":
+            result = await fetch_entities_for_config_entry_via_component(
+                client, helper.entry_id
             )
-            is None
-        )
-    assert client not in component_api._CAPS_CACHE
+        else:
+            result = await resolve_entities_via_component(client, [helper.target])
+
+    assert result is None
+    invalidate.assert_called_once_with(client)
 
 
-@pytest.mark.asyncio
-async def test_config_entry_lookup_timeout_keeps_caps() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_exc=HomeAssistantCommandTimeout("slow"),
-    )
-    client = RoutingClient()
-    with patch_ws(ws, component_registry_lookup):
-        assert (
-            await component_registry_lookup.fetch_entities_for_config_entry_via_component(
-                client, "um_entry"
+async def test_a_timed_out_config_entry_read_keeps_the_capability(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    helper = _flow_helper(hass)
+
+    async with held_command(hass, client, LOOKUP):
+        with invalidations(component_registry_lookup) as invalidate:
+            result = await fetch_entities_for_config_entry_via_component(
+                client, helper.entry_id
             )
-            is None
-        )
-    assert client in component_api._CAPS_CACHE
+
+    assert result is None
+    invalidate.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_config_entry_lookup_malformed_shape_falls_back() -> None:
-    """A reply whose ``entities`` is not a list (shape drift) → None so the caller
-    reads the legacy dump instead of trusting it."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_result={"entities": "not-a-list"},
-    )
-    client = RoutingClient()
-    with patch_ws(ws, component_registry_lookup):
-        assert (
-            await component_registry_lookup.fetch_entities_for_config_entry_via_component(
-                client, "um_entry"
-            )
-            is None
-        )
+async def test_an_unreachable_socket_is_no_entity_answer(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """The caller's legacy per-id resolve runs instead."""
+    helper = _flow_helper(hass)
+    assert await component_api.get_component_caps(client) is not None
 
-
-@pytest.mark.asyncio
-async def test_get_entities_component_connection_error_falls_back_to_legacy() -> None:
-    """A component transport failure rides the seam's fallback, not the warnings.
-
-    Under the uniform transport taxonomy the seam maps a
-    ``HomeAssistantConnectionError`` to ``None``, so
-    ``_get_entities_for_config_entry`` reads the legacy
-    ``config/entity_registry/list`` dump (the WS bridge) and returns its
-    rows with NO warning — the flow-helper delete proceeds exactly as on a
-    component-less install."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_exc=HomeAssistantConnectionError("socket down"),
-    )
-    client = RoutingClient(
-        entities=[
-            {"entity_id": "sensor.um", "config_entry_id": "um_entry"},
-        ]
-    )
-    warnings: list[str] = []
-
-    with patch_ws(ws, component_registry_lookup):
-        result = await _get_entities_for_config_entry(client, "um_entry", warnings)
-
-    assert result == [{"entity_id": "sensor.um", "config_entry_id": "um_entry"}]
-    assert warnings == []
-    assert client.entity_list_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_get_entities_unexpected_seam_error_converted_to_warnings() -> None:
-    """(F8) A failure that DOES escape the seam is converted, with honest attribution.
-
-    Transport/command failures no longer escape the seam, but a genuinely
-    unexpected error (programming fault) still must not abort the flow-helper
-    delete: ``_get_entities_for_config_entry`` converts it into ``warnings`` +
-    ``[]``, and the warning names the read that actually failed
-    (``registry_lookup``, not ``entity_registry/list``)."""
-    client = RoutingClient()
-    warnings: list[str] = []
-
-    # Patch the CONSUMER module's binding (config_helpers/registry.py imports the
-    # function directly), not the source module's.
-    with patch(
-        "ha_mcp.tools.config_helpers.registry.fetch_entities_for_config_entry_via_component",
-        side_effect=RuntimeError("boom"),
-    ):
-        result = await _get_entities_for_config_entry(client, "um_entry", warnings)
-
-    assert result == []
-    assert len(warnings) == 1
-    assert "registry_lookup failed for config_entry_id=um_entry" in warnings[0]
-    assert client.entity_list_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_resolve_entities_unknown_command_invalidates_caps() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_exc=HomeAssistantCommandError("gone", "unknown_command"),
-    )
-    client = RoutingClient()
-    with patch_ws(ws, component_registry_lookup):
-        assert (
-            await component_registry_lookup.resolve_entities_via_component(
-                client, ["input_button.x"]
-            )
-            is None
-        )
-    assert client not in component_api._CAPS_CACHE
-
-
-@pytest.mark.asyncio
-async def test_resolve_entities_malformed_shape_falls_back() -> None:
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_result={"missing": ["input_button.x"]},  # no "entities" key
-    )
-    client = RoutingClient()
-    with patch_ws(ws, component_registry_lookup):
-        assert (
-            await component_registry_lookup.resolve_entities_via_component(
-                client, ["input_button.x"]
-            )
-            is None
-        )
-
-
-@pytest.mark.asyncio
-async def test_resolve_entities_connection_error_falls_back() -> None:
-    """The seam catches a connection error and returns ``None`` (legacy fallback)
-    so the caller's legacy per-id resolve runs — the legacy read rides the
-    ``send_websocket_message`` bridge, so it does not die identically."""
-    ws = make_ws(
-        "ha_mcp_tools/registry_lookup",
-        info_result=_CAPS_REGISTRY,
-        cmd_exc=HomeAssistantConnectionError("socket down"),
-    )
-    client = RoutingClient()
-    with patch_ws(ws, component_registry_lookup):
-        assert (
-            await component_registry_lookup.resolve_entities_via_component(
-                client, ["input_button.x"]
-            )
-            is None
-        )
-
-
-@pytest.mark.asyncio
-async def test_resolve_entities_ws_establish_failure_falls_back() -> None:
-    """A failed establish in ``get_websocket_client()`` (after caps
-    are cached) returns ``None`` (legacy fallback)."""
-    caps_ws = make_ws("ha_mcp_tools/registry_lookup", info_result=_CAPS_REGISTRY)
-    client = RoutingClient()
-    with patch_ws_establish_failure(
-        caps_ws,
+    with patch.object(
         component_registry_lookup,
-        HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
+        "get_websocket_client",
+        AsyncMock(side_effect=HomeAssistantConnectionError("socket down")),
     ):
-        assert (
-            await component_registry_lookup.resolve_entities_via_component(
-                client, ["input_button.x"]
-            )
-            is None
-        )
+        assert await resolve_entities_via_component(client, [helper.target]) is None

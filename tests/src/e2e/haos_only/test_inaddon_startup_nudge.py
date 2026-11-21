@@ -1,8 +1,8 @@
-"""Add-on-lane regression test for the HACS startup nudge scheduling.
+"""App-lane regression test for the Marketplace startup nudge scheduling.
 
 The launcher gap this branch fixes was SPECIFIC to the add-on: ``start.py``
 calls ``mcp.run()`` directly, so the nudge scheduled from ``__main__``'s
-``_run_with_shutdown`` never ran there, and no CI lane noticed. This test
+``run_with_shutdown`` never ran there, and no CI lane noticed. This test
 closes that lane by proving the real add-on launcher enters the server
 lifespan and starts the nudge.
 
@@ -10,7 +10,7 @@ The observable is one of the nudge's own per-boot lines: ``"startup pass
 due"`` (INFO, first boot) or ``"pass not due"`` (DEBUG, later boots). Both
 prove scheduling; which one fires depends on marker state, which this test
 must NOT assume: the add-on's ``/data`` persists across restarts, and once
-an early boot lives ~8.5 minutes its HACS-absent pass completes and writes
+an early boot lives ~8.5 minutes its store-absent pass completes and writes
 the marker, making every later boot legitimately not due (observed live in
 CI — 50 boots, one due-line). So the test drives the add-on to DEBUG via the
 settings API (the ``test_addon_debug_log_level`` flow), records the current
@@ -43,10 +43,10 @@ LOG = logging.getLogger(__name__)
 # src/ha_mcp/hacs_auto_refresh.py.
 NUDGE_LOGGER = "ha_mcp.hacs_auto_refresh"
 NUDGE_BOOT_LOG_PHRASES = (
-    "HACS auto-refresh: startup pass due",
-    "HACS auto-refresh: pass not due",
+    "Marketplace auto-refresh: startup pass due",
+    "Marketplace auto-refresh: pass not due",
     # The nudge is opt-in; an install that has not opted in logs this per boot.
-    "HACS auto-refresh: off",
+    "Marketplace auto-refresh: off",
 )
 
 # Real-world HAOS budgets (a 60 s warm-up starved in CI: two back-to-back

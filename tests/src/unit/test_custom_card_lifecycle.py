@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.ha_mcp_tools import custom_cards as cc
 
-# Room for exactly one runtime (``_BUNDLE_MEMORY``), so a replacement can only
+# Room for exactly one runtime (``BUNDLE_MEMORY``), so a replacement can only
 # start once the runtime it replaces is gone.
 _ONE_BUNDLE = 32 * 1024 * 1024
 
@@ -47,8 +47,8 @@ def test_replacement_disposes_runtime_after_its_last_reader(
             close=lambda: events.append("runtime disposed"),
         )
 
-    monkeypatch.setattr(cc, "_Bundle", load)
-    monkeypatch.setattr(cc, "_TOTAL_MEMORY", _ONE_BUNDLE)
+    monkeypatch.setattr(cc, "CardBundle", load)
+    monkeypatch.setattr(cc, "TOTAL_MEMORY", _ONE_BUNDLE)
     custom = cc.CustomCards("dom")
     custom.refresh([path])
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -86,7 +86,7 @@ def test_refresh_stops_starting_bundles_when_total_budget_expires(
         raise ValueError("broken card")
 
     monkeypatch.setattr(cc.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(cc, "_Bundle", load)
+    monkeypatch.setattr(cc, "CardBundle", load)
     custom = cc.CustomCards("dom")
     custom.refresh(files)
     first_pass = len(attempts)
@@ -107,8 +107,7 @@ async def test_timed_out_callers_share_one_background_refresh(
         return result
 
     worker = AsyncMock(side_effect=refresh)
-    monkeypatch.setattr(cc, "_async_refresh", worker)
-    monkeypatch.setattr(cc, "_refresh_task", None, raising=False)
+    monkeypatch.setattr(cc, "async_refresh_custom_cards", worker)
     try:
         responses = await asyncio.gather(
             *(cc.async_get_custom_cards(hass, timeout=0.01) for _ in range(10))
@@ -141,7 +140,7 @@ def test_partial_budget_failure_gets_a_full_budget_before_being_cached(
         return MagicMock(cards=[{"type": f"card-{source}"}])
 
     monkeypatch.setattr(cc.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(cc, "_Bundle", load)
+    monkeypatch.setattr(cc, "CardBundle", load)
     custom = cc.CustomCards("dom")
     for _ in range(2):
         started[0] = clock[0]

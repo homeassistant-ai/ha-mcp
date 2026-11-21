@@ -38,13 +38,12 @@ PROBE_TIMEOUT_EXIT = 3
 #: no-tools lanes still expose well above this.
 MIN_TOOL_COUNT = 60
 
-#: Pure helpers the probe runs on schemas. Kept as a separate source string so
-#: the unit tier can ``exec`` them without the runner's imports and side effects.
+#: Pure helpers the probe runs on schemas, ahead of the runner that uses them.
 PROBE_HELPERS_SOURCE = """
 import traceback
 
 # Mirrors the component: the values under these keys are instance data or
-# vendor extensions that llm_api._INSTANCE_VALUES / llm_api._is_opaque_key copy
+# vendor extensions that llm_api.INSTANCE_VALUES / llm_api.is_opaque_key copy
 # through untouched, so a bound-like key inside them is not a bound and an
 # integer type inside them is not a parameter type.
 _OPAQUE_VALUE_KEYS = ("default", "const", "enum", "examples", "example")
@@ -186,7 +185,7 @@ async def _run():
         return
 
     async with asyncio.timeout(TIMEOUT_S):
-        async with llm_api._mcp_session(url) as (session, _init):
+        async with llm_api.mcp_session(url) as (session, _init):
             tools = (await session.list_tools()).tools
         _convert_all(
             tools,

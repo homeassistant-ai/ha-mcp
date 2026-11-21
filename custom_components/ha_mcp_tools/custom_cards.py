@@ -1,8 +1,9 @@
 """Custom (``custom:``) cards, asked about themselves (issue #2632).
 
 A custom card ships as a JavaScript file registered as a dashboard resource
-(``/hacsfiles/...`` from HACS, ``/local/...`` from ``www``, which is where
-the Marketplace puts cards, under ``/local/community/``). Each file runs in
+(``/local/...`` from ``www``, where the Marketplace puts cards under
+``/local/community/``, and ``/hacsfiles/...``, the path Home Assistant keeps
+serving ``www/community`` on for YAML resources). Each file runs in
 its own QuickJS sandbox on top of linkedom, a DOM written for non-browser
 runtimes: no network, no filesystem. The card then answers through the same
 calls the dashboard makes: its editor's and its own ``setConfig`` reject a
@@ -41,9 +42,9 @@ _RETRY_AFTER_S = 600.0
 # A card file is the user's own installed frontend code, but it still runs in
 # Home Assistant's process: each sandbox and the whole set are capped, and a
 # card that spins (endless promises or timers) is cut off rather than awaited.
-_BUNDLE_MEMORY = 32 * 1024 * 1024
-_TOTAL_MEMORY = 128 * 1024 * 1024
-_MAX_SOURCE_BYTES = 8 * 1024 * 1024
+BUNDLE_MEMORY = 32 * 1024 * 1024
+TOTAL_MEMORY = 128 * 1024 * 1024
+MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _MAX_DOM_DOWNLOAD_BYTES = 2 * 1024 * 1024
 _CALL_SECONDS = 5
 # Editor enrichment must leave time for later cards in a dashboard save.
@@ -222,7 +223,7 @@ def dom_script(tarball: bytes) -> str:
     return "(function () {\n" + source[: block.start()] + exports + "\n})();"
 
 
-class _Bundle:
+class CardBundle:
     """One resource file running in its own sandbox."""
 
     def __init__(
@@ -251,7 +252,7 @@ class _Bundle:
             raise
 
     def _prepare(self, dom: str, source: str, module: bool) -> None:
-        self._context_call("set_memory_limit", _BUNDLE_MEMORY)
+        self._context_call("set_memory_limit", BUNDLE_MEMORY)
         self._context_call("set_time_limit", _CALL_SECONDS)
         for step, payload in (("eval", dom), ("boot", None)):
             self._limit_preparation()
@@ -389,7 +390,7 @@ class CustomCards:
 
     def __init__(self, dom: str) -> None:
         self._dom = dom
-        self._bundles: dict[Path, tuple[float, _Bundle | None]] = {}
+        self._bundles: dict[Path, tuple[float, CardBundle | None]] = {}
         self._modules: set[Path] = set()
         self._capacity_skipped: set[Path] = set()
         self._budget_deferred: set[Path] = set()
@@ -475,19 +476,19 @@ class CustomCards:
                 self._skipped[path] = "refresh budget; awaiting a later request"
             attempted += 1
 
-    def _load(self, path: Path, size: int) -> _Bundle | None:
+    def _load(self, path: Path, size: int) -> CardBundle | None:
         self._capacity_skipped.discard(path)
         self._skipped.pop(path, None)
         # Reserve each runtime's full allowance, including heap growth in later
         # check/form calls. Measuring current heaps only cannot enforce the cap.
         reserved = sum(
-            _BUNDLE_MEMORY for _, b in self._bundles.values() if b is not None
+            BUNDLE_MEMORY for _, b in self._bundles.values() if b is not None
         )
-        if size > _MAX_SOURCE_BYTES:
+        if size > MAX_SOURCE_BYTES:
             self._skipped[path] = "source size limit"
             _LOGGER.debug("Custom card bundle %s skipped: source size cap", path)
             return None
-        if reserved + _BUNDLE_MEMORY > _TOTAL_MEMORY:
+        if reserved + BUNDLE_MEMORY > TOTAL_MEMORY:
             self._capacity_skipped.add(path)
             self._skipped[path] = "memory limit"
             _LOGGER.debug("Custom card bundle %s skipped: memory cap", path)
@@ -495,12 +496,12 @@ class CustomCards:
         try:
             # The resource may have grown since stat; bound the read itself.
             with path.open("rb") as stream:
-                source = stream.read(_MAX_SOURCE_BYTES + 1)
-            if len(source) > _MAX_SOURCE_BYTES:
+                source = stream.read(MAX_SOURCE_BYTES + 1)
+            if len(source) > MAX_SOURCE_BYTES:
                 self._skipped[path] = "source size limit"
                 _LOGGER.debug("Custom card bundle %s skipped: source size cap", path)
                 return None
-            return _Bundle(
+            return CardBundle(
                 self._dom,
                 source.decode("utf-8"),
                 module=path in self._modules,
@@ -511,7 +512,7 @@ class CustomCards:
             _LOGGER.debug("Custom card bundle %s did not load", path, exc_info=True)
             return None
 
-    def _owner(self, tag: str) -> _Bundle | None:
+    def _owner(self, tag: str) -> CardBundle | None:
         for _, bundle in self._bundles.values():
             if bundle is not None and tag in bundle.tags:
                 return bundle
@@ -561,6 +562,17 @@ _custom: CustomCards | None = None
 _REFRESH_LOCK = asyncio.Lock()
 _refresh_task: asyncio.Task[CustomCards | None] | None = None
 _resource_error: str | None = None
+
+
+def reset_custom_cards_state() -> None:
+    """Clear the process cache between isolated component lifecycles."""
+    global _custom, _refresh_task, _dom_failed_at, _resource_error
+    _custom = None
+    _refresh_task = None
+    _dom_failed_at = None
+    _resource_error = None
+
+
 _unsupported_resources: list[dict[str, str]] = []
 
 
@@ -665,7 +677,7 @@ async def async_get_custom_cards(
     global _refresh_task
     if _refresh_task is None or _refresh_task.done():
         _refresh_task = hass.async_create_background_task(
-            _async_refresh(hass), "ha_mcp_tools custom cards"
+            async_refresh_custom_cards(hass), "ha_mcp_tools custom cards"
         )
     try:
         return await asyncio.wait_for(asyncio.shield(_refresh_task), timeout)
@@ -673,7 +685,7 @@ async def async_get_custom_cards(
         return _custom
 
 
-async def _async_refresh(hass: HomeAssistant) -> CustomCards | None:
+async def async_refresh_custom_cards(hass: HomeAssistant) -> CustomCards | None:
     global _custom, _resource_error
     async with _REFRESH_LOCK:
         try:

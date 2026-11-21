@@ -7,22 +7,21 @@ tool's full description and input schema before the agent executes it.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from homeassistant.core import HomeAssistant
 
-from custom_components.ha_mcp_tools import llm_api
-from custom_components.ha_mcp_tools.const import EXPOSURE_TOOL_SEARCH
-
-from ._llm_api_helpers import (
-    CoreToolResult,
-    fake_session,
-    llm_context,
-    make_api,
-    make_hass,
-    tool_entry,
+from ._llm_api_server import (
+    ServedTool,
+    api_instance,
+    call,
+    payload,
+    serve,
+    tool_named,
 )
+
+pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 _FULL_SCHEMA = {
     "type": "object",
@@ -48,47 +47,40 @@ def _tool(
     *,
     exposed: bool = True,
     params: str | None = _PARAMS,
-) -> Any:
-    entry = tool_entry(name, exposed=exposed, description=_DESCRIPTION, params=params)
-    entry.inputSchema = schema
-    return entry
-
-
-def _catalog() -> list[SimpleNamespace]:
-    return [
-        _tool("ha_config_set_automation", _FULL_SCHEMA),
-        tool_entry("ha_get_state"),
-        tool_entry("ha_search", pinned=True),
-        tool_entry("ha_restart", exposed=False),
-    ]
-
-
-async def _instance(monkeypatch: pytest.MonkeyPatch, tools: list[Any]) -> Any:
-    fake_session(monkeypatch, tools=tools)
-    return await make_api(
-        make_hass(), mode=EXPOSURE_TOOL_SEARCH
-    ).async_get_api_instance(llm_context())
-
-
-async def _search(
-    monkeypatch: pytest.MonkeyPatch, args: dict[str, Any], tools: list[Any]
-) -> Any:
-    monkeypatch.setattr(llm_api.llm, "ToolResult", CoreToolResult, raising=False)
-    instance = await _instance(monkeypatch, tools)
-    search = next(t for t in instance.tools if t.name == "ha_search_tools")
-    return await search.async_call(
-        make_hass(),
-        llm_api.llm.ToolInput("ha_search_tools", args),
-        llm_context(),
+) -> ServedTool:
+    return ServedTool(
+        name,
+        description=_DESCRIPTION,
+        input_schema=schema,
+        exposed=exposed,
+        params=params,
     )
 
 
+def _catalog() -> list[ServedTool]:
+    return [
+        _tool("ha_config_set_automation", _FULL_SCHEMA),
+        ServedTool("ha_get_state"),
+        ServedTool("ha_search", pinned=True),
+        ServedTool("ha_restart", exposed=False),
+    ]
+
+
+async def _search(
+    hass: HomeAssistant, args: dict[str, Any], tools: list[ServedTool]
+) -> Any:
+    """``ha_search_tools`` answering ``args`` over the served ``tools``."""
+    async with serve(tools) as server:
+        instance = await api_instance(hass, server.port)
+        return await call(hass, tool_named(instance, "ha_search_tools"), args)
+
+
 async def test_hit_carries_the_summary_line_and_the_servers_params(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
     """The server renders the params line and stamps it on the tool; the
     component shows it rather than carrying a renderer of its own."""
-    result = await _search(monkeypatch, {"query": "automation"}, _catalog())
+    result = await _search(hass, {"query": "automation"}, _catalog())
 
     [hit] = result.data["results"]
     assert hit == {
@@ -99,10 +91,10 @@ async def test_hit_carries_the_summary_line_and_the_servers_params(
 
 
 async def test_hit_from_a_server_without_the_stamp_has_no_params(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
     result = await _search(
-        monkeypatch,
+        hass,
         {"query": "automation"},
         [_tool("ha_config_set_automation", _FULL_SCHEMA, params=None)],
     )
@@ -113,23 +105,19 @@ async def test_hit_from_a_server_without_the_stamp_has_no_params(
 
 
 async def test_tools_hop_returns_the_full_schema_and_description(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
-    result = await _search(
-        monkeypatch, {"tools": ["ha_config_set_automation"]}, _catalog()
-    )
+    result = await _search(hass, {"tools": ["ha_config_set_automation"]}, _catalog())
 
     [entry] = result.data["results"]
     assert entry["input_schema"] == _FULL_SCHEMA
     assert entry["description"] == _DESCRIPTION
 
 
-async def test_tools_hop_accepts_a_bare_name(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_tools_hop_accepts_a_bare_name(hass: HomeAssistant) -> None:
     """Core passes tool arguments through unvalidated; a small model's
     ``tools="name"`` must not be walked character by character."""
-    result = await _search(
-        monkeypatch, {"tools": "ha_config_set_automation"}, _catalog()
-    )
+    result = await _search(hass, {"tools": "ha_config_set_automation"}, _catalog())
 
     assert [e["name"] for e in result.data["results"]] == ["ha_config_set_automation"]
     assert result.error is False
@@ -139,20 +127,20 @@ async def test_tools_hop_accepts_a_bare_name(monkeypatch: pytest.MonkeyPatch) ->
     "tools", [[{"name": "ha_get_state"}], {"name": "ha_get_state"}, 3]
 )
 async def test_tools_hop_rejects_anything_but_names(
-    monkeypatch: pytest.MonkeyPatch, tools: Any
+    hass: HomeAssistant, tools: Any
 ) -> None:
-    result = await _search(monkeypatch, {"tools": tools}, _catalog())
+    result = await _search(hass, {"tools": tools}, _catalog())
 
     assert result.error is True
     assert "list of tool names" in result.data["error"]
 
 
 async def test_tools_hop_returns_the_stub_for_a_pinned_tool(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
     """A pinned tool is already in the agent's tool list with its schema
     (#2576), on this path as on the server."""
-    result = await _search(monkeypatch, {"tools": ["ha_search"]}, _catalog())
+    result = await _search(hass, {"tools": ["ha_search"]}, _catalog())
 
     [entry] = result.data["results"]
     assert entry["pinned"] is True
@@ -161,37 +149,34 @@ async def test_tools_hop_returns_the_stub_for_a_pinned_tool(
 
 
 async def test_pinned_tool_that_failed_to_mirror_stays_a_full_entry(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
     """A pinned tool whose schema does not convert is skipped from the
     agent's list; a stub saying "already in your tool list" would leave it
     unreachable, so search must hand out its schema for ha_call_tool."""
-
-    def convert(schema: Any) -> Any:
-        if "fails" in schema.get("properties", {}):
-            raise ValueError("unconvertible")
-        return {"_converted": schema}
-
-    monkeypatch.setattr(llm_api, "convert_to_voluptuous", convert)
-    pinned = tool_entry("ha_search", pinned=True)
-    pinned.inputSchema = {"type": "object", "properties": {"fails": {}}}
+    # Core's converter refuses a property of a type JSON Schema does not have.
+    unconvertible = {"type": "object", "properties": {"fails": {"type": "nope"}}}
+    pinned = ServedTool("ha_search", pinned=True, input_schema=unconvertible)
     tools = [pinned, *(t for t in _catalog() if t.name != "ha_search")]
 
-    instance = await _instance(monkeypatch, tools)
-    assert "ha_search" not in [t.name for t in instance.tools]
-    by_query = await _search(monkeypatch, {"query": "ha_search"}, tools)
-    by_name = await _search(monkeypatch, {"tools": ["ha_search"]}, tools)
+    async with serve(tools) as server:
+        instance = await api_instance(hass, server.port)
+        listed = [t.name for t in instance.tools]
+        search = tool_named(instance, "ha_search_tools")
+        by_query = await call(hass, search, {"query": "ha_search"})
+        by_name = await call(hass, search, {"tools": ["ha_search"]})
 
-    [hit] = by_query.data["results"]
+    assert "ha_search" not in listed
+    [hit] = payload(by_query)["results"]
     assert "pinned" not in hit
-    [entry] = by_name.data["results"]
-    assert entry["input_schema"] == pinned.inputSchema
+    [entry] = payload(by_name)["results"]
+    assert entry["input_schema"] == unconvertible
 
 
 async def test_keyword_hit_on_a_pinned_tool_is_the_stub(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
-    result = await _search(monkeypatch, {"query": "ha_search"}, _catalog())
+    result = await _search(hass, {"query": "ha_search"}, _catalog())
 
     [entry] = result.data["results"]
     assert entry == {
@@ -202,32 +187,34 @@ async def test_keyword_hit_on_a_pinned_tool_is_the_stub(
 
 
 async def test_tools_hop_answers_in_the_order_the_agent_asked(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
     asked = ["ha_get_state", "ha_config_set_automation"]
 
-    result = await _search(monkeypatch, {"tools": asked}, _catalog())
+    result = await _search(hass, {"tools": asked}, _catalog())
 
     assert [entry["name"] for entry in result.data["results"]] == asked
 
 
 async def test_tools_hop_does_not_mix_in_keyword_hits(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
     result = await _search(
-        monkeypatch, {"query": "automation", "tools": ["ha_get_state"]}, _catalog()
+        hass,
+        {"query": "automation", "tools": ["ha_get_state"]},
+        _catalog(),
     )
 
     assert [entry["name"] for entry in result.data["results"]] == ["ha_get_state"]
 
 
 async def test_tools_hop_does_not_reveal_that_a_hidden_tool_exists(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
     # A distinct answer for a hidden name would leak its existence, the same
     # rule ha_call_tool keeps.
     result = await _search(
-        monkeypatch, {"tools": ["ha_restart", "ha_totally_made_up"]}, _catalog()
+        hass, {"tools": ["ha_restart", "ha_totally_made_up"]}, _catalog()
     )
 
     hidden, missing = result.data["results"]
@@ -241,13 +228,13 @@ async def test_tools_hop_does_not_reveal_that_a_hidden_tool_exists(
 
 
 async def test_tools_hop_with_no_known_name_is_an_error(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
     """``ha_call_tool`` answers an unknown name with an error; a lookup that
     resolved nothing must not read as a successful schema fetch."""
-    nothing = await _search(monkeypatch, {"tools": ["ha_totally_made_up"]}, _catalog())
+    nothing = await _search(hass, {"tools": ["ha_totally_made_up"]}, _catalog())
     mixed = await _search(
-        monkeypatch, {"tools": ["ha_totally_made_up", "ha_get_state"]}, _catalog()
+        hass, {"tools": ["ha_totally_made_up", "ha_get_state"]}, _catalog()
     )
 
     assert nothing.error is True
@@ -256,17 +243,18 @@ async def test_tools_hop_with_no_known_name_is_an_error(
 
 @pytest.mark.parametrize("args", [{}, {"query": "  "}], ids=["empty", "blank"])
 async def test_search_without_query_or_tools_is_an_error(
-    monkeypatch: pytest.MonkeyPatch, args: dict[str, Any]
+    hass: HomeAssistant, args: dict[str, Any]
 ) -> None:
-    result = await _search(monkeypatch, args, _catalog())
+    result = await _search(hass, args, _catalog())
 
     assert result.error is True
     assert "error" in result.data
 
 
 async def test_prompt_tells_the_agent_to_fetch_the_schema_before_calling(
-    monkeypatch: pytest.MonkeyPatch,
+    hass: HomeAssistant,
 ) -> None:
-    instance = await _instance(monkeypatch, _catalog())
+    async with serve(_catalog()) as server:
+        instance = await api_instance(hass, server.port)
 
     assert "ha_search_tools(tools=" in instance.api_prompt

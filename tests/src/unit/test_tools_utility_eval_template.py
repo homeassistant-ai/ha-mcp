@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -29,13 +30,12 @@ from ha_mcp.client.websocket_client import (
     websocket_manager,
 )
 from ha_mcp.tools import tools_utility
-from ha_mcp.tools.component_api import (
-    SUPPORTED_SCHEMA_VERSION,
-    ComponentCaps,
-    get_component_caps,
-)
+from ha_mcp.tools.component_api import get_component_caps
 from ha_mcp.tools.tools_utility import UtilityTools
 
+from ._gateway import Gateway
+from ._gateway import gateway as gateway
+from ._gateway import gateway_client as gateway_client
 from ._tool_errors import error_body
 
 DIAGNOSE = "ha_mcp_tools/template_diagnose"
@@ -217,21 +217,18 @@ class TestTemplateResults:
 
     async def test_unknown_command_invalidates_the_cached_caps(
         self,
-        core_client: HomeAssistantClient,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
         invalidated: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Cached caps name the command; Core, without the component, does not."""
-        stale = ComponentCaps(
-            SUPPORTED_SCHEMA_VERSION, "1.0.0", frozenset({"template_diagnose"}), {}
-        )
-        monkeypatch.setattr(
-            tools_utility, "get_component_caps", AsyncMock(return_value=stale)
-        )
+        """Cached caps name the command; a component downgraded since the
+        probe no longer registers it, so Core answers it unknown_command."""
+        monkeypatch.delitem(hass.data[websocket_api.DOMAIN], DIAGNOSE)
 
-        error = await _eval_error(core_client, template="{{ 1/0 }}")
+        error = await _eval_error(component_core_client, template="{{ 1/0 }}")
 
-        invalidated.assert_called_once_with(core_client)
+        invalidated.assert_called_once_with(component_core_client)
         assert "division by zero" in error["error"]["message"]
         assert "line_unavailable" not in error
 
@@ -363,3 +360,14 @@ class TestCondition:
 
         assert error["condition"] == condition
         assert "template" not in error
+
+
+async def test_a_403_on_the_socket_gets_the_reverse_proxy_advice(
+    gateway: Gateway, gateway_client: HomeAssistantClient
+) -> None:
+    """A proxy that refuses the WebSocket answers the upgrade with 403."""
+    gateway.upgrade_status = 403
+
+    body = await _eval_error(gateway_client, template="{{ 1 }}")
+
+    assert "403 Forbidden" in " ".join(body["error"]["suggestions"])

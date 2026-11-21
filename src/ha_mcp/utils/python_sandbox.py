@@ -8,7 +8,10 @@ See SECURITY.md § "MCP clients are trusted principals" for the rationale.
 """
 
 import ast
-from typing import Any, cast
+import json
+from typing import Any
+
+from ..error_wording import line_continuation, single_target_unpack
 
 
 class PythonSandboxError(Exception):
@@ -430,7 +433,7 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
     Returns:
         The value bound to ``config`` after execution — typically the same
         dict mutated in place, but also supports expressions that reassign
-        ``config`` to a new object.
+        ``config`` to a new dict.
 
     Raises:
         PythonSandboxError: If expression validation fails or execution errors
@@ -440,13 +443,21 @@ def safe_execute(expr: str, config: dict[str, Any]) -> dict[str, Any]:
         >>> safe_execute("config['views'][0]['cards'][0]['icon'] = 'new'", config)
         {'views': [{'cards': [{'icon': 'new'}]}]}
     """
-    # safe_execute_expression returns Any (generic over result_key); at this
-    # call site the result is always the dict bound to `config`, so narrow
-    # for mypy and existing callers that depend on the dict interface.
-    return cast(
-        dict[str, Any],
-        safe_execute_expression(expr, {"config": config}, "config"),
-    )
+    result = safe_execute_expression(expr, {"config": config}, "config")
+    # The callers send the result to Home Assistant as a JSON object, so a
+    # result that is not one is the expression's mistake, reported as such.
+    if not isinstance(result, dict):
+        raise PythonSandboxExecutionError(
+            f"the expression left `config` as {type(result).__name__}; "
+            "it must stay a dict"
+        )
+    try:
+        json.dumps(result, allow_nan=False)
+    except (TypeError, ValueError) as err:
+        raise PythonSandboxExecutionError(
+            f"the expression left a value that cannot be sent as JSON: {err}"
+        ) from err
+    return result
 
 
 def format_sandbox_error(
@@ -481,8 +492,7 @@ def format_sandbox_error(
             "Use .get(key, default) to handle missing keys",
             f"Expression: {preview}",
         ]
-        # Python 3.14 adds ", got N" only for a plain list, tuple or dict.
-        if "unpack (expected 1)" in str(error) or "unpack (expected 1," in str(error):
+        if single_target_unpack(error):
             suggestions.insert(
                 0,
                 "A single-target unpack needs exactly one item. If this is a "
@@ -502,7 +512,7 @@ def format_sandbox_error(
         # line-continuation token followed by an unexpected character.
         # Pinpoint the actual mistake so the agent fixes it on the first
         # retry instead of guessing at "syntax".
-        if "line continuation character" in str(error):
+        if line_continuation(error):
             suggestions.insert(
                 0,
                 'Remove the leading backslash before quotes — write "foo" '

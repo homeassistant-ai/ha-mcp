@@ -31,7 +31,10 @@ _VENDORED_DISTRIBUTIONS = {"fastmcp", "fastmcp-slim", "mcp", "mcp-types"}
 _NOT_DECLARED = {"websockets"}
 # These drive the component's LLM-API client, which uses HA's shared SDK.
 _SHARED_SDK_USERS = {
+    "tests/src/unit/_llm_api_server.py",
     "tests/src/unit/test_llm_api.py",
+    "tests/src/unit/test_llm_api_instance.py",
+    "tests/src/unit/test_llm_api_sdk_lines.py",
     "tests/src/unit/test_llm_tool_metadata.py",
     "tests/src/e2e/workflows/embedded/test_embedded_server.py",
 }
@@ -51,14 +54,9 @@ def _declared() -> list[Requirement]:
     return [Requirement(d) for d in pyproject["project"]["dependencies"]]
 
 
-_PYTHON_CLASSIFIER = "Programming Language :: Python :: "
-_SUPPORTED_PYTHONS = [
-    c.removeprefix(_PYTHON_CLASSIFIER)
-    for c in tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text("utf-8"))[
-        "project"
-    ]["classifiers"]
-    if c.startswith(_PYTHON_CLASSIFIER) and c.count(".") == 1
-]
+_SUPPORTED_PYTHONS = vendor_fastmcp.supported_pythons(
+    (_REPO_ROOT / "pyproject.toml").read_text("utf-8")
+)
 
 
 @pytest.mark.parametrize("spec", vendor_fastmcp.PACKAGES, ids=lambda s: s.package)
@@ -177,22 +175,23 @@ def test_pyproject_declares_no_shared_fastmcp_or_mcp():
     assert not declared & _VENDORED_DISTRIBUTIONS
 
 
-def _floor(requirement: Requirement) -> Version | None:
-    versions = [
-        Version(s.version)
-        for s in requirement.specifier
-        if s.operator in {">=", ">", "==", "~="}
-    ]
-    return max(versions, default=None)
-
-
-def _ceiling(requirement: Requirement) -> Version | None:
-    versions = [
-        Version(s.version)
+def _ceiling(requirement: Requirement) -> tuple[Version, bool] | None:
+    """The tightest upper bound and whether it admits the bound itself."""
+    bounds = [
+        (Version(s.version), s.operator != "<")
         for s in requirement.specifier
         if s.operator in {"<", "<=", "=="}
     ]
-    return min(versions, default=None)
+    return min(bounds, default=None)
+
+
+def _within(top: tuple[Version, bool] | None, ceiling: tuple[Version, bool]) -> bool:
+    """Whether a declared upper bound ``top`` stays inside ``ceiling``."""
+    if top is None:
+        return False
+    if top[0] != ceiling[0]:
+        return top[0] < ceiling[0]
+    return ceiling[1] or not top[1]
 
 
 @pytest.mark.parametrize("spec", vendor_fastmcp.PACKAGES, ids=lambda s: s.package)
@@ -203,59 +202,64 @@ def test_pyproject_covers_each_vendored_runtime_requirement(
 ):
     """Every requirement the vendored wheels declare is a direct dependency.
 
-    Checked against the requirement list the sync records from each wheel, so
-    a bump that adds a dependency or raises a floor fails here rather than
-    only inside Home Assistant, where Core's constraints can hold an older
-    version back. Check each supported Python and desktop/server platform,
+    Checked against the requirement list the sync records from each wheel.
+    The sync raises the ``>=`` floors it safely can; a bump that adds a
+    dependency, a ceiling, or a floor the declared entry cannot take (an exact
+    pin, a ceiling it passes) fails here rather than only inside Home
+    Assistant, where Core's constraints can hold an older version back. Check
+    each supported Python (every patch release) and desktop/server platform,
     including requirements that do not apply on the runner's own platform.
     """
-    environment = {
-        "python_version": python_version,
-        "python_full_version": f"{python_version}.0",
-        "sys_platform": sys_platform,
-        "platform_system": {
-            "linux": "Linux",
-            "darwin": "Darwin",
-            "win32": "Windows",
-        }[sys_platform],
-        "os_name": "nt" if sys_platform == "win32" else "posix",
-    }
-    declared: dict[str, list[Requirement]] = {}
-    for requirement in _declared():
-        if requirement.marker and not requirement.marker.evaluate(environment):
-            continue
-        declared.setdefault(canonicalize_name(requirement.name), []).append(requirement)
-    problems = []
-    for needed in _vendored_requirements(spec.package):
-        if needed.marker and not needed.marker.evaluate(environment):
-            continue
-        name = canonicalize_name(needed.name)
-        if name in _VENDORED_DISTRIBUTIONS or name in _NOT_DECLARED:
-            continue
-        candidates = declared.get(name, [])
-        if not candidates:
-            problems.append(f"{needed} is not declared")
-            continue
-        floor, ceiling = _floor(needed), _ceiling(needed)
-        ok = any(
-            (floor is None or ((own := _floor(c)) is not None and own >= floor))
-            and (
-                ceiling is None or ((top := _ceiling(c)) is not None and top <= ceiling)
+    declared_all = _declared()
+    needed_all = _vendored_requirements(spec.package)
+    problems: set[str] = set()
+    # Per environment: an entry for a later patch release covers nothing on
+    # an earlier one.
+    for environment in vendor_fastmcp.marker_environments(python_version, sys_platform):
+        declared: dict[str, list[Requirement]] = {}
+        for requirement in declared_all:
+            if requirement.marker is None or requirement.marker.evaluate(environment):
+                declared.setdefault(canonicalize_name(requirement.name), []).append(
+                    requirement
+                )
+        for needed in needed_all:
+            if needed.marker is not None and not needed.marker.evaluate(environment):
+                continue
+            name = canonicalize_name(needed.name)
+            if name in _VENDORED_DISTRIBUTIONS or name in _NOT_DECLARED:
+                continue
+            candidates = declared.get(name, [])
+            if not candidates:
+                problems.add(
+                    f"{needed} is not declared on {environment['python_full_version']}"
+                )
+                continue
+            floor, ceiling = vendor_fastmcp.requirement_floor(needed), _ceiling(needed)
+            ok = any(
+                (
+                    floor is None
+                    or (
+                        (own := vendor_fastmcp.requirement_floor(c)) is not None
+                        and own >= floor
+                    )
+                )
+                and (ceiling is None or _within(_ceiling(c), ceiling))
+                for c in candidates
             )
-            for c in candidates
-        )
-        if not ok:
-            problems.append(
-                f"{needed} is not covered by {[str(c) for c in candidates]}"
-            )
-    assert not problems, problems
+            if not ok:
+                problems.add(
+                    f"{needed} is not covered by {[str(c) for c in candidates]}"
+                )
+    assert not problems, sorted(problems)
 
 
 def test_vendored_packages_agree_on_each_others_pins():
     pins = _pins()
-    mcp_needs = {canonicalize_name(r.name): r for r in _vendored_requirements("mcp")}
+    mcp_needs: dict[str, Requirement] = {
+        canonicalize_name(r.name): r for r in _vendored_requirements("mcp")
+    }
     assert mcp_needs["mcp-types"].specifier.contains(pins["mcp-types"])
-    fastmcp_needs = {
+    fastmcp_needs: dict[str, Requirement] = {
         canonicalize_name(r.name): r for r in _vendored_requirements("fastmcp")
     }
     assert fastmcp_needs["mcp"].specifier.contains(pins["mcp"])

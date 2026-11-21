@@ -15,17 +15,42 @@ import httpx
 from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
+from ..error_wording import service_call_unauthorized
 from .admin_routes import is_admin_only_route
 from .error_log_journald import (
     JournaldPage,
     container_page,
     first_cursor,
     journald_page,
-    range_header,
+)
+from .exceptions import (
+    HomeAssistantAdminRequiredError as HomeAssistantAdminRequiredError,
+)
+from .exceptions import (
+    HomeAssistantAPIError as HomeAssistantAPIError,
+)
+from .exceptions import (
+    HomeAssistantAuthError as HomeAssistantAuthError,
+)
+from .exceptions import (
+    HomeAssistantCommandError as HomeAssistantCommandError,
+)
+from .exceptions import (
+    HomeAssistantCommandNotSent as HomeAssistantCommandNotSent,
+)
+from .exceptions import (
+    HomeAssistantCommandTimeout as HomeAssistantCommandTimeout,
+)
+from .exceptions import (
+    HomeAssistantConnectionError as HomeAssistantConnectionError,
+)
+from .exceptions import (
+    HomeAssistantError as HomeAssistantError,
 )
 from .models import ErrorLogPage
+from .service_identifiers import service_rest_path
 from .supervisor_client import make_supervisor_httpx_client
-from .transport_errors import is_ssl_error, redirect_message
+from .transport_errors import is_ssl_error, redirect_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -65,72 +90,6 @@ _ADMIN_ONLY_401_MESSAGE = (
     "Home Assistant returned 401 for an admin-only endpoint: "
     "the token is invalid or its user is not an administrator"
 )
-
-
-class HomeAssistantError(Exception):
-    """Base exception for Home Assistant API errors."""
-
-
-class HomeAssistantConnectionError(HomeAssistantError):
-    """Connection error to Home Assistant."""
-
-
-class HomeAssistantCommandNotSent(HomeAssistantConnectionError):
-    """A WS command that provably never left the process.
-
-    Raised by ``HomeAssistantWebSocketClient.send_command``'s entry guard (socket not
-    authenticated) and by ``send_websocket_message`` when no attempt obtained a client
-    (raised from the acquisition error, so a rejected token survives as ``__cause__``).
-    A subclass of ``HomeAssistantConnectionError``, so broad handlers are unaffected,
-    yet a write consumer can catch it FIRST: the write provably never happened, so a
-    legacy first fire cannot double-apply. Check ``__cause__`` before such a fallback:
-    resending a rejected token over REST adds a 401 toward Home Assistant's IP ban. A
-    ``send_json_message`` failure is NOT this type: ``websocket.send()`` raising does
-    not prove the frame was untransmitted (bytes may already be on the socket when the
-    close surfaces), so send_command re-raises the original exception and the consumer
-    treats it as ambiguous. A post-send socket close (mid-await) likewise raises a plain
-    ``HomeAssistantConnectionError`` (the close handler sets it on the pending future),
-    so type alone distinguishes never-sent from sent-then-dropped/ambiguous.
-    """
-
-
-class HomeAssistantAuthError(HomeAssistantError):
-    """Authentication error with Home Assistant.
-
-    Sibling of ``HomeAssistantAPIError`` (not a subclass). The codebase has
-    18 ``except HomeAssistantAPIError`` sites (ws_waiters polling,
-    tools_integrations registry lookups, etc.) that deliberately rely on
-    auth errors NOT matching so they can propagate to a paired
-    ``except (HomeAssistantConnectionError, HomeAssistantAuthError): raise``
-    block. Subclassing AuthError under APIError silently swallowed those
-    auth errors as part of the local "this entity is not registered yet"
-    polling logic. Sites that specifically need to catch both must list
-    them explicitly (see ``_get_supervisor_log`` and
-    ``_get_system_service_log`` in ``log_sources_supervisor.py``).
-    """
-
-
-class HomeAssistantAdminRequiredError(HomeAssistantAuthError):
-    """An admin-only request refused because the token's user is not an admin.
-
-    A REST request is refused locally, never sent: Home Assistant would answer
-    401 and count it toward its IP ban (#2546). A service call is refused by
-    Home Assistant over WebSocket, where a refusal is not counted.
-    """
-
-
-class HomeAssistantAPIError(HomeAssistantError):
-    """API error from Home Assistant."""
-
-    def __init__(
-        self,
-        message: str,
-        status_code: int | None = None,
-        response_data: dict[str, Any] | None = None,
-    ):
-        super().__init__(message)
-        self.status_code = status_code
-        self.response_data = response_data
 
 
 @dataclass(frozen=True)
@@ -179,43 +138,6 @@ class SceneStorageConfigNotFoundError(HomeAssistantAPIError):
         if storage_key and storage_key != scene_id:
             msg += f" (resolved storage key: {storage_key})"
         super().__init__(msg, status_code=404)
-
-
-class HomeAssistantCommandError(HomeAssistantError):
-    """WebSocket command returned success=False.
-
-    Raised by ``WebSocketClient.send_command`` when Home Assistant responds
-    with ``{type: "result", success: False}``. Used as a type marker in
-    ``_classify_exception``'s match dispatch; classification then falls
-    through to ``_classify_by_message`` for pattern matching on the
-    error message.
-
-    ``code`` carries HA's structured WebSocket error code (the ``code`` field
-    of the response ``error`` object — e.g. ``"unknown_command"``,
-    ``"invalid_format"``) when available, so routing decisions can key off the
-    stable code rather than pattern-matching the human-readable message. It
-    defaults to ``None`` for exceptions raised without a code (older raise
-    sites, string error payloads, or direct construction in tests), which
-    keeps the single-positional-argument constructor backward-compatible.
-    """
-
-    def __init__(self, message: str, code: str | None = None):
-        super().__init__(message)
-        self.code = code
-
-
-class HomeAssistantCommandTimeout(HomeAssistantError):
-    """WebSocket ``send_command`` timed out waiting for HA's response.
-
-    Sibling of ``HomeAssistantCommandError`` (not a subclass) so existing
-    ``except HomeAssistantCommandError`` sites — including the match
-    dispatch in ``helpers._classify_exception`` — keep their original
-    semantics. Callers that specifically want to handle our 30s WS
-    round-trip timeout (e.g. short-lived waiter cleanup that should
-    swallow a timeout instead of masking the real wait result) catch
-    this type directly. Replaces a bare ``Exception("Command timeout")``
-    string-match pattern (#1382 Patch76 review).
-    """
 
 
 # Exception classes that are evidence no answer came back from Home Assistant,
@@ -458,9 +380,7 @@ class HomeAssistantClient:
                     )
 
                 if 300 <= response.status_code < 400:
-                    raise HomeAssistantConnectionError(
-                        redirect_message(self.base_url, response)
-                    )
+                    raise redirect_refusal(self.base_url, response)
 
                 if response.status_code >= 400:
                     message, error_data = self._error_message_from_response(response)
@@ -678,15 +598,13 @@ class HomeAssistantClient:
         data: dict[str, Any] | None = None,
         return_response: bool = False,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """
-        Call Home Assistant service.
+        """Call a Home Assistant service.
 
         Args:
             domain: Service domain (e.g., 'light', 'climate')
             service: Service name (e.g., 'turn_on', 'set_temperature')
             data: Optional service data
-            return_response: If True, returns the service response data (for services
-                           that support SupportsResponse.ONLY or SupportsResponse.OPTIONAL)
+            return_response: Request response data from a service that supports it.
 
         Returns:
             Service response data - list of affected states normally, or dict with
@@ -729,7 +647,6 @@ class HomeAssistantClient:
         A 401 means Home Assistant refused before running the service, so the
         WebSocket retry cannot apply it twice.
         """
-        # Build query params for return_response
         params = {}
         if return_response:
             params["return_response"] = "true"
@@ -737,7 +654,7 @@ class HomeAssistantClient:
         try:
             result = await self._request(
                 "POST",
-                f"/services/{domain}/{service}",
+                service_rest_path(domain, service),
                 json=payload,
                 params=params if params else None,
             )
@@ -782,7 +699,7 @@ class HomeAssistantClient:
         )
         if not reply.get("success"):
             error = str(reply.get("error", "Service call failed"))
-            if error.removeprefix("Command failed: ") == "Unauthorized":
+            if service_call_unauthorized(reply.get("error_code"), error):
                 raise HomeAssistantAdminRequiredError(
                     f"Service {domain}.{service} is admin-only in Home Assistant "
                     "and this token's user is not an administrator"
@@ -1138,7 +1055,6 @@ class HomeAssistantClient:
         self,
         path: str,
         lines: int | None = None,
-        offset: int | None = None,
     ) -> str:
         """Fetch ``text/plain`` logs from a Supervisor REST endpoint.
 
@@ -1149,14 +1065,7 @@ class HomeAssistantClient:
           multicast}) for system-service logs
 
         ``lines`` maps to the endpoint's ``?lines=`` journald-window query
-        param; omitted → Supervisor's 100-line default window. Adding
-        ``offset`` switches the same window to a ``Range: entries=`` header
-        (see ``_journald_range_header``), which is the only form that can
-        address an older window. The two forms are mutually exclusive on the
-        wire — Supervisor tests ``if "lines" in request.query`` first and
-        ignores a ``Range`` header whenever that query param is present — so
-        the offset form sends the window in the header and no query param,
-        rather than a pair that could contradict each other.
+        param; omitted → Supervisor's 100-line default window.
 
         Bypasses ``HomeAssistantClient.httpx_client`` because that client targets
         Home Assistant Core through ``http://supervisor/core/api``, while logs
@@ -1186,17 +1095,11 @@ class HomeAssistantClient:
         params: dict[str, Any] = {"no_colors": "true"}
         if lines is not None:
             params["lines"] = lines
-        if offset is not None:
-            # An offset window with no size asked for falls back to the
-            # smallest one the Range syntax can express.
-            size = lines if lines is not None else MIN_LOG_WINDOW_LINES
-            headers["Range"] = range_header(size, offset)
-            params.pop("lines", None)
         logger.debug(
-            "Fetching %s/%s/logs via Supervisor direct (%s)",
+            "Fetching %s/%s/logs via Supervisor direct (lines=%s)",
             get_supervisor_base_url(),
             path,
-            f"range={headers['Range']}" if offset is not None else f"lines={lines}",
+            lines,
         )
         response = await self._supervisor_logs_response(path, headers, params)
         return response.text
@@ -1518,7 +1421,7 @@ class HomeAssistantClient:
     # cadence-measurement instrumentation also retired with the loop;
     # the WS waiter logs `time.monotonic()` elapsed via its own debug
     # line at ``ws_waiters._ws_wait_for_condition``.
-    _POLL_BUDGET_S: float = 6.0
+    POLL_BUDGET_S: float = 6.0
 
     async def _poll_for_automation_entity(self, unique_id: str) -> str | None:
         """Discover the entity_id assigned to a newly created automation.
@@ -1536,7 +1439,7 @@ class HomeAssistantClient:
 
         try:
             entity_id = await wait_for_automation_entity_by_unique_id(
-                self, unique_id, timeout=self._POLL_BUDGET_S
+                self, unique_id, timeout=self.POLL_BUDGET_S
             )
         except HomeAssistantError as e:
             # Narrow catch: programming bugs (TypeError/KeyError/etc.) propagate.
@@ -1582,11 +1485,7 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            # Core's DELETE answers a missing id with 400, not 404.
-            if (
-                e.status_code == 400
-                and (e.response_data or {}).get("message") == "Resource not found"
-            ):
+            if e.config_not_found:
                 raise HomeAssistantAPIError(
                     f"Automation not found: {identifier} (unique_id: {unique_id})",
                     status_code=404,
@@ -1750,17 +1649,12 @@ class HomeAssistantClient:
         subentry_type: str,
         *,
         subentry_id: str | None = None,
-        show_advanced_options: bool | None = None,
     ) -> dict[str, Any]:
         """Start a config subentry create or reconfigure flow."""
-        # HA 2026.6+ treats show_advanced_options as a no-op; keep passing it
-        # for older HA versions until the server-side property is removed.
         # HA requires the handler as [parent_entry_id, subentry_type].
         payload: dict[str, Any] = {"handler": [entry_id, subentry_type]}
         if subentry_id is not None:
             payload["subentry_id"] = subentry_id
-        if show_advanced_options is not None:
-            payload["show_advanced_options"] = show_advanced_options
 
         logger.debug(
             "Starting config subentry flow for entry %s and type %s",
@@ -1903,124 +1797,63 @@ class HomeAssistantClient:
         """
         from .websocket_client import get_websocket_client
 
-        max_retries = 2
-        retry_delay = 0.5  # seconds
-        # Whether an earlier attempt got past acquisition, so may have sent.
-        sent_before = False
+        try:
+            # Per-client WebSocket keyed to this client's credentials (verify_ssl
+            # included so a verify_ssl=False client never shares a
+            # default-verification pooled connection).
+            ws_client = await get_websocket_client(
+                url=self.base_url, token=self.token, verify_ssl=self.verify_ssl
+            )
+        except Exception as e:
+            # No usable connection, whatever was raised (an auth failure, the
+            # pool-lock guard's bare ``Exception``): nothing was sent.
+            logger.error(f"WebSocket transport failed ({message.get('type')}): {e}")
+            raise HomeAssistantCommandNotSent(str(e)) from e
 
-        for attempt in range(max_retries):
-            # Whether the failure happened before a usable connection existed.
-            acquiring = True
-            try:
-                # Use per-client WebSocket keyed to this client's credentials
-                # (verify_ssl included so a verify_ssl=False client never
-                # shares a default-verification pooled connection).
-                ws_client = await get_websocket_client(
-                    url=self.base_url,
-                    token=self.token,
-                    verify_ssl=self.verify_ssl,
-                )
-                acquiring = False
-
-                # render_template is a subscription; see _handle_render_template.
-                if message.get("type") == "render_template":
-                    return await self._handle_render_template(ws_client, message)
-
-                # Extract command type and parameters for other commands
-                message_copy = message.copy()
-                command_type = message_copy.pop("type")
-                result = await ws_client.send_command(command_type, **message_copy)
-
-                return result
-
-            except Exception as e:
-                error_str = str(e)
-                is_403 = "403" in error_str and "Forbidden" in error_str
-
-                # Transient 403 (rate limiting / reverse proxy throttling): retry
-                # before deciding anything, since the next attempt may succeed.
-                if is_403 and attempt < max_retries - 1:
-                    logger.warning(
-                        f"WebSocket 403 error (attempt {attempt + 1}/{max_retries}), "
-                        f"retrying after {retry_delay}s: {error_str}"
-                    )
-                    await asyncio.sleep(retry_delay)
-                    sent_before = sent_before or not acquiring
-                    continue
-
-                # Phase first, type second. Failing before a client exists is
-                # transport evidence whatever was raised: an auth failure or the
-                # pool-lock guard's bare ``Exception`` is no no-answer class.
-                # Past acquisition only those classes count (``send_command``
-                # re-raises the original ``ConnectionClosed`` /
-                # ``ConnectionResetError`` to keep writes at-most-once); anything
-                # else is Home Assistant's own answer or a local bug.
-                if acquiring or isinstance(e, _NO_ANSWER_ERRORS):
-                    # One error channel for "no answer came back" (#1947): the
-                    # caller decides the policy. Callers that legitimately continue
-                    # on a missing answer catch this and say in ``warnings`` what
-                    # they skipped; callers whose output would read as a negative
-                    # finding let it propagate.
-                    logger.error(
-                        f"WebSocket transport failed ({message.get('type')}): {e}"
-                    )
-                    if acquiring and not sent_before:
-                        # No attempt obtained a client, so nothing was sent.
-                        raise HomeAssistantCommandNotSent(error_str) from e
-                    if isinstance(e, HomeAssistantConnectionError) and not (
-                        sent_before and isinstance(e, HomeAssistantCommandNotSent)
-                    ):
-                        # Re-raised unchanged so subtypes and the traceback
-                        # survive; not "never sent" once an attempt may have sent.
-                        raise
-                    raise HomeAssistantConnectionError(error_str) from e
-
-                # Deliberate asymmetry (#1966 review item 8): a 403 that
-                # exhausts its retries DURING acquisition is transport death -
-                # no client was ever obtained - so it raises and loses the
-                # reverse-proxy suggestions below. The 403 text survives in the
-                # message, and returning a soft envelope there instead would
-                # put a blocked transport back on the degrade path this change
-                # exists to close. Past acquisition the socket is alive and HA
-                # (or a proxy) answered, so the tailored suggestions apply.
-                if is_403:
-                    logger.error(
-                        f"WebSocket 403 error after {max_retries} attempts: {error_str}"
-                    )
-                    return {
-                        "success": False,
-                        "error": f"WebSocket request blocked (403 Forbidden): {error_str}",
-                        "error_code": getattr(e, "code", None),
-                        "suggestions": [
-                            "This may be caused by a reverse proxy or security filter",
-                            "Try simplifying the request (e.g., shorter templates, fewer parameters)",
-                            "If using complex templates, try breaking them into smaller parts",
-                            "Check if your Home Assistant is behind a reverse proxy with security rules",
-                        ],
-                    }
-
-                # Name the command in the log line: a bare "Command failed:
-                # Unknown command." is undiagnosable from a user's log
-                # (issue #1889 took a live reproduction to attribute).
-                code = getattr(e, "code", None)
-                logger.log(
-                    logging.DEBUG if code in expected_error_codes else logging.ERROR,
-                    f"WebSocket message failed ({message.get('type')}): {e}",
-                )
-                # Preserve HA's structured error code (e.g. ``not_found``) so callers
-                # can distinguish HA's authoritative verdict from a transient failure
-                # instead of only seeing the stringified message.
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "error_code": getattr(e, "code", None),
-                }
-
-        # Unreachable: every attempt either returns, raises, or ``continue``s,
-        # and the last attempt cannot ``continue`` (the 403 branch guards on
-        # ``attempt < max_retries - 1``). Assert rather than return a
-        # contextless failure envelope that would read as a soft error.
-        raise AssertionError("send_websocket_message loop exited without a result")
+        # A command is sent once: once it went out, Home Assistant may have run
+        # it, so no failure below is retried.
+        try:
+            # render_template is a subscription; see _handle_render_template.
+            if message.get("type") == "render_template":
+                return await self._handle_render_template(ws_client, message)
+            message_copy = message.copy()
+            command_type = message_copy.pop("type")
+            result: dict[str, Any] = await ws_client.send_command(
+                command_type, **message_copy
+            )
+            return result
+        except _NO_ANSWER_ERRORS as e:
+            # One error channel for "no answer came back" (#1947): the caller
+            # decides the policy. ``send_command`` re-raises the original
+            # ``ConnectionClosed`` / ``ConnectionResetError`` to keep writes
+            # at-most-once, so those arrive untranslated.
+            # A caller that waits zero seconds sent a command Core never answers.
+            log = logger.debug if message.get("_wait_timeout") == 0 else logger.error
+            log(f"WebSocket transport failed ({message.get('type')}): {e}")
+            if isinstance(e, HomeAssistantConnectionError):
+                # Re-raised unchanged so subtypes and the traceback survive.
+                raise
+            raise HomeAssistantConnectionError(str(e)) from e
+        except Exception as e:  # noqa: BLE001  # an answer or local bug is an envelope
+            # Home Assistant's own answer (or a proxy's), or a local bug.
+            error_str = str(e)
+            code = getattr(e, "code", None)
+            # Name the command in the log line: a bare "Command failed:
+            # Unknown command." is undiagnosable from a user's log
+            # (issue #1889 took a live reproduction to attribute).
+            logger.log(
+                logging.DEBUG if code in expected_error_codes else logging.ERROR,
+                f"WebSocket message failed ({message.get('type')}): {e}",
+            )
+            # Preserve HA's structured error code (e.g. ``not_found``) so callers
+            # can distinguish HA's authoritative verdict from a transient failure
+            # instead of only seeing the stringified message.
+            fields = (
+                e.refusal_fields()
+                if isinstance(e, HomeAssistantCommandError)
+                else {"error_code": code}
+            )
+            return {"success": False, "error": error_str, **fields}
 
     async def _handle_render_template(
         self, ws_client: Any, message: dict[str, Any]
@@ -2064,7 +1897,7 @@ class HomeAssistantClient:
                 "error": str(e).removeprefix(
                     "subscribe_command('render_template') failed: "
                 ),
-                "error_code": e.code,
+                **e.refusal_fields(),
                 "template": template,
             }
         except TimeoutError:
@@ -2235,7 +2068,7 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            if e.status_code == 404:
+            if e.config_not_found:
                 msg = f"Script not found: {script_id}"
                 if resolved_id != script_id:
                     msg += f" (resolved storage key: {resolved_id})"
@@ -2514,7 +2347,7 @@ class HomeAssistantClient:
                 "operation": "deleted",
             }
         except HomeAssistantAPIError as e:
-            if e.status_code == 404:
+            if e.config_not_found:
                 await self._raise_scene_config_404(scene_id, resolved_id, resolution)
             elif e.status_code == 405:
                 raise HomeAssistantAPIError(

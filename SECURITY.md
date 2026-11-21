@@ -456,6 +456,13 @@ boundary, admin-equivalent access, self-issued HMAC bearers, and revocation by
 credential rotation plus a restart. Only one of the two may own the root
 `/authorize` and `/token` routes per Home Assistant instance.
 
+With OAuth off, the app's anonymous auto-approve endpoint redirects only to a
+callback on the allowlist set in the app's options, with the same matching
+rules as the in-process `none` mode above; **Allow any OAuth callback URL**
+turns the list off. This holds from dev-channel version 3.0.6.dev3 and the
+stable release that promotes it, after Home Assistant is restarted; earlier
+versions redirect to any spec-valid callback.
+
 ## Scope
 
 **In scope** — please report these:

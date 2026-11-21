@@ -43,7 +43,7 @@ async def test_a_requested_name_is_explained_when_a_current_component_fails(
         raise HomeAssistantError("boom")
 
     monkeypatch.setattr(
-        "custom_components.ha_mcp_tools.websocket_api.search._search_entities",
+        "custom_components.ha_mcp_tools.websocket_api.search.search_entities",
         _fails,
     )
     ha_search = _build_ha_search(component_core_client)

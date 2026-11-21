@@ -17,8 +17,8 @@ therefore keep calling proxy-owned endpoints across mode switches. In none mode
 the exchange remains invisible and its access token remains cosmetic:
 
 * ``GET  {OAUTH_BASE}/authorize`` issues a PKCE-bound one-time code and
-  immediately 302-redirects back to the client with ``?code=…&state=…`` — no
-  page is rendered.
+  immediately 302-redirects back to an allowed callback with
+  ``?code=…&state=…``; any other callback gets a 400 page instead.
 * ``POST {OAUTH_BASE}/token`` exchanges that code (public client, PKCE S256, no
   ``client_secret``) for an opaque access token. The token is *cosmetic* — none
   mode ignores bearers entirely — but is a real random string so a spec-strict
@@ -28,16 +28,20 @@ the exchange remains invisible and its access token remains cosmetic:
   (#2248); it 404s in the other two.
 
 In none mode the secret webhook URL remains the only credential and the OAuth
-token grants nothing. By maintainer decision, authorize therefore accepts any
-spec-valid HTTPS or RFC 8252 loopback callback; malformed targets still fail in
-place. The resulting crafted-link redirect behavior is accepted within that
-secret-URL trust model.
+token grants nothing, but authorize is anonymous: redirecting to any callback
+would make the Home Assistant origin an open redirector. It therefore redirects
+only to a callback on the app's allowlist (:mod:`oauth_redirect_allowlist`), or,
+with "Allow any OAuth callback URL" on, to any callback that list could hold. It
+answers any other with a page explaining how to list a legitimate one, or why
+one carrying credentials or a ``#``, or too long, can never be listed.
 """
 
 from __future__ import annotations
 
+import html
 import logging
 import secrets
+import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode, urlparse
 
@@ -60,17 +64,57 @@ from .oauth import (
     PKCECodeStore,
     _addon_alive,
     _build_base_url,
-    _is_valid_redirect_uri,
     handle_legacy_authorize_get,
     handle_legacy_authorize_post,
     handle_legacy_token_post,
     read_form,
 )
+from .oauth_redirect_allowlist import (
+    MAX_OAUTH_CALLBACK_LENGTH,
+    _is_listable,
+    _is_valid_redirect_uri,
+    effective_allowlist,
+    is_redirect_allowed,
+    loggable_callback,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from multidict import MultiDict
 
 _LOGGER = logging.getLogger(__name__)
+
+# The none-mode /authorize view is anonymous, so its refusal log is bounded in
+# time: one line per interval, naming the latest callback and how many more
+# were refused since the last line. A per-callback limit would not bound it,
+# because the caller picks the callback.
+_REFUSAL_LOG_INTERVAL = 60.0
+_refusal_log: dict[str, float] = {"last": float("-inf"), "suppressed": 0}
+
+
+def _log_refused_callback(redirect_uri: str, listable: bool) -> None:
+    now = time.monotonic()
+    if now - _refusal_log["last"] < _REFUSAL_LOG_INTERVAL:
+        _refusal_log["suppressed"] += 1
+        return
+    suppressed = int(_refusal_log["suppressed"])
+    _refusal_log.update(last=now, suppressed=0)
+    reason = (
+        "it is not on the app's Allowed OAuth callback URLs option"
+        if listable
+        else "a callback carrying a username, a password or a '#', or one that is "
+        "too long, can never be allowed"
+    )
+    # repr: the path is attacker-supplied, and an encoded newline or terminal
+    # sequence in it must not forge log lines.
+    _LOGGER.warning(
+        "Refused a none-mode sign-in to callback %s: %s%s",
+        repr(loggable_callback(redirect_uri)[:200]),
+        reason,
+        f"; {suppressed} more refused since the last such line" if suppressed else "",
+    )
+
 
 # Dedicated session for anonymous CIMD lookups. Keeping it separate prevents a
 # slow public metadata host from consuming the authenticated relay pool.
@@ -150,7 +194,7 @@ def _json_error(
 
 
 def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
-    """Validate the none-mode authorization request without a client allowlist."""
+    """Validate the none-mode request's shape; the callback list is checked after."""
     if params.get("response_type", "") != "code":
         return _json_error("unsupported_response_type", 400)
     if params.get("code_challenge_method", "") != "S256":
@@ -176,6 +220,60 @@ def _redirect_with(redirect_uri: str, **params: str) -> web.Response:
     return web.Response(status=302, headers={"Location": str(url)})
 
 
+_UNLISTED_CALLBACK_PAGE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webhook Proxy: sign-in callback not allowed</title></head>
+<body style="font-family:sans-serif;max-width:40em;margin:2em auto;padding:0 1em">
+<h1>Sign-in callback not allowed</h1>
+<p>This sign-in was not sent back to <code>{callback}</code> because that
+address is not on the Webhook Proxy app (add-on)'s list of allowed callback
+URLs.</p>
+<p>If you trust the client you are connecting, a Home Assistant administrator
+can enter this exact address in the app's <b>Allowed OAuth callback URLs</b>
+option (<b>Settings &rarr; Apps &rarr; the Webhook Proxy app &rarr;
+Configuration</b>). That option replaces the built-in list, so also enter every
+built-in callback still in use (the app's <b>Documentation</b> tab lists them).
+Then restart the app and connect again.</p>
+</body></html>
+"""
+
+_UNLISTABLE_CALLBACK_PAGE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webhook Proxy: sign-in callback not allowed</title></head>
+<body style="font-family:sans-serif;max-width:40em;margin:2em auto;padding:0 1em">
+<h1>Sign-in callback not allowed</h1>
+<p>This sign-in was not sent back to <code>{callback}</code> because a callback
+address may not contain a username, a password or a <code>#</code>, nor be
+longer than {limit} characters.</p>
+<p>Such an address cannot be allowed in the Webhook Proxy app (add-on)'s
+options. The client you are connecting must use a plain <code>https</code>
+callback, or <code>http</code> on a loopback address such as
+<code>127.0.0.1</code>.</p>
+</body></html>
+"""
+
+
+def _unlisted_callback_response(redirect_uri: str, listable: bool) -> web.Response:
+    """400 page for a callback the allowlist refuses — never a redirect.
+
+    RFC 6749 §4.1.2.1: with an untrusted ``redirect_uri`` the server must not
+    redirect and should tell the resource owner instead.
+    """
+    return web.Response(
+        status=400,
+        text=(
+            _UNLISTED_CALLBACK_PAGE if listable else _UNLISTABLE_CALLBACK_PAGE
+        ).format(callback=html.escape(redirect_uri), limit=MAX_OAUTH_CALLBACK_LENGTH),
+        content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+        },
+    )
+
+
 class AutoApproveProvider:
     """None-mode auto-approve authorization-server state + metadata provider.
 
@@ -183,24 +281,40 @@ class AutoApproveProvider:
     (``webhook_id`` / ``resource_url`` / ``authorization_server_url`` /
     ``base_url_for`` — satisfying ``oauth.MetadataProvider``) so the shared views
     can build documents for none mode too, PLUS the PKCE code store shared with
-    :mod:`oauth`. It owns NO signing key and NO client credentials (the token it
-    issues is cosmetic). Base URLs are host-derived (``public_base_url=None``),
-    like ha_auth, so the same install works via any external URL. Constructed per
-    setup and stored in ``hass.data[DOMAIN][AUTOAPPROVE_PROVIDER_KEY]``; the views
-    resolve it from ``hass.data`` per request, so a reload minting a fresh
-    provider is transparent.
+    :mod:`oauth` and the callback policy. It owns NO signing key and NO client
+    credentials (the token it issues is cosmetic). Base URLs are host-derived
+    (``public_base_url=None``), like ha_auth, so the same install works via any
+    external URL. Constructed per setup and stored in
+    ``hass.data[DOMAIN][AUTOAPPROVE_PROVIDER_KEY]``; the views resolve it from
+    ``hass.data`` per request, so a reload minting a fresh provider is
+    transparent. The callback policy is read once from the proxy config file,
+    which the app rewrites before reloading the entry on every start, so an
+    option change applies when the app restarts.
     """
 
     def __init__(
         self,
         hass: HomeAssistant,
         webhook_id: str,
-        public_base_url: str | None = None,
+        public_base_url: str | None,
+        proxy_config: Mapping[str, Any],
     ) -> None:
         self._hass = hass
         self._webhook_id = webhook_id
         self._public_base_url = public_base_url
         self._code_store = PKCECodeStore()
+        self._allowlist = effective_allowlist(proxy_config)
+        self._allow_any = proxy_config.get("oauth_allow_any_callback") is True
+
+    def allows_redirect(self, redirect_uri: str) -> bool:
+        """True when ``redirect_uri`` may receive a none-mode code.
+
+        With allow-any on, any callback the list itself could hold is
+        accepted: https, or http on a loopback host, with no userinfo, not too long.
+        """
+        if self._allow_any:
+            return _is_listable(redirect_uri)
+        return is_redirect_allowed(redirect_uri, self._allowlist)
 
     @property
     def webhook_id(self) -> str:
@@ -243,10 +357,11 @@ def _domain_data(hass: HomeAssistant) -> dict[str, Any] | None:
 class AutoApproveAuthorizeView(HomeAssistantView):
     """Unified scoped authorization dispatcher for all three proxy modes.
 
-    Validates ``response_type=code``, PKCE S256, and the redirect_uri
-    open-redirect gate, then issues a PKCE-bound one-time code and redirects
-    straight back to the client. No login page and no consent screen render, so
-    claude.ai's OAuth flow completes invisibly (issue #1969).
+    Validates ``response_type=code``, PKCE S256, and the redirect_uri against
+    the allowlist (or, with allow-any on, the shape any listed callback must
+    have), then issues a PKCE-bound one-time code and
+    redirects straight back to the client. No login page and no consent screen
+    render, so claude.ai's OAuth flow completes invisibly (issue #1969).
 
     ACCEPTED RISK (issue #1978): this endpoint is anonymous by design — none
     mode requires zero HA login — so it consults neither the webhook id nor a
@@ -295,13 +410,17 @@ class AutoApproveAuthorizeView(HomeAssistantView):
     def _autoapprove_authorize(
         self, provider: AutoApproveProvider, request: web.Request
     ) -> web.Response:
-        """Issue a code invisibly for any structurally valid none-mode request."""
+        """Issue a code invisibly for a valid request to an allowed callback."""
         params = request.query
         redirect_uri = params.get("redirect_uri", "")
         state = params.get("state", "")
         code_challenge = params.get("code_challenge", "")
         if error := _validate_autoapprove_authorize(params):
             return error
+        if not provider.allows_redirect(redirect_uri):
+            listable = _is_listable(redirect_uri)
+            _log_refused_callback(redirect_uri, listable)
+            return _unlisted_callback_response(redirect_uri, listable)
 
         # RFC 9207: every authorization response — success or error — names the
         # issuer that produced it, so a client registered with several

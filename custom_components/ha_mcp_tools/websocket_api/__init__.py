@@ -38,8 +38,9 @@ the info handshake carries no capability entry:
   requested entity_id (a pure ``hass.states.get`` in-memory read) plus the list
   of ids with no state, so the server's ``ha_get_state`` serves a 100-entity
   bulk call from one in-process frame instead of up to 100 REST GETs. The body
-  is byte-identical to the REST ``/api/states/<id>`` serialization by
-  construction; the server maps found/missing onto its per-id error contract.
+  is the REST ``/api/states/<id>`` serialization with the live
+  ``last_reported``, which Core's cached one can lag; the server maps
+  found/missing onto its per-id error contract.
 * ``ha_mcp_tools/blueprint_get`` — the full body of one installed blueprint
   (``{metadata, config, yaml}``), which core's ``blueprint/list`` never returns (it
   serves only ``{metadata}``). The path is jailed under
@@ -66,17 +67,20 @@ the info handshake carries no capability entry:
   equivalent of ``config/device_registry/list`` served through the component
   seam, so ``ha_get_device`` list mode need not mix a legacy WS read with the
   component path.
-* ``ha_mcp_tools/entity_enrich`` — the area/floor/labels/aliases join for a set
-  of entity_ids (``{entities: {id: {area, floor, labels, aliases}}}``), computed
-  by the SAME ``_entity_record``/``_RegistryView`` registry join the search path
-  uses (device-inherited area/labels included). Lets ``ha_get_entity`` add the
+* ``ha_mcp_tools/entity_enrich`` — the area/floor/labels/aliases join and the
+  name Core composes for a set of entity_ids (``{entities: {id: {area, floor,
+  labels, aliases, full_name}}}``). The join is the SAME
+  ``_entity_record``/``_RegistryView`` registry join the search path uses
+  (device-inherited area/labels included); ``full_name`` is the composed name
+  the overview serves as ``full_name`` (search's ``name`` falls back to
+  friendly_name where it is None). Lets ``ha_get_entity`` add the
   resolved-name enrichment fields the raw registry entry lacks (it carries
   ``area_id`` / label *ids*, not resolved names) without the caller fanning out
   its own area/floor/label registry reads. Registry-only entities (no state) are
   enriched too — the join keys off the registry, not the state machine.
 * ``ha_mcp_tools/exposure`` — voice-assistant exposure with names/areas attached.
   List mode mirrors core's ``ws_list_exposed_entities`` (``{exposed_entities:
-  {id: {assistant: True}}}`` — byte-identical to ``homeassistant/expose_entity/
+  {id: {assistant: True}}}`` — the same entries as ``homeassistant/expose_entity/
   list``); single-entity mode reads core's module-level
   ``async_get_entity_settings``. Both add a sibling ``entity_info`` map enriching
   each id through the same registry join (friendly_name/domain/area/floor/labels),
@@ -217,6 +221,11 @@ the info handshake carries no capability entry:
   (``get_caller_token`` → arbitrary config-dir file/YAML writes). A confirmation
   timeout is reported as ``partial`` (``success`` still holds); a failure BEFORE
   the dispatch raises, a failure AFTER it does not (the call already landed).
+  A call asking for a response also returns ``changed_states``, every state
+  written under the call's context (Core's REST call lists the same) followed
+  by each target's state that is none of them, and a response Core rejects after the service ran comes back as ``response_error``.
+  A ``HomeAssistantError`` such a call raises comes back as ``service_error``
+  (``translation_key``, ``message``): it may have run.
 * ``ha_mcp_tools/bulk_call_service`` — the BATCH write capability (D5a). One frame
   runs the D1 ``ha_mcp_tools`` domain block for EVERY operation FIRST, before any
   dispatch or listener: a batch is fail-closed — one refused op raises the whole
@@ -260,7 +269,7 @@ the info handshake carries no capability entry:
   live objects the health path reads: ``config_entries`` (identity fields only —
   no options/subentries), ``issues`` (the ``_overview_repairs`` slice),
   ``entities`` (the ``registry_lookup`` row shape), ``states``
-  (``State.as_dict()``). ``include_*`` flags gate each section. Reading them in a
+  (``State.as_dict()`` with the live ``last_reported``). ``include_*`` flags gate each section. Reading them in a
   single frame kills the 3x ``config_entries/get`` TOCTOU the server had.
 * ``ha_mcp_tools/entity_lookup`` — registry entries whose ``unique_id`` matches
   (optionally narrowed by ``domain`` / ``platform``), returned as
@@ -269,13 +278,15 @@ the info handshake carries no capability entry:
   all returned; the server picks. The in-process read is authoritative
   immediately (no registry-write settle retry).
 * ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
-  the FULL-FIELD ``config/<x>_registry/list`` shapes (byte-compatible with the
-  legacy WS list responses; timestamps as ``created_at`` / ``modified_at``
-  floats via ``.timestamp()``). Only the requested ``registries`` keys are
-  present; ``category`` REQUIRES a non-empty ``category_scopes`` (categories are
+  the rows Core's ``config/<x>_registry/list`` sends (Core's own serializers,
+  so a field Core adds is listed without a change here). Only the requested
+  ``registries`` keys are present; ``category`` REQUIRES a non-empty ``category_scopes`` (categories are
   scoped) — a ``category`` request without one raises ``HomeAssistantError``
   rather than silently serving ``{}``. ``category_registry`` is imported
   function-locally (not needed at module top).
+* ``ha_mcp_tools/registry_fields`` — the fields Core's commands take for a
+  registry, and how Core keeps the fields of one of its entries (see
+  ``registries._do_registry_fields``).
 
 ``ha_mcp_tools/config_get`` was withdrawn before release: it served an entity's
 ``raw_config``, whose freshness lags the config file between a write and the next
@@ -371,16 +382,16 @@ from .logbook import _do_logbook_events, _logbook_events_prep
 from .lookups import (
     _blueprint_get_prep,
     _do_blueprint_get,
-    _do_device_get,
     _do_device_list,
     _do_entity_enrich,
     _do_entity_lookup,
     _do_exposure,
     _do_registry_lookup,
+    do_device_get,
 )
 from .oauth_callbacks import command_specs as _oauth_callback_specs
-from .overview import _do_helpers_list, _do_overview, _do_states, _helpers_list_prep
-from .registries import _do_registries
+from .overview import _do_overview, _do_states, _helpers_list_prep, do_helpers_list
+from .registries import _do_registries, _do_registry_fields
 from .schemas import (
     _blueprint_get_schema,
     _bulk_call_service_schema,
@@ -400,6 +411,7 @@ from .schemas import (
     _overview_schema,
     _reference_data_schema,
     _registries_schema,
+    _registry_fields_schema,
     _registry_lookup_schema,
     _search_schema,
     _server_entry_schema,
@@ -411,16 +423,16 @@ from .schemas import (
     _trace_context_schema,
 )
 from .seam import PreSerializedResult
-from .search import _do_search, _search_prep
+from .search import _search_prep, do_search
 from .services import _do_reference_data, _do_services_list, _services_list_prep
 from .system import (
-    _do_info,
     _do_server_entry,
     _do_server_entry_update,
     _do_system_snapshot,
     _do_template_diagnose,
     _server_entry_update_prep,
     _template_diagnose_prep,
+    do_info,
 )
 from .trace_context import _do_trace_context, _trace_context_prep
 
@@ -481,13 +493,13 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
     ``_do_*`` function a pure, synchronous in-memory read.
     """
     return [
-        (_info_schema(), lambda hass, msg: _do_info(hass), None),
-        (_search_schema(), _do_search, _search_prep),
+        (_info_schema(), lambda hass, msg: do_info(hass), None),
+        (_search_schema(), do_search, _search_prep),
         (_overview_schema(), _do_overview, None),
-        (_helpers_list_schema(), _do_helpers_list, _helpers_list_prep),
+        (_helpers_list_schema(), do_helpers_list, _helpers_list_prep),
         (_states_schema(), _do_states, None),
         (_blueprint_get_schema(), _do_blueprint_get, _blueprint_get_prep),
-        (_device_get_schema(), _do_device_get, None),
+        (_device_get_schema(), do_device_get, None),
         (_device_list_schema(), _do_device_list, None),
         (_entity_enrich_schema(), _do_entity_enrich, None),
         (_exposure_schema(), _do_exposure, None),
@@ -496,6 +508,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_system_snapshot_schema(), _do_system_snapshot, None),
         (_entity_lookup_schema(), _do_entity_lookup, None),
         (_registries_schema(), _do_registries, None),
+        (_registry_fields_schema(), _do_registry_fields, None),
         (_dashboards_schema(), _do_dashboards, _dashboards_prep),
         (_dashboard_edit_schema(), _do_dashboard_edit, _dashboard_edit_prep),
         (_services_list_schema(), _do_services_list, _services_list_prep),

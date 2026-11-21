@@ -40,7 +40,7 @@ async def wait_for_entity_state(
     mcp_client,
     entity_id: str,
     expected_state: str,
-    timeout: int = 10,
+    timeout: float = 10,
     poll_interval: float = 0.5,
 ) -> bool:
     """
@@ -80,7 +80,7 @@ async def wait_for_entity_state(
         return None
 
     try:
-        result = await _ws_wait_for_predicate(
+        result = await ws_wait_for_predicate(
             sample,
             entity_id,
             event_types=("state_changed",),
@@ -137,7 +137,7 @@ async def wait_for_entity_state(
 async def wait_for_logbook_entry(
     mcp_client,
     search_text: str,
-    timeout: int = 30,
+    timeout: float = 30,
     poll_interval: float = 2.0,
     hours_back: int = 1,
 ) -> bool:
@@ -194,7 +194,7 @@ async def wait_for_logbook_entry(
 
 async def wait_for_condition(
     condition_func: Callable[[], Any],
-    timeout: int = 10,
+    timeout: float = 10,
     poll_interval: float = 0.5,
     condition_name: str = "condition",
 ) -> bool:
@@ -239,7 +239,7 @@ async def _rest_poll_for_state_change(
     initial_state: str | None,
     rest_budget: float,
     poll_interval: float,
-    timeout: int,
+    timeout: float,
 ) -> str | None:
     """REST-poll ``sample`` until it reports a changed state or the budget elapses."""
     rest_start = time.monotonic()
@@ -264,7 +264,7 @@ async def _rest_poll_for_state_change(
 
 
 async def wait_for_state_change(
-    mcp_client, entity_id: str, timeout: int = 10, poll_interval: float = 0.5
+    mcp_client, entity_id: str, timeout: float = 10, poll_interval: float = 0.5
 ) -> str | None:
     """
     Wait for entity state to change from current state.
@@ -314,7 +314,7 @@ async def wait_for_state_change(
 
     start_time = time.monotonic()
     try:
-        result = await _ws_wait_for_predicate(
+        result = await ws_wait_for_predicate(
             sample,
             entity_id,
             event_types=("state_changed",),
@@ -352,7 +352,7 @@ async def wait_for_tool_result(
     tool_name: str,
     arguments: dict[str, Any],
     predicate: Callable[[dict[str, Any]], bool],
-    timeout: int = 15,
+    timeout: float = 15,
     poll_interval: float = 0.5,
     description: str = "tool result",
 ) -> dict[str, Any]:
@@ -424,7 +424,7 @@ async def wait_for_tool_result(
 
 
 async def wait_for_entity_registration(
-    mcp_client, entity_id: str, timeout: int = 20
+    mcp_client, entity_id: str, timeout: float = 20
 ) -> bool:
     """
     Wait for entity to be registered and queryable via API.
@@ -473,7 +473,7 @@ async def wait_for_entity_registration(
         return None
 
     try:
-        result = await _ws_wait_for_predicate(
+        result = await ws_wait_for_predicate(
             entity_exists,
             entity_id,
             # entity_registry_updated fires when the registry row is added,
@@ -498,7 +498,7 @@ async def wait_for_entity_registration(
             f"WS waiter unavailable for {entity_id} registration after "
             f"{e.elapsed:.2f}s ({cause_repr}); using REST polling"
         )
-        rest_budget = max(0, int(timeout - e.elapsed))
+        rest_budget = max(0.0, timeout - e.elapsed)
 
     # Fall back to the existing condition-based REST poll. Reset attempt
     # counter so the legacy log lines start from 1 again. ``rest_budget``
@@ -512,7 +512,7 @@ async def wait_for_entity_registration(
     )
 
 
-async def _open_ha_ws(ha_url: str | None = None, token: str | None = None):
+async def open_ha_ws(ha_url: str | None = None, token: str | None = None):
     """Open + authenticate a fresh HA WebSocket connection.
 
     Shared setup for the ``*_via_ws`` helpers below. Returns the connected
@@ -550,7 +550,7 @@ async def _open_ha_ws(ha_url: str | None = None, token: str | None = None):
 
 
 class _WsPathUnavailable(Exception):
-    """Signal from ``_ws_wait_for_predicate`` that the WS path can't be set
+    """Signal from ``ws_wait_for_predicate`` that the WS path can't be set
     up (handshake/subscribe failed) OR died mid-wait. Callers catch this
     and fall back to REST polling. Pure timeouts return ``None`` instead —
     those did consume the budget on the WS side, so the caller treats them
@@ -573,7 +573,7 @@ class _WsPathUnavailable(Exception):
 # ``_POLLING_TRANSIENT_ERRORS`` minus ``RuntimeError``. ``RuntimeError`` is
 # the one Python exception codebases routinely overload for both transport
 # and logic failures; swallowing it in a polling loop hides legitimate
-# sample-callable bugs. Used INSIDE ``_ws_wait_for_predicate`` around
+# sample-callable bugs. Used INSIDE ``ws_wait_for_predicate`` around
 # ``sample()`` invocations only; the broader tuple still applies to the
 # REST-fallback polling loops in the public helpers (pre-existing
 # behaviour preserved there).
@@ -655,7 +655,7 @@ async def _ws_event_wait_loop(
     return None
 
 
-async def _ws_wait_for_predicate(
+async def ws_wait_for_predicate(
     sample: Callable[[], Any],
     entity_id: str,
     *,
@@ -686,7 +686,7 @@ async def _ws_wait_for_predicate(
         backstop_interval: seconds between independent REST samples while
             we have a healthy WS subscription. Bounded slow-poll so a
             silent-broken subscription still resolves within ``timeout``.
-        ha_url, token: forwarded to ``_open_ha_ws``; defaults to env vars.
+        ha_url, token: forwarded to ``open_ha_ws``; defaults to env vars.
 
     Returns:
         ``sample``'s truthy return on success, ``None`` on timeout.
@@ -696,18 +696,18 @@ async def _ws_wait_for_predicate(
             died mid-wait. Caller should fall back to REST polling, using
             ``e.elapsed`` to deduct WS-side time spent.
 
-        Pre-existing ``RuntimeError`` from ``_open_ha_ws`` (missing URL /
+        Pre-existing ``RuntimeError`` from ``open_ha_ws`` (missing URL /
         token / bad auth / malformed handshake) PROPAGATES — those are
         config-level failures the test rig should see as a loud
         traceback, not a silent REST fallback against the same broken
         creds (silent-failure-hunter finding, #1382 final review).
     """
     start = time.monotonic()
-    # ``_open_ha_ws`` raises ``RuntimeError`` on auth/config issues —
+    # ``open_ha_ws`` raises ``RuntimeError`` on auth/config issues —
     # intentionally NOT caught here so a misconfigured test rig fails
     # loudly. Only transport-level exceptions degrade to REST.
     try:
-        ws = await _open_ha_ws(ha_url=ha_url, token=token)
+        ws = await open_ha_ws(ha_url=ha_url, token=token)
     except (
         websockets.exceptions.WebSocketException,
         OSError,
@@ -825,7 +825,7 @@ async def wait_for_ha_event(
     e.g. ``automation_triggered`` after a manual ``automation.trigger``
     service call (~10s saved per ``test_basic_automation_lifecycle``).
     """
-    ws = await _open_ha_ws(ha_url=ha_url, token=token)
+    ws = await open_ha_ws(ha_url=ha_url, token=token)
     try:
         sub_id = 1
         await ws.send(
@@ -961,7 +961,7 @@ async def wait_for_entities_registered_via_ws(
     entity_id in ``expected_entity_ids`` is either in that sample or has
     produced a ``state_changed`` event. The sample-after-subscribe order
     mirrors the other event-driven waiters in this module
-    (``_ws_wait_for_predicate``). Avoids the chronic 10s REST polling
+    (``ws_wait_for_predicate``). Avoids the chronic 10s REST polling
     burn observed in the HAOS bulk-fixture wait (#1349 audit) and the
     full-timeout stall when callers create entities before waiting
     (#1515).
@@ -1046,7 +1046,7 @@ async def wait_for_entities_registered_via_ws(
             # (#1515). Query the current state set once over the SAME
             # connection and mark any already-present entity as seen. Mirrors
             # the sample-after-subscribe pattern the other event-driven waiters
-            # in this module use (``_ws_wait_for_predicate``).
+            # in this module use (``ws_wait_for_predicate``).
             states_msg_id = 2
             await ws.send(json.dumps({"id": states_msg_id, "type": "get_states"}))
 

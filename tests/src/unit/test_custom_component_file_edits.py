@@ -4,18 +4,18 @@ import asyncio
 import errno
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 
 import custom_components.ha_mcp_tools as component
 from custom_components.ha_mcp_tools import file_ops
-from custom_components.ha_mcp_tools.file_ops import (
-    build_edit_file_handler,
-    edit_file_sync,
-)
+from custom_components.ha_mcp_tools.file_ops import edit_file_sync
+
+from ._file_services import make_file_service
 
 
 def _edit(old: str, new: str) -> dict[str, str]:
@@ -226,176 +226,173 @@ class TestRefusedEditSavesNothing:
         assert target.read_bytes() == b"one\n"
 
 
-class _Hass:
-    def __init__(self, config_dir: Path) -> None:
-        self.config = MagicMock(config_dir=str(config_dir))
-        self.data: dict[str, Any] = {}
+class _FileJobs:
+    """Observe real executor jobs, holding the first until both callers arrive."""
+
+    def __init__(self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch):
+        self.hass = hass
+        self.entered = asyncio.Event()
+        self.attempted = asyncio.Event()
+        self.overlap = asyncio.Event()
+        self.release = threading.Event()
         self.running = 0
-        self.most_running = 0
-        self.before_job: Any = lambda: asyncio.sleep(0)
+        self.attempts = 0
+        self.lock = threading.Lock()
+        original = file_ops.run_file_job
 
-    def async_add_executor_job(self, func: Any, *args: Any) -> asyncio.Future[Any]:
-        """Return a future, as the real executor does."""
+        async def run(core, function, *args):
+            self.attempts += 1
+            ordinal = self.attempts
+            if ordinal == 2:
+                self.attempted.set()
 
-        async def job() -> Any:
-            self.running += 1
-            self.most_running = max(self.most_running, self.running)
-            # Hands over to any other call, as a real executor thread would.
-            await self.before_job()
-            try:
-                return func(*args)
-            finally:
-                self.running -= 1
+            def observed():
+                with self.lock:
+                    self.running += 1
+                    if self.running > 1:
+                        core.loop.call_soon_threadsafe(self.overlap.set)
+                if ordinal == 1:
+                    core.loop.call_soon_threadsafe(self.entered.set)
+                try:
+                    assert self.release.wait(5), "test did not release the file job"
+                    return function(*args)
+                finally:
+                    with self.lock:
+                        self.running -= 1
 
-        # Shielded because cancelling a call never stops a running thread.
-        return asyncio.shield(asyncio.ensure_future(job()))
+            return await original(core, observed)
 
+        monkeypatch.setattr(file_ops, "run_file_job", run)
+        monkeypatch.setattr(component, "run_file_job", run)
 
-def _handler(
-    tmp_path: Path,
-    *,
-    token_ok: bool = True,
-    denied: str | None = None,
-    hass: _Hass | None = None,
-) -> Any:
-    return build_edit_file_handler(
-        hass or _Hass(tmp_path),  # type: ignore[arg-type]
-        caller_token_ok=lambda _hass, _call: token_ok,
-        unauthorized_response=lambda service: {"success": False, "error": service},
-        write_denied=lambda _hass, _path: denied,
-        volume_root_for=lambda _path: None,
-    )
+    async def assert_serialized(self):
+        await asyncio.wait_for(self.attempted.wait(), 2)
+        try:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(self.overlap.wait(), 0.05)
+        finally:
+            self.release.set()
 
 
-def _call(path: str, edits: list[dict[str, str]]) -> MagicMock:
-    return MagicMock(data={"path": path, "edits": edits})
+def _service_file(hass: HomeAssistant, data: bytes) -> Path:
+    directory = Path(hass.config.path("cards"))
+    directory.mkdir(exist_ok=True)
+    return _file(directory, data)
 
 
 class TestEditFileService:
-    @pytest.mark.asyncio
-    async def test_reports_the_applied_edits(self, tmp_path: Path) -> None:
-        target = _file(tmp_path, b"one two\n")
+    async def test_reports_the_applied_edits(
+        self, hass: HomeAssistant, tmp_path: Path
+    ) -> None:
+        target = _service_file(hass, b"one two\n")
+        call = await make_file_service(hass, "cards")
 
-        response = await _handler(tmp_path)(
-            _call("card.js", [_edit("one", "1"), _edit("two", "2")])
+        response = await call(
+            component.SERVICE_EDIT_FILE,
+            {"path": "cards/card.js", "edits": [_edit("one", "1"), _edit("two", "2")]},
         )
 
         assert response["success"] is True
-        assert response["path"] == "card.js"
+        assert response["path"] == "cards/card.js"
         assert response["edits_applied"] == 2
         assert target.read_bytes() == b"1 2\n"
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "guard",
-        [{"token_ok": False}, {"denied": "Write not allowed"}],
-        ids=["bad-token", "path-outside-allowlist"],
+        "bad_token", [True, False], ids=["bad-token", "path-outside-allowlist"]
     )
     async def test_refused_caller_changes_nothing(
-        self, tmp_path: Path, guard: dict[str, Any]
+        self, hass: HomeAssistant, tmp_path: Path, bad_token: bool
     ) -> None:
-        target = _file(tmp_path, b"one\n")
+        target = _service_file(hass, b"one\n")
+        call = await make_file_service(hass, "cards" if bad_token else "allowed")
+        data = {"path": "cards/card.js", "edits": [_edit("one", "1")]}
+        if bad_token:
+            response = await hass.services.async_call(
+                component.DOMAIN,
+                component.SERVICE_EDIT_FILE,
+                {**data, component.CALLER_TOKEN_FIELD: "incorrect-token"},
+                blocking=True,
+                return_response=True,
+            )
+        else:
+            response = await call(component.SERVICE_EDIT_FILE, data)
 
-        response = await _handler(tmp_path, **guard)(
-            _call("card.js", [_edit("one", "1")])
-        )
-
+        assert response is not None
         assert response["success"] is False
         assert target.read_bytes() == b"one\n"
 
-    @pytest.mark.asyncio
-    async def test_concurrent_edits_do_not_overlap(self, tmp_path: Path) -> None:
-        """Two overlapping read-modify-writes would lose one edit and report
-        success for both."""
-        target = _file(tmp_path, b"one two\n")
-        hass = _Hass(tmp_path)
-        handler = _handler(tmp_path, hass=hass)
-
-        responses = await asyncio.gather(
-            handler(_call("card.js", [_edit("one", "1")])),
-            handler(_call("card.js", [_edit("two", "2")])),
-        )
-
-        assert [response["success"] for response in responses] == [True, True]
-        assert hass.most_running == 1
-        assert target.read_bytes() == b"1 2\n"
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("build_other", "other_data"),
-        [
-            (
-                "_build_write_file_handler",
-                {"path": "card.js", "content": "written\n", "overwrite": True},
-            ),
-            ("_build_delete_file_handler", {"path": "card.js"}),
-        ],
-        ids=["write", "delete"],
-    )
-    async def test_edit_does_not_overlap_other_file_changes(
+    @pytest.mark.parametrize("other", ["edit_file", "write_file", "delete_file"])
+    async def test_file_changes_do_not_overlap(
         self,
+        hass: HomeAssistant,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        build_other: str,
-        other_data: dict[str, Any],
+        other: str,
     ) -> None:
-        """An edit that read the file first would swap its stale result back in,
-        undoing the write or delete while both report success."""
-        monkeypatch.setattr(component, "_caller_token_ok", lambda *_: True)
-        monkeypatch.setattr(component, "_write_denied", lambda *_: None)
-        monkeypatch.setattr(component, "_current_extra_dirs", lambda _: [])
-        monkeypatch.setattr(component, "_is_path_allowed_for_dir", lambda *_: True)
-        _file(tmp_path, b"one\n")
-        hass = _Hass(tmp_path)
-        other = getattr(component, build_other)(hass)
-
-        responses = await asyncio.gather(
-            _handler(tmp_path, hass=hass)(_call("card.js", [_edit("one", "1")])),
-            other(MagicMock(data=other_data)),
+        """An edit's read-modify-write shares the lock with all file mutations."""
+        target = _service_file(hass, b"one two\n")
+        call = await make_file_service(hass, "cards")
+        jobs = _FileJobs(hass, monkeypatch)
+        first = asyncio.ensure_future(
+            call(
+                component.SERVICE_EDIT_FILE,
+                {"path": "cards/card.js", "edits": [_edit("one", "1")]},
+            )
         )
+        await asyncio.wait_for(jobs.entered.wait(), 2)
+        data: dict[str, Any] = {"path": "cards/card.js"}
+        if other == "edit_file":
+            data["edits"] = [_edit("two", "2")]
+        elif other == "write_file":
+            data.update(content="written\n", overwrite=True)
+        following = asyncio.ensure_future(call(other, data))
+        await jobs.assert_serialized()
+        responses = await asyncio.gather(first, following)
 
         assert [response["success"] for response in responses] == [True, True]
-        assert hass.most_running == 1
+        if other == "delete_file":
+            assert not target.exists()
+        else:
+            expected = b"1 2\n" if other == "edit_file" else b"written\n"
+            assert target.read_bytes() == expected
 
-    @pytest.mark.asyncio
     async def test_cancelled_call_keeps_the_lock_until_its_thread_ends(
-        self, tmp_path: Path
+        self, hass: HomeAssistant, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A cancelled call can't stop its executor thread, so the next change
-        has to wait for that thread or one of the two is lost."""
-        target = _file(tmp_path, b"one two\n")
-        hass = _Hass(tmp_path)
-        thread_may_finish = asyncio.Event()
-        hass.before_job = thread_may_finish.wait
-        handler = _handler(tmp_path, hass=hass)
-
-        cancelled = asyncio.create_task(handler(_call("card.js", [_edit("one", "1")])))
-        await asyncio.sleep(0)
-        cancelled.cancel()
-        await asyncio.sleep(0)
-        following = asyncio.create_task(handler(_call("card.js", [_edit("two", "2")])))
-        await asyncio.sleep(0)
-        # A second cancel must not release the lock either.
-        cancelled.cancel()
-        await asyncio.sleep(0)
-        thread_may_finish.set()
-        outcome, response = await asyncio.gather(
-            cancelled, following, return_exceptions=True
+        """A cancelled executor caller cannot release the shared write lock early."""
+        target = _service_file(hass, b"one two\n")
+        jobs = _FileJobs(hass, monkeypatch)
+        cancelled = asyncio.create_task(
+            file_ops.run_file_job(hass, edit_file_sync, target, [_edit("one", "1")])
         )
+        await asyncio.wait_for(jobs.entered.wait(), 2)
+        cancelled.cancel()
+        following = asyncio.create_task(
+            file_ops.run_file_job(hass, edit_file_sync, target, [_edit("two", "2")])
+        )
+        await jobs.attempted.wait()
+        cancelled.cancel()
+        await jobs.assert_serialized()
+        outcomes = await asyncio.gather(cancelled, following, return_exceptions=True)
 
-        assert isinstance(outcome, asyncio.CancelledError)
-        assert response["success"] is True
-        assert hass.most_running == 1
+        assert isinstance(outcomes[0], asyncio.CancelledError)
+        response = outcomes[1]
+        assert isinstance(response, dict)
+        assert "_error" not in response
         assert target.read_bytes() == b"1 2\n"
 
-    @pytest.mark.asyncio
     async def test_refusal_tells_the_model_which_edit_failed(
-        self, tmp_path: Path
+        self, hass: HomeAssistant, tmp_path: Path
     ) -> None:
-        _file(tmp_path, b"one\n")
+        _service_file(hass, b"one\n")
+        call = await make_file_service(hass, "cards")
 
-        response = await _handler(tmp_path)(
-            _call("card.js", [_edit("one", "1"), _edit("missing", "x")])
+        response = await call(
+            component.SERVICE_EDIT_FILE,
+            {
+                "path": "cards/card.js",
+                "edits": [_edit("one", "1"), _edit("missing", "x")],
+            },
         )
 
         assert response["success"] is False

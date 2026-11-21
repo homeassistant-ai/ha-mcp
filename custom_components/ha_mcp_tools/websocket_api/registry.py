@@ -158,33 +158,14 @@ def _reg_entity_id(view: _RegistryView, platform: str, unique_id: str) -> str | 
 
 
 def _device_collection_values(
-    view: _RegistryView,
-    collection: Any,
-    *,
-    collection_name: str,
-    mapping_like: bool = False,
+    view: _RegistryView, collection: Any, *, collection_name: str
 ) -> list[Any]:
-    """Enumerate a Core device collection across old and 2026.9 shapes.
+    """Enumerate a Core device collection by iteration.
 
-    Before Core 2026.9 ``registry.devices`` was a mapping-like container. Core
-    2026.9 exposes supported iterable collections for both ``devices`` and
-    ``child_devices``. Mapping fakes and older containers still use ``values``;
-    modern collections are consumed by iteration so the deprecated mapping API
-    on ``registry.devices`` is not invoked.
+    Iterating avoids the deprecated mapping API on ``registry.devices``.
     """
     if collection is None:
         return []
-    if mapping_like or isinstance(collection, Mapping):
-        try:
-            return list(collection.values())
-        except Exception:  # pragma: no cover - defensive
-            view._access_failures.add("device")
-            _LOGGER.warning(
-                "failed to enumerate device registry collection %s",
-                collection_name,
-                exc_info=True,
-            )
-            return []
     try:
         return list(collection)
     except Exception:  # pragma: no cover - defensive
@@ -200,10 +181,10 @@ def _device_collection_values(
 def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
     """Return one request-local map of unambiguous main and child devices.
 
-    Core 2026.9 stores child devices in a separate collection. Older releases
-    have only the mapping-like ``devices`` container. Duplicate ids cannot occur
-    in a valid Core registry; if a drifted/corrupt view supplies conflicting
-    entries, remove that identity rather than choosing one arbitrarily.
+    Core stores child devices in a separate collection. Duplicate ids cannot
+    occur in a valid Core registry; if a drifted/corrupt view supplies
+    conflicting entries, remove that identity rather than choosing one
+    arbitrarily.
     """
     if view._device_entries_by_id_cache is not None:
         return view._device_entries_by_id_cache
@@ -213,23 +194,14 @@ def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
         view._device_conflicting_ids_cache = frozenset()
         view._device_invalid_area_ids_cache = frozenset()
         return view._device_entries_by_id_cache
-    main_collection = getattr(reg, "devices", None)
-    if hasattr(reg, "child_devices"):
-        candidates = _device_collection_values(
-            view, main_collection, collection_name="devices"
+    candidates = _device_collection_values(
+        view, getattr(reg, "devices", None), collection_name="devices"
+    )
+    candidates.extend(
+        _device_collection_values(
+            view, getattr(reg, "child_devices", None), collection_name="child_devices"
         )
-        candidates.extend(
-            _device_collection_values(
-                view,
-                getattr(reg, "child_devices", None),
-                collection_name="child_devices",
-            )
-        )
-    else:
-        # The pre-2026.9 container is mapping-like and iterates ids, not entries.
-        candidates = _device_collection_values(
-            view, main_collection, collection_name="devices", mapping_like=True
-        )
+    )
 
     by_id: dict[str, Any] = {}
     conflicts: set[str] = set()
@@ -303,7 +275,7 @@ def _invalid_device_area_ids(view: _RegistryView) -> frozenset[str]:
 
 
 def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
-    """Return Core 2026.9's direct-or-parent effective device area."""
+    """Return Core's direct-or-parent effective device area."""
     devices_by_id = _unambiguous_device_entries(view)
     device_row = _device_dict_repr(device)
     if device_row is None:
@@ -420,25 +392,6 @@ def _enum_value(value: Any) -> Any:
     return getattr(value, "value", str(value))
 
 
-def _timestamp(value: Any) -> float | None:
-    """Serialize a datetime-ish registry timestamp as a float, like core.
-
-    core's registry WS list responses emit ``created_at`` / ``modified_at`` via
-    ``entry.created_at.timestamp()`` (a float, seconds since epoch), so mirror
-    that. A value that is already numeric passes through; anything else (or a
-    ``.timestamp()`` that raises) degrades to ``None``.
-    """
-    if value is None:
-        return None
-    ts = getattr(value, "timestamp", None)
-    if callable(ts):
-        try:
-            return float(ts())
-        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
-            return None
-    return float(value) if isinstance(value, (int, float)) else None
-
-
 def _reg_name(reg: Any) -> str | None:
     """Current display name from a registry entry: user override, else original."""
     if reg is None:
@@ -541,15 +494,17 @@ def _state_get(hass: HomeAssistant, entity_id: str) -> Any:
 
 
 def _state_as_dict(state: Any) -> Any:
-    """core ``State.as_dict()`` verbatim — the REST ``/api/states/<id>`` shape.
+    """Core's ``State.as_dict()``, the REST ``/api/states/<id>`` shape, with the
+    live ``last_reported``.
 
-    Returned unmodified so the WS transport encodes its datetimes with the same
-    ``isoformat`` the REST layer uses (byte-parity — see :func:`_do_states`).
+    Core caches that dict and does not refresh it when a write repeats the
+    unchanged state, so its ``last_reported`` stays at the first serialization
+    (home-assistant/core#181392); the ``State`` object itself is current.
     """
     as_dict = getattr(state, "as_dict", None)
     if callable(as_dict):
         try:
-            return as_dict()
+            return {**as_dict(), "last_reported": state.last_reported.isoformat()}
         except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             return None
     return None
@@ -560,7 +515,7 @@ def _device_dict_repr(entry: Any) -> dict[str, Any] | None:
 
     Returned UNMODIFIED so the WS transport encodes it with the same JSON
     serializer ``config/device_registry/list`` uses (byte-parity — see
-    :func:`_do_device_get`). Guarded against core drift: a missing/raising
+    :func:`do_device_get`). Guarded against core drift: a missing/raising
     ``dict_repr`` yields ``None`` rather than propagating.
     """
     try:

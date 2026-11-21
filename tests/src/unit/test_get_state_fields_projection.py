@@ -1,7 +1,8 @@
 """``fields=`` and ``attribute_keys=`` projection in ha_get_state (issue #1199).
 
-The tool reads the entity through the server's own client from a real
-``hass``, so every record it projects is Core's own state.
+The tool reads the entity from a real ``hass`` through the component's
+``states`` command, so every record it projects is Core's own state with the
+live ``last_reported``.
 """
 
 from __future__ import annotations
@@ -21,9 +22,13 @@ ATTRIBUTES = {"brightness": 200, "color_temp": 3500, "friendly_name": "Kitchen L
 
 
 @pytest.fixture
-def search_tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> SearchTools:
+def search_tools(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> SearchTools:
     hass.states.async_set(ENTITY_ID, "on", ATTRIBUTES)
-    return SearchTools(core_client, SmartSearchTools(client=core_client))
+    return SearchTools(
+        component_core_client, SmartSearchTools(client=component_core_client)
+    )
 
 
 async def get_state(search_tools: SearchTools, **projection: Any) -> dict[str, Any]:
