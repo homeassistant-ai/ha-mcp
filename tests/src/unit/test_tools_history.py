@@ -96,30 +96,6 @@ def _window(days: int) -> dict[str, str]:
 # --- failures ----------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("source", "hint"),
-    [("statistics", "state_class"), ("history", "entity ids")],
-)
-async def test_lost_connection_suggests_the_check_for_the_source(
-    core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-    source: str,
-    hint: str,
-) -> None:
-    """Statistics need a state_class; raw history only needs the entity to exist."""
-    monkeypatch.setattr(
-        core_client,
-        "send_websocket_message",
-        AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
-    )
-
-    response = await _refusal(core_client, entity_ids="sensor.test", source=source)
-
-    suggestions = " ".join(response["error"]["suggestions"]).lower()
-    assert hint in suggestions
-    assert ("state_class" in suggestions) is (source == "statistics")
-
-
 async def test_history_disabled_in_core_is_a_service_failure(
     core_client: HomeAssistantClient,
 ) -> None:

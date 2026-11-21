@@ -1,34 +1,26 @@
-"""Translate native recorder error codes without duplicating its request schemas."""
+"""A recorder command Core refused, passed on with Core's own code and message."""
 
-from ..errors import ErrorCode, create_error_response
-from .helpers import raise_tool_error
+from typing import Any, Literal, NoReturn
+
+from ..errors import ErrorCode
+from .helpers import raise_core_refusal, ws_failure_code
+
+_REJECTED_REQUEST_SUGGESTIONS = [
+    "Correct the parameter named in Home Assistant's validation message",
+    "With the HA-MCP component installed, include_schema=True on a read Core accepts shows the schema of the command that read uses",
+]
 
 
-def raise_recorder_ws_failure(
-    kind: str,
-    error_msg: str,
-    entity_id_list: list[str],
-    suggestions: list[str],
-    error_code: str | None = None,
-) -> None:
-    """Classify a recorder reply. Transport failures already raise in the client."""
-    if error_code == "invalid_format":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Home Assistant rejected the {kind} parameters: {error_msg}",
-                context={"entity_ids": entity_id_list, "ha_error_code": error_code},
-                suggestions=[
-                    "Correct the parameter named in Home Assistant's validation message",
-                    "With the HA-MCP component installed and supporting schema discovery, use include_schema=True on a valid read to inspect the running Core schema",
-                ],
-            )
-        )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Failed to retrieve {kind}: {error_msg}",
-            context={"entity_ids": entity_id_list},
-            suggestions=suggestions,
-        )
+def raise_recorder_refusal(
+    kind: Literal["history", "statistics"],
+    response: dict[str, Any],
+    statistic_or_entity_ids: list[str],
+) -> NoReturn:
+    """Raise Core's refusal of a ``kind`` (history, statistics) request."""
+    rejected = ws_failure_code(response) is ErrorCode.VALIDATION_INVALID_PARAMETER
+    raise_core_refusal(
+        f"Home Assistant refused the {kind} request",
+        response,
+        {"entity_ids": statistic_or_entity_ids},
+        _REJECTED_REQUEST_SUGGESTIONS if rejected else None,
     )

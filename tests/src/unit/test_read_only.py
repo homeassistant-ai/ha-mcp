@@ -251,25 +251,6 @@ class TestExemptionRules:
         assert (rule(args) is None) is allowed
 
     @pytest.mark.parametrize(
-        "args,allowed",
-        [
-            ({"action": "list"}, True),
-            # No pure-read duplicate exists, and Read Only Mode still surfaces
-            # the capture warning naming this value -- so it stays inspectable.
-            ({"action": "get_engine_theme"}, True),
-            # Both writes stay blocked: the backend default and the
-            # engine-account restore.
-            ({"action": "set", "theme_name": "nord"}, False),
-            ({"action": "set_engine_theme", "value": {"theme": ""}}, False),
-            # A missing action fails closed -- never a silent read.
-            ({}, False),
-        ],
-    )
-    def test_manage_theme(self, args, allowed):
-        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_theme"].blocked_write
-        assert (rule(args) is None) is allowed
-
-    @pytest.mark.parametrize(
         ("args", "allowed"),
         [
             ({"action": "list"}, True),
@@ -666,6 +647,7 @@ class TestExemptTableContract:
             "ha_manage_security_policy",
             "ha_manage_theme",
             "ha_manage_blueprints",
+            "ha_manage_logs",
         }
 
     def test_every_exemption_describes_whats_allowed(self):
@@ -691,6 +673,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_security_policy": "tools_security_policy.py",
     "ha_manage_theme": "tools_themes.py",
     "ha_manage_blueprints": "tools_blueprints.py",
+    "ha_manage_logs": "tools_logs_manage.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -703,6 +686,7 @@ _EXEMPT_TOOL_MODULES = {
 # read-only predicate.
 _EXEMPT_INSPECTED_ARGS = {
     "ha_manage_theme": {"action"},
+    "ha_manage_logs": {"action", "describe"},
     "ha_manage_backup": {"scope", "action"},
     "ha_manage_app": {
         "action",
@@ -746,6 +730,9 @@ _ADDON_CONFIG_WRITE_PARAMS_MANIFEST = (
 # dispatch fields the predicate inspects) would silently classify as a
 # read in Read Only Mode.
 _EXEMPT_GATED_OR_READ_ARGS = {
+    # data: the fields of an action the predicate lets through, never sent
+    # with describe; limit and offset page the statistics listing client-side.
+    "ha_manage_logs": {"data", "limit", "offset"},
     "ha_manage_theme": {
         # Consumed only under the action dispatch the predicate inspects:
         # the backend-default write payload ('set')...

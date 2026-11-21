@@ -105,11 +105,12 @@ async def _contract_bridge(
 
 def command_payload(command: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Preserve every payload field while preventing command-envelope injection."""
-    if {"id", "type"} & payload.keys():
+    # The client takes _wait_timeout out of a message as its own reply wait.
+    if {"id", "type", "_wait_timeout"} & payload.keys():
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_FAILED,
-                "id and type are reserved WebSocket transport fields",
+                "id, type and _wait_timeout are reserved WebSocket transport fields",
             )
         )
     return {"type": command, **payload}

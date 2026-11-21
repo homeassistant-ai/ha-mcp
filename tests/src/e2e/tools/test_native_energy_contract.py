@@ -151,9 +151,9 @@ async def test_core_parameter_errors_retain_validation_classification(
                 "period": "hour",
                 **options,
             },
-            expected_error="parameters",
         )
     assert failure["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert failure["ha_error_code"] == "invalid_format"
     assert "state_class" not in str(failure["error"]["suggestions"])
 
 

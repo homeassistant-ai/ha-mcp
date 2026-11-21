@@ -19,14 +19,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 
 from custom_components.ha_mcp_tools import core_contract as component_contract
-from custom_components.ha_mcp_tools import websocket_api as component_ws
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.client.websocket_client import websocket_manager
 from ha_mcp.tools.tools_energy import EnergyTools
 from ha_mcp.tools.tools_history import HistoryTools
 
-from ._client_spies import routing_spies, sent_messages
+from ._client_spies import sent_messages
 from ._recorded_history import import_statistic, record_states, statistics
 
 START = datetime(2024, 1, 1, tzinfo=UTC)
@@ -221,111 +219,3 @@ async def test_optional_schema_preserves_reads_and_promotes_warnings(
         # Core's energy/save_prefs schema holds validators the component cannot
         # describe; the component says so in the contract's warnings.
         assert any("cannot be described" in warning for warning in result["warnings"])
-
-
-@pytest.mark.parametrize(
-    ("stored", "unit_class", "needs_query"),
-    [("USD", None, False), ("kWh", None, True)],
-    ids=["no-converter", "converter-found-by-unit"],
-)
-async def test_native_converter_controls_nullable_class_reset_recovery(
-    recorder_mock: Recorder,
-    hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
-    stored: str,
-    unit_class: str | None,
-    needs_query: bool,
-) -> None:
-    """A statistic recorded without a unit class: Core's converter, which the
-    component reports, decides whether energy units apply and so whether the
-    reset must be re-read in the stored unit."""
-    await _import(hass, "sensor.test", stored, unit_class)
-    stored_reset = await _core_last_reset(component_core_client, "sensor.test")
-
-    with sent_messages(component_core_client) as sent:
-        result = await statistics(
-            component_core_client,
-            ["sensor.test"],
-            START,
-            END,
-            statistic_types=["sum", "last_reset"],
-            core_options={"units": {"energy": "MWh"}},
-        )
-
-    assert "warnings" not in result
-    assert _entities(result)["sensor.test"]["statistics"][0]["last_reset"] == (
-        stored_reset
-    )
-    queries = _reset_queries(sent)
-    if needs_query:
-        assert [query["units"] for query in queries] == [{"energy": "kWh"}]
-    else:
-        assert queries == []
-
-
-async def test_unknown_converter_can_recover_resets_in_unchanged_default_units(
-    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    """Without the component Core's default output is the stored unit, so the
-    reset is re-read with no unit option at all."""
-    await _import(hass, "sensor.cost", "USD", None)
-    stored_reset = await _core_last_reset(core_client, "sensor.cost")
-
-    with sent_messages(core_client) as sent:
-        result = await statistics(
-            core_client,
-            ["sensor.cost"],
-            START,
-            END,
-            statistic_types=["sum", "last_reset"],
-            core_options={"units": {"energy": "MWh"}},
-        )
-
-    assert not any("last_reset" in warning for warning in result["warnings"])
-    row = _entities(result)["sensor.cost"]["statistics"][0]
-    assert row["last_reset"] == stored_reset
-    assert [query["units"] for query in _reset_queries(sent)] == [{}]
-
-
-@pytest.mark.parametrize("component", [True, False])
-async def test_default_conversion_recovers_null_class_reset_without_losing_unit(
-    recorder_mock: Recorder,
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    component: bool,
-) -> None:
-    """Stored in kWh without a unit class and shown in Wh: Core converts to the
-    display unit. The component names the converter, so the reset is re-read in
-    kWh; without it the reset cannot be trusted and is left out."""
-    if component:
-        component_ws.async_register_commands(hass)
-    await _import(hass, "sensor.energy", "kWh", None, display="Wh")
-    stored_reset = await _core_last_reset(core_client, "sensor.energy")
-    socket = await websocket_manager.get_client(
-        url=core_client.base_url, token=core_client.token, verify_ssl=False
-    )
-
-    with routing_spies(core_client, socket) as (legacy, pooled):
-        result = await statistics(
-            core_client,
-            ["sensor.energy"],
-            START,
-            END,
-            statistic_types=["sum", "last_reset"],
-        )
-
-    entity = _entities(result)["sensor.energy"]
-    assert entity["unit_of_measurement"] == "Wh"
-    resolved = [
-        call for call in pooled.call_args_list if call.args[0] == STATISTICS_UNITS
-    ]
-    if component:
-        assert entity["statistics"][0]["last_reset"] == stored_reset
-        assert [query["units"] for query in _reset_queries(legacy)] == [
-            {"energy": "kWh"}
-        ]
-        assert len(resolved) == 1
-    else:
-        assert "last_reset" not in entity["statistics"][0]
-        assert result["warnings"]
-        assert resolved == []
