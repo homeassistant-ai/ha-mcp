@@ -407,9 +407,13 @@ sidebar that reverse-proxies the server's web settings UI over Home Assistant's
 own HTTP. Because a browser cannot attach a Bearer token to a panel view, access
 is gated by a short-lived, HttpOnly session cookie that an authenticated
 **administrator** obtains through Home Assistant, and every proxied request
-re-validates that the session still maps to an active admin. The loopback secret
-path is never exposed to the browser and no token or secret is placed in a URL;
-the proxy returns 503 whenever the server is not running.
+re-validates that the session still maps to an active admin. The proxy never
+sends the loopback secret path to the browser and places no token or secret in a
+URL; it returns 503 whenever the server is not running. The one deliberate
+exception is the administrator's settings export: its JSON download carries the
+webhook ID, the secret path and any legacy OAuth credentials, which the panel
+states before the download. The export and import routes accept only
+same-origin requests from that admin session.
 
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)
 

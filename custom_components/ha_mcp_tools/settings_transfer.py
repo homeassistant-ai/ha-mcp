@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import traceback
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, nullcontext
 from functools import partial
@@ -273,9 +272,6 @@ async def _restore_tools(
             created.entry_id,
         )
         if created.state is not ConfigEntryState.LOADED:
-            _LOGGER.warning(
-                "Settings import added a File & YAML Tools entry that did not load"
-            )
             raise InvalidBackup("restore_failed")
 
 
@@ -463,27 +459,38 @@ async def _transfer(hass: HomeAssistant, body: Any, exporting: bool) -> web.Resp
             if exporting:
                 return await _export_response(hass, body)
             return await _import_response(hass, body)
-        except Exception as err:  # noqa: BLE001 -- never emit uploaded credentials
-            return _failure_response(operation, err)
+        except Exception as err:
+            incomplete = _INCOMPLETE_ROLLBACK in getattr(err, "__notes__", ())
+            if not incomplete and (expected := _expected_failure(operation, err)):
+                return expected
+            _LOGGER.error(
+                "Settings %s failed%s",
+                operation,
+                " with incomplete rollback" if incomplete else "",
+                exc_info=_withheld(err),
+            )
+            return _error(
+                "rollback_incomplete" if incomplete else "restore_failed", 500
+            )
 
 
-def _failure_response(operation: str, err: Exception) -> web.Response:
-    incomplete = _INCOMPLETE_ROLLBACK in getattr(err, "__notes__", ())
-    if not incomplete and isinstance(err, ToolsStoreUnavailable):
+def _expected_failure(operation: str, err: Exception) -> web.Response | None:
+    if isinstance(err, ToolsStoreUnavailable):
         _LOGGER.warning("Settings %s failed (%s)", operation, err.code)
         return _error(err.code, 503)
-    if not incomplete and isinstance(err, InvalidBackup):
+    if isinstance(err, InvalidBackup):
         _LOGGER.info("Settings %s refused (%s)", operation, err.code)
         return _error(err.code, 409 if err.code in _CONFLICTS else 400)
-    # Messages may echo uploaded values; log the type and frames only.
-    _LOGGER.error(
-        "Settings %s failed (%s)%s\n%s",
-        operation,
-        type(err).__name__,
-        " with incomplete rollback" if incomplete else "",
-        "".join(traceback.format_tb(err.__traceback__)),
-    )
-    return _error("rollback_incomplete" if incomplete else "restore_failed", 500)
+    return None
+
+
+class _MessageWithheld(Exception):
+    """Stands in for an error whose message may echo uploaded values."""
+
+
+def _withheld(err: Exception) -> _MessageWithheld:
+    """Keep the error's type and frames for the log, never its message."""
+    return _MessageWithheld(type(err).__name__).with_traceback(err.__traceback__)
 
 
 async def async_handle(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -114,7 +115,9 @@ class TestSettingsTransfer:
         running_server: _SettingsServer,
         admin_cookies: dict[str, str],
         hass_client_no_auth: ClientSessionGenerator,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
+        caplog.set_level(logging.INFO)
         add_options_entry(hass)
         client = await hass_client_no_auth()
         resp = await client.post(
@@ -126,6 +129,8 @@ class TestSettingsTransfer:
         assert resp.status == 400
         assert await resp.json() == {"success": False, "error": "invalid_backup"}
         assert not running_server.seen
+        assert "Settings import refused (invalid_backup)" in caplog.text
+        assert "sensitive" not in caplog.text
 
     @pytest.mark.parametrize("failure", ["published", "early_value", "early_io"])
     async def test_failed_server_document_undo_reports_incomplete_and_continues(
@@ -230,6 +235,7 @@ class TestSettingsTransfer:
         hass: HomeAssistant,
         admin_cookies: dict[str, str],
         hass_client_no_auth: ClientSessionGenerator,
+        caplog: pytest.LogCaptureFixture,
         origin: str | None,
     ) -> None:
         add_options_entry(hass, data={"webhook_id": "hook", "secret_path": "/path"})
@@ -242,6 +248,39 @@ class TestSettingsTransfer:
         )
         assert response.status == 403
         assert await response.json() == {"success": False, "error": "origin_denied"}
+        assert "Refused a settings transfer request from another origin" in caplog.text
+
+    async def test_unreadable_tools_store_names_the_setting(
+        self,
+        hass: HomeAssistant,
+        admin_cookies: dict[str, str],
+        hass_client_no_auth: ClientSessionGenerator,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        add_options_entry(hass, data={"webhook_id": "hook", "secret_path": "/path"})
+        await add_tools_entry(hass, loaded=True)
+        real_load = Store.async_load
+
+        async def load(store: Store):
+            if store.key == ALLOWED_PATHS_KEY:
+                raise OSError("synthetic store unavailable")
+            return await real_load(store)
+
+        monkeypatch.setattr(Store, "async_load", load)
+        client = await hass_client_no_auth()
+        response = await client.post(
+            _APP + "api/settings/transfer/export",
+            cookies=admin_cookies,
+            json={},
+            headers={"Sec-Fetch-Site": "same-origin"},
+        )
+        assert response.status == 503
+        assert await response.json() == {
+            "success": False,
+            "error": "allowed_paths_store_unavailable",
+        }
+        assert "Settings export failed (allowed_paths_store_unavailable)" in caplog.text
 
     @pytest.mark.parametrize(
         ("operation", "body", "status", "code"),
@@ -309,7 +348,8 @@ class TestSettingsTransfer:
         )
         assert response.status == 500
         assert await response.json() == {"success": False, "error": "restore_failed"}
-        assert "Settings import failed (PermissionError)" in caplog.text
+        assert "Settings import failed" in caplog.text
+        assert "_MessageWithheld: PermissionError" in caplog.text
         assert "uploaded_marker" not in caplog.text
 
     async def test_failure_after_the_browser_disconnects_is_still_logged(
@@ -348,4 +388,4 @@ class TestSettingsTransfer:
             await asyncio.sleep(0)
         release.set()
         await hass.async_block_till_done()
-        assert "Settings export failed (PermissionError)" in caplog.text
+        assert "_MessageWithheld: PermissionError" in caplog.text

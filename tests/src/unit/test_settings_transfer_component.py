@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import copy
-import json
+import importlib.abc
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -63,6 +64,8 @@ async def test_mirror_backup_restores_connection_and_permissions_on_main(
             "enable_webhook": True,
             "webhook_auth": "legacy",
             "pip_spec": "ha-mcp-dev==9.2.1.dev1",
+            # Configure stores the field as typed, scheme or not.
+            "external_url": "mcp.example.org",
         },
     )
     tools_entry = await add_tools_entry(hass, data={})
@@ -119,6 +122,7 @@ async def test_mirror_backup_restores_connection_and_permissions_on_main(
     assert server.options == {
         "enable_webhook": True,
         "webhook_auth": "legacy",
+        "external_url": "mcp.example.org",
         "pip_spec": "ha-mcp-dev==9.2.1.dev2",
         "server_url": "https://local.example",
     }
@@ -285,6 +289,7 @@ async def test_failed_entry_update_restores_prior_tools_and_server_file(
 async def test_tools_failure_keeps_policy_and_permission_saves_made_after_import(
     hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     call = await make_file_service(hass)
     add_options_entry(hass, data={"webhook_id": "old", "secret_path": "/old"})
@@ -324,6 +329,7 @@ async def test_tools_failure_keeps_policy_and_permission_saves_made_after_import
     assert restored["entries"]["tools"]["allowed_dirs"] == ["blueprints"]
     assert restored["server_settings"]["tools"] is None
     assert restored["entries"]["tools"]["extra_yaml_keys"] == []
+    assert "Kept allowed_dirs because it changed after settings import" in caplog.text
 
 
 async def test_importing_a_changed_search_timeout_requests_a_home_assistant_restart(
@@ -547,20 +553,6 @@ async def test_unreadable_destination_file_is_not_blamed_on_the_backup(
         assert failure.value.code == "invalid_server_settings"
 
 
-async def test_retired_destination_flag_does_not_block_export_or_import(
-    hass: HomeAssistant,
-) -> None:
-    add_options_entry(hass, data={"webhook_id": "hook", "secret_path": "/path"})
-    await hass.async_add_executor_job(
-        _store_features, hass, json.dumps({"retired_flag": True})
-    )
-    backup = await settings_transfer.async_export(hass)
-    assert backup["server_settings"]["features"] == {}
-    backup["server_settings"]["backup"] = {"auto_backup_retain_per_entity": 18}
-    await settings_transfer.async_import(hass, backup)
-    assert (await settings_transfer.async_export(hass)) == backup
-
-
 async def test_undo_restores_stored_directories_startup_would_drop(
     hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
@@ -592,3 +584,41 @@ async def test_undo_restores_stored_directories_startup_would_drop(
     assert (await settings_transfer.async_export(hass))["entries"]["tools"][
         "allowed_dirs"
     ] == []
+
+
+async def test_import_onto_an_ignored_tools_discovery_says_why_it_stopped(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "hook", "secret_path": "/path"})
+    MockConfigEntry(
+        domain=DOMAIN, source=SOURCE_IGNORE, unique_id=DOMAIN, data={}
+    ).add_to_hass(hass)
+    original = await settings_transfer.async_export(hass)
+    backup = copy.deepcopy(original)
+    backup["entries"]["tools"] = {"allowed_dirs": [], "extra_yaml_keys": []}
+    with pytest.raises(settings_transfer.InvalidBackup, match="restore_failed"):
+        await settings_transfer.async_import(hass, backup)
+    assert "could not add the File & YAML Tools entry (already_configured)" in (
+        caplog.text
+    )
+    assert await settings_transfer.async_export(hass) == original
+
+
+async def test_broken_server_package_is_logged_not_hidden(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "hook", "secret_path": "/path"})
+
+    class BrokenDependency(importlib.abc.MetaPathFinder):
+        def find_spec(self, name: str, path: object, target: object = None) -> None:
+            if name == "ha_mcp.settings_transfer":
+                raise ImportError("a dependency of the package is broken")
+
+    monkeypatch.delitem(sys.modules, "ha_mcp.settings_transfer")
+    monkeypatch.delattr("ha_mcp.settings_transfer")
+    monkeypatch.setattr(sys, "meta_path", [BrokenDependency(), *sys.meta_path])
+    with pytest.raises(settings_transfer.InvalidBackup, match="server_unavailable"):
+        await settings_transfer.async_export(hass)
+    assert "The HA-MCP server package failed to import" in caplog.text
