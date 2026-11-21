@@ -795,8 +795,8 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_config_set_group` — Create or update a service-based Home Assistant entity group via the group.set service.
 
 ### HACS
-- `ha_get_hacs_info` — Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
-- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
+- `ha_get_hacs_info` — Get data from Home Assistant's Marketplace, what HACS became in 2026.11.
+- `ha_manage_hacs` — Manage Home Assistant's Marketplace (what HACS became in 2026.11): install, update, remove and add repositories.
 
 ### Helper Entities
 - `ha_config_list_helpers` — List Home Assistant helpers of a specific type with their configurations.
