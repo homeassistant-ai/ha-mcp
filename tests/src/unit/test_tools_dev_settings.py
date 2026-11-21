@@ -262,7 +262,7 @@ class TestSettingsMatrix:
             await dev_tools.ha_dev_manage_settings(action="reset", setting="log_level")
 
     async def test_overlapping_sets_both_land(self, dev_tools: DevTools) -> None:
-        """The shared override-file lock keeps one write from clobbering the other."""
+        """The config write lock keeps one write from clobbering the other."""
         await asyncio.gather(
             dev_tools.ha_dev_manage_settings(
                 action="set", setting="log_level", value="DEBUG"

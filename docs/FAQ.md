@@ -791,14 +791,19 @@ transfer in the **HA-MCP** sidebar panel.
    do so to apply the restored settings. Reopen the panel and try an existing
    client with its saved URL.
 
-The backup includes tool states, security policies, entity visibility and
-automatic backup settings. Backup snapshots stay on the source instance.
+The backup includes tool states, security policies, entity visibility, server
+and feature settings, automatic backup settings, and the File & YAML Tools
+allowed directories and extra YAML keys. Backup snapshots stay on the source
+instance, and the destination keeps its own **Access** switch.
 Import recreates an enabled **File & YAML Tools** entry when needed. If the
-source had that entry disabled, disable it on the destination before importing.
+source had that entry disabled, add the **File & YAML Tools** entry on the
+destination and disable it before importing.
 If the source had no tools entry, import into a destination with only the server
 entry.
-On a different Home Assistant instance, supply the destination's Home Assistant
-credentials. A change of hostname or cloudhook can change the public URL.
+The backup never carries Home Assistant credentials: on a different Home
+Assistant instance, setting up the **HA-MCP Server** entry asks for that
+instance's administrator token or login. A change of hostname or cloudhook can
+change the public URL.
 If you use PIN-based approval events, set a decision PIN on the destination
 before importing their policy.
 

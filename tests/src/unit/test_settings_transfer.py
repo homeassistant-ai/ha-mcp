@@ -6,8 +6,11 @@ from pathlib import Path
 
 import pytest
 
+from ha_mcp.policy.decision_pin import clear_pin, set_pin
 from ha_mcp.settings_transfer import (
     INCOMPLETE_ROLLBACK_NOTE,
+    DecisionPinRequired,
+    LocalSettingsUnusable,
     ServerSettingsRollbackIncomplete,
     export_server_settings,
     restore_server_settings,
@@ -91,6 +94,9 @@ def test_import_advances_the_local_edit_revision_even_on_reset(
         ("visibility", {"deny_entity_ids": "light.guest"}),
         ("backup", {"homeassistant_token": "unrelated"}),
         ("features", {"ipv6_allowed_networks": "bad"}),
+        ("features", {"fuzzy_threshold": 101}),
+        ("features", {"log_level": "VERBOSE"}),
+        ("features", {"retired_flag": True}),
     ],
 )
 def test_invalid_import_preserves_all_old_settings(tmp_path, section, payload):
@@ -304,3 +310,58 @@ def test_unstamped_policy_keeps_its_startup_semantics_on_transfer(
     assert restore_server_settings(tmp_path, archive) is not None
     assert restore_server_settings(tmp_path, archive) is None
     assert export_server_settings(tmp_path) == archive
+
+
+def test_entries_the_server_ignores_do_not_block_moving_settings(tmp_path, caplog):
+    stored = {
+        "feature_flags.json": {"redact_secrets": True, "retired_flag": "strong"},
+        "backup_settings.json": {"auto_backup_retain_per_entity": 12, "old": 1},
+        "entity_visibility.json": {"enabled": True, "retired_option": True},
+        "tool_config.json": {"tools": {"ha_search": "disabled", "ha_x": "on"}},
+    }
+    for name, document in stored.items():
+        (tmp_path / name).write_text(json.dumps(document))
+    archive = export_server_settings(tmp_path)
+    assert archive["features"] == {"redact_secrets": True}
+    assert archive["backup"] == {"auto_backup_retain_per_entity": 12}
+    assert "retired_option" not in archive["visibility"]
+    assert archive["tools"] == {"tools": {"ha_search": "disabled"}}
+    assert "'retired_flag'" in caplog.text
+    changed = {**archive, "features": {"redact_secrets": False}}
+    assert restore_server_settings(tmp_path, changed) is not None
+    assert export_server_settings(tmp_path) == changed
+
+
+@pytest.mark.parametrize("contents", ["{", "[]"])
+def test_unreadable_stored_file_is_reported_as_local(tmp_path, contents):
+    (tmp_path / "feature_flags.json").write_text(contents)
+    with pytest.raises(LocalSettingsUnusable):
+        export_server_settings(tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    with pytest.raises(LocalSettingsUnusable):
+        restore_server_settings(tmp_path, export_server_settings(source))
+
+
+def test_approval_policy_needs_the_destinations_own_pin(tmp_path):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    target.mkdir()
+    (source / "tool_policy.json").write_text(
+        json.dumps({"schema_version": 2, "event_decisions_enabled": True})
+    )
+    archive = export_server_settings(source)
+    with pytest.raises(DecisionPinRequired):
+        restore_server_settings(target, archive)
+    assert not (target / "tool_policy.json").exists()
+
+    set_pin(target, "approval-pin")
+    assert restore_server_settings(target, archive) is not None
+    reset = restore_server_settings(target, {**archive, "policy": None})
+    assert reset is not None
+    # Undoing back to an approval policy is refused once the PIN is gone.
+    clear_pin(target)
+    with pytest.raises(ServerSettingsRollbackIncomplete):
+        rollback_server_settings(target, reset)
+    assert export_server_settings(target)["policy"] is None

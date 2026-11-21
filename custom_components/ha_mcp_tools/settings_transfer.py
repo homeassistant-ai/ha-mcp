@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, nullcontext
+from functools import partial
 from pathlib import Path
 from types import ModuleType, TracebackType
 from typing import Any
@@ -36,8 +38,10 @@ from .tools_settings_store import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-# Shared with the lazily loaded server wheel's INCOMPLETE_ROLLBACK_NOTE.
+# Must equal the wheel's INCOMPLETE_ROLLBACK_NOTE, which notes its own failed
+# undo; copied because the wheel is imported lazily.
 _INCOMPLETE_ROLLBACK = "Settings import rollback incomplete"
+_WHEEL_MODULES = {"ha_mcp", "ha_mcp.settings_transfer"}
 
 
 def _entries(hass: HomeAssistant) -> dict[str, ConfigEntry]:
@@ -51,10 +55,12 @@ def _entries(hass: HomeAssistant) -> dict[str, ConfigEntry]:
 
 
 def _load_wheel() -> ModuleType:
-    """Load the paired wheel off-loop, allowing overrides that predate transfer."""
+    """Import lazily and off-loop: an older pinned wheel has no settings transfer."""
     try:
         from ha_mcp import settings_transfer
     except ImportError as err:
+        if not (isinstance(err, ModuleNotFoundError) and err.name in _WHEEL_MODULES):
+            _LOGGER.exception("The HA-MCP server package failed to import")
         raise InvalidBackup("server_unavailable") from err
     return settings_transfer
 
@@ -91,11 +97,14 @@ async def _write_tools_setting(
     name: str,
     values: list[str],
     entry: ConfigEntry | None,
+    *,
+    strict: bool = True,
 ) -> None:
     _, _, apply, save = _TOOLS_STORES[name]
     if entry is not None and entry.state is ConfigEntryState.LOADED:
         _, rejected = await apply(hass, values)
-        if rejected:
+        # An undo restores raw stored values; apply() drops what startup would.
+        if rejected and strict:
             raise InvalidBackup("invalid_backup")
     else:
         # Unloaded entries have no live permissions cache. Setup loads the
@@ -117,7 +126,7 @@ async def async_export(hass: HomeAssistant) -> dict[str, Any]:
         settings = await hass.async_add_executor_job(
             wheel.export_server_settings, directory
         )
-    except ValueError as err:
+    except wheel.LocalSettingsUnusable as err:
         raise InvalidBackup("invalid_server_settings") from err
     bundle = {
         "format": schema.FORMAT,
@@ -127,7 +136,7 @@ async def async_export(hass: HomeAssistant) -> dict[str, Any]:
         "server_settings": settings,
     }
     return await hass.async_add_executor_job(
-        schema.validate, bundle, Path(hass.config.config_dir)
+        partial(schema.validate, stored=True), bundle, Path(hass.config.config_dir)
     )
 
 
@@ -144,8 +153,9 @@ def _check_tools_entry(
         return
     disabled = target is not None and target.disabled_by is not None
     if source.get("disabled", False) != disabled:
-        # HA's config flow sets up a new entry immediately. Creating one for
-        # a disabled source would grant file access before it could be disabled.
+        # The enabled state must already match. HA's config flow sets up a new
+        # entry immediately, so creating one for a disabled source would grant
+        # file access before it could be disabled.
         raise InvalidBackup(
             "tools_must_be_enabled" if disabled else "tools_must_be_disabled"
         )
@@ -204,13 +214,18 @@ async def _rollback_tools_setting(
 ) -> None:
     writes = store_writes(hass, _TOOLS_STORES[name][0])
     async with writes.lock:
-        if writes.revision != revision:
+        current = (
+            await _read_tools_setting(hass, name)
+            if writes.revision == revision
+            else None
+        )
+        if current not in (imported, before):
+            _LOGGER.warning("Kept %s because it changed after settings import", name)
             return
-        current = await _read_tools_setting(hass, name)
-        if current in (imported, before):
-            # A failed HA Store save can leave just the live cache changed.
-            await _write_tools_setting(hass, name, before, entry)
-            writes.revision += 1
+        # A save can land even when its verification read fails, leaving the
+        # live cache at the old value; rewriting before re-syncs both.
+        await _write_tools_setting(hass, name, before, entry, strict=False)
+        writes.revision += 1
 
 
 async def _restore_tools(
@@ -245,6 +260,10 @@ async def _restore_tools(
             data={c.CONF_ENTRY_TYPE: c.ENTRY_TYPE_TOOLS},
         )
         if flow["type"] != FlowResultType.CREATE_ENTRY:
+            _LOGGER.warning(
+                "Settings import could not add the File & YAML Tools entry (%s)",
+                flow.get("reason", flow["type"]),
+            )
             raise InvalidBackup("restore_failed")
         created = flow["result"]
         _add_undo(
@@ -254,6 +273,9 @@ async def _restore_tools(
             created.entry_id,
         )
         if created.state is not ConfigEntryState.LOADED:
+            _LOGGER.warning(
+                "Settings import added a File & YAML Tools entry that did not load"
+            )
             raise InvalidBackup("restore_failed")
 
 
@@ -327,6 +349,8 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
             )
         except wheel.DecisionPinRequired as err:
             raise InvalidBackup("decision_pin_required") from err
+        except wheel.LocalSettingsUnusable as err:
+            raise InvalidBackup("invalid_server_settings") from err
         except ValueError as err:
             if _INCOMPLETE_ROLLBACK in getattr(err, "__notes__", ()):
                 raise
@@ -388,38 +412,78 @@ def _same_origin(request: web.Request) -> bool:
     return request.headers.get("Origin") == str(request.url.origin())
 
 
+_CONFLICTS = {
+    "server_unavailable",
+    "webhook_in_use",
+    "extra_tools_entry",
+    "tools_must_be_enabled",
+    "tools_must_be_disabled",
+    "tools_entry_busy",
+    "tools_entry_unavailable",
+}
+
+
+async def _export_response(hass: HomeAssistant, body: Any) -> web.Response:
+    if body != {}:
+        return _error("invalid_request", 400)
+    bundle = await async_export(hass)
+    payload = json.dumps(bundle, ensure_ascii=False).encode("utf-8")
+    if len(payload) > schema.MAX_BYTES:
+        return _error("too_large", 413)
+    return web.Response(
+        body=payload,
+        content_type="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="ha-mcp-settings.json"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+async def _import_response(hass: HomeAssistant, body: Any) -> web.Response:
+    restart = await async_import(hass, body)
+    if restart:
+        _LOGGER.warning("Restart Home Assistant to apply the imported HA-MCP settings")
+    return web.json_response(
+        {"success": True, "restart_required": restart},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def _transfer(hass: HomeAssistant, body: Any, exporting: bool) -> web.Response:
+    """Run one transfer and report every outcome, including to the log.
+
+    A disconnected browser cancels the request handler, and the shield then
+    discards this task's result, so nothing may be left for the handler to log.
+    """
+    operation = "export" if exporting else "import"
     lock = hass.data.setdefault("ha_mcp_tools_settings_transfer_lock", asyncio.Lock())
     async with lock:
-        if exporting:
-            if body != {}:
-                return _error("invalid_request", 400)
-            bundle = await async_export(hass)
-            payload = json.dumps(bundle, ensure_ascii=False).encode("utf-8")
-            if len(payload) > schema.MAX_BYTES:
-                raise _TooLarge
-            return web.Response(
-                body=payload,
-                content_type="application/json",
-                headers={
-                    "Content-Disposition": 'attachment; filename="ha-mcp-settings.json"',
-                    "Cache-Control": "no-store",
-                },
-            )
         try:
-            restart = await async_import(hass, body)
-        except Exception as err:
-            if _INCOMPLETE_ROLLBACK not in getattr(err, "__notes__", ()):
-                raise
-            _LOGGER.error(
-                "Settings import failed (%s) with incomplete rollback",
-                type(err).__name__,
-            )
-            return _error("rollback_incomplete", 500)
-        return web.json_response(
-            {"success": True, "restart_required": restart},
-            headers={"Cache-Control": "no-store"},
-        )
+            if exporting:
+                return await _export_response(hass, body)
+            return await _import_response(hass, body)
+        except Exception as err:  # noqa: BLE001 -- never emit uploaded credentials
+            return _failure_response(operation, err)
+
+
+def _failure_response(operation: str, err: Exception) -> web.Response:
+    incomplete = _INCOMPLETE_ROLLBACK in getattr(err, "__notes__", ())
+    if not incomplete and isinstance(err, ToolsStoreUnavailable):
+        _LOGGER.warning("Settings %s failed (%s)", operation, err.code)
+        return _error(err.code, 503)
+    if not incomplete and isinstance(err, InvalidBackup):
+        _LOGGER.info("Settings %s refused (%s)", operation, err.code)
+        return _error(err.code, 409 if err.code in _CONFLICTS else 400)
+    # Messages may echo uploaded values; log the type and frames only.
+    _LOGGER.error(
+        "Settings %s failed (%s)%s\n%s",
+        operation,
+        type(err).__name__,
+        " with incomplete rollback" if incomplete else "",
+        "".join(traceback.format_tb(err.__traceback__)),
+    )
+    return _error("rollback_incomplete" if incomplete else "restore_failed", 500)
 
 
 async def async_handle(
@@ -432,38 +496,17 @@ async def async_handle(
     if request.method != "POST":
         return _error("invalid_request", 405)
     if not _same_origin(request):
+        _LOGGER.warning("Refused a settings transfer request from another origin")
         return _error("origin_denied", 403)
     if request.content_type != "application/json":
         return _error("invalid_request", 415)
     try:
         body = await _read_json(request)
-        # A disconnect during an executor write must let the transaction finish.
-        return await asyncio.shield(
-            hass.async_create_task(_transfer(hass, body, exporting))
-        )
-    except ToolsStoreUnavailable as err:
-        return _error(err.code, 503)
-    except InvalidBackup as err:
-        code = err.code
-        return _error(
-            code,
-            409
-            if code
-            in {
-                "server_unavailable",
-                "webhook_in_use",
-                "extra_tools_entry",
-                "tools_must_be_enabled",
-                "tools_must_be_disabled",
-                "tools_entry_busy",
-                "tools_entry_unavailable",
-            }
-            else 400,
-        )
     except _TooLarge:
         return _error("too_large", 413)
     except json.JSONDecodeError, UnicodeError, RecursionError:
         return _error("invalid_backup", 400)
-    except Exception as err:  # noqa: BLE001 -- never emit uploaded credentials
-        _LOGGER.error("HA-MCP settings transfer failed (%s)", type(err).__name__)
-        return _error("restore_failed", 500)
+    # A disconnect during an executor write must let the transaction finish.
+    return await asyncio.shield(
+        hass.async_create_task(_transfer(hass, body, exporting))
+    )

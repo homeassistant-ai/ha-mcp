@@ -187,6 +187,8 @@ def test_failed_import_never_renders_arbitrary_error_text() -> None:
         (409, "tools_entry_busy", "Wait for it to finish"),
         (409, "tools_entry_unavailable", "reload the entry"),
         (500, "rollback_incomplete", "some settings could not be restored"),
+        (403, "origin_denied", "Open the panel from the sidebar"),
+        (400, "invalid_server_settings", "The Home Assistant log names the file"),
     ],
 )
 def test_import_errors_explain_next_action(
