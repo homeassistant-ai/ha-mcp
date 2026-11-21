@@ -623,3 +623,31 @@ async def test_broken_server_package_is_logged_not_hidden(
     with pytest.raises(settings_transfer.TransferRefused, match="server_unavailable"):
         await settings_transfer.async_export(hass)
     assert "The HA-MCP server package failed to import" in caplog.text
+
+
+async def test_another_installations_file_keeps_the_connection_and_tools_entry(
+    hass: HomeAssistant,
+) -> None:
+    server = add_options_entry(hass, data={"webhook_id": "hook", "secret_path": "/p"})
+    await add_tools_entry(hass, loaded=True)
+    exported = await settings_transfer.async_export(hass)
+    standalone = {
+        "format": "ha-mcp-settings",
+        "version": 1,
+        "contains_credentials": False,
+        "entries": {},
+        "server_settings": {
+            **exported["server_settings"],
+            "backup": {"auto_backup_retain_per_entity": 21},
+        },
+    }
+    with pytest.raises(settings_transfer.TransferRefused, match="invalid_backup"):
+        await settings_transfer.async_import(
+            hass, {**standalone, "contains_credentials": True}
+        )
+
+    assert await settings_transfer.async_import(hass, standalone) is False
+    assert server.data["webhook_id"] == "hook"
+    after = await settings_transfer.async_export(hass)
+    assert after["server_settings"]["backup"] == {"auto_backup_retain_per_entity": 21}
+    assert after["entries"]["tools"] == exported["entries"]["tools"]

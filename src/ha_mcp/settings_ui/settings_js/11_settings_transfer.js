@@ -1,8 +1,8 @@
-// The component serves these routes inside the authenticated HA sidebar proxy.
-// Direct connections to the server's settings UI have no such routes.
+// The HA sidebar panel's proxy answers these routes itself so it can also move
+// the integration's entries; every other page reaches the server's own routes.
 function initSettingsTransfer() {
   const section = document.getElementById('settingsTransfer');
-  if (!section || location.pathname !== '/api/ha_mcp_tools/ui/app/settings') return;
+  if (!section) return;
   const exportButton = document.getElementById('transferExport');
   const importButton = document.getElementById('transferImport');
   const input = document.getElementById('transferFile');
@@ -109,7 +109,13 @@ function initSettingsTransfer() {
       const result = await response.json();
       if (result?.success !== true) return report('restore_failed', true);
       input.value = '';
-      report(result.restart_required ? 'restart' : 'imported');
+      const restart = result.restart === 'server' ? 'restart_server' : 'restart';
+      report(result.restart_required ? restart : 'imported');
+      for (const part of result.skipped || []) {
+        if (part === 'connection' || part === 'file_permissions') {
+          status.textContent += ' ' + t('transfer.' + part + '_skipped');
+        }
+      }
     } catch (err) {
       console.error('HA-MCP settings import failed', err);
       report('restore_failed', true);

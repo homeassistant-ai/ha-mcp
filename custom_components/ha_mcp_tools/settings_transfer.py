@@ -276,13 +276,28 @@ async def _restore_tools(
             raise TransferRefused(RefusalCode.RESTORE_FAILED)
 
 
+def _check_webhook(hass: HomeAssistant, server: dict[str, Any]) -> None:
+    hook = (
+        server["options"].get(c.OPT_WEBHOOK_ID_OVERRIDE)
+        or server["data"][c.DATA_WEBHOOK_ID]
+    )
+    current_hook = hass.data.get(c.DOMAIN, {}).get(c.DATA_WEBHOOK, {}).get("webhook_id")
+    if hook != current_hook and hook in hass.data.get(webhook.DOMAIN, {}):
+        raise TransferRefused(RefusalCode.WEBHOOK_IN_USE)
+
+
 def _restore_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    server: dict[str, Any],
+    server: dict[str, Any] | None,
     files_changed: bool,
 ) -> bool:
     """Commit the config entry in one update, scheduling at most one worker reload."""
+    if server is None:
+        # The settings files changed; the entry's connection stays as it is.
+        if files_changed and entry.state is ConfigEntryState.LOADED:
+            hass.config_entries.async_schedule_reload(entry.entry_id)
+        return False
     data, options = schema.restored_entry(entry, server)
     options_reload = _reload_relevant(entry.options) != _reload_relevant(options)
     needs_reload = files_changed or data != entry.data
@@ -323,16 +338,15 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
     entries = _entries(hass)
     source_tools = checked["entries"].get(c.ENTRY_TYPE_TOOLS)
     target_tools = entries.get(c.ENTRY_TYPE_TOOLS)
-    _check_tools_entry(source_tools, target_tools, allow_create=True)
     settings = checked["server_settings"]
-    server = checked["entries"][c.ENTRY_TYPE_SERVER]
-    hook = (
-        server["options"].get(c.OPT_WEBHOOK_ID_OVERRIDE)
-        or server["data"][c.DATA_WEBHOOK_ID]
-    )
-    current_hook = hass.data.get(c.DOMAIN, {}).get(c.DATA_WEBHOOK, {}).get("webhook_id")
-    if hook != current_hook and hook in hass.data.get(webhook.DOMAIN, {}):
-        raise TransferRefused(RefusalCode.WEBHOOK_IN_USE)
+    server = checked["entries"].get(c.ENTRY_TYPE_SERVER)
+    # An export from another installation says nothing about this entry's
+    # tools unless it carries their permissions.
+    checks_tools = server is not None or source_tools is not None
+    if checks_tools:
+        _check_tools_entry(source_tools, target_tools, allow_create=True)
+    if server is not None:
+        _check_webhook(hass, server)
     directory = Path(hass.config.path(c.SERVER_CONFIG_SUBDIR))
     # Keep setup/unload from crossing the choice between live and stored
     # settings. A newly created entry loads the persisted values in its flow.
@@ -366,9 +380,10 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
                 hass, entries.get(c.ENTRY_TYPE_TOOLS), source_tools, rollback
             )
         # Entry enable/remove flows can run while the disk writes are awaited.
-        _check_tools_entry(
-            source_tools, _entries(hass).get(c.ENTRY_TYPE_TOOLS), allow_create=False
-        )
+        if checks_tools:
+            _check_tools_entry(
+                source_tools, _entries(hass).get(c.ENTRY_TYPE_TOOLS), allow_create=False
+            )
         restart = _restore_entry(
             hass,
             entries[c.ENTRY_TYPE_SERVER],

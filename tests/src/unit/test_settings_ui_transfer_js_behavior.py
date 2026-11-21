@@ -17,6 +17,11 @@ from ._settings_ui_dom import DEFAULT_FETCHES
 _PANEL = "/api/ha_mcp_tools/ui/app/settings"
 _TRANSFER = "./api/settings/transfer/"
 _BUNDLE = '{"format":"ha-mcp-settings","version":1,"entries":{"server":{"webhook_id":"test-private-id"}}}'
+_EN = json.loads(
+    (importlib.resources.files("ha_mcp.settings_ui") / "locales" / "en.json").read_text(
+        encoding="utf-8"
+    )
+)["messages"]
 
 
 def _run(
@@ -55,10 +60,28 @@ def _choose(contents: str, size: int = 100) -> str:
     """
 
 
-def test_direct_server_has_no_transfer_controls_or_requests() -> None:
-    result = _run("", path="/mcp/settings")
-    assert re.search(r'<section id="settingsTransfer"[^>]* hidden', result.dom)
-    assert not result.fetches_to(_TRANSFER)
+def test_a_direct_server_page_imports_through_its_own_routes() -> None:
+    """Standalone, Docker and the app serve the routes the sidebar proxy does."""
+    result = _run(
+        _choose(_BUNDLE),
+        path="/mcp/settings",
+        responses={
+            _TRANSFER + "import": {
+                "json": {
+                    "success": True,
+                    "restart_required": True,
+                    "restart": "server",
+                    "skipped": ["connection", "file_permissions"],
+                }
+            }
+        },
+    )
+    assert not re.search(r'<section id="settingsTransfer"[^>]* hidden', result.dom)
+    assert [r["method"] for r in result.fetches_to(_TRANSFER + "import")] == ["POST"]
+    assert result.status == "status: " + " ".join(
+        _EN[f"transfer.{key}"]
+        for key in ("restart_server", "connection_skipped", "file_permissions_skipped")
+    )
 
 
 def test_download_preserves_the_export_without_rendering_credentials() -> None:
@@ -147,7 +170,7 @@ def test_confirmed_import_sends_original_file_and_reports_next_step(
     assert "test-private-id" not in result.dom
     assert result.status and result.status.startswith("status: Settings imported.")
     assert (
-        "Restart Home Assistant" if restart else "Reopen the HA-MCP panel"
+        "Restart Home Assistant" if restart else "Reload this page"
     ) in result.status
 
 
@@ -199,13 +222,6 @@ def test_import_errors_explain_next_action(
     )
     assert result.status and result.status.startswith("alert:")
     assert message in result.status
-
-
-_EN = json.loads(
-    (importlib.resources.files("ha_mcp.settings_ui") / "locales" / "en.json").read_text(
-        encoding="utf-8"
-    )
-)["messages"]
 
 
 @pytest.mark.parametrize("code", list(RefusalCode))
