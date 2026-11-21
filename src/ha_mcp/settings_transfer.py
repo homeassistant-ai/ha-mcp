@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -74,6 +74,10 @@ class LocalSettingsUnusable(ValueError):
 
 class ServerSettingsRollbackIncomplete(RuntimeError):
     """One or more server settings could not be restored."""
+
+
+class ChangeRefused(Exception):
+    """The caller's ``allow`` check refused what the import would change."""
 
 
 class IncompatibleVersion(ValueError):
@@ -392,9 +396,18 @@ def rollback_server_settings(directory: Path, changes: ServerSettingsChanges) ->
 
 
 def restore_server_settings(
-    data_dir: Path, settings: dict[str, Any]
+    data_dir: Path,
+    settings: dict[str, Any],
+    *,
+    keep: Mapping[str, Collection[str]] | None = None,
+    allow: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None,
 ) -> ServerSettingsChanges | None:
-    """Return a rollback record for committed changes, or None on a no-op."""
+    """Return a rollback record for committed changes, or None on a no-op.
+
+    ``keep`` names, per section, entries that keep their stored values;
+    ``allow`` sees the stored and resulting content and may refuse the change.
+    Both run under the file lock, against the state the write replaces.
+    """
     incoming = validate_server_settings(settings)
     data_dir.mkdir(parents=True, exist_ok=True)
     with config_file_lock(data_dir):
@@ -406,6 +419,16 @@ def restore_server_settings(
         ):
             raise DecisionPinRequired("Set the approval decision PIN locally first")
         previous, old_content = _stored_settings(data_dir)
+        for section, names in (keep or {}).items():
+            merged = {
+                k: v for k, v in (incoming[section] or {}).items() if k not in names
+            }
+            merged.update(
+                {k: v for k, v in (old_content[section] or {}).items() if k in names}
+            )
+            incoming[section] = merged or None
+        if allow is not None and not allow(old_content, incoming):
+            raise ChangeRefused("This import may not make these changes")
         changed: list[_DocumentChange] = []
         try:
             for key, name in _FILES.items():

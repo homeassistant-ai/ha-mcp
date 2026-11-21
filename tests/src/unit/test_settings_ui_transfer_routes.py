@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from ._file_services import make_file_service
 from ._settings_ui_app import (
     SELF_INFO,
     SELF_OPTIONS,
+    app_server,
     in_app,
     post_settings,
     settings_http,
@@ -159,6 +161,39 @@ async def test_a_failed_permission_write_restores_files_and_permissions(
     assert await _export(monkeypatch, core_client) == original
 
 
+async def test_one_failed_permission_undo_still_undoes_the_other(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+) -> None:
+    await make_file_service(hass, allowed="pyscript")
+    bundle = await _export(monkeypatch, core_client)
+    # "http" is refused after "mqtt" is saved, so the import fails and undoes both.
+    bundle["entries"]["tools"] = {
+        "allowed_dirs": ["www"],
+        "extra_yaml_keys": ["mqtt", "http"],
+    }
+    save = Store.async_save
+
+    async def fail_paths_undo(store: Store, data: Any) -> None:
+        if data == {"paths": ["pyscript"]}:
+            raise OSError("storage unavailable")
+        await save(store, data)
+
+    monkeypatch.setattr(Store, "async_save", fail_paths_undo)
+    response = await post_settings(monkeypatch, core_client, IMPORT, bundle)
+
+    assert (response.status_code, response.json()["error"]) == (
+        400,
+        "rollback_incomplete",
+    )
+    monkeypatch.setattr(Store, "async_save", save)
+    assert (await _export(monkeypatch, core_client))["entries"]["tools"] == {
+        "allowed_dirs": ["www"],
+        "extra_yaml_keys": [],
+    }
+
+
 async def test_permissions_without_a_tools_entry_are_reported_as_skipped(
     monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
 ) -> None:
@@ -199,14 +234,26 @@ async def test_an_unusable_file_changes_nothing(
     assert await _export(monkeypatch, core_client) == original
 
 
-async def test_an_oversized_upload_is_refused_before_parsing(
+async def test_an_oversized_upload_is_refused_while_it_is_read(
     monkeypatch: pytest.MonkeyPatch, core_client: HomeAssistantClient
 ) -> None:
-    response = await post_settings(
-        monkeypatch, core_client, IMPORT, {"padding": "x" * (4 * 1024 * 1024)}
-    )
+    chunk = b"x" * (1024 * 1024)
+    sent = 0
+
+    async def body() -> AsyncIterator[bytes]:
+        nonlocal sent
+        for _ in range(64):
+            sent += len(chunk)
+            yield chunk
+
+    async with settings_http(app_server(monkeypatch, core_client)) as http:
+        response = await http.post(
+            IMPORT, content=body(), headers={"Content-Type": "application/json"}
+        )
 
     assert (response.status_code, response.json()["error"]) == (413, "too_large")
+    # Stops reading just past the limit instead of holding all 64 MiB.
+    assert sent <= 6 * len(chunk)
 
 
 async def test_the_sidecar_moves_settings_without_a_live_server(

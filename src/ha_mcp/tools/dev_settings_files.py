@@ -11,6 +11,7 @@ from .helpers import raise_tool_error
 
 if TYPE_CHECKING:
     from ..server import HomeAssistantSmartMCPServer
+    from ..settings_ui._handlers_transfer import ImportLimits
 
 # Marks a key for removal in merge_feature_overrides (reset action).
 REMOVE = object()
@@ -85,6 +86,7 @@ async def import_settings_file(
 ) -> dict[str, Any]:
     """Apply an export as the settings page's import does."""
     from ..settings_ui._handlers_transfer import TransferFailed, import_bundle
+    from .tools_dev import _require_security_policy_access
 
     if settings_file is None:
         raise_tool_error(
@@ -95,66 +97,43 @@ async def import_settings_file(
             )
         )
     try:
-        guarded = await _guard_agent_import(server, settings_file)
-        return await import_bundle(server, guarded)
+        return await import_bundle(server, settings_file, _agent_limits())
     except TransferFailed as err:
+        if err.code == "access_required":
+            _require_security_policy_access(_GUARDED_CHANGES)
         _raise_transfer_error(err.code)
 
 
-def _kept(
-    incoming: dict[str, Any] | None, current: dict[str, Any] | None, names: Any
-) -> dict[str, Any] | None:
-    """``incoming`` with ``names`` taken from ``current`` (or left unset)."""
-    merged = {k: v for k, v in (incoming or {}).items() if k not in names}
-    merged.update({k: v for k, v in (current or {}).items() if k in names})
-    return merged or None
+_GUARDED_CHANGES = (
+    "import tool security policies, entity visibility or File & YAML Tools permissions"
+)
+_SWITCH = "enable_tool_security_policies"
 
 
-async def _guard_agent_import(
-    server: HomeAssistantSmartMCPServer | None, settings_file: dict[str, Any]
-) -> dict[str, Any]:
+def _agent_limits() -> ImportLimits:
     """Hold an agent's import to the limits of the single-setting actions.
 
-    The human-only settings keep this server's values, and anything that
-    loosens what limits the agent needs dev_tools_security_policy_access.
+    The human-only settings keep this server's values, and changing what
+    limits the agent needs dev_tools_security_policy_access. The import
+    applies both against the settings it replaces, under its write lock.
     """
-    from .. import settings_transfer as transfer
-    from ..settings_ui._handlers_transfer import export_bundle
+    from ..settings_ui._handlers_transfer import ImportLimits
     from .dev_backup import _HUMAN_BACKUP_CONTROLS
-    from .tools_dev import _HUMAN_ONLY_SETTINGS, _require_security_policy_access
+    from .tools_dev import _HUMAN_ONLY_SETTINGS, _security_policy_access_enabled
 
-    try:
-        incoming = transfer.validate_server_settings(settings_file["server_settings"])
-    except KeyError, TypeError, ValueError:
-        return settings_file  # import_bundle refuses it with its own code
-    current = await export_bundle(server)
-    settings = current["server_settings"]
-    incoming["features"] = _kept(
-        incoming["features"], settings["features"], _HUMAN_ONLY_SETTINGS
-    )
-    incoming["backup"] = _kept(
-        incoming["backup"], settings["backup"], _HUMAN_BACKUP_CONTROLS
-    )
-    switch = "enable_tool_security_policies"
-    entries = settings_file.get("entries")
-    tools = entries.get("tools") if isinstance(entries, dict) else None
-    if (
-        incoming["policy"] != settings["policy"]
-        or incoming["visibility"] != settings["visibility"]
-        or (incoming["features"] or {}).get(switch)
-        != (settings["features"] or {}).get(switch)
-        or (
-            isinstance(tools, dict)
-            and not tools.get("disabled")
-            and {k: tools.get(k) for k in ("allowed_dirs", "extra_yaml_keys")}
-            != current["entries"].get("tools")
+    def allow(old: dict[str, Any], new: dict[str, Any]) -> bool:
+        changed = any(
+            old.get(k) != new.get(k) for k in ("policy", "visibility", "permissions")
         )
-    ):
-        _require_security_policy_access(
-            "import tool security policies, entity visibility or File & YAML "
-            "Tools permissions"
-        )
-    return {**settings_file, "server_settings": incoming}
+        switch = (old.get("features") or {}).get(_SWITCH) != (
+            new.get("features") or {}
+        ).get(_SWITCH)
+        return not (changed or switch) or _security_policy_access_enabled()
+
+    return ImportLimits(
+        keep={"features": _HUMAN_ONLY_SETTINGS, "backup": _HUMAN_BACKUP_CONTROLS},
+        allow=allow,
+    )
 
 
 def _raise_transfer_error(code: str) -> NoReturn:

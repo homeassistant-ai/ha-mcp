@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from ha_mcp import settings_transfer as transfer
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -459,3 +460,70 @@ class TestSettingsTransfer:
         assert (
             exported["settings_file"]["server_settings"]["policy"]["wait_seconds"] == 12
         )
+
+    async def test_a_revocation_just_before_the_import_commits_holds(
+        self, served: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        write_overrides({"dev_tools_security_policy_access": True})
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["policy"] = {"wait_seconds": 12}
+        restore = transfer.restore_server_settings
+
+        def revoke_then_restore(*args: Any, **kwargs: Any) -> Any:
+            # A person turns access off while the import is under way.
+            write_overrides({"dev_tools_security_policy_access": False})
+            return restore(*args, **kwargs)
+
+        monkeypatch.setattr(transfer, "restore_server_settings", revoke_then_restore)
+        with pytest.raises(ToolError, match="security-policy access is disabled"):
+            await served.ha_dev_manage_settings(
+                action="import_settings", settings_file=settings_file
+            )
+
+        assert stored_overrides() == {"dev_tools_security_policy_access": False}
+
+
+class TestSettingsTransferInTheApp:
+    """In the app, the human-only settings and the policy switch are options."""
+
+    async def test_an_agent_import_leaves_the_human_only_options_alone(
+        self, supervisor: Supervisor, served: DevTools
+    ) -> None:
+        supervisor.options = {
+            "custom_instructions": "set by a person",
+            "redact_secrets": False,
+        }
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["features"] = {
+            "custom_instructions": "from the file",
+            "redact_secrets": True,
+        }
+
+        await served.ha_dev_manage_settings(
+            action="import_settings", settings_file=settings_file
+        )
+
+        assert supervisor.saved == [
+            {"custom_instructions": "set by a person", "redact_secrets": True}
+        ]
+
+    async def test_switching_the_policy_engine_needs_policy_access(
+        self, supervisor: Supervisor, served: DevTools
+    ) -> None:
+        supervisor.options = {"enable_tool_security_policies": True}
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["features"] = {
+            "enable_tool_security_policies": False
+        }
+
+        with pytest.raises(ToolError, match="security-policy access is disabled"):
+            await served.ha_dev_manage_settings(
+                action="import_settings", settings_file=settings_file
+            )
+        assert supervisor.saved == []

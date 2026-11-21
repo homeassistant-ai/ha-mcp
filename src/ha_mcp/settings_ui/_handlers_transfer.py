@@ -13,6 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request
@@ -63,9 +66,11 @@ def _error(code: str, status: int) -> JSONResponse:
 async def _read_body(request: Request) -> Any:
     if request.headers.get("content-type", "").split(";")[0] != "application/json":
         raise TransferFailed("invalid_request", 415)
-    body = await request.body()
-    if len(body) > transfer.MAX_BYTES:
-        raise TransferFailed("too_large", 413)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > transfer.MAX_BYTES:
+            raise TransferFailed("too_large", 413)
+        body.extend(chunk)
     try:
         return json.loads(body)
     except (ValueError, RecursionError) as err:
@@ -140,13 +145,36 @@ async def _export(
     )
 
 
+def _without_app_options(settings: dict[str, Any]) -> dict[str, Any]:
+    """``settings`` minus what the app (add-on) keeps in Supervisor instead."""
+    if not is_running_in_addon():
+        return settings
+    trimmed = dict(settings)
+    for section in _APP_SECTIONS:
+        names = transfer.app_option_fields(section)
+        trimmed[section] = {
+            k: v for k, v in (settings[section] or {}).items() if k not in names
+        }
+    return trimmed
+
+
 async def _restore_files(
-    settings: dict[str, Any],
+    settings: dict[str, Any], limits: ImportLimits | None
 ) -> transfer.ServerSettingsChanges | None:
-    try:
-        return await asyncio.to_thread(
-            transfer.restore_server_settings, get_data_dir(), settings
+    restore = partial(transfer.restore_server_settings)
+    if limits is not None:
+        # The app's Supervisor options are checked where they are posted.
+        restore = partial(
+            restore,
+            keep=limits.keep,
+            allow=lambda old, new: limits.allow(
+                _without_app_options(old), _without_app_options(new)
+            ),
         )
+    try:
+        return await asyncio.to_thread(restore, get_data_dir(), settings)
+    except transfer.ChangeRefused as err:
+        raise TransferFailed("access_required", 403) from err
     except transfer.DecisionPinRequired as err:
         raise TransferFailed("decision_pin_required", 400) from err
     except transfer.LocalSettingsUnusable as err:
@@ -160,8 +188,13 @@ async def _restore_files(
 
 
 async def _write_tools(
-    server: HomeAssistantSmartMCPServer | None, wanted: dict[str, list[str]]
+    server: HomeAssistantSmartMCPServer | None,
+    current: dict[str, list[str]],
+    wanted: dict[str, list[str]],
+    limits: ImportLimits | None,
 ) -> None:
+    if limits and not limits.allow({"permissions": current}, {"permissions": wanted}):
+        raise TransferFailed("access_required", 403)
     for name, values in wanted.items():
         _, write, key = _TOOLS_SERVICES[name]
         # The component applies what it accepts, so a refusal still wrote.
@@ -170,7 +203,9 @@ async def _write_tools(
 
 
 async def _apply_app_options(
-    server: HomeAssistantSmartMCPServer | None, settings: dict[str, Any]
+    server: HomeAssistantSmartMCPServer | None,
+    settings: dict[str, Any],
+    limits: ImportLimits | None,
 ) -> bool:
     """Post the app-managed settings to Supervisor; True when any changed."""
     if not is_running_in_addon() or server is None:
@@ -183,10 +218,24 @@ async def _apply_app_options(
         for section in _APP_SECTIONS
         for values in [settings.get(section) or {}]
         for name in transfer.app_option_fields(section)
-        if name in live and name in values and live[name] != values[name]
+        if name in live
+        and name in values
+        and live[name] != values[name]
+        and name not in (limits.keep.get(section, ()) if limits else ())
     }
     if not changes:
         return False
+    if limits:
+        old = {
+            s: {k: live.get(k) for k in transfer.app_option_fields(s)}
+            for s in _APP_SECTIONS
+        }
+        new = {
+            s: {**old[s], **{k: v for k, v in changes.items() if k in old[s]}}
+            for s in _APP_SECTIONS
+        }
+        if not limits.allow(old, new):
+            raise TransferFailed("access_required", 403)
     ok, err = await _supervisor._supervisor_merge_and_post_options(
         server.settings.verify_ssl, changes
     )
@@ -206,13 +255,12 @@ async def _undo(
 ) -> bool:
     """Put back this import's writes; False when any undo failed."""
     complete = True
-    if tools is not None:
+    for name, values in (tools or {}).items():
+        _, write, key = _TOOLS_SERVICES[name]
         try:
-            for name, values in tools.items():
-                _, write, key = _TOOLS_SERVICES[name]
-                await _tools_service(server, write, {key: values})
+            await _tools_service(server, write, {key: values})
         except Exception:
-            logger.exception("Settings import could not undo the permissions")
+            logger.exception("Settings import could not undo %s", name)
             complete = False
     if changes is not None:
         try:
@@ -224,8 +272,24 @@ async def _undo(
     return complete
 
 
+@dataclass(frozen=True)
+class ImportLimits:
+    """What an import may change, decided against the state it replaces.
+
+    ``keep`` names, per section, settings that keep this server's values;
+    ``allow`` sees the replaced and resulting ``policy``, ``visibility``,
+    ``features``, ``backup`` and File & YAML Tools ``permissions`` and may
+    refuse.
+    """
+
+    keep: Mapping[str, Collection[str]]
+    allow: Callable[[dict[str, Any], dict[str, Any]], bool]
+
+
 async def import_bundle(
-    server: HomeAssistantSmartMCPServer | None, bundle: Any
+    server: HomeAssistantSmartMCPServer | None,
+    bundle: Any,
+    limits: ImportLimits | None = None,
 ) -> dict[str, Any]:
     """Apply an export's settings and permissions; roll everything back on failure."""
     try:
@@ -238,15 +302,17 @@ async def import_bundle(
     async with get_config_write_lock():
         changes = tools = None
         try:
-            changes = await _restore_files(backup.server_settings)
+            changes = await _restore_files(backup.server_settings, limits)
             if backup.tools is not None:
                 # Recorded before the first write so any failure can undo it.
                 tools = await _read_tools(server)
                 if tools is None:
                     skipped.append("file_permissions")
                 else:
-                    await _write_tools(server, backup.tools)
-            app_changed = await _apply_app_options(server, backup.server_settings)
+                    await _write_tools(server, tools, backup.tools, limits)
+            app_changed = await _apply_app_options(
+                server, backup.server_settings, limits
+            )
         except Exception as err:
             if isinstance(err, TransferFailed):
                 logger.info("Settings import refused (%s)", err.code)
