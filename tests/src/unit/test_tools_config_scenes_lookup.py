@@ -356,6 +356,8 @@ class TestNotAStorageScene:
         result = await tools.ha_config_remove_scene(scene_id="scene.rv_dyn", wait=True)
 
         assert result["success"] is True
+        assert result["scene_id"] == "scene.rv_dyn"
+        assert result["deleted_with"] == "scene.delete"
         assert hass.states.get("scene.rv_dyn") is None
         assert await stored_scenes(hass) == [scene("test_scene", "Test Scene")]
 
@@ -398,6 +400,10 @@ class TestNotAStorageScene:
         )
 
         assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+        # Core's refusal leads.
+        assert body["error"]["message"].startswith(
+            ("Validation error: The scene", f"Validation error: {entity_id}")
+        )
         assert hass.states.get(entity_id) is not None
 
     @pytest.mark.parametrize("transform", [False, True])
@@ -905,6 +911,36 @@ class TestEntityIdForm:
 
         assert result["success"] is True
         assert hass.states.get("scene.key_a") is None
+        assert await stored_scenes(hass) == before
+
+    async def test_remove_of_a_yaml_scene_named_after_another_key_names_no_key(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """scene.key_a is an id-less YAML scene, so no registered entity, while
+        key_a holds "First": Core's refusal leads, and the bare key, which
+        would delete "First", is not suggested."""
+        tools = await scene_tools(
+            hass,
+            core_client,
+            monkeypatch,
+            [scene("key_a", "First")],
+            yaml_only=[{"name": "Key A", "entities": TV_ON}],
+        )
+        before = await stored_scenes(hass)
+
+        body = await rejected_call_body(
+            tools.ha_config_remove_scene(scene_id="scene.key_a", wait=False)
+        )
+
+        assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+        assert body["error"]["message"].startswith(
+            "Validation error: The scene scene.key_a is not"
+        )
+        assert not any("'key_a'" in s for s in body["error"]["suggestions"])
+        assert hass.states.get("scene.key_a") is not None
         assert await stored_scenes(hass) == before
 
     @pytest.mark.parametrize("search_in_config", [False, True])

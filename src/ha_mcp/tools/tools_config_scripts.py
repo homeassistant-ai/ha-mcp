@@ -345,7 +345,8 @@ class ConfigScriptTools:
         ``resolved_id`` lets the upsert call site skip the redundant re-resolve
         (issue #1813 Phase 0); it is ``None`` when the envelope omitted the key,
         so the upsert re-resolves rather than writing to the caller slug. Raises
-        ToolError if the hash does not match (conflict).
+        ToolError when a bare ``script_id`` resolved to another script's key, or
+        when the hash does not match (conflict).
         """
         (
             actual_config,
@@ -375,7 +376,8 @@ class ConfigScriptTools:
         ``script_id`` is always the CALLER's identifier (used to default a
         missing alias). ``resolved_id``, the storage key the tool resolved, is
         passed as the write target so the REST client skips the redundant
-        entity-registry lookup (issue #1813 Phase 0). Passing the caller id
+        entity-registry lookup (issue #1813 Phase 0); ``None`` lets the REST
+        client resolve. Passing the caller id
         separately keeps a renamed script's alias caller-facing (#1935).
         """
         result: dict[str, Any] = await self._client.upsert_script_config(

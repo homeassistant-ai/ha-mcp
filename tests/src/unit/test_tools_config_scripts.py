@@ -637,6 +637,28 @@ class TestCollidingIds:
             "key_b": "B",
         }
 
+    async def test_a_snapshot_by_entity_id_restores_that_entitys_script(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        backup_manager: BackupManager,
+    ) -> None:
+        """A snapshot taken as script.key_a holds key_b and restores it there."""
+        path = await backup_manager.maybe_snapshot("script", "script.key_a", force=True)
+        assert path is not None
+        await tools.ha_config_set_script(
+            script_id="script.key_a",
+            config={"alias": "Changed", "sequence": [{"event": "ran_b"}]},
+            wait=False,
+        )
+
+        await backup_manager.restore_snapshot(path.name)
+
+        assert {k: s["alias"] for k, s in (await _stored(hass)).items()} == {
+            "key_a": "A",
+            "key_b": "B",
+        }
+
     async def test_a_removed_key_has_no_snapshot(
         self, tools: ConfigScriptTools, backup_manager: BackupManager
     ) -> None:

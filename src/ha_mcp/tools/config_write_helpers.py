@@ -38,9 +38,9 @@ def refuse_write_by_bare_id_of_another_key(
 ) -> None:
     """Refuse a write by a bare id that resolved to another storage key.
 
-    It resolves so only when nothing is stored under the id and the entity
-    ``<domain>.<id>`` belongs to another key: a recreate of a removed key would
-    overwrite the object that holds that entity_id.
+    The resolvers return another key for a bare id only when nothing is stored
+    under it and the entity ``<domain>.<id>`` belongs to that key; writing there
+    would overwrite that object instead of creating one under the bare key.
     """
     if storage_key in (None, identifier) or identifier.startswith(f"{domain}."):
         return
@@ -52,7 +52,8 @@ def refuse_write_by_bare_id_of_another_key(
             f"is '{storage_key}'",
             suggestions=[
                 f"Pass '{domain}.{identifier}' to update that {domain}",
-                f"To create a new {domain}, pass a storage key no {domain} uses",
+                f"To create a new {domain}, pass a key whose {domain}.<key> "
+                f"entity_id no other {domain} has",
             ],
             context={f"{domain}_id": identifier, "storage_key": storage_key},
         )

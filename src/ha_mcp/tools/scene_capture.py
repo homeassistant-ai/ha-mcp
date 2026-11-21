@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn
 
 from ..client.exceptions import HomeAssistantAPIError, HomeAssistantError
 from ..errors import ErrorCode, create_error_response
@@ -38,6 +38,29 @@ async def _read_states(client: Any, entity_ids: list[str]) -> list[dict[str, Any
     return states
 
 
+def _refuse_without_component(read: str, context: dict[str, Any]) -> NoReturn:
+    """capture_devices without the component's ``read``: nothing is written."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            f"capture_devices needs the ha_mcp_tools component's {read}, which "
+            "it does not serve or did not answer; nothing was written",
+            suggestions=[
+                "Install or update the ha_mcp_tools component",
+                (
+                    "If it is installed and current, retry; the server log "
+                    "names the failure"
+                ),
+                (
+                    "Or capture the device's entities with capture_entities; "
+                    "the scene editor then lists them as single entities"
+                ),
+            ],
+            context=context,
+        )
+    )
+
+
 async def _device_members(
     client: Any, device_ids: list[str], problems: list[dict[str, Any]]
 ) -> dict[str, list[str]]:
@@ -50,54 +73,18 @@ async def _device_members(
     if not device_ids:
         return members
     editor = await ask_component(client, "scene_ignored_domains")
-    if editor is not None and editor.get("domains") is None:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.INTERNAL_ERROR,
-                "The ha_mcp_tools component found no list of the domains the "
-                "scene editor ignores in the installed frontend, so the device's "
-                "entities cannot be picked as the editor picks them; nothing was "
-                "written",
-                suggestions=[
-                    (
-                        "Capture the device's entities with capture_entities; "
-                        "the scene editor then lists them as single entities"
-                    ),
-                    "Report it with ha_report_issue: the frontend moved the list",
-                ],
-                context={"device_ids": device_ids},
-            )
+    if editor is None:
+        _refuse_without_component(
+            "read of the domains the scene editor ignores",
+            {"device_ids": device_ids},
         )
-    ignored = (editor or {}).get("domains")
+    ignored = editor["domains"]
     for device_id in device_ids:
         reply = await fetch_device_via_component(
             client, device_id, include_entities=True
         )
-        if (
-            ignored is None
-            or reply is None
-            or not isinstance(reply.get("entities"), list)
-        ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.COMPONENT_NOT_INSTALLED,
-                    "capture_devices needs the ha_mcp_tools component's device "
-                    "read and its read of the domains the scene editor ignores, "
-                    "one of which is missing or did not answer; nothing was written",
-                    suggestions=[
-                        "Install or update the ha_mcp_tools component",
-                        (
-                            "If it is installed and current, retry; the server log "
-                            "names the failure"
-                        ),
-                        (
-                            "Or capture the device's entities with capture_entities; "
-                            "the scene editor then lists them as single entities"
-                        ),
-                    ],
-                    context={"device_id": device_id},
-                )
-            )
+        if reply is None or not isinstance(reply.get("entities"), list):
+            _refuse_without_component("device read", {"device_id": device_id})
         if reply["device"] is None:
             problems.append(
                 create_error_response(

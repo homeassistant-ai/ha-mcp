@@ -61,13 +61,16 @@ def scene_body_problems(
     return problems
 
 
-def raise_scene_id_refusal(identifier: str, storage_key: str) -> NoReturn:
+def raise_scene_id_refusal(
+    identifier: str, storage_key: str, *, core: str = ""
+) -> NoReturn:
     """``identifier`` is ``scene.<storage_key>``: no such entity is registered,
-    while that storage key holds a scene."""
+    while that storage key holds a scene. ``core`` is Core's refusal, which
+    then leads the message."""
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_FAILED,
-            f"{identifier} is no registered entity, while storage key "
+            f"{_lead(core)}{identifier} is no registered entity, while storage key "
             f"'{storage_key}' holds a scene; scene.<x> is read as an entity_id, "
             f"and the bare '{storage_key}' names the scene stored under that key",
             suggestions=[
@@ -170,19 +173,26 @@ def raise_bare_id_of_another_key(scene_id: str, storage_key: str) -> NoReturn:
     )
 
 
+def _lead(core: str) -> str:
+    return f"{core.rstrip('.')}. " if core else ""
+
+
 def raise_scene_not_storage_error(
-    scene_id: str, platform: str | None, *, remove: bool = False
+    scene_id: str, platform: str | None, *, remove: bool = False, core: str = ""
 ) -> NoReturn:
     """Raise ``CONFIG_NOT_FOUND`` for a scene that exists but has no editable config.
 
     The scene entity was confirmed to exist - in the entity registry, or, for an
     ``id``-less YAML scene that has no registry entry, in the state machine - but
     ``config/scene/config/{id}``, backed only by the managed ``scenes.yaml``, has
-    no entry for it. That is the not-a-storage-scene case (a Hue/vendor scene, or
-    a scene defined directly in YAML): the entity EXISTS, so ``ENTITY_NOT_FOUND``
-    would be wrong (issue #1971). ``platform`` names the owning integration when
-    the registry exposed it; the message stays generic otherwise. ``remove``
-    names the entity_id form, by which a scene from ``scene.create`` is deleted.
+    no entry for it. That is the not-a-storage-scene case (a Hue/vendor scene, a
+    scene defined directly in YAML, or one made by ``scene.create``): the entity
+    EXISTS, so ``ENTITY_NOT_FOUND`` would be wrong (issue #1971). ``platform``
+    names the owning integration when the registry exposed it; the message stays
+    generic otherwise. With ``remove`` and a bare ``scene_id`` on that generic
+    branch, the first suggestion names the entity_id form, by which a
+    ``scene.create`` scene is deleted. ``core`` is Core's refusal, which then
+    leads the message.
     """
     entity_id = f"scene.{scene_id.removeprefix('scene.')}"
     suggestions = [
@@ -215,7 +225,7 @@ def raise_scene_not_storage_error(
     raise_tool_error(
         create_error_response(
             ErrorCode.CONFIG_NOT_FOUND,
-            f"Scene '{entity_id}' exists but has no editable Home Assistant "
+            f"{_lead(core)}Scene '{entity_id}' exists but has no editable Home Assistant "
             f"storage configuration.{platform_note}",
             suggestions=suggestions,
             context={"scene_id": scene_id, "platform": platform},

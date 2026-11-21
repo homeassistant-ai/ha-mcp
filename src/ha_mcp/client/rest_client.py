@@ -2002,9 +2002,9 @@ class HomeAssistantClient:
     ) -> dict[str, Any]:
         """Create or update Home Assistant script configuration.
 
-        ``resolved_id``, when provided, is the already-resolved storage key used
-        as the write target (the caller ran :meth:`_resolve_script_id`),
-        skipping the redundant entity-registry lookup. ``script_id`` stays the
+        ``resolved_id``, when provided, is the storage key written under,
+        unresolved: a key the caller resolved with :meth:`_resolve_script_id`,
+        or a bare key that must not be resolved (a backup restore). ``script_id`` stays the
         CALLER's identifier and is used only to default a missing ``alias`` — a
         renamed script (whose storage key differs from the entity slug the
         caller passed) keeps its caller-facing name rather than resetting the

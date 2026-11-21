@@ -140,7 +140,7 @@ the info handshake carries no capability entry:
   call's target with it. See ``flow_record.py``.
 * ``ha_mcp_tools/scene_ignored_domains`` — the domains the scene editor leaves
   out of a picked device's entities, read from the installed frontend build,
-  where the list lives only. See ``scene_editor.py``.
+  the only place the list exists. See ``scene_editor.py``.
 * ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set
