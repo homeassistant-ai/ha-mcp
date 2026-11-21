@@ -102,6 +102,21 @@ async def _read_tools(
     return values
 
 
+async def _app_options(
+    server: HomeAssistantSmartMCPServer, code: str
+) -> dict[str, Any]:
+    """The app's live Supervisor options; an unreadable answer fails the transfer."""
+    options, err = await _supervisor._supervisor_fetch_current_options(
+        server.settings.verify_ssl
+    )
+    if err is not None:
+        logger.warning(
+            "Settings transfer could not read the app options (%s)", err.kind
+        )
+        raise TransferFailed(code, 500)
+    return options
+
+
 async def export_bundle(server: HomeAssistantSmartMCPServer | None) -> dict[str, Any]:
     """This server's settings file: no connection, which only the HA entry has."""
     try:
@@ -110,8 +125,8 @@ async def export_bundle(server: HomeAssistantSmartMCPServer | None) -> dict[str,
         )
     except transfer.LocalSettingsUnusable as err:
         raise TransferFailed("invalid_server_settings", 400) from err
-    if is_running_in_addon():
-        live = await _supervisor._live_addon_options(server)
+    if is_running_in_addon() and server is not None:
+        live = await _app_options(server, "export_failed")
         for section in _APP_SECTIONS:
             app = {k: live[k] for k in transfer.app_option_fields(section) if k in live}
             settings[section] = {**(settings[section] or {}), **app} or None
@@ -210,7 +225,7 @@ async def _apply_app_options(
     """Post the app-managed settings to Supervisor; True when any changed."""
     if not is_running_in_addon() or server is None:
         return False
-    live = await _supervisor._live_addon_options(server)
+    live = await _app_options(server, "restore_failed")
     # Only values the file states: an app export states every app option,
     # and another installation's file states only its overrides.
     changes = {

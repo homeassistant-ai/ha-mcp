@@ -336,3 +336,44 @@ class TestInsideTheApp:
             "restore_failed",
         )
         assert await _export(monkeypatch, core_client) == original
+
+
+class TestAnUnreadableAppConfiguration:
+    """Supervisor cannot report the app's options."""
+
+    async def test_export_fails_instead_of_leaving_the_app_options_out(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        supervisor: Supervisor,
+        core_client: HomeAssistantClient,
+    ) -> None:
+        in_app(monkeypatch, supervisor)
+        supervisor.refuse(*SELF_INFO, "unavailable", status=503)
+
+        response = await post_settings(monkeypatch, core_client, EXPORT, {})
+
+        assert (response.status_code, response.json()["error"]) == (
+            500,
+            "export_failed",
+        )
+
+    async def test_import_fails_and_restores_the_files(
+        self,
+        settings_world: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        supervisor: Supervisor,
+        core_client: HomeAssistantClient,
+    ) -> None:
+        bundle = await _export(monkeypatch, core_client)
+        bundle["server_settings"]["backup"] = {"auto_backup_retain_per_entity": 30}
+        in_app(monkeypatch, supervisor)
+        supervisor.refuse(*SELF_INFO, "unavailable", status=503)
+
+        response = await post_settings(monkeypatch, core_client, IMPORT, bundle)
+
+        assert (response.status_code, response.json()["error"]) == (
+            500,
+            "restore_failed",
+        )
+        assert not (settings_world / "backup_settings.json").exists()
+        assert supervisor.sent(*SELF_OPTIONS) == []
