@@ -50,7 +50,12 @@ from .config_write_helpers import (
     merge_validation_meta,
     refuse_write_by_bare_id_of_another_key,
 )
-from .entity_registration import resolve_entity_id_after_write
+from .entity_registration import (
+    LOOKUP_ERRORS,
+    resolve_entity_id_after_write,
+    script_entity_id,
+    script_entity_or_warning,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -197,15 +202,17 @@ class ConfigScriptTools:
 
         # Fetch category from entity registry (best-effort)
         # (injected after hash so transient registry failures don't affect the hash)
-        entity_id = await self._script_entity_id(
-            script_id, config_result.get("script_id")
-        )
         cat_warnings: list[str] = []
-        cat_id = await fetch_entity_category(
-            self._client, entity_id, "script", cat_warnings
+        key = config_result.get("script_id")
+        entity_id = await script_entity_or_warning(
+            self._client, script_id, key, cat_warnings, "category unavailable"
         )
-        if cat_id:
-            actual_config["category"] = cat_id
+        if entity_id:
+            cat_id = await fetch_entity_category(
+                self._client, entity_id, "script", cat_warnings
+            )
+            if cat_id:
+                actual_config["category"] = cat_id
 
         # Issue #1334: return the canonical storage key from the
         # rest_client envelope so callers can thread the result into
@@ -242,22 +249,6 @@ class ConfigScriptTools:
         if cat_warnings:
             response.setdefault("warnings", []).extend(cat_warnings)
         return response
-
-    async def _script_entity_id(
-        self, script_id: str, storage_key: str | None = None
-    ) -> str:
-        """The entity of the script ``script_id`` names, matched by its storage
-        key: a renamed script's entity is not ``script.<key>``, and an
-        unregistered ``script.<x>`` names the script stored under ``<x>``."""
-        bare_id = script_id.removeprefix("script.")
-        storage_key = storage_key or await self._client._resolve_script_id(script_id)
-        if storage_key != bare_id:
-            # Only the registry entry of script.<bare_id> resolves to another
-            # key (HomeAssistantClient._resolve_script_id).
-            return f"script.{bare_id}"
-        return await resolve_entity_id_after_write(
-            self._client, storage_key, "script", timeout=0
-        )
 
     async def _raise_script_not_found(
         self, script_id: str, *, bare_key: bool = False
@@ -766,6 +757,21 @@ class ConfigScriptTools:
             augment_error_dict_with_skill_content(error, bp_warnings)
             raise_tool_error(error)
 
+    async def _run_target(self, script_id: str, run: str | None) -> str:
+        """The entity a run calls: one registry lookup, not a registration poll."""
+        try:
+            entity_id = await script_entity_id(self._client, script_id)
+        except LOOKUP_ERRORS as exc:
+            exception_to_structured_error(
+                exc,
+                context={"action": run, "script_id": script_id},
+                suggestions=[
+                    "Nothing was started: the entity registry lookup failed; retry"
+                ],
+            )
+            raise  # unreachable: exception_to_structured_error always raises
+        return entity_id or await self._raise_script_not_found(script_id)
+
     async def _run_script_control(
         self,
         script_id: str,
@@ -802,8 +808,7 @@ class ConfigScriptTools:
                     context={"action": "run", "script_id": script_id, "run": run},
                 )
             )
-        # An existing script needs one registry lookup, not a registration poll.
-        entity_id = await self._script_entity_id(script_id)
+        entity_id = await self._run_target(script_id, run)
         # HA's script services are a silent no-op on an unknown entity.
         try:
             await self._client.get_entity_state(entity_id)
@@ -1113,12 +1118,18 @@ class ConfigScriptTools:
                 ],
                 context={"operation": "remove_script"},
             )
-            # The entity is gone from the registry once its script is deleted.
+            # The delete goes by the key; the wait needs the entity, which is
+            # gone from the registry once its script is deleted.
             key = script_id if bare else None
-            entity_id = await self._script_entity_id(script_id, key) if wait else ""
+            unverified: list[str] = []
+            entity_id = wait and await script_entity_or_warning(
+                self._client, script_id, key, unverified, "Deletion not verified"
+            )
             result = await self._client.delete_script_config(script_id)
-            if wait:
+            if entity_id:
                 await verify_entity_removed(self._client, entity_id, result)
+            if unverified:
+                result.setdefault("warnings", []).extend(unverified)
 
             return {"success": True, "action": "delete", **result}
         except ToolError:

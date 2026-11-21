@@ -1965,7 +1965,7 @@ class HomeAssistantClient:
         )
         qualified = identifier != bare_id
         # Another key only from script.<bare_id>'s entry: the script tools'
-        # _script_entity_id relies on it.
+        # entity_registration.script_entity_id relies on it.
         if unique_id and (
             qualified
             or unique_id == bare_id

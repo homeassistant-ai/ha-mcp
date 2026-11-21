@@ -15,7 +15,9 @@ from homeassistant.helpers import entity_registry as er
 
 from ha_mcp.backup_manager import BackupManager, MandatoryBackupError
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.backup_on_demand import capture_on_demand
 
+from ._tool_errors import rejected_call_body
 from ._tools_config_scenes_core import TV_ON, scene, scene_tools, stored_scenes
 
 
@@ -102,6 +104,30 @@ async def test_the_comparison_finds_a_deleted_scene_gone(
     )
 
     assert current is None
+
+
+async def test_a_deleted_key_has_no_snapshot(
+    backup_manager: BackupManager, snapshot_of_deleted_movie: str
+) -> None:
+    """A snapshot by the bare key movie never holds other, whose entity can be
+    scene.movie."""
+    reasons: list[str] = []
+
+    path = await backup_manager.maybe_snapshot(
+        "scene", "movie", force=True, skip_reasons=reasons
+    )
+
+    assert path is None
+    assert reasons == []
+
+
+async def test_an_on_demand_snapshot_by_a_bare_key_names_the_entity_form(
+    backup_manager: BackupManager, snapshot_of_deleted_movie: str
+) -> None:
+    body = await rejected_call_body(capture_on_demand(backup_manager, "scene", "movie"))
+
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert "'scene.movie'" in body["error"]["suggestions"][0]
 
 
 async def test_a_deleted_scene_comes_back_under_its_own_key(

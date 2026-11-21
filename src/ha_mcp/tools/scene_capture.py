@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, NoReturn
 
-from ..client.exceptions import HomeAssistantAPIError, HomeAssistantError
+from ..client.exceptions import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+    HomeAssistantError,
+)
 from ..errors import ErrorCode, create_error_response
 from .component_api import ask_component
 from .component_devices import fetch_device_via_component
@@ -72,7 +76,11 @@ async def _device_members(
     members: dict[str, list[str]] = {}
     if not device_ids:
         return members
-    editor = await ask_component(client, "scene_ignored_domains")
+    try:
+        editor = await ask_component(client, "scene_ignored_domains")
+    except HomeAssistantConnectionError:
+        # A lost reply is no answer, as for the device read below.
+        editor = None
     if editor is None:
         _refuse_without_component(
             "read of the domains the scene editor ignores",

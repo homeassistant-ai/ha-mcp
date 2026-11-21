@@ -117,7 +117,7 @@ from .backup_registry_items import fetch_label as _fetch_label
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
-from .backup_scenes import current_scene_key, fetch_scene, restore_scene
+from .backup_scenes import fetch_scene, restore_scene, scene_key
 from .backup_snapshot_identity import (
     entity_id_aliases as _entity_id_aliases,
 )
@@ -1678,7 +1678,7 @@ class BackupManager:
         if domain == "todo_item":
             return todo_current_key(target, data["config"])
         if domain == "scene":
-            return await current_scene_key(self._client, target, data["config"])
+            return scene_key(data["config"]) or target
         return target
 
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
@@ -2072,12 +2072,13 @@ async def _ws_send(client: Any, message: Mapping[str, Any]) -> Any:
     return envelope
 
 
-# Automation / Script / Scene — reuse the typed client helpers, which
-# handle id-resolution (entity_id ↔ unique_id) and unwrap response envelopes
+# Automation / Script — reuse the typed client helpers, which handle
+# id-resolution (entity_id ↔ unique_id) and unwrap response envelopes
 # identically to how ``ha_config_set_<domain>`` itself fetches state for
 # the existing optimistic-locking flow. Going through these helpers
 # guarantees the snapshot's ``config`` shape matches what the restorer
-# will re-POST.
+# will re-POST. A bare script id skips them and is read as a storage key only,
+# as the scene fetch in backup_scenes does.
 
 
 async def _fetch_automation(client: Any, entity_id: str) -> Any:

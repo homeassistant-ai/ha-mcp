@@ -31,7 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 
 WS_SCENE_IGNORED_DOMAINS = "ha_mcp_tools/scene_ignored_domains"
 # Advertised by websocket_api's info; without it, or when the command is
-# refused, the server refuses capture_devices.
+# refused or unanswered, the server refuses capture_devices.
 CAPABILITY = "scene_ignored_domains"
 # scene.ts's deleteScene; the module that holds it is scene.ts.
 _ANCHOR = 'callApi("DELETE",`config/scene/config/'

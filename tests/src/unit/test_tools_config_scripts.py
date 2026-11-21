@@ -27,7 +27,7 @@ from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.tools.ws_waiters import wait_for_entity_registered
 
 from ._blueprint_actions_core import BEDTIME, SCRIPT_PATH
-from ._command_faults import registry_lookup_failing
+from ._command_faults import registry_lookup_failing, unanswered
 from ._config_dir_yaml import setup_from_configuration, write_config_files
 from ._tool_errors import rejected_call_body
 
@@ -686,6 +686,86 @@ class TestCollidingIds:
 
         assert fired == [event]
 
+    async def test_a_key_the_registry_cannot_look_up_runs_nothing(
+        self, hass: HomeAssistant, tools: ConfigScriptTools
+    ) -> None:
+        """A failed lookup is no answer: script.key_a, the entity id key_a
+        would have without its rename, is B."""
+        fired: list[str] = []
+        for name in ("ran_a", "ran_b"):
+            hass.bus.async_listen(name, lambda e: fired.append(str(e.event_type)))
+
+        with registry_lookup_failing(hass, "config/entity_registry/list"):
+            body = await rejected_call_body(
+                tools.ha_config_set_script(script_id="key_a", run="start")
+            )
+        await hass.async_block_till_done()
+
+        assert "registry unavailable" in body["error"]["message"]
+        assert "Nothing was started" in " ".join(body["error"]["suggestions"])
+        assert fired == []
+
+    async def test_an_unanswered_lookup_runs_nothing(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fired: list[str] = []
+        for name in ("ran_a", "ran_b"):
+            hass.bus.async_listen(name, lambda e: fired.append(str(e.event_type)))
+
+        async with unanswered(hass, "config/entity_registry/list", monkeypatch):
+            body = await rejected_call_body(
+                tools.ha_config_set_script(script_id="key_a", run="start")
+            )
+        await hass.async_block_till_done()
+
+        assert "Nothing was started" in " ".join(body["error"]["suggestions"])
+        assert fired == []
+
+    async def test_a_key_the_registry_cannot_look_up_is_removed_unverified(
+        self, hass: HomeAssistant, tools: ConfigScriptTools
+    ) -> None:
+        """The delete goes by the key; only the wait needs its entity."""
+        with registry_lookup_failing(hass, "config/entity_registry/list"):
+            result = await tools.ha_config_remove_script(script_id="key_a")
+
+        assert set(await _stored(hass)) == {"key_b"}
+        assert any("registry unavailable" in w for w in result["warnings"])
+
+    async def test_a_key_without_a_registry_entry_has_no_entity(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+    ) -> None:
+        """Core registers every loaded script under its key, so no entry is no
+        entity: script.key_a is B's, which neither runs nor lends its category."""
+        category_id = category_registry.async_create(
+            name="Lighting", scope="script"
+        ).category_id
+        entity_registry.async_update_entity(
+            "script.key_a", categories={"script": category_id}
+        )
+        entity_registry.async_remove("script.first")
+        await hass.async_block_till_done()
+        fired: list[str] = []
+        for name in ("ran_a", "ran_b"):
+            hass.bus.async_listen(name, lambda e: fired.append(str(e.event_type)))
+
+        body = await rejected_call_body(
+            tools.ha_config_set_script(script_id="key_a", run="start")
+        )
+        got = await tools.ha_config_get_script(script_id="key_a")
+        await hass.async_block_till_done()
+
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert fired == []
+        assert got["config"]["alias"] == "A"
+        assert "category" not in got["config"]
+
     @pytest.mark.parametrize(
         ("script_id", "entity_id"),
         [
@@ -712,6 +792,30 @@ class TestCollidingIds:
         got = await tools.ha_config_get_script(script_id=script_id)
 
         assert got["config"]["category"] == category_id
+
+    async def test_a_get_by_a_key_the_registry_cannot_look_up_reads_no_category(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+    ) -> None:
+        """The config still reads, and B's category, on script.key_a, is not
+        reported for A."""
+        category_id = category_registry.async_create(
+            name="Lighting", scope="script"
+        ).category_id
+        entity_registry.async_update_entity(
+            "script.key_a", categories={"script": category_id}
+        )
+
+        with registry_lookup_failing(hass, "config/entity_registry/list"):
+            got = await tools.ha_config_get_script(script_id="key_a")
+
+        assert got["config"]["alias"] == "A"
+        assert "category" not in got["config"]
+        assert len(got["warnings"]) == 1
+        assert "registry unavailable" in got["warnings"][0]
 
     async def test_the_id_search_reports_opens_that_script(
         self, tools: ConfigScriptTools, core_client: HomeAssistantClient

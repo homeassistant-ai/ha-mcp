@@ -31,7 +31,10 @@ async def current_scene_key(client: Any, entity_id: str, config: Any) -> str | N
 
 
 async def fetch_scene(client: Any, entity_id: str) -> Any:
+    # A bare id is a storage key: its snapshot holds only the scene stored there.
     try:
+        if not entity_id.startswith("scene."):
+            return await client._request("GET", f"config/scene/config/{entity_id}")
         result = await client.get_scene_config(entity_id)
     except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:

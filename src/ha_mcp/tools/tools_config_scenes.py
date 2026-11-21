@@ -1386,21 +1386,21 @@ class ConfigSceneTools:
             },
             expected_error_codes=frozenset({"service_validation_error"}),
         )
-        if reply.get("success"):
-            return {"scene_id": scene_id, "deleted_with": "scene.delete"}
-        refusal = (
-            reply.get("translation_key")
-            if reply.get("translation_domain") == "scene"
-            else None
-        )
-        core = core_error_message(reply.get("error", ""))
-        if refusal == "entity_not_scene" and isinstance(
-            target, SceneIdNotAnEntityError
-        ):
-            raise_scene_id_refusal(target.identifier, target.storage_key, core=core)
-        if refusal in ("entity_not_scene", "entity_not_dynamically_created"):
-            raise_scene_not_storage_error(scene_id, platform, core=core)
-        raise_entity_refusal("Could not delete scene", reply, scene_id)
+        if not reply.get("success"):
+            refusal = (
+                reply.get("translation_key")
+                if reply.get("translation_domain") == "scene"
+                else None
+            )
+            core = core_error_message(reply.get("error", ""))
+            if refusal == "entity_not_scene" and isinstance(
+                target, SceneIdNotAnEntityError
+            ):
+                raise_scene_id_refusal(target.identifier, target.storage_key, core=core)
+            if refusal in ("entity_not_scene", "entity_not_dynamically_created"):
+                raise_scene_not_storage_error(scene_id, platform, core=core)
+            raise_entity_refusal("Could not delete scene", reply, scene_id)
+        return {"scene_id": scene_id, "deleted_with": "scene.delete"}
 
 
 def register_config_scene_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

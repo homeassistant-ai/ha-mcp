@@ -109,14 +109,16 @@ def before_handling(
 
 
 @contextmanager
-def registry_lookup_failing(hass: HomeAssistant) -> Iterator[None]:
-    """Core's handler of ``config/entity_registry/get`` raises meanwhile, so
-    Core answers each lookup with an error other than ``not_found``."""
+def registry_lookup_failing(
+    hass: HomeAssistant, command: str = "config/entity_registry/get"
+) -> Iterator[None]:
+    """Core's handler of ``command`` raises meanwhile, so Core answers each
+    registry read with an error other than ``not_found``."""
 
     def fail(msg: dict[str, Any]) -> None:
         raise HomeAssistantError("registry unavailable")
 
-    with before_handling(hass, "config/entity_registry/get", fail):
+    with before_handling(hass, command, fail):
         yield
 
 

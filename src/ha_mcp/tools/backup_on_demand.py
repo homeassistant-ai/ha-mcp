@@ -46,17 +46,24 @@ async def capture_on_demand(mgr: BackupManager, domain: str, entity_id: str) -> 
             )
         )
     if path is None:
+        suggestions = [
+            "Verify the entity exists via the matching ha_config_get_* tool",
+            "For helpers, pass domain='helper_<helper_type>', e.g. "
+            + "'helper_input_boolean'",
+        ]
+        if domain in ("scene", "script") and "." not in entity_id:
+            suggestions.insert(
+                0,
+                f"A bare {domain} id is read as a storage key; for the entity "
+                f"{domain}.{entity_id}, pass '{domain}.{entity_id}'",
+            )
         raise_tool_error(
             create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
                 f"Could not snapshot {domain}:{entity_id} — entity not found "
                 "or fetch returned no config",
                 context={"domain": domain, "entity_id": entity_id},
-                suggestions=[
-                    "Verify the entity exists via the matching ha_config_get_* tool",
-                    "For helpers, pass domain='helper_<helper_type>', e.g. "
-                    + "'helper_input_boolean'",
-                ],
+                suggestions=suggestions,
             )
         )
     return path
