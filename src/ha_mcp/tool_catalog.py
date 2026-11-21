@@ -49,29 +49,14 @@ class CacheHintArgs(TypedDict):
 
 # MCP 2026-07-28 (SEP-2549) puts ``ttlMs``/``cacheScope`` on every cacheable
 # result: tools/list, prompts/list, resources/list, resources/templates/list,
-# resources/read and server/discover. With one Home Assistant credential per
-# server, each is the same for every caller of an endpoint (the catalog follows
-# the deployment's settings and the URL; the resources are the bundled skill
-# files), so the scope is ``public`` and shared caches such as MCP gateways may
-# serve one copy to all users. The SDK default, ``private``, makes them treat it
-# as per-user. The TTL bounds staleness after a live settings change, such as
-# Read Only Mode toggled without a restart; the write blocker still applies at
-# call time.
-CATALOG_CACHE_TTL_S: Final = 300
-
-
-def catalog_cache_hint(client: object | None) -> CacheHintArgs:
-    """The cache hint for a server whose tools run on ``client``.
-
-    A per-request client (the OAuth proxy, which has ``current_client``) runs
-    each caller on their own credential, and the component-capability
-    transforms shape ``ha_search`` and the helper schema from that caller's own
-    probe (``ha_mcp_tools/info`` is admin-only), so its catalog stays private.
-    """
-    per_request = getattr(type(client), "current_client", None) is not None
-    scope: Literal["public", "private"] = "private" if per_request else "public"
-    return {"cache_ttl": CATALOG_CACHE_TTL_S, "cache_scope": scope}
-
+# resources/read and server/discover. Each is the same for every caller of an
+# endpoint (the catalog follows the deployment's settings and the URL, never
+# the credential; the resources are the bundled skill files), so the scope is
+# ``public`` and shared caches such as MCP gateways may serve one copy to all
+# users. The SDK default, ``private``, makes them treat it as per-user. The TTL
+# bounds staleness after a live settings change, such as Read Only Mode
+# toggled without a restart; the write blocker still applies at call time.
+CATALOG_CACHE_HINT: Final[CacheHintArgs] = {"cache_ttl": 300, "cache_scope": "public"}
 
 _endpoint_mode: ContextVar[CatalogMode | None] = ContextVar(
     "ha_mcp_endpoint_catalog_mode", default=None
