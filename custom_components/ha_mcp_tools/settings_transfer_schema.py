@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 import voluptuous as vol
 
@@ -33,21 +32,13 @@ def _port(value: Any) -> int:
 
 
 def _external_url(value: str) -> str:
-    try:
-        url = urlsplit(value)
-        _ = url.port  # Forces validation of malformed or out-of-range ports.
-        if not value or (
-            url.scheme in {"http", "https"}
-            and url.hostname
-            and url.username is None
-            and not url.query
-            and not url.fragment
-            and not any(ch.isspace() or ord(ch) < 32 for ch in value)
-        ):
-            return value
-    except ValueError as err:
-        raise vol.Invalid("invalid external URL") from err
-    raise vol.Invalid("invalid external URL")
+    # Configure stores any single-line text here, stripped of surrounding
+    # whitespace and a trailing slash; accept every value it can save.
+    if value != value.strip().rstrip("/") or any(
+        ord(ch) < 32 or ord(ch) == 127 for ch in value
+    ):
+        raise vol.Invalid("invalid external URL")
+    return value
 
 
 def _callbacks(values: list[str]) -> list[str]:
@@ -75,10 +66,10 @@ _signing_key = vol.All(str, vol.Match(r"^[a-fA-F0-9]{64}\Z"))
 _webhook = vol.All(str, _path_value, vol.Match(r"^[^/]+\Z"))
 _path = vol.All(str, _path_value, vol.Match(r"^/"))
 
+# The Access switch (DATA_ACCESS_ENABLED) is the destination's own state.
 SERVER_DATA = {
     vol.Required(c.DATA_WEBHOOK_ID): _webhook,
     vol.Required(c.DATA_SECRET_PATH): _path,
-    c.DATA_ACCESS_ENABLED: bool,
     c.DATA_OAUTH_CLIENT_ID: _secret,
     c.DATA_OAUTH_CLIENT_SECRET: _secret,
     c.DATA_OAUTH_SIGNING_KEY: _signing_key,
@@ -143,14 +134,21 @@ def portable_server(entry: Any) -> dict[str, Any]:
     }
 
 
-def validate(bundle: Any, config_dir: Path) -> dict[str, Any]:
-    """Validate the complete entry payload before writing either entry or store."""
+def validate(bundle: Any, config_dir: Path, *, stored: bool = False) -> dict[str, Any]:
+    """Validate the complete entry payload before writing either entry or store.
+
+    An export (``stored``) drops the directories and YAML keys that the File &
+    YAML Tools startup would also drop; an upload containing one is refused.
+    """
+    # Another version may have another shape, so check it before the v1 schema.
+    if not isinstance(bundle, dict) or bundle.get("format") != FORMAT:
+        raise InvalidBackup("invalid_backup")
+    if type(bundle.get("version")) is not int or bundle["version"] != VERSION:
+        raise InvalidBackup("incompatible_version")
     try:
         checked: dict[str, Any] = _ENVELOPE(bundle)
     except (vol.Invalid, TypeError, ValueError) as err:
         raise InvalidBackup("invalid_backup") from err
-    if type(checked["version"]) is not int or checked["version"] != VERSION:
-        raise InvalidBackup("incompatible_version")
     if checked["contains_credentials"] is not True:
         raise InvalidBackup("invalid_backup")
     server = checked["entries"][c.ENTRY_TYPE_SERVER]
@@ -167,12 +165,10 @@ def validate(bundle: Any, config_dir: Path) -> dict[str, Any]:
         paths = [
             _normalize_extra_dir(item, config_dir) for item in tools["allowed_dirs"]
         ]
-        if None in paths:
-            raise InvalidBackup("invalid_backup")
         keys, dropped = _normalize_extra_yaml_keys(tools["extra_yaml_keys"])
-        if dropped:
+        if not stored and (None in paths or dropped):
             raise InvalidBackup("invalid_backup")
-        tools["allowed_dirs"] = list(dict.fromkeys(paths))
+        tools["allowed_dirs"] = list(dict.fromkeys(p for p in paths if p is not None))
         tools["extra_yaml_keys"] = keys
     return checked
 

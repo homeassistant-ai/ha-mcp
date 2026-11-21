@@ -57,65 +57,116 @@ class DecisionPinRequired(ValueError):
     """The source accepts approval events and the destination needs its own PIN."""
 
 
+class LocalSettingsUnusable(ValueError):
+    """A settings file on this installation cannot be read or validated."""
+
+
 class ServerSettingsRollbackIncomplete(RuntimeError):
     """One or more server settings could not be restored."""
 
 
-def _validate_overrides(values: dict[str, Any], types: Mapping[str, type]) -> None:
+def _override_error(name: str, value: Any, types: Mapping[str, type]) -> str | None:
+    field_type = types.get(name)
+    if field_type is None:
+        return "Unknown settings override"
+    if type(value) is not field_type and not (
+        field_type is float and type(value) is int
+    ):
+        return "Invalid settings override"
+    meta = setting_of(Settings.model_fields[name])
+    if meta is None:
+        return "Unknown settings override"
+    if meta.range and value != meta.off_value:
+        low, high = meta.range
+        if not isinstance(value, int | float) or not low <= value <= high:
+            return "Settings override outside its permitted range"
+    if meta.choices and value not in meta.choices:
+        return "Invalid settings choice"
+    if isinstance(value, str):
+        if "\x00" in value:
+            return "Unexpected null character in settings"
+        if name == "ipv6_allowed_networks" and invalid_allowed_networks(value):
+            return "Invalid IPv6 networks"
+    return None
+
+
+def _drop(file_key: str, entry: str) -> None:
+    # The runtime loaders skip what they cannot apply, so a stored file can
+    # keep a retired or out-of-range entry that no settings save removes.
+    _LOGGER.warning("Left %s out of the %s settings", entry, file_key)
+
+
+def _validate_overrides(
+    file_key: str, values: dict[str, Any], types: Mapping[str, type], *, strict: bool
+) -> dict[str, Any]:
+    kept = {}
     for name, value in values.items():
-        field_type = types.get(name)
-        if type(value) is not field_type and not (
-            field_type is float and type(value) is int
-        ):
-            raise ValueError("Invalid settings override")
-        meta = setting_of(Settings.model_fields[name])
-        assert meta is not None
-        if meta.range and value != meta.off_value:
-            low, high = meta.range
-            if not isinstance(value, int | float) or not low <= value <= high:
-                raise ValueError("Settings override outside its permitted range")
-        if meta.choices and value not in meta.choices:
-            raise ValueError("Invalid settings choice")
-        if isinstance(value, str):
-            if "\x00" in value:
-                raise ValueError("Unexpected null character in settings")
-            if name == "ipv6_allowed_networks" and invalid_allowed_networks(value):
-                raise ValueError("Invalid IPv6 networks")
+        if (error := _override_error(name, value, types)) is None:
+            kept[name] = value
+        elif strict:
+            raise ValueError(error)
+        else:
+            _drop(file_key, repr(name))
+    return kept
 
 
-def _validate_tools(values: dict[str, Any]) -> None:
-    if values.keys() - {"tools", LLM_API_CONFIG_KEY}:
+def _validate_tools(values: dict[str, Any], *, strict: bool) -> dict[str, Any]:
+    if strict and values.keys() - {"tools", LLM_API_CONFIG_KEY}:
         raise ValueError("Invalid tool configuration")
-    states = values.get("tools", {})
-    if not isinstance(states, dict) or any(
-        not isinstance(state, str) or state not in _VALID_STATES
-        for state in states.values()
+    kept: dict[str, Any] = {}
+    for section, valid in (
+        ("tools", lambda state: isinstance(state, str) and state in _VALID_STATES),
+        (LLM_API_CONFIG_KEY, lambda value: isinstance(value, bool)),
     ):
-        raise ValueError("Invalid tool state")
-    exposure = values.get(LLM_API_CONFIG_KEY, {})
-    if not isinstance(exposure, dict) or any(
-        not isinstance(value, bool) for value in exposure.values()
-    ):
-        raise ValueError("Invalid tool exposure")
+        if section not in values:
+            continue
+        entries = values[section]
+        if not isinstance(entries, dict):
+            if strict:
+                raise ValueError("Invalid tool configuration")
+            _drop("tools", repr(section))
+            continue
+        kept[section] = {}
+        for name, value in entries.items():
+            if valid(value):
+                kept[section][name] = value
+            elif strict:
+                raise ValueError("Invalid tool state")
+            else:
+                _drop("tools", repr(name))
+    return kept
 
 
-def _revisioned_content(key: str, value: dict[str, Any]) -> dict[str, Any] | None:
+def _revisioned_content(
+    key: str, value: dict[str, Any], *, strict: bool
+) -> dict[str, Any] | None:
     if key == "policy":
         policy = Policy.model_validate(value, strict=True)
         if "schema_version" not in value:
             policy, _ = unpack_legacy_policy(policy)
         model: Policy | VisibilityConfig = policy
     else:
-        if value.keys() - VisibilityConfig.model_fields.keys():
-            raise ValueError("Unknown entity visibility option")
+        if unknown := value.keys() - VisibilityConfig.model_fields.keys():
+            if strict:
+                raise ValueError("Unknown entity visibility option")
+            # VisibilityConfig ignores unknown keys when the server loads it.
+            for name in sorted(unknown):
+                _drop("visibility", repr(name))
+            value = {k: v for k, v in value.items() if k not in unknown}
         model = VisibilityConfig.model_validate(value, strict=True)
     content = model.model_dump(mode="json", exclude={"version"})
     default = _REVISIONED_DEFAULTS[key].model_dump(mode="json", exclude={"version"})
     return None if content == default else content
 
 
-def validate_server_settings(settings: dict[str, Any]) -> dict[str, Any]:
-    """Validate the complete document and strip destination-owned edit revisions."""
+def validate_server_settings(
+    settings: dict[str, Any], *, strict: bool = True
+) -> dict[str, Any]:
+    """Validate the complete document and strip destination-owned edit revisions.
+
+    An uploaded document is strict. A stored one (``strict=False``) drops the
+    entries the runtime loaders would also skip.
+    """
     if not isinstance(settings, dict) or settings.keys() != _FILES.keys():
         raise ValueError("Expected the complete set of server settings")
     portable = dict(settings)
@@ -125,13 +176,12 @@ def validate_server_settings(settings: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise ValueError("Invalid server settings section")
         if key in _REVISIONED_DEFAULTS:
-            portable[key] = _revisioned_content(key, value)
+            portable[key] = _revisioned_content(key, value, strict=strict)
         elif key == "tools":
-            _validate_tools(value)
+            portable[key] = _validate_tools(value, strict=strict)
         else:
-            _validate_overrides(
-                value, _FEATURE_TYPES if key == "features" else _BACKUP_TYPES
-            )
+            types = _FEATURE_TYPES if key == "features" else _BACKUP_TYPES
+            portable[key] = _validate_overrides(key, value, types, strict=strict)
     return portable
 
 
@@ -140,8 +190,12 @@ def _read_document(path: Path) -> dict[str, Any] | None:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
+    except (OSError, ValueError) as err:
+        _LOGGER.error("Could not read %s (%s)", path.name, type(err).__name__)
+        raise LocalSettingsUnusable(path.name) from err
     if not isinstance(value, dict):
-        raise ValueError("Expected a JSON object in the server settings file")
+        _LOGGER.error("Could not read %s (not a JSON object)", path.name)
+        raise LocalSettingsUnusable(path.name)
     return value
 
 
@@ -149,11 +203,21 @@ def _read_settings(directory: Path) -> dict[str, Any]:
     return {key: _read_document(directory / name) for key, name in _FILES.items()}
 
 
+def _stored_settings(directory: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return the raw stored documents and their portable content."""
+    raw = _read_settings(directory)
+    try:
+        return raw, validate_server_settings(raw, strict=False)
+    except ValueError as err:
+        # Only the policy or visibility model can still refuse a stored file.
+        _LOGGER.error("Stored server settings are invalid (%s)", type(err).__name__)
+        raise LocalSettingsUnusable("server settings") from err
+
+
 def export_server_settings(data_dir: Path) -> dict[str, Any]:
     """Read portable documents, failing explicitly on an unreadable setting."""
     with config_file_lock(data_dir):
-        settings = _read_settings(data_dir)
-    return validate_server_settings(settings)
+        return _stored_settings(data_dir)[1]
 
 
 def _replace(path: Path, value: dict[str, Any] | None) -> None:
@@ -261,8 +325,7 @@ def restore_server_settings(
             and not is_pin_set(data_dir)
         ):
             raise DecisionPinRequired("Set the approval decision PIN locally first")
-        previous = _read_settings(data_dir)
-        old_content = validate_server_settings(previous)
+        previous, old_content = _stored_settings(data_dir)
         changed: list[_DocumentChange] = []
         try:
             for key, name in _FILES.items():

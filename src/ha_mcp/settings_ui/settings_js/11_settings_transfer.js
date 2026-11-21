@@ -32,17 +32,18 @@ function initSettingsTransfer() {
   }
 
   async function reportFailure(response, fallback) {
-    if (response.status === 401 || response.status === 403) return report('session', true);
+    if (response.status === 401) return report('session', true);
     if (response.status === 413) {
       return report(fallback === 'export_failed' ? 'export_too_large' : 'too_large', true);
     }
-    // Import validation errors can concern credentials. Display only known codes.
+    // Only codes with their own transfer.* message are shown; others fall back.
     const failure = await response.json().catch(() => null);
-    const sharedErrors = ['server_unavailable', 'allowed_paths_store_unavailable', 'extra_yaml_keys_store_unavailable'];
+    if (response.status === 403) return report(failure?.error === 'origin_denied' ? 'origin_denied' : 'session', true);
+    const sharedErrors = ['server_unavailable', 'allowed_paths_store_unavailable', 'extra_yaml_keys_store_unavailable',
+      'invalid_server_settings'];
     if (sharedErrors.includes(failure?.error)) return report(failure.error, true);
-    if (fallback === 'export_failed') {
-      if (failure?.error === 'invalid_backup') return report('invalid_source_entries', true);
-      if (failure?.error === 'invalid_server_settings') return report('invalid_server_settings', true);
+    if (fallback === 'export_failed' && failure?.error === 'invalid_backup') {
+      return report('invalid_source_entries', true);
     }
     const importErrors = ['invalid_backup', 'incompatible_version', 'webhook_in_use', 'decision_pin_required',
       'extra_tools_entry', 'tools_must_be_disabled', 'tools_must_be_enabled', 'tools_entry_busy',
@@ -70,7 +71,8 @@ function initSettingsTransfer() {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
       report('downloaded');
-    } catch {
+    } catch (err) {
+      console.error('HA-MCP settings export failed', err);
       report('export_failed', true);
     } finally {
       setBusy(false);
@@ -84,13 +86,15 @@ function initSettingsTransfer() {
   importButton.addEventListener('click', async () => {
     const file = input.files[0];
     if (!file) return;
+    // Mirrors MAX_BYTES in the component's settings_transfer_schema.py.
     if (file.size > 4 * 1024 * 1024) return report('too_large', true);
     setBusy(true);
     try {
       let contents;
       try {
         contents = await file.text();
-      } catch {
+      } catch (err) {
+        console.error('HA-MCP could not read the settings file', err);
         return report('read_failed', true);
       }
       try {
@@ -106,7 +110,8 @@ function initSettingsTransfer() {
       if (result?.success !== true) return report('restore_failed', true);
       input.value = '';
       report(result.restart_required ? 'restart' : 'imported');
-    } catch {
+    } catch (err) {
+      console.error('HA-MCP settings import failed', err);
       report('restore_failed', true);
     } finally {
       setBusy(false);

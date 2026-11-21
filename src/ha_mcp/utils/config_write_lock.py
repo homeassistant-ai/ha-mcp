@@ -1,14 +1,15 @@
 """Event-loop and file locks serialising config/policy read-modify-write.
 
-Both the web settings handlers (async) and the developer tools (which run
-their file I/O in ``asyncio.to_thread`` while holding this lock on the event
-loop) acquire this single lock around any load-modify-save of
-``tool_config.json`` or ``tool_policy.json``, so two concurrent writers can't
+The web settings handlers (async) and the developer tools (which run their
+file I/O in ``asyncio.to_thread`` while holding the loop's lock) take these
+locks around any load-modify-save of ``tool_config.json``,
+``tool_policy.json`` or ``feature_flags.json``, and the settings import takes
+the file lock around every file it replaces, so two concurrent writers can't
 read the same on-disk state and then clobber each other's update.
 
-An embedded server reload can start a new worker loop in the same process.
-Each loop shares an asyncio lock among its active writers. The file lock
-also serializes writers in different loops or processes.
+An embedded server reload can start a new worker loop in the same process,
+so each running loop has its own asyncio lock. The file lock serializes
+writers across loops, threads and processes.
 
 Leaf at import time (stdlib-only at module scope; ``data_paths`` is imported
 lazily inside ``config_file_lock`` — keep it that way) so settings_ui, policy,
@@ -47,8 +48,9 @@ def get_config_write_lock() -> asyncio.Lock:
     loop = asyncio.get_running_loop()
     lock = _CONFIG_WRITE_LOCKS.get(loop)
     if lock is None:
-        # Owners and waiters keep the lock alive. A strong cache entry would
-        # retain the retired worker loop through a formerly contended lock.
+        # Owners and waiters keep the lock alive. A plain dict would keep every
+        # retired loop as a key, and weak keys would not drop a contended lock,
+        # which references its loop.
         lock = asyncio.Lock()
         _CONFIG_WRITE_LOCKS[loop] = lock
     return lock
@@ -58,8 +60,9 @@ def get_config_write_lock() -> asyncio.Lock:
 async def config_write_guard() -> AsyncIterator[None]:
     """Both write locks at once: in-process (asyncio) + cross-process (file).
 
-    The one-liner for async writers: serializes against other coroutines in
-    this process AND against the sidecar / other server processes. Thread
+    The one-liner for async writers: serializes against other coroutines on
+    this loop AND, through the file lock, against other loops, threads and
+    processes such as the sidecar. Thread
     writers (the dev tools' ``asyncio.to_thread`` sections) hold the asyncio
     lock on the loop and take ``config_file_lock()`` inside the thread
     instead.
@@ -88,7 +91,7 @@ def config_file_lock(data_dir: Path | None = None) -> Iterator[None]:
     dir) — pass it when operating on an explicit directory, as the policy
     migration does, so the lock lives beside the files it guards.
 
-    The asyncio lock above only serializes writers within one process, but
+    The asyncio lock above only serializes writers on one event loop, but
     stdio deployments run the settings-UI sidecar as a SEPARATE process from
     the MCP server: a sidecar policy PUT and a dev-tool write could both read
     the same on-disk version and silently drop each other's update. Acquire
@@ -98,9 +101,9 @@ def config_file_lock(data_dir: Path | None = None) -> Iterator[None]:
 
     Best-effort by design: on filesystems or platforms where locking fails,
     a warning is logged and the write proceeds (matching the previous
-    behavior) rather than bricking config saves. Never acquire twice in one
-    process (the asyncio lock already prevents that; nested flock on a second
-    fd would self-block).
+    behavior) rather than bricking config saves. Never nest it in one thread:
+    a second fd would block on the first. Separate threads or loops contend
+    on separate fds, which is the point.
     """
     from .data_paths import get_data_dir
 
@@ -152,8 +155,8 @@ def run_with_file_lock(fn: Callable[..., Any], /, *args: Any) -> Any:
 
     Thread-side companion of ``config_write_guard()`` and the single entry
     point every load-modify-save uses from inside ``asyncio.to_thread``:
-    callers hold the asyncio lock on the loop, so the file lock never nests
-    in-process.
+    callers hold the loop's asyncio lock and never hold the file lock in the
+    worker thread already.
     """
     with config_file_lock():
         return fn(*args)

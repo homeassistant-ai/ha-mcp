@@ -470,6 +470,7 @@ async def _load_extra_yaml_keys(hass: HomeAssistant) -> list[str]:
 async def _apply_allowed_paths(
     hass: HomeAssistant, raw_paths: Any
 ) -> tuple[list[str], list[Any]]:
+    """Shared by the ``set_allowed_paths`` service and the tools-entry options flow."""
     async with store_writes(hass, ALLOWED_PATHS_KEY).writing():
         return await _apply_allowed_paths_locked(hass, raw_paths)
 
@@ -479,8 +480,8 @@ async def _apply_allowed_paths_locked(
 ) -> tuple[list[str], list[Any]]:
     """Normalize, persist, and hot-swap the extra directories (#1567, #1887).
 
-    Shared by the ``set_allowed_paths`` service and the tools-entry options flow
-    so both edit the store through one validated path. Each entry runs through
+    The caller holds ``store_writes(hass, ALLOWED_PATHS_KEY).lock`` and owns the
+    revision bump. Each entry runs through
     :func:`_normalize_extra_dir`; traversal / out-of-config / deny-floor entries
     are dropped into ``rejected``. Persists to .storage and updates hass.data so
     enforcement applies live. Returns ``(kept, rejected)``.
@@ -504,6 +505,7 @@ async def _apply_allowed_paths_locked(
 async def _apply_extra_yaml_keys(
     hass: HomeAssistant, raw_keys: Any
 ) -> tuple[list[str], list[Any]]:
+    """Shared by the ``set_extra_yaml_keys`` service and the tools-entry options flow."""
     async with store_writes(hass, EXTRA_YAML_KEYS_KEY).writing():
         return await _apply_extra_yaml_keys_locked(hass, raw_keys)
 
@@ -513,8 +515,8 @@ async def _apply_extra_yaml_keys_locked(
 ) -> tuple[list[str], list[Any]]:
     """Normalize, persist, and hot-swap the extra YAML write keys (#1887).
 
-    Shared by the ``set_extra_yaml_keys`` service and the tools-entry options
-    flow. Delegates validation to :func:`_normalize_extra_yaml_keys` (strip,
+    The caller holds ``store_writes(hass, EXTRA_YAML_KEYS_KEY).lock`` and owns
+    the revision bump. Delegates validation to :func:`_normalize_extra_yaml_keys` (strip,
     dedup, sort, drop denylist). Persists to .storage and updates hass.data so
     enforcement applies live. Returns ``(kept, rejected)``.
     """
