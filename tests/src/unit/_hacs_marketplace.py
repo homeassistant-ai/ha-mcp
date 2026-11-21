@@ -76,6 +76,17 @@ def _install_path(config_dir: Path, record: dict[str, Any]) -> Path | None:
     return None
 
 
+def prepare_marketplace(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """What the Marketplace's setup needs in a unit test: GitHub unreachable,
+    and a frontend, whose web assets are not installed here."""
+    offline = aiohttp.ClientConnectionError("GitHub is not reachable in a unit test")
+    for method in ("get", "post", "put", "patch", "delete"):
+        getattr(aioclient_mock, method)(re.compile(".*"), exc=offline)
+    mock_integration(hass, MockModule("frontend"))
+
+
 def add_marketplace(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
@@ -83,16 +94,12 @@ def add_marketplace(
     repositories: dict[str, dict[str, Any]],
 ) -> MockConfigEntry:
     """Core's Marketplace entry with ``repositories`` stored, not set up yet."""
-    offline = aiohttp.ClientConnectionError("GitHub is not reachable in a unit test")
-    for method in ("get", "post", "put", "patch", "delete"):
-        getattr(aioclient_mock, method)(re.compile(".*"), exc=offline)
+    prepare_marketplace(hass, aioclient_mock)
     store_repositories(hass_storage, repositories)
     config_dir = Path(hass.config.config_dir)
     for record in repositories.values():
         if (path := _install_path(config_dir, record)) is not None:
             path.mkdir(parents=True, exist_ok=True)
-    # Core's frontend needs its web assets, which are not installed here.
-    mock_integration(hass, MockModule("frontend"))
     entry = MockConfigEntry(domain="marketplace", data={})
     entry.add_to_hass(hass)
     return entry

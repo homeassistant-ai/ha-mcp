@@ -195,8 +195,9 @@ jobs:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           HAOS_TEST_MODE: stdio
-          # _conftest_haos.py injects this bare token into HACS inside the guest so its
-          # repository calls do not hit the shared-IP unauthenticated rate limit.
+          # _conftest_haos.py injects this bare token into the Marketplace inside the
+          # guest so its GitHub calls do not hit the shared-IP unauthenticated rate
+          # limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}

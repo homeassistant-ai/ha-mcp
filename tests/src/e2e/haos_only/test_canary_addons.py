@@ -6,14 +6,15 @@ The testcontainer suite cannot run these checks against a real Supervisor
 because its partial mock covers only a few direct REST endpoints.
 
 Six concrete assertions:
-1. ``ha_get_app`` (default listing) contains every entry from ``ADDONS``
-   plus ``GET_HACS_ADDON``, by display name.
+1. ``ha_get_app`` (default listing) contains every entry from ``ADDONS``,
+   by display name.
 2. ``ha_get_app(slug=core_mosquitto)`` returns Supervisor-backed detail.
 3. ``ha_get_app(source="available")`` searches the live Supervisor store.
 4. The in-app lane submits a harmless duplicate repository write.
 5. Beta lanes boot the Supervisor channel/minimum and exact Core version
    resolved from the live beta manifest.
-6. HACS is loaded and reachable through its MCP tool in the emitted image.
+6. The Marketplace is loaded and reachable through its MCP tool in the
+   emitted image.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from ..utilities.assertions import MCPAssertions
 LOG = logging.getLogger(__name__)
 
 
-# Mirrors build_image.py's ADDONS tuple plus GET_HACS_ADDON. It lives outside
+# Mirrors build_image.py's ADDONS tuple. It lives outside
 # pytest's normal import path, so this list is maintained manually. Missing
 # expected entries fail loudly; additional builder-installed apps are not
 # detected by this subset assertion.
@@ -41,7 +42,6 @@ INSTALLED_ADDON_NAMES = (
     "Matter Server",
     "AppDaemon",
     "MQTT IO",
-    "Get HACS",
 )
 BAKED_REPOSITORY_URL = "https://github.com/homeassistant-ai/ha-mcp"
 
@@ -184,13 +184,9 @@ async def test_beta_image_versions_match_manifest(ha_client: Any) -> None:
     )
 
 
-async def test_hacs_available_in_emitted_image(mcp_client: Any) -> None:
-    """The emitted qcow2 boots with HACS (the Marketplace on 2026.11+) reachable via MCP.
-
-    The post-shutdown seed state also contains HACS files and a config entry,
-    so this validates final runtime availability rather than isolating which
-    image-build step supplied the integration.
-    """
+async def test_marketplace_available_in_emitted_image(mcp_client: Any) -> None:
+    """The emitted qcow2 boots with the Marketplace reachable via MCP, from the
+    config entry and stored state the bake lays down."""
     async with MCPAssertions(mcp_client) as mcp:
         await mcp.call_tool_success(
             "ha_get_hacs_info",

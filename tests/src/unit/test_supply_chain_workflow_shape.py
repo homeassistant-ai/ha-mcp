@@ -340,7 +340,7 @@ def test_dev_release_tag_cleanup_uses_authenticated_github_api() -> None:
 
 
 def test_the_dev_release_tags_the_component_stamped_for_its_build() -> None:
-    # HACS installs a pre-release from the commit its tag names (#2763), so that
+    # The Marketplace installs a pre-release from the commit its tag names (#2763), so that
     # commit must pin the ha-mcp-dev build the release installs, not master's
     # stable pin.
     job = _workflow(_WORKFLOW_DIR / "publish-dev.yml")["jobs"]["create-prerelease"]

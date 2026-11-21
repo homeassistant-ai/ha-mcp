@@ -41,7 +41,7 @@ jobs:
   # user-facing markdown counts as code. On non-PR events (manual dispatch)
   # always run. Consumed by e2e-validation's `if:` below — a job-level skip
   # reports Success to a required check (a workflow path-skip would not).
-  # The HACS component shares the server's version and pins the server build
+  # The component shares the server's version and pins the server build
   # it runs (#2427). semantic-release stamps all five places in each release
   # commit (pyproject's project.version, the manifest's version and ha-mcp pin,
   # const.py's COMPONENT_VERSION, tools_filesystem.py's MIN_COMPONENT_VERSION).
@@ -224,8 +224,7 @@ jobs:
   # of noisy downstream reds: read the FIRST red step, not the last.
   #
   # ORDER IS LOAD-BEARING: HACS and Hassfest validate the checkout as
-  # committed (minus the vendored fixtures, removed just for Hassfest below),
-  # so they run before ANY step that executes PR-controlled code — `uv sync`
+  # committed, so they run before ANY step that executes PR-controlled code — `uv sync`
   # builds this project via its PR-supplied PEP 517 backend, and the
   # lock/constraint/lint steps run PR-supplied config and scripts. This guards
   # against accidental or inconspicuous tree mutation ahead of the validators
@@ -268,30 +267,9 @@ jobs:
       with:
         category: integration
 
-    # Drop vendored third-party fixtures (e.g. the upstream HACS integration
-    # used as an e2e fixture) so hassfest only validates integrations this repo
-    # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
-    # Restored right after Hassfest so the later checks see the tracked tree
-    # again (a fresh CI checkout holds nothing untracked here).
-    - name: Remove vendored test fixtures
-      if: success() || failure()
-      run: rm -rf tests/initial_test_state
-
     - name: Hassfest
       if: success() || failure()
       uses: home-assistant/actions/hassfest@86d4564712fa02543c808e3a693dd04f9d3f8361 # master
-
-    - name: Restore vendored test fixtures
-      # The restore must be verified: the fixture tree holds 59 tracked .py
-      # files that ast-grep and the changed-files format check walk, so a
-      # silently failed restore would stamp green checks on a reduced file set.
-      if: success() || failure()
-      run: |
-        git checkout HEAD -- tests/initial_test_state
-        if ! git diff --quiet HEAD -- tests/initial_test_state; then
-          echo "::error::tests/initial_test_state was not fully restored; the lint steps below would silently skip its files"
-          exit 1
-        fi
 
     - name: Install uv
       # Pinned, not "latest": the folded jobs got uv from the Renovate-pinned
@@ -319,7 +297,7 @@ jobs:
       # where HA pins a shared dependency exactly, ha-mcp must admit the pin;
       # where HA is loose, ha-mcp must not pin exactly (an exact pin forces
       # pip to replace the image-shipped copy in place — the torn-install
-      # window). Check the current E2E image AND the HACS minimum: a Core
+      # window). Check the current E2E image AND the hacs.json minimum: a Core
       # image update must not silently strand users on the supported floor.
       # For the image's Core, uv.lock must also hold Core's exact pin for every
       # runtime package, so the Docker/app images and the embedded install run

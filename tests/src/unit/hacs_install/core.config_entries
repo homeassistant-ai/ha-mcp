@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "minor_version": 5,
+  "key": "core.config_entries",
+  "data": {
+    "entries": [
+      {
+        "created_at": "2025-12-03T00:00:00+00:00",
+        "data": {},
+        "disabled_by": null,
+        "discovery_keys": {},
+        "domain": "hacs",
+        "entry_id": "01HACS0000000000000000000",
+        "minor_version": 1,
+        "modified_at": "2025-12-03T00:00:00+00:00",
+        "options": {
+          "experimental": false,
+          "sidepanel_icon": "hacs:hacs",
+          "sidepanel_title": "HACS"
+        },
+        "pref_disable_new_entities": false,
+        "pref_disable_polling": false,
+        "source": "user",
+        "subentries": [],
+        "title": "HACS",
+        "unique_id": null,
+        "version": 1
+      }
+    ]
+  }
+}

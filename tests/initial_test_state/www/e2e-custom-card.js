@@ -1,5 +1,5 @@
 // A minimal custom card for the card-definition E2E tests (#2632): it
-// registers like a HACS card and rejects a config without an entity.
+// registers like a Marketplace card and rejects a config without an entity.
 // Module syntax must reach the module evaluator, not classic-script eval.
 void import.meta;
 export class E2ECustomCard extends HTMLElement {
