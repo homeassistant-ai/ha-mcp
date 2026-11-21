@@ -25,7 +25,6 @@ from haos_runtime import (
     _authenticate_ws_supervisor,
     _wait_supervisor_running,
     enable_config_entry,
-    inject_hacs_token_in_qcow2,
     login_for_token,
     refresh_dev_addon_source_in_qcow2,
     remove_tools_entry_in_qcow2,
@@ -38,6 +37,7 @@ from haos_runtime import (
     wait_for_addon_ha_link_ready,
     wait_for_addon_mcp_ready,
 )
+from marketplace_token import inject_marketplace_token_in_qcow2
 from recorder_seed import session_recorder_seed
 
 # Import test constants
@@ -153,11 +153,10 @@ def _prepare_haos_image(
     # Replace the baked recorder database with this session's freshly
     # generated one. Must run before boot: guestfish edits the qcow2 offline.
     stage_recorder_seed_in_qcow2(image_path, session_recorder_seed())
-    # Authenticate HACS with the CI GitHub token (parity with the
-    # testcontainer path's injection below) so HACS repo adds don't
-    # ride the shared-IP 60 req/h unauthenticated GitHub budget —
-    # the long-standing HACS-install flake. Must run before boot.
-    inject_hacs_token_in_qcow2(image_path)
+    # Connect the Marketplace to GitHub with the CI token (parity with the
+    # testcontainer path's injection) so its GitHub calls don't ride the
+    # shared-IP 60 req/h unauthenticated budget. Must run before boot.
+    inject_marketplace_token_in_qcow2(image_path)
     # No-tools lanes (#2292): drop the baked "File & YAML Tools" config entry so
     # the privileged ha_mcp_tools services never register. Pre-boot offline edit
     # on this worker's own overlay (HA Core owns .storage once it boots), and it

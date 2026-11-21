@@ -167,20 +167,20 @@ def test_vendored_paths_are_ignored(tmp_path: Path) -> None:
     ]
 
 
-def test_javascript_findings_gate_and_vendored_js_is_ignored(tmp_path: Path) -> None:
-    """The gate is language-agnostic: a JS finding under the vendored fixture
-    tree is dropped by PATHS_IGNORE, while a first-party JS finding gates.
+def test_javascript_findings_gate_and_fixture_js_is_ignored(tmp_path: Path) -> None:
+    """The gate is language-agnostic: a JS finding under the fixture tree is
+    dropped by PATHS_IGNORE, while a first-party JS finding gates.
 
     Guards the workflow's multi-language premise — the python+javascript matrix
-    feeds JS SARIFs through this same gate, and the only vendored JS that must be
-    dropped lives under tests/initial_test_state/ (e.g. HACS's iconset.js).
+    feeds JS SARIFs through this same gate, and the only JS that must be dropped
+    lives under tests/initial_test_state/ (e.g. the E2E custom card).
     """
     path = _write_sarif(
         tmp_path,
         [
             _result(
                 "js/useless-assignment",
-                "tests/initial_test_state/custom_components/hacs/iconset.js",
+                "tests/initial_test_state/www/e2e-custom-card.js",
                 42,
                 "The value assigned here is unused.",
             ),

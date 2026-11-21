@@ -307,9 +307,9 @@ jobs:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
-          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit)
-          # so HACS repo adds don't hit the unauthenticated shared-IP
-          # GitHub rate limit — the recurring HACS-install flake.
+          # Feeds _conftest_haos.py's Marketplace token injection (qcow2 pre-boot
+          # edit) so the Marketplace's GitHub calls don't hit the unauthenticated
+          # shared-IP GitHub rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HAOS + app diagnostics from booted qcow2 (always)
@@ -381,7 +381,7 @@ jobs:
             cat "$outdir/config.yaml" || true
           done
           ls -laR /tmp/haos-inaddon-beta-diagnostics/ || true
-          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
+          # The Marketplace token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.
@@ -542,9 +542,9 @@ jobs:
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
-          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit) so HACS
-          # repo adds don't hit the unauthenticated shared-IP GitHub rate limit —
-          # the recurring HACS-install flake.
+          # Feeds _conftest_haos.py's Marketplace token injection (qcow2 pre-boot
+          # edit) so the Marketplace's GitHub calls don't hit the unauthenticated
+          # shared-IP GitHub rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HA diagnostics from booted qcow2 (always)
@@ -599,7 +599,7 @@ jobs:
             cat "$outdir/config-dir-listing.txt" || true
           done
           ls -laR /tmp/haos-embedded-beta-diagnostics/ || true
-          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
+          # The Marketplace token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.

@@ -461,129 +461,6 @@ def stage_recorder_seed_in_qcow2(image_path: Path, seed_db: Path) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def inject_hacs_token(config_entries_doc: dict[str, Any], token: str) -> bool:
-    """Set ``token`` as the HACS config entry's GitHub auth token.
-
-    Mutates ``config_entries_doc`` (a parsed ``.storage/core.config_entries``
-    document) in place, replacing the ``hacs`` entry's ``data`` with
-    ``{"token": token}`` — the same shape HACS' own config flow persists
-    after device-flow auth. Returns True if a ``hacs`` entry was found and
-    patched, False if the document has none (doc left untouched).
-    """
-    for entry in config_entries_doc.get("data", {}).get("entries", []):
-        if entry.get("domain") == "hacs":
-            entry["data"] = {"token": token}
-            return True
-    return False
-
-
-def inject_hacs_token_in_qcow2(image_path: Path) -> None:
-    """Authenticate HACS inside the qcow2 with the CI GitHub token.
-
-    The baked HACS config entry carries no token, so HACS calls the GitHub
-    API unauthenticated — 60 requests/hour per IP, shared across GitHub-
-    hosted runners. When that budget is exhausted every HACS repository add
-    fails ("<Integration ...> GitHub Ratelimit error" in the HA core log)
-    until the hourly window resets, which no in-test wait or rerun can
-    outlast — the long-standing source of the HACS-install e2e flake. The
-    testcontainer path already injects GITHUB_TOKEN into the seeded entry
-    (see conftest's container setup); this brings the HAOS backend to
-    parity by editing the config entry inside the per-worker qcow2 before
-    boot. GITHUB_TOKEN gets 1,000 requests/hour scoped per repository, so
-    the shared-IP limit stops applying.
-
-    Token lifecycle is safe by construction: the workflow saves the image
-    cache BEFORE the test step runs, and xdist workers boot per-run
-    overlays, so the cached base image never carries a token (which would
-    be expired next run anyway — GITHUB_TOKEN dies with the job).
-
-    No-op with a log line when GITHUB_TOKEN is unset (local runs). A
-    guestfish failure degrades LOUDLY to a warning instead of failing the
-    session: the suite then runs exactly as it did before this helper
-    existed (unauthenticated HACS, rate-limit flakes possible).
-    """
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if not token:
-        LOG.info(
-            "GITHUB_TOKEN not set — HACS in %s stays unauthenticated "
-            "(GitHub rate-limit flakes possible)",
-            image_path,
-        )
-        return
-
-    import shutil
-    import tempfile
-
-    storage_path = "/supervisor/homeassistant/.storage/core.config_entries"
-    workdir = Path(tempfile.mkdtemp(prefix="haos-hacs-token-"))
-    try:
-        try:
-            subprocess.run(
-                [
-                    "guestfish",
-                    "--ro",
-                    "-a",
-                    str(image_path),
-                    "run",
-                    ":",
-                    "mount",
-                    "/dev/sda8",
-                    "/",
-                    ":",
-                    "copy-out",
-                    storage_path,
-                    str(workdir),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            local = workdir / "core.config_entries"
-            doc = json.loads(local.read_text(encoding="utf-8"))
-            if not inject_hacs_token(doc, token):
-                LOG.warning(
-                    "No hacs config entry in %s — token not injected; HACS "
-                    "stays unauthenticated (GitHub rate-limit flakes possible)",
-                    image_path,
-                )
-                return
-            local.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-            subprocess.run(
-                [
-                    "guestfish",
-                    "--rw",
-                    "-a",
-                    str(image_path),
-                    "run",
-                    ":",
-                    "mount",
-                    "/dev/sda8",
-                    "/",
-                    ":",
-                    "copy-in",
-                    str(local),
-                    "/supervisor/homeassistant/.storage/",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            LOG.info("Injected GITHUB_TOKEN into HACS config entry in %s", image_path)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            stderr = (getattr(exc, "stderr", "") or "").strip()
-            LOG.warning(
-                "HACS token injection failed for %s (%s%s) — HACS stays "
-                "unauthenticated (GitHub rate-limit flakes possible)",
-                image_path,
-                type(exc).__name__,
-                f": {stderr[-300:]}" if stderr else "",
-            )
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
-
-
 def remove_tools_entry(config_entries_doc: dict[str, Any]) -> list[str]:
     """Drop the "File & YAML Tools" config entry from a parsed storage doc.
 
@@ -623,13 +500,14 @@ def remove_tools_entry_in_qcow2(image_path: Path) -> None:
     ``ha_mcp_tools`` services are unavailable when the user never added the
     "HA-MCP File & YAML Tools" entry. On HAOS that entry is baked into the
     image, so it is removed here — a pre-boot offline qcow2 edit on the
-    per-worker overlay, the same mechanism as the recorder / HACS-token
+    per-worker overlay, the same mechanism as the recorder / Marketplace-token
     refreshers and for the same reason: HA Core owns ``.storage`` once it
     boots. The component files and the staged (disabled) in-process server
     entry are deliberately left alone, so the ``haos_embedded`` lane still
     gets its server-entry-only topology.
 
-    Unlike the best-effort HACS-token injection above, every failure RAISES:
+    Unlike the best-effort Marketplace-token injection in ``marketplace_token``,
+    every failure RAISES:
     a silent no-op would leave the tools entry in place and the whole lane
     would then re-test the ordinary topology while reporting green.
     """
@@ -816,7 +694,7 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path, admin_token: str) -> 
     pointing at it — so when the HAOS embedded-server test enables the entry, the
     in-process server installs from the PR's own source (checkout fidelity for
     the ``src/ha_mcp`` embedded-mode routing under test) rather than PyPI. Runs
-    once per session before ``boot_haos_qemu``, like the recorder / HACS-token
+    once per session before ``boot_haos_qemu``, like the recorder / Marketplace-token
     qcow2 refreshers.
 
     Best-effort by design: on the external HAOS lane the baked entry stays
@@ -1096,7 +974,7 @@ def stage_embedded_server_feature_flags_in_qcow2(
 
     Delivered pre-boot via guestfish (mkdir-p the data dir + copy-in the file),
     the same offline-qcow2 mechanism as ``stage_embedded_server_wheel_in_qcow2``
-    and the recorder / HACS-token refreshers — deterministic (present before HA
+    and the recorder / Marketplace-token refreshers — deterministic (present before HA
     boots and before the entry is enabled) with no post-boot service-availability
     or ordering dependency, which is why it's preferred over calling the baked
     ``ha_mcp_tools`` write_file service after boot. The integration's

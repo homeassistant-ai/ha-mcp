@@ -1,7 +1,7 @@
 """Unit tests for scripts/redact_diagnostics_secrets.py.
 
 The HAOS diagnostics artifact tars ``.storage`` out of the booted qcow2;
-since CI injects GITHUB_TOKEN into the HACS config entry pre-boot, the tar
+since CI injects GITHUB_TOKEN into the Marketplace config entry pre-boot, the tar
 would otherwise persist a credential into a downloadable artifact. The
 script must redact credential values in place and FAIL CLOSED (delete the
 tar) when it cannot guarantee redaction.
@@ -58,17 +58,17 @@ def _doc(entries):
     return {"version": 1, "data": {"entries": entries}}
 
 
-def test_redacts_hacs_token_and_preserves_other_members(tmp_path):
+def test_redacts_marketplace_token_and_preserves_other_members(tmp_path):
     tar = tmp_path / "storage.tar"
     _make_storage_tar(
         tar,
         _doc(
             [
-                {"domain": "hacs", "data": {"token": "ghs_secret_value"}},
+                {"domain": "marketplace", "data": {"token": "ghs_secret_value"}},
                 {"domain": "sun", "data": {}},
             ]
         ),
-        extra_files={"./hacs.data": b'{"repositories": {}}'},
+        extra_files={"./marketplace.common": b'{"custom_repositories": []}'},
     )
     assert redact.redact_storage_tar(tar) == 1
     with tarfile.open(tar) as tf:
@@ -76,7 +76,7 @@ def test_redacts_hacs_token_and_preserves_other_members(tmp_path):
         assert doc["data"]["entries"][0]["data"]["token"] == "**REDACTED**"
         assert "ghs_secret_value" not in json.dumps(doc)
         # Non-config-entries members ride through byte-identical.
-        assert _member(tf, "./hacs.data") == b'{"repositories": {}}'
+        assert _member(tf, "./marketplace.common") == b'{"custom_repositories": []}'
 
 
 def test_redacts_all_credential_keys_across_entries(tmp_path):
@@ -116,7 +116,8 @@ def test_main_redacts_recursively(tmp_path):
         d = tmp_path / f"haos-test-image-{gw}"
         d.mkdir()
         _make_storage_tar(
-            d / "storage.tar", _doc([{"domain": "hacs", "data": {"token": "x"}}])
+            d / "storage.tar",
+            _doc([{"domain": "marketplace", "data": {"token": "x"}}]),
         )
     assert redact.main(["prog", str(tmp_path)]) == 0
     for gw in ("gw0", "gw1"):

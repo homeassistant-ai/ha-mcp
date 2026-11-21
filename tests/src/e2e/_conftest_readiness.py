@@ -263,10 +263,9 @@ def _snapshot_config_entries(
         return 0, 0, False, ""
 
 
-# Bounded budget for the entries_loaded follow-up gate. HACS (the only entry
-# observed lagging — it fetches remote data during setup) typically finishes
-# seconds after CoreState.RUNNING; 60s is generous without stalling a genuinely
-# broken container for long.
+# Bounded budget for the entries_loaded follow-up gate. A slow entry setup
+# typically finishes seconds after CoreState.RUNNING; 60s is generous without
+# stalling a genuinely broken container for long.
 _ENTRIES_LOADED_TIMEOUT = 60
 
 
@@ -279,12 +278,11 @@ def _wait_for_entries_loaded(
     """Follow-up readiness gate: wait for every config entry to reach ``loaded``.
 
     ``CoreState.RUNNING`` only means every ``async_setup_entry`` was
-    DISPATCHED; a slow one can still be running. The drift telemetry
-    repeatedly caught the seeded HACS entry ``not_loaded`` at trip time
-    (#2033's arm lanes, #2040's x86 lane), which the OptionsFlow probe tests
-    then observe as all-empty options — the #1245 regression signature —
-    while a sibling test probing the same entry seconds later passes. This
-    gate closes exactly that window.
+    DISPATCHED; a slow one can still be running. An entry still
+    ``not_loaded`` at trip time (#2033's arm lanes, #2040's x86 lane) is
+    observed by the OptionsFlow probe tests as all-empty options — the #1245
+    regression signature — while a sibling test probing the same entry
+    seconds later passes. This gate closes exactly that window.
 
     Bounded and non-fatal: on timeout the unloaded entries and the Home
     Assistant log so far go to the terminal summary and the session proceeds.
