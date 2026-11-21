@@ -472,7 +472,8 @@ async def test_a_lost_permission_reply_that_cannot_be_undone_is_reported(
     finally:
         await impatient.close()
 
-    assert "could not undo allowed_dirs" in caplog.text
+    # The undo got a reply and kept the value (an undo that failed logs differently).
+    assert "could not undo allowed_dirs: its write got no reply" in caplog.text
     assert (response.status_code, response.json()["error"]) == (
         500,
         "rollback_incomplete",

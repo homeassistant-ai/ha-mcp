@@ -682,8 +682,11 @@ async def test_a_root_connection_path_saved_in_configure_exports(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     replace_server(monkeypatch)
-    entry = add_server_entry(hass, options={"secret_path_override": "/"})
+    entry = add_server_entry(hass)
     assert await set_up(hass, entry)
+    form = await start_options_flow(hass, entry)
+    await submit_options_step(hass, form["flow_id"], {"secret_path_override": "/"})
+    await hass.async_block_till_done()
     assert entry.data["secret_path"] == "/"
 
     bundle = await settings_transfer.async_export(hass)

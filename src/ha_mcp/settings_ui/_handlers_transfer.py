@@ -338,8 +338,11 @@ async def _undo(
                 server, write, {key: values, "only_if": only_if}
             )
             if reply.get("kept") and len(written[name]) == 1:
-                # Its write got no reply, so what it stored is unknown.
-                logger.error("Settings import could not undo %s", name)
+                logger.error(
+                    "Settings import could not undo %s: its write got no reply "
+                    "and the value is not one this import knows",
+                    name,
+                )
                 complete = False
             elif reply.get("kept"):
                 logger.warning("Kept %s because it changed during the import", name)
