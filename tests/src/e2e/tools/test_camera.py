@@ -70,16 +70,6 @@ class TestCameraToolsE2E:
             )
 
     @pytest.mark.asyncio
-    async def test_image_entity_rejects_dimensions(self, mcp_client):
-        """width/height are refused for image.* entities before any request."""
-        async with MCPAssertions(mcp_client) as mcp:
-            await mcp.call_tool_failure(
-                "ha_get_camera_image",
-                {"entity_id": "image.anything", "width": 320, "height": 240},
-                expected_error="apply only to camera entities",
-            )
-
-    @pytest.mark.asyncio
     async def test_unknown_image_entity_reports_not_found(self, mcp_client):
         """An image.* entity Home Assistant does not know maps to a not-found error."""
         async with MCPAssertions(mcp_client) as mcp:

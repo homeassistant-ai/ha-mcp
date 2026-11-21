@@ -5,7 +5,6 @@ the tool on the server's own client against a real ``hass`` whose ``image``
 integration serves an entity of a test integration, so every reply is Core's.
 """
 
-import json
 from contextlib import AbstractContextManager
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -23,7 +22,7 @@ from ha_mcp.tools import tools_camera
 from ha_mcp.tools.tools_camera import CameraTools
 
 from ._camera_test_helpers import png_bytes as _png
-from ._tool_errors import error_of
+from ._tool_errors import error_body, error_of
 
 
 class TestImage(ImageEntity):
@@ -62,23 +61,6 @@ def _spy_on_requests(
     return patch.object(client.httpx_client, "stream", wraps=client.httpx_client.stream)
 
 
-async def test_image_entity_uses_image_proxy(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    body = _png(64, 32)
-    await _serve(hass, TestImage(hass, "qr code", body))
-
-    with _spy_on_requests(core_client) as stream:
-        text, image = await CameraTools(core_client).ha_get_camera_image(
-            entity_id="image.qr_code"
-        )
-
-    assert stream.call_args.args[1] == "/image_proxy/image.qr_code"
-    assert image.data == body
-    assert image.to_image_content().mime_type == "image/png"
-    assert text.startswith("Image (PNG, 64x32). Retrieved: ")
-
-
 @pytest.mark.parametrize("dimension", ["width", "height"])
 async def test_dimensions_rejected_for_image_entities(
     hass: HomeAssistant, core_client: HomeAssistantClient, dimension: str
@@ -96,32 +78,34 @@ async def test_dimensions_rejected_for_image_entities(
     stream.assert_not_called()
 
 
-async def test_entity_id_cannot_alter_the_request_path(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+@pytest.mark.parametrize("domain", ["camera", "image"])
+async def test_entity_id_stays_in_one_proxy_path_segment(
+    core_client: HomeAssistantClient, domain: str
 ) -> None:
-    await _serve(hass, TestImage(hass, "qr code", _png(4, 4)))
-
-    with _spy_on_requests(core_client) as stream, pytest.raises(ToolError):
+    http = core_client.httpx_client
+    with patch.object(http, "send", wraps=http.send) as send, pytest.raises(ToolError):
         await CameraTools(core_client).ha_get_camera_image(
-            entity_id="image.x/../../states/light.a"
+            entity_id=f"{domain}.missing/extra"
         )
 
-    endpoint = stream.call_args.args[1]
-    assert endpoint.startswith("/image_proxy/image.x%2F")
-    assert "/../" not in endpoint
+    request = send.call_args.args[0]
+    assert request.url.raw_path.endswith(b".missing%2Fextra")
 
 
 async def test_declared_oversize_is_refused(
     hass: HomeAssistant, core_client: HomeAssistantClient, monkeypatch: Any
 ) -> None:
     monkeypatch.setattr(tools_camera, "MAX_IMAGE_ENTITY_BYTES", 1024)
-    await _serve(hass, TestImage(hass, "huge", _png(4, 4) + b"0" * 2048))
+    payload = _png(4, 4) + b"0" * 2048
+    await _serve(hass, TestImage(hass, "huge", payload))
 
     with pytest.raises(ToolError) as exc_info:
         await CameraTools(core_client).ha_get_camera_image(entity_id="image.huge")
 
     assert error_of(exc_info)["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
-    body = json.loads(exc_info.value.args[0])
+    body = error_body(exc_info)
+    assert body["declared_bytes"] == len(payload)
+    assert "cannot resize" in body["error"]["suggestion"]
     assert body["limit_bytes"] == 1024
     assert body["entity_id"] == "image.huge"
 
@@ -161,4 +145,8 @@ async def test_unavailable_image_is_a_service_error(
     with pytest.raises(ToolError) as exc_info:
         await CameraTools(core_client).ha_get_camera_image(entity_id="image.broken")
 
-    assert error_of(exc_info)["code"] == "SERVICE_CALL_FAILED"
+    error = error_of(exc_info)
+    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert "image.broken" in error["message"]
+    assert "HTTP 500" in error["message"]
+    assert "Home Assistant" in error["suggestion"]

@@ -311,6 +311,7 @@ async def test_camera_without_an_image_is_reported_as_a_failed_call(
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert "HTTP 500" in error["message"]
     assert "may be offline" in error["message"]
+    assert "Home Assistant" in error["suggestion"]
 
 
 async def test_unreachable_home_assistant_is_reported_as_a_connection_failure(
