@@ -3286,7 +3286,7 @@
       "properties": {
         "scene_id": {
           "type": "str | None",
-          "description": "Scene storage ID from listing (e.g. 'movie_night') or the scene's entity_id; an entity_id is resolved to the storage ID.",
+          "description": "Scene storage ID from listing (e.g. 'movie_night') or the scene's entity_id (e.g. 'scene.movie_night'). A bare id names the scene stored under that key or, when none is, the scene whose entity is 'scene.<id>'; 'scene.<x>' is an entity_id, resolved to its storage key.",
           "default": null
         },
         "query": {
@@ -3332,12 +3332,12 @@
   {
     "name": "ha_config_remove_scene",
     "title": "Remove Scene",
-    "description": "Delete a Home Assistant scene.\n\nEXAMPLE: ha_config_remove_scene(\"old_scene\")\n\nOnly scenes created via the Home Assistant UI can be deleted. Scenes\ndefined in YAML configuration files (scenes.yaml or configuration.yaml)\ncannot be deleted through the API and return a 405 Method Not Allowed\nerror; edit the configuration file directly instead.\n\nWARNING: Deleting a scene that is referenced by automations or scripts\n(via ``scene.turn_on``) may cause those to fail.",
+    "description": "Delete a Home Assistant scene.\n\nEXAMPLE: ha_config_remove_scene(\"old_scene\")\n\nDeletes a scene from Home Assistant's editable scene storage\n(``scenes.yaml`` entries with an ``id``, as the UI and\nha_config_set_scene write them) or one made by ``scene.create``\n(through Core's ``scene.delete``); a scene defined elsewhere in YAML or\nby an integration is CONFIG_NOT_FOUND.\n\nThe scene is deleted even when automations or scripts reference it;\nthe ones Home Assistant's related search finds are listed in\n``referenced_by``, with a warning.",
     "inputSchema": {
       "properties": {
         "scene_id": {
           "type": "str",
-          "description": "Scene identifier to delete (e.g., 'old_scene')"
+          "description": "Scene to delete: storage key (e.g. 'old_scene') or entity_id (e.g. 'scene.old_scene'). A bare id deletes only the scene stored under that key; a scene made by scene.create has none and is deleted by its entity_id."
         },
         "wait": {
           "type": "bool",
@@ -3363,21 +3363,31 @@
   {
     "name": "ha_config_set_scene",
     "title": "Create or Update Scene",
-    "description": "Create or update a Home Assistant scene.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n\nSupports two modes: full config replacement (``config``) or\nPython transformation of an existing scene (``python_transform``).\nSee the field descriptions for ``python_transform`` examples and\nthe ``config`` shape contract. Either mode can also take\n``activate``, which can be passed alone with ``scene_id`` to activate\na scene without touching its config.\n\nWHEN TO USE:\n- ``python_transform``: surgical edits to an existing scene\n  (add/remove/update a single entity entry).\n- ``config``: creating a new scene, or wholesale replacement.\n- ``activate`` (with scene_id, no config): activate any scene,\n  e.g. ha_config_set_scene(scene_id=\"scene.movie_night\", activate=True).\n\nWHEN NOT TO USE:\n- To list or look up existing scenes, use ha_config_get_scene.\n\nSCENE SHAPE: Automations use a list of actions; scenes capture a snapshot\nof states as a dict.\n\nEXAMPLE:\n\nha_config_set_scene(scene_id=\"movie_night\", config={\n    \"name\": \"Movie Night\",\n    \"entities\": {\n        \"light.living_room\": {\"state\": \"on\", \"brightness\": 50},\n    },\n    \"icon\": \"mdi:movie\",\n})\n\nThe top-level ``SKILL.md`` for home-assistant-best-practices ships in\nthis response under ``skill_content`` by default — generic\nbest-practice index covering entity-naming and\nsafe-refactoring patterns that intersect with scene authoring. For\ndetailed scene configuration help beyond that, use ha_get_skill_guide.",
+    "description": "Create or update a Home Assistant scene.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n\nSupports two modes: full config replacement (``config``) or\nPython transformation of an existing scene (``python_transform``).\nSee the field descriptions for ``python_transform`` examples and\nthe ``config`` shape contract. Either mode can also take\n``activate``, which can be passed alone with ``scene_id`` to activate\na scene without touching its config.\n\nWHEN TO USE:\n- ``python_transform``: surgical edits to an existing scene\n  (add/remove/update a single entity entry).\n- ``config``: creating a new scene, or wholesale replacement; with\n  ``capture_entities`` or ``capture_devices``, from current states.\n- ``activate`` (with scene_id, no config): activate any scene,\n  e.g. ha_config_set_scene(scene_id=\"scene.movie_night\", activate=True).\n\nWHEN NOT TO USE:\n- To list or look up existing scenes, use ha_config_get_scene.\n\nSCENE SHAPE: Automations use a list of actions; scenes capture a snapshot\nof states as a dict.\n\nEXAMPLE:\n\nha_config_set_scene(scene_id=\"movie_night\", config={\n    \"name\": \"Movie Night\",\n    \"entities\": {\n        \"light.living_room\": {\"state\": \"on\", \"brightness\": 50},\n    },\n    \"icon\": \"mdi:movie\",\n})\n\nThe top-level ``SKILL.md`` for home-assistant-best-practices ships in\nthis response under ``skill_content`` by default — generic\nbest-practice index covering entity-naming and\nsafe-refactoring patterns that intersect with scene authoring. For\ndetailed scene configuration help beyond that, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "scene_id": {
           "type": "str",
-          "description": "Scene identifier (e.g., 'movie_night')"
+          "description": "Scene storage key (e.g. 'movie_night') or entity_id (e.g. 'scene.movie_night'). A bare id writes the scene stored under that key; when none is but another scene's entity is scene.<id>, the write is refused (pass scene.<id> for that scene). A new scene takes the bare key; Core names its entity after 'name'."
         },
         "config": {
           "type": "dict[str, Any] | None",
-          "description": "Scene configuration dictionary. Must include 'entities' (a dict keyed by entity_id, NOT a list). Optional fields: 'name' (defaults to scene_id), 'icon', 'id'. Mutually exclusive with python_transform.",
+          "description": "Scene configuration dictionary. Must include 'entities' (a dict keyed by entity_id, NOT a list) unless capture_entities or capture_devices supplies them. Optional fields: 'name' (defaults to scene_id), 'icon', 'id' (the storage key; must equal the scene's), 'metadata' (per-entity editor hints, e.g. {'light.x': {'entity_only': true}}). Mutually exclusive with python_transform.",
           "default": null
         },
         "python_transform": {
           "type": "str | None",
           "description": "Python expression to transform existing scene config. Mutually exclusive with config. WARNING: Expressions with infinite loops will hang the server. Examples: Add entity: python_transform=\"config['entities']['light.bed'] = {'state': 'on'}\" Update brightness: python_transform=\"config['entities']['light.kitchen']['brightness'] = 50\" Remove entity: python_transform=\"del config['entities']['light.kitchen']\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend, index, count, sort,\n  reverse\n- Dict methods: update, get, setdefault, keys, values, items, pop, clear\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- Guards (a failed guard raises and the config is not changed):\n  one match: [a] = [a for a in config['actions'] if a.get('alias') == 'Y']\n  a value: [a] = [a for a in [config['actions'][2]] if a['data']['v'] == 1]\n- String methods: startswith, endswith, lower, upper, strip, lstrip, rstrip,\n  removeprefix, removesuffix, split, join, replace, count, index\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead",
+          "default": null
+        },
+        "capture_entities": {
+          "type": "list[str] | None",
+          "description": "Entity IDs whose current state and attributes are written into config's 'entities', as the scene editor captures them; a captured state replaces that entity's entry in config. Requires config.",
+          "default": null
+        },
+        "capture_devices": {
+          "type": "list[str] | None",
+          "description": "Device IDs captured as the scene editor saves a picked device: each entity of the device that has a state, is not hidden, has no entity category and is outside the domains the editor leaves out (sensors, buttons, scenes, scripts, update, zone, ...), without entity_only unless also in capture_entities. Needs the ha_mcp_tools component. Requires config.",
           "default": null
         },
         "config_hash": {
@@ -3427,12 +3437,12 @@
   {
     "name": "ha_config_get_script",
     "title": "Get Script Config",
-    "description": "Get Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` stays the same across consecutive reads of an unchanged config.\n\nThe returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. Prefix handling matches `ha_config_get_automation` in behavior (mechanism differs: automations resolve through the entity registry; scripts strip the prefix).\n\nEXAMPLES:\n- Get script (bare form): ha_config_get_script(\"morning_routine\")\n- Get script (entity_id form): ha_config_get_script(\"script.morning_routine\")\n\nFor detailed script configuration help, use ha_get_skill_guide.",
+    "description": "Get Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` stays the same across consecutive reads of an unchanged config.\n\nThe returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A bare id names the script stored under that key first; `script.<x>` names that entity's script, or the script stored under key `<x>` when no entity has that id.\n\nEXAMPLES:\n- Get script (bare form): ha_config_get_script(\"morning_routine\")\n- Get script (entity_id form): ha_config_get_script(\"script.morning_routine\")\n\nFor detailed script configuration help, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "script_id": {
           "type": "str",
-          "description": "Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup."
+          "description": "Script identifier — bare storage key ('morning_routine') or entity_id ('script.morning_routine'); a bare id names the script stored under that key even when another script's entity is 'script.<id>'."
         }
       },
       "required": [
@@ -3458,7 +3468,7 @@
       "properties": {
         "script_id": {
           "type": "str",
-          "description": "Script identifier to delete — bare storage key ('old_script') or entity_id form ('script.old_script'); a leading 'script.' prefix is stripped before lookup."
+          "description": "Script identifier to delete — bare storage key ('old_script') or entity_id ('script.old_script'); a bare id deletes only the script stored under that key, even when another script's entity is 'script.<id>'."
         },
         "wait": {
           "type": "bool",
@@ -3489,7 +3499,7 @@
       "properties": {
         "script_id": {
           "type": "str",
-          "description": "Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup."
+          "description": "Script identifier — bare storage key ('morning_routine') or entity_id ('script.morning_routine'); a bare id writes the script stored under that key; when none is but another script's entity is 'script.<id>', the write is refused (pass 'script.<id>' for that script)."
         },
         "config": {
           "type": "dict[str, Any] | None",
