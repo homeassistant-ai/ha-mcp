@@ -782,7 +782,7 @@ transfer in the **HA-MCP** sidebar panel.
    the server's connect URL.
 2. Open **Settings → Devices & services** and delete each HA-MCP integration
    entry, including **HA-MCP Server** and **File & YAML Tools** if present.
-3. In HACS or Marketplace, uninstall the `homeassistant-ai/ha-mcp-integration`
+3. In Marketplace, uninstall the `homeassistant-ai/ha-mcp-integration`
    mirror. Install the catalog listing, `homeassistant-ai/ha-mcp`, and restart
    Home Assistant when prompted.
 4. Add the **HA-MCP Server** integration entry. In its sidebar panel, open

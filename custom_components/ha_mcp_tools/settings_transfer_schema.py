@@ -12,7 +12,11 @@ import voluptuous as vol
 from . import _normalize_extra_dir
 from . import const as c
 from .extra_yaml_keys import _normalize_extra_yaml_keys
-from .oauth_redirect_allowlist import normalize_allowlist
+from .oauth_redirect_allowlist import (
+    MAX_OAUTH_CALLBACKS,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
+    normalize_allowlist,
+)
 
 FORMAT = "ha-mcp-settings"
 VERSION = 1
@@ -80,7 +84,7 @@ def _external_url(value: str) -> str:
 
 def _callbacks(values: list[str]) -> list[str]:
     entries, rejected = normalize_allowlist(values)
-    if rejected or len(entries) > c.MAX_OAUTH_CALLBACKS:
+    if rejected or len(entries) > MAX_OAUTH_CALLBACKS:
         raise vol.Invalid("invalid OAuth callbacks")
     return entries
 
@@ -130,7 +134,7 @@ SERVER_OPTIONS = {
     c.OPT_LLM_API_EXPOSURE: vol.In(
         [c.EXPOSURE_TOOL_SEARCH, c.EXPOSURE_FULL, c.EXPOSURE_BOTH]
     ),
-    c.OPT_OAUTH_REDIRECT_ALLOWLIST: vol.All([str], _callbacks),
+    OPT_OAUTH_REDIRECT_ALLOWLIST: vol.All([str], _callbacks),
     c.OPT_OAUTH_ALLOW_ANY_CALLBACK: bool,
 }
 
