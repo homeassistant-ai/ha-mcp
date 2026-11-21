@@ -8,12 +8,15 @@ keeps as its options. The server's client talks to a real ``hass``.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 
@@ -88,6 +91,9 @@ async def test_an_embedded_servers_file_keeps_this_servers_connection(
     assert json.loads((settings_world / "backup_settings.json").read_text()) == {
         "auto_backup_retain_per_entity": 21
     }
+    # Nothing of the connection lands on this server.
+    names = await asyncio.to_thread(os.listdir, settings_world)
+    assert {n for n in names if not n.startswith(".")} == {"backup_settings.json"}
 
 
 async def test_file_permissions_move_through_the_tools_entry(
@@ -110,6 +116,47 @@ async def test_file_permissions_move_through_the_tools_entry(
         "allowed_dirs": ["www"],
         "extra_yaml_keys": ["mqtt"],
     }
+
+
+async def test_a_refused_directory_leaves_the_permissions_as_they_were(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+) -> None:
+    await make_file_service(hass, allowed="pyscript")
+    original = await _export(monkeypatch, core_client)
+    bundle = json.loads(json.dumps(original))
+    bundle["entries"]["tools"]["allowed_dirs"] = ["www", "../outside"]
+
+    response = await post_settings(monkeypatch, core_client, IMPORT, bundle)
+
+    assert (response.status_code, response.json()["error"]) == (400, "invalid_backup")
+    assert await _export(monkeypatch, core_client) == original
+
+
+async def test_a_failed_permission_write_restores_files_and_permissions(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+) -> None:
+    await make_file_service(hass, allowed="pyscript")
+    original = await _export(monkeypatch, core_client)
+    bundle = json.loads(json.dumps(original))
+    bundle["entries"]["tools"] = {"allowed_dirs": ["www"], "extra_yaml_keys": ["mqtt"]}
+    bundle["server_settings"]["features"] = {"redact_secrets": True}
+    save = Store.async_save
+
+    async def fail_keys(store: Store, data: Any) -> None:
+        if data == {"keys": ["mqtt"]}:
+            raise OSError("storage unavailable")
+        await save(store, data)
+
+    monkeypatch.setattr(Store, "async_save", fail_keys)
+    response = await post_settings(monkeypatch, core_client, IMPORT, bundle)
+
+    assert (response.status_code, response.json()["error"]) == (500, "restore_failed")
+    monkeypatch.setattr(Store, "async_save", save)
+    assert await _export(monkeypatch, core_client) == original
 
 
 async def test_permissions_without_a_tools_entry_are_reported_as_skipped(

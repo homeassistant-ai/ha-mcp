@@ -816,13 +816,24 @@ server, the app's (add-on's) page, and the standalone or Docker server's
 from a standalone server into the in-process server.
 
 Tool states, security policies, entity visibility, feature, server and
-automatic backup settings move with the file. In the app, the settings it keeps
-as app options are read from and written to its Configuration. The File & YAML
-Tools permissions move when that entry exists on both sides. The connection
-(webhook ID, secret path, OAuth credentials) belongs to the in-process server's
-entry: only an export from that entry carries it, and only that entry imports
-it. Any other server keeps its own connection and says so after the import.
-Restart HA-MCP when the import asks for it.
+automatic backup settings saved on the settings page move with the file. A value
+set by an environment variable (for example `READ_ONLY_MODE` on a Docker
+server) is not in the file: set it on the destination and check it after the
+import. In the app, the settings it keeps as app options are read from and
+written to its Configuration.
+
+The File & YAML Tools permissions move when that entry exists and is enabled on
+both sides; check them after the import when the source's entry was disabled.
+An export from the in-process server records whether it had that entry, so its
+import into another in-process server needs the same entry state on the
+destination (add or remove the entry first). A file from the app, Docker or a
+standalone server leaves the destination's entry as it is unless it carries
+permissions.
+
+The connection (webhook ID, secret path, OAuth credentials) belongs to the
+in-process server's entry: only an export from that entry carries it, and only
+that entry imports it. Any other server keeps its own connection and says so
+after the import. Restart HA-MCP when the import asks for it.
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 

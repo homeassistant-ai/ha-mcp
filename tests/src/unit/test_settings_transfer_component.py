@@ -651,3 +651,28 @@ async def test_another_installations_file_keeps_the_connection_and_tools_entry(
     after = await settings_transfer.async_export(hass)
     assert after["server_settings"]["backup"] == {"auto_backup_retain_per_entity": 21}
     assert after["entries"]["tools"] == exported["entries"]["tools"]
+
+
+async def test_a_file_without_permissions_ignores_an_unloaded_tools_entry(
+    hass: HomeAssistant,
+) -> None:
+    add_options_entry(hass, data={"webhook_id": "hook", "secret_path": "/p"})
+    MockConfigEntry(
+        domain=DOMAIN, data={"entry_type": "tools"}, state=ConfigEntryState.SETUP_RETRY
+    ).add_to_hass(hass)
+    exported = await settings_transfer.async_export(hass)
+    standalone = {
+        "format": "ha-mcp-settings",
+        "version": 1,
+        "contains_credentials": False,
+        "entries": {},
+        "server_settings": {
+            **exported["server_settings"],
+            "backup": {"auto_backup_retain_per_entity": 22},
+        },
+    }
+
+    await settings_transfer.async_import(hass, standalone)
+
+    after = await settings_transfer.async_export(hass)
+    assert after["server_settings"]["backup"] == {"auto_backup_retain_per_entity": 22}

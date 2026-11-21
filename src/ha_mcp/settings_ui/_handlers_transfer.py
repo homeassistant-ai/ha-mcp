@@ -152,18 +152,14 @@ async def _restore_files(
         raise _ImportFailed("invalid_backup", 400) from err
 
 
-async def _apply_tools(
+async def _write_tools(
     server: HomeAssistantSmartMCPServer | None, wanted: dict[str, list[str]]
-) -> dict[str, list[str]] | None:
-    """Write the lists; return the previous ones, or None without the component."""
-    previous = await _read_tools(server)
-    if previous is None:
-        return None
+) -> None:
     for name, values in wanted.items():
         _, write, key = _TOOLS_SERVICES[name]
+        # The component applies what it accepts, so a refusal still wrote.
         if (await _tools_service(server, write, {key: values})).get("rejected"):
             raise _ImportFailed("invalid_backup", 400)
-    return previous
 
 
 async def _apply_app_options(
@@ -238,14 +234,24 @@ async def _import(
         try:
             changes = await _restore_files(backup.server_settings)
             if backup.tools is not None:
-                tools = await _apply_tools(server, backup.tools)
+                # Recorded before the first write so any failure can undo it.
+                tools = await _read_tools(server)
                 if tools is None:
                     skipped.append("file_permissions")
+                else:
+                    await _write_tools(server, backup.tools)
             app_changed = await _apply_app_options(server, backup.server_settings)
-        except _ImportFailed as err:
+        except Exception as err:
+            if isinstance(err, _ImportFailed):
+                logger.info("Settings import refused (%s)", err.code)
+                failure = err
+            else:
+                logger.exception("Settings import failed")
+                failure = _ImportFailed("restore_failed", 500)
             complete = await _undo(server, changes, tools)
-            logger.info("Settings import refused (%s)", err.code)
-            return _error(err.code if complete else "rollback_incomplete", err.status)
+            return _error(
+                failure.code if complete else "rollback_incomplete", failure.status
+            )
     reset_global_settings()
     changed = {d.key for d in changes.documents} if changes else set()
     return JSONResponse(

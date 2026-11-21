@@ -351,7 +351,7 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
     # Keep setup/unload from crossing the choice between live and stored
     # settings. A newly created entry loads the persisted values in its flow.
     async with (
-        _tools_setup_lock(target_tools),
+        _tools_setup_lock(target_tools) if checks_tools else nullcontext(),
         AsyncExitStack() as rollback,
     ):
         try:
