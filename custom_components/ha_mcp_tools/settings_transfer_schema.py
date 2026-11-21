@@ -145,9 +145,11 @@ _ENVELOPE = vol.Schema(
     {
         vol.Required("format"): FORMAT,
         vol.Required("version"): int,
-        vol.Required("contains_credentials"): True,
+        vol.Required("contains_credentials"): bool,
         vol.Required("entries"): {
-            vol.Required(c.ENTRY_TYPE_SERVER): {
+            # Only an export from the HA-MCP Server entry carries the
+            # connection; another installation's export moves the settings.
+            c.ENTRY_TYPE_SERVER: {
                 vol.Required("data"): SERVER_DATA,
                 vol.Required("options"): SERVER_OPTIONS,
             },
@@ -170,6 +172,18 @@ def portable_server(entry: Any) -> dict[str, Any]:
     }
 
 
+def _check_legacy_credentials(server: Mapping[str, Any]) -> None:
+    legacy_fields = {
+        c.DATA_OAUTH_CLIENT_ID,
+        c.DATA_OAUTH_CLIENT_SECRET,
+        c.DATA_OAUTH_SIGNING_KEY,
+    }
+    has_legacy = server["options"].get(c.OPT_WEBHOOK_AUTH) == c.WEBHOOK_AUTH_LEGACY
+    if has_legacy or legacy_fields.intersection(server["data"]):
+        if not legacy_fields.issubset(server["data"]):
+            raise TransferRefused(RefusalCode.INVALID_BACKUP)
+
+
 def validate(bundle: Any, config_dir: Path, *, stored: bool = False) -> dict[str, Any]:
     """Validate the complete entry payload before writing either entry or store.
 
@@ -185,18 +199,11 @@ def validate(bundle: Any, config_dir: Path, *, stored: bool = False) -> dict[str
         checked: dict[str, Any] = _ENVELOPE(bundle)
     except (vol.Invalid, TypeError, ValueError) as err:
         raise TransferRefused(RefusalCode.INVALID_BACKUP) from err
-    if checked["contains_credentials"] is not True:
+    server = checked["entries"].get(c.ENTRY_TYPE_SERVER)
+    if checked["contains_credentials"] is not (server is not None):
         raise TransferRefused(RefusalCode.INVALID_BACKUP)
-    server = checked["entries"][c.ENTRY_TYPE_SERVER]
-    legacy_fields = {
-        c.DATA_OAUTH_CLIENT_ID,
-        c.DATA_OAUTH_CLIENT_SECRET,
-        c.DATA_OAUTH_SIGNING_KEY,
-    }
-    has_legacy = server["options"].get(c.OPT_WEBHOOK_AUTH) == c.WEBHOOK_AUTH_LEGACY
-    if has_legacy or legacy_fields.intersection(server["data"]):
-        if not legacy_fields.issubset(server["data"]):
-            raise TransferRefused(RefusalCode.INVALID_BACKUP)
+    if server is not None:
+        _check_legacy_credentials(server)
     if tools := checked["entries"].get(c.ENTRY_TYPE_TOOLS):
         paths = [
             _normalize_extra_dir(item, config_dir) for item in tools["allowed_dirs"]

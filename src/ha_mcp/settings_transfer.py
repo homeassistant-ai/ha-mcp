@@ -32,6 +32,17 @@ from .visibility.persistence import VISIBILITY_FILENAME
 
 _LOGGER = logging.getLogger(__name__)
 INCOMPLETE_ROLLBACK_NOTE = "Settings import rollback incomplete"
+# The component's settings_transfer_schema validates the same envelope.
+FORMAT = "ha-mcp-settings"
+VERSION = 1
+MAX_BYTES = 4 * 1024 * 1024
+_ENVELOPE_KEYS = {
+    "format",
+    "version",
+    "contains_credentials",
+    "entries",
+    "server_settings",
+}
 
 # Never use a path from the uploaded document. A null section records that
 # the source used defaults and must clear any override on the destination.
@@ -63,6 +74,75 @@ class LocalSettingsUnusable(ValueError):
 
 class ServerSettingsRollbackIncomplete(RuntimeError):
     """One or more server settings could not be restored."""
+
+
+class IncompatibleVersion(ValueError):
+    """The file is a settings export of another format version."""
+
+
+@dataclass
+class Backup:
+    """The parts of an export a server outside Home Assistant can apply."""
+
+    server_settings: dict[str, Any]
+    tools: dict[str, list[str]] | None
+    has_connection: bool
+
+
+def read_backup(bundle: Any) -> Backup:
+    """Check an uploaded export's envelope; the settings are checked on restore.
+
+    Only the HA-MCP Server entry in Home Assistant can apply the connection
+    section, so it is reported and left out here.
+    """
+    if not isinstance(bundle, dict) or bundle.get("format") != FORMAT:
+        raise ValueError("Not an HA-MCP settings export")
+    if type(bundle.get("version")) is not int or bundle["version"] != VERSION:
+        raise IncompatibleVersion("Unsupported settings export version")
+    entries = bundle.get("entries", {})
+    if (
+        bundle.keys() - _ENVELOPE_KEYS
+        or "server_settings" not in bundle
+        or not isinstance(entries, dict)
+        or entries.keys() - {"server", "tools"}
+        or type(bundle.get("contains_credentials")) is not bool
+        or bundle["contains_credentials"] != ("server" in entries)
+    ):
+        raise ValueError("Invalid settings export")
+    return Backup(
+        bundle["server_settings"],
+        _read_tools(entries.get("tools")),
+        "server" in entries,
+    )
+
+
+def _read_tools(tools: Any) -> dict[str, list[str]] | None:
+    """The File & YAML Tools lists to apply; None when absent or disabled."""
+    if tools is None:
+        return None
+    names = ("allowed_dirs", "extra_yaml_keys")
+    if (
+        not isinstance(tools, dict)
+        or tools.keys() - {*names, "disabled"}
+        or not isinstance(tools.get("disabled", False), bool)
+        or any(
+            not isinstance(tools.get(k), list)
+            or not all(isinstance(i, str) for i in tools[k])
+            for k in names
+        )
+    ):
+        raise ValueError("Invalid File & YAML Tools settings")
+    return None if tools.get("disabled") else {k: tools[k] for k in names}
+
+
+def app_option_fields(section: str) -> frozenset[str]:
+    """The ``features`` or ``backup`` overrides the app keeps as its options."""
+    types = _FEATURE_TYPES if section == "features" else _BACKUP_TYPES
+    return frozenset(
+        name
+        for name in types
+        if (meta := setting_of(Settings.model_fields[name])) and meta.app
+    )
 
 
 def _override_error(name: str, value: Any, types: Mapping[str, type]) -> str | None:

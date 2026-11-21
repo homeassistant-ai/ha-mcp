@@ -807,6 +807,23 @@ change the public URL.
 If you use PIN-based approval events, set a decision PIN on the destination
 before importing their policy.
 
+### Can I move my settings between the app, Docker, standalone and the in-process server?
+
+Yes. Every HA-MCP settings page has **Server Settings → Download settings
+JSON** and **Import settings**: the **HA-MCP** sidebar panel of the in-process
+server, the app's (add-on's) page, and the standalone or Docker server's
+`/settings` page. A file from any of them imports into any other, for example
+from a standalone server into the in-process server.
+
+Tool states, security policies, entity visibility, feature, server and
+automatic backup settings move with the file. In the app, the settings it keeps
+as app options are read from and written to its Configuration. The File & YAML
+Tools permissions move when that entry exists on both sides. The connection
+(webhook ID, secret path, OAuth credentials) belongs to the in-process server's
+entry: only an export from that entry carries it, and only that entry imports
+it. Any other server keeps its own connection and says so after the import.
+Restart HA-MCP when the import asks for it.
+
 ### Do I still need the app or the webhook proxy if I use the custom component?
 
 **No.** The custom component's **HA-MCP Server** entry runs the whole ha-mcp server inside Home Assistant and is completely independent of the Home Assistant app. For remote access it registers its own built-in Home Assistant webhook, so you do not need the separate Webhook Proxy app either.
