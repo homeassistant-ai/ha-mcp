@@ -779,21 +779,21 @@
   {
     "name": "ha_get_camera_image",
     "title": "Get Camera Image",
-    "description": "Get a snapshot image from a Home Assistant camera entity.\n\nFetches the current camera image and returns it directly for\nvisual analysis (security checks, delivery verification,\nconfirming a garage door actually closed), in the format Home\nAssistant serves (JPEG, PNG, or GIF), alongside a short text\nblock stating the served snapshot's size and retrieval time in\nHome Assistant local time.\n\nDo not use it to inspect the camera's state or attributes — use\nha_search or ha_get_state for those; it returns an image, not\nstate. Use it when you need to see the current scene, and on\nhigh-resolution cameras pass width and height to reduce token\nusage.\n\nEXAMPLE: ha_get_camera_image(entity_id=\"camera.backyard\", width=640, height=480)",
+    "description": "Get a snapshot image from a Home Assistant camera or image entity.\n\nReturns the image in its served format, with its available dimensions\nand retrieval time in Home Assistant local time. Use ha_get_state for\nentity state and attributes. Use this tool to inspect a camera scene\nor view content such as a QR code, album cover, or map.\n\nEXAMPLES:\nha_get_camera_image(entity_id=\"camera.backyard\", width=640, height=480)\nha_get_camera_image(entity_id=\"image.album_art\")",
     "inputSchema": {
       "properties": {
         "entity_id": {
           "type": "str",
-          "description": "Camera entity ID (e.g., 'camera.front_door')"
+          "description": "Camera or image entity ID (e.g., 'camera.front_door', 'image.album_art')"
         },
         "width": {
           "type": "int | None",
-          "description": "Width for the resized image. Home Assistant rescales only when both width and height are given and the camera serves JPEG.",
+          "description": "Requested width in pixels.",
           "default": null
         },
         "height": {
           "type": "int | None",
-          "description": "Height for the resized image. Home Assistant rescales only when both width and height are given and the camera serves JPEG.",
+          "description": "Requested height in pixels.",
           "default": null
         }
       },
@@ -805,7 +805,7 @@
       "readOnlyHint": true,
       "destructiveHint": false,
       "idempotentHint": true,
-      "openWorldHint": false
+      "openWorldHint": true
     },
     "tags": [
       "Camera"
@@ -1056,7 +1056,7 @@
   {
     "name": "ha_config_list_dashboard_resources",
     "title": "List Dashboard Resources",
-    "description": "List Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns one page of registered resources; `total_count` and `has_more`\nreport the full set, and `inline_count` and `by_type` summarise every\nresource, not just this page. Each resource has a unique ID for\nupdate/delete operations. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the\ncontent instead of the full encoded URL to save tokens.\n`resource_mode` is Core's lovelace resource mode; in 'yaml' mode\nresources cannot be created, updated or deleted through the API.\n\nEXAMPLES:\n- Next page: ha_config_list_dashboard_resources(offset=100)\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n- Verify an edit by hash: ha_config_list_dashboard_resources(include_hash=True)\n\nHome Assistant 2026.6+ exposes resource management in the UI by default;\nAPI access works regardless of UI availability.",
+    "description": "List Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns one page of registered resources; `total_count` and `has_more`\nreport the full set, and `inline_count` and `by_type` summarise every\nresource, not just this page. Each resource has a unique ID for\nupdate/delete operations. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the\ncontent instead of the full encoded URL to save tokens.\n`resource_mode` is Core's lovelace resource mode; in 'yaml' mode\nresources cannot be created, updated or deleted through the API.\n\nEXAMPLES:\n- Next page: ha_config_list_dashboard_resources(offset=100)\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n- Verify an edit by hash: ha_config_list_dashboard_resources(include_hash=True)\n\nHome Assistant exposes resource management in the UI by default;\nAPI access works regardless of UI availability.",
     "inputSchema": {
       "properties": {
         "include_content": {
@@ -1186,7 +1186,7 @@
   {
     "name": "ha_config_set_dashboard_resource",
     "title": "Set Dashboard Resource",
-    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- edits: Search/replace edits on an existing inline resource. Any\n  failing edit (or a config_hash mismatch) aborts the whole call\n  and saves nothing. Prefer this over content= for small changes to a\n  large card: only the changed text is sent.\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only; URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (/config/www/; Marketplace\n  cards: /local/community/...), /hacsfiles/... (HACS cards) or\n  https://... (CDN). Supports all types: 'module', 'js', 'css', 'html'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- Store cards need no call: in storage mode HACS and the Marketplace register the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n- Patch: ha_config_set_dashboard_resource(resource_id=\"abc123\", edits=[{\"old\": \"color: red\", \"new\": \"color: blue\"}], config_hash=\"<_config_hash from the list>\")\n\nInline writes return the stored content's config_hash.\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
+    "description": "Create or update a dashboard resource (inline code or external URL).\n\nProvide exactly one of:\n- edits: Search/replace edits on an existing inline resource. Any\n  failing edit (or a config_hash mismatch) aborts the whole call\n  and saves nothing. Prefer this over content= for small changes to a\n  large card: only the changed text is sent.\n- content: Inline JavaScript or CSS code (embedded in the resource URL\n  as a data: URI — no file storage or external hosting involved).\n  Supports 'module' and 'css' types only; URLs are\n  deterministic (same content = same URL); up to ~128KB. Content must be\n  self-contained: a data: URI has no base URL, so relative imports inside\n  a module and relative url() references inside CSS cannot resolve (use\n  fully-qualified URLs instead). If Home Assistant is behind a reverse\n  proxy that injects a Content-Security-Policy without 'data:' in\n  script-src/style-src, the browser blocks these resources: this call\n  still succeeds and the card simply never renders. Register the code as\n  a file and use url='/local/...' on such a deployment. (HA itself ships\n  no CSP.)\n- url: External resource URL — /local/... (/config/www/; Marketplace\n  cards: /local/community/...), /hacsfiles/... (the older path\n  for the same folder) or https://... (CDN). Supports all types:\n  'module', 'js', 'css', 'html'.\n\nEXAMPLES:\n- Inline: ha_config_set_dashboard_resource(content=\"class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);\", resource_type=\"module\")\n- Store cards need no call: in storage mode the Marketplace registers the resource on install (adding it again duplicates it); with YAML-mode resources, list it under lovelace: resources: in configuration.yaml instead.\n- Update: ha_config_set_dashboard_resource(url=\"/local/my-card-v2.js\", resource_type=\"module\", resource_id=\"abc123\")\n- Patch: ha_config_set_dashboard_resource(resource_id=\"abc123\", edits=[{\"old\": \"color: red\", \"new\": \"color: blue\"}], config_hash=\"<_config_hash from the list>\")\n\nInline writes return the stored content's config_hash.\n\nAfter adding a resource, a browser cache clear or hard refresh\n(Ctrl+Shift+R) is needed to load it.",
     "inputSchema": {
       "properties": {
         "content": {
@@ -1239,7 +1239,7 @@
   {
     "name": "ha_dev_manage_server",
     "title": "Manage MCP Server (dev)",
-    "description": "Manage the running ha-mcp server itself (developer mode).\n\nWhen NOT to use: to restart Home Assistant use ha_restart; to\nupdate Home Assistant Apps (add-ons) or HACS packages use\nha_manage_app / ha_manage_hacs.\n\nCaveats: update_source changes ONLY the ha_mcp_tools custom\ncomponent's separate in-process server entry — it never updates\nthe app (add-on), Docker, standalone, or PyPI server that may be\nserving this connection (update those via ha_manage_app /\ndocker pull / pip). In embedded mode that entry IS this server,\nso the update self-interrupts; elsewhere this connection is\nuntouched and keeps its current version. Success means the\nentry's options were applied — the component then reinstalls in\nthe background, which can take minutes and can still fail\n(check HA logs). update_source requires the component's\nin-process server entry to exist. restart interrupts this MCP\nconnection in embedded and app deployments (the reply\narrives just before the server goes down) and supports those\ntwo deployments only (standalone processes must be restarted\nexternally). approve/deny require the separate\n'dev_tools_security_policy_access' setting, off by default.\n\nEXAMPLES:\nha_dev_manage_server(\"update_source\", pip_spec=\"https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz\")\nha_dev_manage_server(\"update_source\", pip_spec=\"clear\")\nha_dev_manage_server(\"approve\", token=\"abc123\")",
+    "description": "Manage the running ha-mcp server itself (developer mode).\n\nWhen NOT to use: to restart Home Assistant use ha_restart; to\nupdate Home Assistant Apps (add-ons) or Marketplace repositories use\nha_manage_app / ha_manage_hacs.\n\nCaveats: update_source changes ONLY the ha_mcp_tools custom\ncomponent's separate in-process server entry — it never updates\nthe app (add-on), Docker, standalone, or PyPI server that may be\nserving this connection (update those via ha_manage_app /\ndocker pull / pip). In embedded mode that entry IS this server,\nso the update self-interrupts; elsewhere this connection is\nuntouched and keeps its current version. Success means the\nentry's options were applied — the component then reinstalls in\nthe background, which can take minutes and can still fail\n(check HA logs). update_source requires the component's\nin-process server entry to exist. restart interrupts this MCP\nconnection in embedded and app deployments (the reply\narrives just before the server goes down) and supports those\ntwo deployments only (standalone processes must be restarted\nexternally). approve/deny require the separate\n'dev_tools_security_policy_access' setting, off by default.\n\nEXAMPLES:\nha_dev_manage_server(\"update_source\", pip_spec=\"https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz\")\nha_dev_manage_server(\"update_source\", pip_spec=\"clear\")\nha_dev_manage_server(\"approve\", token=\"abc123\")",
     "inputSchema": {
       "properties": {
         "action": {
@@ -2030,27 +2030,37 @@
   },
   {
     "name": "ha_get_hacs_info",
-    "title": "Get HACS Info",
-    "description": "Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.\n\nOn Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool\nuses whichever the instance has. Use ``action=\"search\"`` to\nsearch/browse/list store repositories, or ``action=\"info\"`` for one\nrepository's full details as the store reports them (the README is in\n``additional_info``). This tool is read-only; to install or add\nrepositories use ``ha_manage_hacs``, and for non-HACS entities/config use\nthe domain-specific tools.\n\n**DASHBOARD TIP:** ``action=\"search\", installed_only=True, category=\"lovelace\"``\ndiscovers installed custom cards to wire into ``ha_config_set_dashboard()``.\n\n**Examples:**\n- Search the store: ha_get_hacs_info(action=\"search\", query=\"mushroom\", category=\"lovelace\")\n- List installed: ha_get_hacs_info(action=\"search\", installed_only=True)\n- Repository details: ha_get_hacs_info(action=\"info\", repository_id=\"441028036\")\n- Before an update: ha_get_hacs_info(action=\"info\", repository_id=\"owner/repo\", include_releases=True)\n\n**Caveats:** ``info`` fetches full repository detail from GitHub, so it can hit GitHub\nrate limits without a connected GitHub account; ``search`` reads the locally cached\nrepository index.",
+    "title": "Get Marketplace Info",
+    "description": "Get data from Home Assistant's Marketplace, what HACS became in 2026.11.\n\nThis tool only reads; to install, update, add or forget repositories\nuse ``ha_manage_hacs``. Use ``search`` to browse, filter or list\ninstalled repositories: it filters and pages the store's own list, in\nthe order Core lists it. Use ``info`` for one\nrepository's full record as the store sends it (the README is\n``additional_info``).\n\n**DASHBOARD TIP:** ``action=\"search\", installed_only=True, category=\"lovelace\"``\nfinds installed custom cards to wire into ``ha_config_set_dashboard()``.\n\n**Examples:**\n- Search: ha_get_hacs_info(action=\"search\", query=\"mushroom\", category=\"lovelace\")\n- Updates waiting: ha_get_hacs_info(action=\"search\", status=[\"pending-upgrade\"])\n- Details before an update: ha_get_hacs_info(action=\"info\", repository_id=\"owner/repo\", include_releases=True)\n- Before adding a repository: ha_get_hacs_info(action=\"detect\", repository=\"owner/repo\")\n\n**Caveats:** ``info`` marks the repository as seen (Core clears its\n``new`` flag) and may fetch it from GitHub. ``detect`` needs the\naccepted first-run warning and a connected GitHub account.\n``download_source`` opens and ends the Marketplace entry's options\nflow, as the panel's \"Download source\" does.",
     "inputSchema": {
       "properties": {
         "action": {
-          "type": "Literal['search', 'info']",
-          "description": "'search' the store, or 'info' for one repository"
+          "type": "Literal['search', 'info', 'removed', 'critical', 'detect', 'download_source']",
+          "description": "'search' the store's repositories, 'info' for one repository, 'removed' for repositories the catalog removed, 'critical' for those it marks critical, 'detect' for the categories a GitHub repository's content fits, 'download_source' for the sources the Marketplace can download from and the one in use"
         },
         "query": {
           "type": "str",
-          "description": "Search keyword (action='search')",
+          "description": "Words that must each appear in a row (action='search': name, full_name, description, authors, topics, category, domain, status and versions; action='removed': repository, reason, removal_type), case-insensitive",
           "default": ""
         },
         "category": {
           "type": "str | None",
-          "description": "Filter by category (action='search'). One of the categories the store reports (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
+          "description": "Only this category (action='search'). One of the Marketplace's categories (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
+          "default": null
+        },
+        "status": {
+          "type": "list[str] | str | None",
+          "description": "Only rows whose store status is one of these (action='search'), e.g. 'installed', 'pending-upgrade', 'pending-restart', 'new'; an installed row waiting for an update or a restart has that status, so use installed_only for every installed row",
+          "default": null
+        },
+        "source": {
+          "type": "Literal['catalog', 'custom'] | None",
+          "description": "Only catalog repositories or only custom ones added by link (action='search')",
           "default": null
         },
         "installed_only": {
           "type": "bool",
-          "description": "Only return installed repositories (action='search')",
+          "description": "Only installed repositories (action='search')",
           "default": false
         },
         "max_results": {
@@ -2059,7 +2069,7 @@
             "ge": 1,
             "le": 100
           },
-          "description": "Maximum number of results (action='search')",
+          "description": "Rows per page (action='search' / 'removed')",
           "default": 10
         },
         "offset": {
@@ -2067,18 +2077,23 @@
           "constraints": {
             "ge": 0
           },
-          "description": "Results to skip for pagination (action='search')",
+          "description": "Rows to skip (action='search' / 'removed')",
           "default": 0
         },
         "repository_id": {
           "type": "str | None",
-          "description": "Numeric HACS ID or 'owner/repo' path (action='info')",
+          "description": "The repository's numeric Marketplace id or its 'owner/repo' name, which is looked up in the store's list (action='info')",
           "default": null
         },
         "include_releases": {
           "type": "bool",
-          "description": "Add the repository's GitHub releases and the release notes of versions newer than the installed one (action='info')",
+          "description": "Add the repository's GitHub releases, and with an upgrade pending the release notes of its update entity (action='info')",
           "default": false
+        },
+        "repository": {
+          "type": "str | None",
+          "description": "'owner/repo' or a GitHub URL (action='detect')",
+          "default": null
         }
       },
       "required": [
@@ -2098,42 +2113,67 @@
   },
   {
     "name": "ha_manage_hacs",
-    "title": "Manage HACS",
-    "description": "Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.\n\nOn Home Assistant 2026.11+ HACS is the built-in Marketplace; the tool\nuses whichever the instance has. This tool performs writes; to search the\nstore or read repository details use ``ha_get_hacs_info``. Use\n``action=\"update_information\"`` to run the HACS UI's \"Update information\"\naction (\"Refresh information\" in the Marketplace) — a forced re-fetch of\none repository's release data from GitHub, so a pending update becomes\nvisible to the store and its update entity immediately.\n\n**Examples:**\n- Install latest: ha_manage_hacs(action=\"download\", repository_id=\"441028036\")\n- Install a version: ha_manage_hacs(action=\"download\", repository_id=\"piitaya/lovelace-mushroom\", version=\"v4.0.0\")\n- Remove: ha_manage_hacs(action=\"remove\", repository_id=\"owner/repo\")\n- Add a custom repo: ha_manage_hacs(action=\"add_repository\", repository=\"owner/repo\", category=\"lovelace\")\n- Refresh release data: ha_manage_hacs(action=\"update_information\", repository_id=\"owner/repo\")\n- Accept the Marketplace warning: ha_manage_hacs(action=\"accept_warning\", confirm=True)\n\n**Caveats:** Installing an integration usually needs a Home Assistant restart to\nactivate; new Lovelace cards need a browser cache clear. ``add_repository`` requires ``owner/repo``\nformat plus a matching ``category``. Removing an integration deletes its files but\nthe loaded module persists until the next Home Assistant restart — delete its config\nentries first (``ha_remove_helpers_integrations``). HACS refreshes custom\nrepositories on its own only about every 48 hours (the Marketplace only with a\nconnected GitHub account), so ``update_information`` is the way to surface a\njust-published release. The Marketplace refuses installs until the user this server\nconnects as has accepted its first-run warning; Home Assistant keeps that per user,\nso the user's own acceptance in the UI does not cover this server. Ask the user\nwhether they have read it (Settings > Marketplace) and accept it before\n``accept_warning``. Adding a repository needs a GitHub account the user connects in\nthe Marketplace panel.",
+    "title": "Manage Marketplace",
+    "description": "Manage Home Assistant's Marketplace (what HACS became in 2026.11): install, update, remove and add repositories.\n\nThis tool writes; to search the store or read a repository use\n``ha_get_hacs_info``. Use ``update_information`` to surface a\njust-published release: on its own the Marketplace re-reads an\ninstalled custom repository only every 48 hours, and only with a\nconnected GitHub account; catalog repositories follow the catalog,\nwhich it refreshes every 6 hours without one.\n\n**Examples:**\n- Install the latest: ha_manage_hacs(action=\"download\", repository_id=\"441028036\")\n- Install a version: ha_manage_hacs(action=\"download\", repository_id=\"piitaya/lovelace-mushroom\", version=\"v4.0.0\")\n- Add a custom repository: ha_manage_hacs(action=\"add_repository\", repository=\"owner/repo\")\n- Read a repository at another version, installing nothing: ha_manage_hacs(action=\"set_version\", repository_id=\"owner/repo\", version=\"v1.2.0\")\n- Accept the warning: ha_manage_hacs(action=\"accept_warning\", confirm=True)\n- Connect GitHub: ha_manage_hacs(action=\"connect_github\"), then again with\n  the flow_id it returns for the URL and code the user enters on GitHub,\n  then again with flow_id once they did, for the outcome\n- Change the download source: ha_manage_hacs(action=\"set_download_source\")\n  returns the form and flow_id; once the user chose, call again with\n  flow_id and config={\"profile\": \"<their choice>\"}\n\n**Caveats:** An installed integration loads after a Home Assistant\nrestart, and a new dashboard card after a browser cache clear. The\nMarketplace refuses to uninstall an integration while it has config\nentries. Installs, version and beta changes, and adding or detecting\na repository wait for the first-run warning, which Home Assistant\nkeeps per user, so the user's own acceptance in the UI does not cover\nthis server: ask whether they read it (Settings > Marketplace) before\n``accept_warning``. Adding and detecting a repository also need a\nconnected GitHub account. A saved download source reloads the\nMarketplace, and the call waits for it.",
     "inputSchema": {
       "properties": {
         "action": {
-          "type": "Literal['download', 'add_repository', 'remove', 'update_information', 'accept_warning']",
-          "description": "'download' to install/update, 'add_repository' to register a custom repo, 'remove' to uninstall a downloaded repo, 'update_information' to refresh a repository's release data from GitHub, or 'accept_warning' to accept the Marketplace's first-run warning for the user this server connects as"
+          "type": "Literal['download', 'remove', 'add_repository', 'remove_repository', 'update_information', 'set_version', 'set_beta', 'ignore', 'clear_new', 'acknowledge_critical', 'connect_github', 'set_download_source', 'accept_warning']",
+          "description": "'download' installs or updates; 'remove' uninstalls; 'add_repository' adds a custom repository; 'remove_repository' forgets a custom one that is not installed; 'update_information' re-reads a repository from GitHub; 'set_version' selects the tag or branch the Marketplace reads the repository at and installs nothing (the default branch clears the selection, and the next download without version resets it; to install a version pass version to 'download'); 'set_beta' shows or hides prereleases; 'ignore' hides a repository's removal notice (the store has no un-ignore); 'clear_new' clears the new flag; 'acknowledge_critical' confirms a critical removal was seen; 'connect_github' runs the GitHub sign-in one step per call; 'set_download_source' picks where the Marketplace downloads from, one step per call; 'accept_warning' accepts the first-run warning for the user this server connects as"
         },
         "repository_id": {
           "type": "str | None",
-          "description": "Numeric HACS ID or 'owner/repo' path (action='download' / 'remove' / 'update_information')",
+          "description": "The repository's numeric Marketplace id or its 'owner/repo' name, which is looked up in the store's list (action='download', 'remove', 'remove_repository', 'update_information', 'set_version', 'set_beta', 'ignore'; 'clear_new' instead of categories)",
           "default": null
         },
         "version": {
           "type": "str | None",
-          "description": "Specific version to install (action='download')",
+          "description": "A release tag or branch (action='download', default the latest; action='set_version')",
           "default": null
         },
         "repository": {
           "type": "str | None",
-          "description": "GitHub repo 'owner/repo' to add (action='add_repository')",
+          "description": "'owner/repo' or a GitHub URL (action='add_repository'); the full name of a critical repository (action='acknowledge_critical')",
           "default": null
         },
         "category": {
           "type": "str | None",
-          "description": "Repository category (action='add_repository'). One of the categories the store reports (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
+          "description": "action='add_repository'; without it the Marketplace detects it. One of the Marketplace's categories (search's store.categories); 'lovelace' means 'plugin' (dashboard cards).",
+          "default": null
+        },
+        "categories": {
+          "type": "list[str] | str | None",
+          "description": "Whole categories to clear (action='clear_new')",
+          "default": null
+        },
+        "show_beta": {
+          "type": "bool | None",
+          "description": "True shows prereleases (action='set_beta')",
           "default": null
         },
         "confirm_replace_built_in": {
           "type": "bool | None",
-          "description": "Marketplace only (action='download'): install a repository that replaces the built-in integration of the same domain. Set it only after the user agrees.",
+          "description": "action='download': install a repository that replaces the built-in integration of the same domain. Set it only after the user agrees.",
           "default": null
         },
         "confirm": {
           "type": "bool | None",
           "description": "action='accept_warning': True once the user has said they read the Marketplace's first-run warning and accept it",
+          "default": null
+        },
+        "config": {
+          "type": "dict[str, Any] | None",
+          "description": "action='set_download_source': the answer to the form, sent to Home Assistant as given, e.g. {'profile': '<one of its options>'}. A mirror is run by a third party (Home Assistant's text for each option names who): the user picks one, not you.",
+          "default": null
+        },
+        "flow_id": {
+          "type": "str | None",
+          "description": "action='connect_github' / 'set_download_source': the flow a previous call opened; without it a new one opens",
+          "default": null
+        },
+        "abort": {
+          "type": "bool | None",
+          "description": "action='connect_github' / 'set_download_source': True ends flow_id's flow",
           "default": null
         }
       },
@@ -2244,11 +2284,6 @@
           "type": "str | None",
           "description": "Existing config subentry ID to reconfigure when helper_type='config_subentry'.",
           "default": null
-        },
-        "show_advanced_options": {
-          "type": "bool",
-          "description": "When helper_type='config_subentry', ask older Home Assistant versions to expose advanced flow options. No-op on HA 2026.6+; pending removal before HA 2027.6.",
-          "default": false
         },
         "icon": {
           "type": "str | None",
@@ -2450,7 +2485,7 @@
   {
     "name": "ha_get_history",
     "title": "Get Entity History or Statistics",
-    "description": "Get historical data from Home Assistant's recorder.\n\nWHEN NOT TO USE:\nFor current values, use ha_get_state. To inspect Energy Dashboard\npreferences and configured statistics, use\nha_manage_energy_prefs(mode=\"get\", include_statistics=True).\n\nWHEN TO USE:\nUse source=\"history\" (default) to troubleshoot why a value changed, check\nevent sequences, or analyze recent patterns. Use summary=True when the\nquestion needs a count or a duration (\"was it ever unavailable?\") rather\nthan the rows. Use source=\"statistics\" for long-term trends and period\naverages.\n\nCAVEATS:\nHistory rows rename Core's compact keys once: s -> state, a -> attributes,\nlu -> last_updated, lc -> last_changed. History event times are ISO strings\nin HA's timezone (UTC if unavailable). When Core omits lc, last_changed\nfalls back to last_updated; this may not be the actual state-change time\nwith significant_changes_only (default) or a window-start snapshot.\nAttributes and unknown fields pass through unchanged.\nStatistics timestamps use Unix milliseconds. Minimal history may omit attributes.\nNo duplicate compact aliases are added. include_schema=True\nretains core_contract even when fields selects other data keys.\n\nOutput units come from\nCore recorder metadata and reflect its display-unit conversion; unresolved\nunits include a reason. statistics_metadata preserves Core's native fields.\n\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for\noffset > 0. Use has_more and next_offset from the response to paginate.\nWith source=\"history\", summary=True does not combine with offset > 0.\nAdministrators can optionally enable recorder workload guardrails in\nAdvanced settings. When enabled, oversized entity/time workloads are\nrejected before the recorder query is issued; narrow the time range or\nentity list to stay within the budget. Calendar statistics may first\nread HA's configured timezone so the estimate follows local calendar\nboundaries.\n\nEXAMPLES:\n- ha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\n- Paginate oldest-first: ha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100, order=\"asc\")\n- Time per state: ha_get_history(entity_ids=\"binary_sensor.door\", start_time=\"7d\", summary=True)\n- ha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\", start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])",
+    "description": "Get historical data from Home Assistant's recorder.\n\nWHEN NOT TO USE:\nFor current values, use ha_get_state. To inspect Energy Dashboard\npreferences and configured statistics, use\nha_manage_energy_prefs(mode=\"get\", include_statistics=True). To list the\nrecorder's statistics, see Core's issues with them, or change recorded\ndata, use ha_manage_logs.\n\nWHEN TO USE:\nUse source=\"history\" (default) to troubleshoot why a value changed, check\nevent sequences, or analyze recent patterns. Use summary=True when the\nquestion needs a count or a duration (\"was it ever unavailable?\") rather\nthan the rows. Use source=\"statistics\" for long-term trends and period\naverages.\n\nCAVEATS:\nWhen the recorder holds less than the requested window, the rows it has\ncome back with the reason in warnings.\nHistory rows rename Core's compact keys once: s -> state, a -> attributes,\nlu -> last_updated, lc -> last_changed. History event times are ISO strings\nin HA's timezone (UTC if unavailable). When Core omits lc, last_changed\nfalls back to last_updated; this may not be the actual state-change time\nwith significant_changes_only (default) or a window-start snapshot.\nAttributes and unknown fields pass through unchanged.\nStatistics timestamps use Unix milliseconds. Minimal history may omit attributes.\nNo duplicate compact aliases are added. include_schema=True\nretains core_contract even when fields selects other data keys.\n\nOutput units come from\nCore recorder metadata and reflect its display-unit conversion; unresolved\nunits include a reason. statistics_metadata preserves Core's native fields.\n\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for\noffset > 0. Use has_more and next_offset from the response to paginate.\nsummary=True does not combine with offset > 0.\nAdministrators can optionally enable recorder workload guardrails in\nAdvanced settings. When enabled, oversized entity/time workloads are\nrejected before the recorder query is issued; narrow the time range or\nentity list to stay within the budget. Calendar statistics may first\nread HA's configured timezone so the estimate follows local calendar\nboundaries.\n\nEXAMPLES:\n- ha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\n- Paginate oldest-first: ha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100, order=\"asc\")\n- Time per state: ha_get_history(entity_ids=\"binary_sensor.door\", start_time=\"7d\", summary=True)\n- ha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\", start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])",
     "inputSchema": {
       "properties": {
         "entity_ids": {
@@ -2459,7 +2494,7 @@
         },
         "source": {
           "type": "Literal['history', 'statistics']",
-          "description": "Data source: \"history\" for raw state changes at full resolution (~10 day retention), or \"statistics\" for pre-aggregated long-term data (permanent, requires state_class).",
+          "description": "Data source: \"history\" for recorded state changes at full resolution, or \"statistics\" for the recorder's aggregated statistics, where entity_ids are statistic IDs (an entity's ID, or an external statistic's \"domain:name\").",
           "default": "history"
         },
         "start_time": {
@@ -2506,7 +2541,7 @@
         },
         "statistic_types": {
           "type": "str | list[str] | None",
-          "description": "Native Core statistics types (for example \"sum\", \"change\", \"last_reset\"). Default: Core chooses all. Use include_schema=True to discover the installed contract. Ignored when source=\"history\"",
+          "description": "Native Core statistics types (for example \"sum\", \"change\", \"last_reset\"). Default: Core chooses all. Core accepts a different set with summary=True; include_schema=True shows the one for the call made. Ignored when source=\"history\"",
           "default": null
         },
         "order": {
@@ -2517,12 +2552,12 @@
         "summary": {
           "type": "bool",
           "default": false,
-          "description": "Return per-entity totals instead of state rows: changes (switches to a different state; the state at the window start is not one, but without that state, e.g. with core_options {'include_start_time_state': false} or purged history, the first recorded state counts as one), first_change and last_change (null without changes), and per state its periods (separate spells) and duration_s (seconds, up to end_time or now, whichever is earlier). distinct_states counts every state, listed or not. Ignored when source=\"statistics\"."
+          "description": "Return per-entity totals instead of state rows: changes (switches to a different state; the state at the window start is not one, but without that state, e.g. with core_options {'include_start_time_state': false} or purged history, the first recorded state counts as one), first_change and last_change (null without changes), and per state its periods (separate spells) and duration_s (seconds, up to end_time or now, whichever is earlier). distinct_states counts every state, listed or not. With source=\"statistics\": one max, mean, min and change per statistic over the whole window, computed by Core; statistic_types selects among them, and period and limit are ignored."
         },
         "fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Return only the specified keys within data to reduce response size. None = full response. History keys: success, source, entities, period, query_params. Statistics keys: success, source, entities, period_type, time_range, statistic_types, query_params. Warnings and timezone metadata remain outside data and are always retained."
+          "description": "Return only the specified keys within data to reduce response size. None = full response. History keys: success, source, entities, period, query_params. Statistics keys: success, source, entities, period_type, time_range, statistic_types, query_params (a statistics summary has no period_type or statistic_types). Warnings and timezone metadata remain outside data and are always retained."
         },
         "include_schema": {
           "type": "bool",
@@ -2651,6 +2686,59 @@
     "source_file": "tools_logs.py"
   },
   {
+    "name": "ha_manage_logs",
+    "title": "Manage Recorder, Statistics and Logs",
+    "description": "Manage Home Assistant's recorder, its long-term statistics and its logs.\n\nWHEN NOT TO USE:\nFor reading recorded states or statistics values use ha_get_history,\nfor reading log entries ha_get_logs, and for one integration's debug\nlogging ha_set_integration with log_level.\n\nWHEN TO USE:\nTo purge or pause the recorder, to list the recorder's statistics and\nCore's issues with them, to fix a statistic (clear it, adjust a sum,\nchange its unit, import rows), and to write to or clear the system\nlog, set log levels or add a logbook entry.\n\nCAVEATS:\nEach call runs one Core operation; Core validates its fields and its\nrefusal comes back with its own error code. Call with describe=True\nfirst when the fields are not known. With the HA-MCP component a\nrecorder write returns once the recorder has finished it, and a\nrecorder service returns the recorder's purge settings and oldest\nstate as `recorder`; without it the tool watches the recorder's queue\nand says what that cannot show. A statistics command that names\nstatistics (Core's `statistic_id` / `statistic_ids` fields) also\nreturns Core's metadata for them as `statistics_metadata`, read\nafter the write. Core also lists a statistic a sensor still\nprovides, so after a clear read its statistics to see the rows went.\nPurges and statistics clears cannot be undone.\n\nEXAMPLES:\n- ha_manage_logs(action=\"recorder/adjust_sum_statistics\", describe=True)\n- ha_manage_logs(action=\"recorder/clear_statistics\", data={\"statistic_ids\": [\"sensor.old_meter\"]})\n- ha_manage_logs(action=\"system_log.write\", data={\"message\": \"checkpoint\"})",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "type": "LogsAction",
+          "description": "The Home Assistant operation, named as Core names it: a dot is a service, a slash a WebSocket command (Developer Tools > Statistics)."
+        },
+        "data": {
+          "type": "dict[str, Any] | None",
+          "description": "The operation's fields, sent to Core unchanged: a service's service data, or the fields of the WebSocket command, where 'id', 'type' and '_wait_timeout' are refused.",
+          "default": null
+        },
+        "describe": {
+          "type": "bool",
+          "description": "Send nothing and return Core's own description of the action's fields instead.",
+          "default": false
+        },
+        "limit": {
+          "type": "int",
+          "constraints": {
+            "ge": 1,
+            "le": 1000
+          },
+          "description": "Page size for 'recorder/list_statistic_ids' only.",
+          "default": 100
+        },
+        "offset": {
+          "type": "int",
+          "constraints": {
+            "ge": 0
+          },
+          "description": "Page start for 'recorder/list_statistic_ids' only.",
+          "default": 0
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "tags": [
+      "History & Statistics"
+    ],
+    "source_file": "tools_logs_manage.py"
+  },
+  {
     "name": "ha_get_integration",
     "title": "Get Integration",
     "description": "Get integration (config entry) information with pagination.\n\nWithout an entry_id: Lists all configured integrations with optional filters.\nWith an entry_id: Returns detailed information including full options/configuration.\n\nWHEN NOT TO USE:\n- Changing an entry, or describing a setup form or a form behind a\n  menu: use ha_set_integration (without config it returns the form).\n\nEXAMPLES:\n- List / search: ha_get_integration(query=\"zigbee\")\n- Get an entry with its editable fields: ha_get_integration(entry_id=\"abc123\", include_schema=True)\n- Diagnostics dump, paged along a list-valued path: ha_get_integration(entry_id=\"abc123\", include_diagnostics=True, diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10, diagnostics_data_offset=20)\n- Inspect a subentry reconfigure schema: ha_get_integration(entry_id=\"abc123\", include_subentry_schema=True, subentry_type=\"conversation\", subentry_id=\"sub123\")\n- Options flow that opens with a menu: ha_get_integration(entry_id=\"abc123\", include_schema=True) lists menu_options; ha_set_integration(entry_id=\"abc123\", menu_choice=\"<option>\") opens that form\n- List template entries with their options: ha_get_integration(domain=\"template\")\n- Only service integrations: ha_get_integration(integration_type=\"service\")\n- An entry's panel commands: ha_get_integration(entry_id=\"abc123\", include_ws_commands=True)\n\nOPTIONS: with the component, ``options`` are the stored mapping as-is,\nso a field never set may be absent and a section's fields stay nested\nunder the section key (e.g. a template helper's ``additional_options``);\nvalues that match a ``secrets.yaml`` entry are returned as\n``\"**redacted**\"``. Without it, include_schema=True reads ``options``\nfrom the options form: unset fields at their schema default, a\nsection's fields at the top level. With redact_secrets on, every\noption value of an entry that has an options flow is redacted unless\ninclude_schema=True reads the form that names the password fields;\nan entry without an options flow has no such form, so its option\nvalues come back as stored.\n\nEach entry carries ``log_level``: the canonical Python logger level name\n(``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the\nintegration has a log-level override (set one with\n``ha_set_integration(log_level=...)``), or ``\"DEFAULT\"``\n(uppercase sentinel) when no override is set; and ``log_level_raw``: the\noriginal numeric level (e.g. ``10`` for DEBUG) when HA returned an int,\n``None`` otherwise. This is distinct from the app side, where\n``ha_get_app`` returns Supervisor's lowercase ``\"default\"`` literal — do\nnot cross-compare.",
@@ -2705,11 +2793,6 @@
           "type": "str | None",
           "description": "Existing subentry ID used with include_subentry_schema=True to inspect a reconfigure flow.",
           "default": null
-        },
-        "show_advanced_options": {
-          "type": "bool",
-          "description": "When include_subentry_schema=True, ask older Home Assistant versions to expose advanced flow options. No-op on HA 2026.6+; pending removal before HA 2027.6.",
-          "default": false
         },
         "exact_match": {
           "type": "bool",
@@ -4257,7 +4340,7 @@
   {
     "name": "ha_manage_theme",
     "title": "Manage Frontend Themes",
-    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through HACS\n(the Marketplace on 2026.11+, both via ha_manage_hacs); theme files\nare edited with ha_write_file or ha_config_set_yaml (beta), which\nreload themes after the edit. After any other change to theme files,\nha_reload_core(target='themes') loads them.\n\nWhen to use: action='list' discovers installed theme names, the modes\neach theme declares and the current defaults; action='set' selects\nthe backend default theme, the dark-mode one, or both in one call,\nand returns the defaults Home Assistant then holds. Home Assistant\ndescribes frontend.set_theme's fields in\nha_list_services(domain='frontend', detail_level='full').\n\nSCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):\nTaking a dashboard screenshot makes the Puppet engine write the saved\ntheme of the Home Assistant user its token belongs to, which also\nflips that user's live web and mobile sessions. The screenshot tools\nare read-only and only *report* this; use action='set_engine_theme'\nwith the value quoted in their warning to put it back, and\naction='get_engine_theme' to inspect it. These act on that engine\naccount's per-user profile via frontend/set_user_data, which is a\ndifferent layer from the backend default that action='set' changes.\nGiving the engine its own dedicated user and token avoids the issue\nentirely.\n\nCaveats: action='set' changes the backend-selected defaults only -\nusers who explicitly picked a theme in their profile keep their\nchoice.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set light and dark defaults: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", theme_name_dark=\"nord_dark\")\n- Inspect the engine account's theme: ha_manage_theme(\n      action=\"get_engine_theme\")\n- Undo a screenshot's theme change (pass BOTH values from the\n  warning, so a theme changed since then is not overwritten):\n  ha_manage_theme(action=\"set_engine_theme\",\n      value={\"theme\": \"\", \"dark\": False},\n      expected_current={\"theme\": \"default\", \"dark\": True})",
+    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through the\nMarketplace (ha_manage_hacs); theme files\nare edited with ha_write_file or ha_config_set_yaml (beta), which\nreload themes after the edit. After any other change to theme files,\nha_reload_core(target='themes') loads them.\n\nWhen to use: action='list' discovers installed theme names, the modes\neach theme declares and the current defaults; action='set' selects\nthe backend default theme, the dark-mode one, or both in one call,\nand returns the defaults Home Assistant then holds. Home Assistant\ndescribes frontend.set_theme's fields in\nha_list_services(domain='frontend', detail_level='full').\n\nSCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):\nTaking a dashboard screenshot makes the Puppet engine write the saved\ntheme of the Home Assistant user its token belongs to, which also\nflips that user's live web and mobile sessions. The screenshot tools\nare read-only and only *report* this; use action='set_engine_theme'\nwith the value quoted in their warning to put it back, and\naction='get_engine_theme' to inspect it. These act on that engine\naccount's per-user profile via frontend/set_user_data, which is a\ndifferent layer from the backend default that action='set' changes.\nGiving the engine its own dedicated user and token avoids the issue\nentirely.\n\nCaveats: action='set' changes the backend-selected defaults only -\nusers who explicitly picked a theme in their profile keep their\nchoice.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set light and dark defaults: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", theme_name_dark=\"nord_dark\")\n- Inspect the engine account's theme: ha_manage_theme(\n      action=\"get_engine_theme\")\n- Undo a screenshot's theme change (pass BOTH values from the\n  warning, so a theme changed since then is not overwritten):\n  ha_manage_theme(action=\"set_engine_theme\",\n      value={\"theme\": \"\", \"dark\": False},\n      expected_current={\"theme\": \"default\", \"dark\": True})",
     "inputSchema": {
       "properties": {
         "action": {
@@ -4308,7 +4391,7 @@
   {
     "name": "ha_manage_updates",
     "title": "Manage Updates",
-    "description": "Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore).\n\nCovers Core, OS, supervisor, apps (add-ons), device firmware, and HACS\nupdate entities, plus the Repairs issues in Settings > System > Repairs.\nRepairs are listed by ha_get_overview (not here); pass their domain and\nissue_id to 'ignore_repair' / 'unignore_repair'. In Read Only Mode the\nread actions ('list', 'get') stay available; write actions are blocked.\n\n'install' blocks until each update finishes (minutes). One that outlasts\nthe request timeout ends the call with a connection timeout while it\nkeeps running, and a Core update restarts Home Assistant; neither means\nfailure, but later batch targets were not started. Confirm per entity\nwith action='get'; finished updates drop out of 'list', which also\nreturns ha_mcp_update — this MCP server's own update status {current,\nlatest, update_available; python_required + upgrade_command if it needs another Python}.\n\nEXAMPLES:\n- Pre-update analysis: ha_manage_updates(action=\"get\", entity_ids=[\"update.home_assistant_core_update\"], include_release_notes=True)\n- Update everything pending in a category: ha_manage_updates(action=\"install\", categories=[\"addons\", \"hacs\"])\n- Dismiss a repair: ha_manage_updates(action=\"ignore_repair\", repairs=[{\"domain\": \"sun\", \"issue_id\": \"abc\"}])",
+    "description": "Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore).\n\nCovers Core, OS, supervisor, apps (add-ons), device firmware, and\nMarketplace update entities, plus the Repairs issues in Settings > System > Repairs.\nRepairs are listed by ha_get_overview (not here); pass their domain and\nissue_id to 'ignore_repair' / 'unignore_repair'. In Read Only Mode the\nread actions ('list', 'get') stay available; write actions are blocked.\n\n'install' blocks until each update finishes (minutes). One that outlasts\nthe request timeout ends the call with a connection timeout while it\nkeeps running, and a Core update restarts Home Assistant; neither means\nfailure, but later batch targets were not started. Confirm per entity\nwith action='get'; finished updates drop out of 'list', which also\nreturns ha_mcp_update — this MCP server's own update status {current,\nlatest, update_available; python_required + upgrade_command if it needs another Python}.\n\nEXAMPLES:\n- Pre-update analysis: ha_manage_updates(action=\"get\", entity_ids=[\"update.home_assistant_core_update\"], include_release_notes=True)\n- Update everything pending in a category: ha_manage_updates(action=\"install\", categories=[\"addons\", \"hacs\"])\n- Dismiss a repair: ha_manage_updates(action=\"ignore_repair\", repairs=[{\"domain\": \"sun\", \"issue_id\": \"abc\"}])",
     "inputSchema": {
       "properties": {
         "action": {
@@ -4323,7 +4406,7 @@
         },
         "categories": {
           "type": "list[str] | str | None",
-          "description": "For install: apply every pending update in these categories ('addons', 'hacs', 'devices', 'other'). As with the HA 'Update all' button, core/os/supervisor are excluded (target those individually via entity_ids) and skipped updates are never included.",
+          "description": "For install: apply every pending update in these categories ('addons', 'hacs' (Marketplace repositories), 'devices', 'other'). As with the HA 'Update all' button, core/os/supervisor are excluded (target those individually via entity_ids) and skipped updates are never included.",
           "default": null
         },
         "include_skipped": {

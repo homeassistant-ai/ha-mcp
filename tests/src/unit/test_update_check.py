@@ -410,14 +410,14 @@ class TestUpdateCommandHint:
 
 
 class TestEmbeddedUpdateHint:
-    def test_embedded_hint_points_to_hacs(self, monkeypatch):
+    def test_embedded_hint_points_to_the_marketplace(self, monkeypatch):
         # The server arrives with the component release (#2427): no update
         # entity exists and a reload installs nothing. Embedded wins even
         # though the HA core container also carries a SUPERVISOR_TOKEN.
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
         monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
         hint = update_command_hint("7.11.0")
-        assert "HACS" in hint
+        assert "Marketplace" in hint
         assert "update entity" not in hint
         assert "pip install" not in hint
 
@@ -491,14 +491,14 @@ class TestReleaseNeedsNewerPython:
         assert field["python_required"] == "3.14.2"
         assert field["upgrade_command"] == "uvx --python 3.14.2 ha-mcp@latest"
 
-    def test_embedded_install_keeps_the_hacs_hint(
+    def test_embedded_install_keeps_the_marketplace_hint(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Its server arrives with the component release, not with uvx."""
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
         info = UpdateInfo("9.1.2", "9.2.0", True, requires_python=">=3.14")
         assert update_check.required_python(info) is None
-        assert "HACS" in update_command_hint("9.1.2", info)
+        assert "Marketplace" in update_command_hint("9.1.2", info)
 
     def test_invalid_spec_keeps_the_pip_hint(self) -> None:
         info = UpdateInfo("9.1.2", "9.2.0", True, requires_python="not a spec")

@@ -27,7 +27,7 @@ from pytest_homeassistant.common import MockConfigEntry
 
 import custom_components.ha_mcp_tools.embedded_entry as eentry
 import custom_components.ha_mcp_tools.embedded_setup as esetup
-from custom_components.ha_mcp_tools import const
+from custom_components.ha_mcp_tools import const, oauth_redirect_allowlist
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.embedded_server import EmbeddedServerManager
 
@@ -581,7 +581,7 @@ class TestOptionsChanges:
     @pytest.mark.parametrize(
         ("option", "value"),
         [
-            (const.OPT_OAUTH_REDIRECT_ALLOWLIST, []),
+            (oauth_redirect_allowlist.OPT_OAUTH_REDIRECT_ALLOWLIST, []),
             (const.OPT_ACCESS_OFF_AFTER_RESTART, True),
         ],
         ids=["callback_allowlist", "off_after_restart"],

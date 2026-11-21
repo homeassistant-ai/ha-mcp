@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .helper_collections import _convert, _optional_attr
+from .helper_collections import _convert
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -23,16 +23,16 @@ WS_FLOW_OUTLINE = "ha_mcp_tools/flow_outline"
 # Advertised by websocket_api's info; without it the server describes only
 # the form a flow is at.
 CAPABILITY = "flow_outline"
-# What Core's flow view adds to a serialized form; absent before Core 2026.9.
-_ADD_VISIBLE_CONDITIONS = _optional_attr(
-    "homeassistant.data_entry_flow", "add_visible_conditions_to_serialized_schema"
-)
 
 
 def _fields(schema: Any) -> list[dict[str, Any]]:
+    from homeassistant.data_entry_flow import (
+        add_visible_conditions_to_serialized_schema,
+    )
+
     fields = _convert(schema)
-    if _ADD_VISIBLE_CONDITIONS is not None:
-        _ADD_VISIBLE_CONDITIONS(schema, fields)
+    # What Core's flow view adds to a serialized form.
+    add_visible_conditions_to_serialized_schema(schema, fields)
     return fields
 
 

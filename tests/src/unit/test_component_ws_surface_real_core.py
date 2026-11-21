@@ -26,6 +26,7 @@ from custom_components.ha_mcp_tools import (
     flow_outline,
     flow_record,
     helper_collections,
+    recorder_status,
     scene_editor,
     todo_items,
 )
@@ -134,6 +135,7 @@ async def test_every_command_is_registered_and_config_get_is_not(
         automation_config.WS_AUTOMATION_CONFIG,
         config_references.WS_CONFIG_REFERENCES,
         flow_record.WS_FLOW_RECORD,
+        recorder_status.WS_RECORDER_STATUS,
         flow_outline.WS_FLOW_OUTLINE,
         scene_editor.WS_SCENE_IGNORED_DOMAINS,
     }

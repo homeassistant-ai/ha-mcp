@@ -26,7 +26,7 @@ from homeassistant.helpers import label_registry as lr
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_entities
 from ha_mcp.tools.component_api import (
-    COMPONENT_VIA_HACS,
+    COMPONENT_VIA_MARKETPLACE,
     get_component_caps,
     invalidate_caps,
 )
@@ -139,7 +139,7 @@ async def test_an_older_component_leaves_the_record_as_core_stores_it(
     assert frames == []
     (warning,) = resp["warnings"]
     assert "too old" in warning
-    assert COMPONENT_VIA_HACS in warning
+    assert COMPONENT_VIA_MARKETPLACE in warning
 
 
 async def test_a_downgraded_component_leaves_the_record_and_is_probed_again(
@@ -156,7 +156,7 @@ async def test_a_downgraded_component_leaves_the_record_and_is_probed_again(
     assert (entry["entity_id"], entry["area_id"]) == (lamp.entity_id, lamp.area_id)
     assert not [key for key in ENRICHMENT_KEYS if key in entry]
     (warning,) = resp["warnings"]
-    assert COMPONENT_VIA_HACS in warning
+    assert COMPONENT_VIA_MARKETPLACE in warning
     drop.assert_called_once_with(client)
 
 

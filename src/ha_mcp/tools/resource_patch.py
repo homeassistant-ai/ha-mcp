@@ -242,7 +242,7 @@ async def load_inline_resource(client: Any, resource_id: str) -> tuple[str, str]
                 },
                 suggestions=[
                     "Edit the file behind a /local/ URL with ha_write_file instead",
-                    "HACS and CDN resources are managed by their source",
+                    "Marketplace and CDN resources are managed by their source",
                 ],
             )
         )

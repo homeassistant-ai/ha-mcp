@@ -18,12 +18,14 @@ from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
 from custom_components.ha_mcp_tools.const import (
+    OPT_OAUTH_ALLOW_ANY_CALLBACK,
+    OPT_WEBHOOK_AUTH,
+)
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
     DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
     MAX_OAUTH_CALLBACK_LENGTH,
     MAX_OAUTH_CALLBACKS,
-    OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_REDIRECT_ALLOWLIST,
-    OPT_WEBHOOK_AUTH,
 )
 from custom_components.ha_mcp_tools.websocket_api.constants import (
     WS_OAUTH_CALLBACKS,

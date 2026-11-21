@@ -322,6 +322,18 @@ def _no_opened_flows() -> Iterator[None]:
     reset_opened_flows()
 
 
+@pytest.fixture(autouse=True)
+def _closed_websockets_end_their_keepalive_threads() -> Iterator[None]:
+    """``websockets`` closes a synchronous connection without joining its
+    keepalive thread, which ends a moment later; Core's teardown check fails a
+    test on a thread still alive."""
+    before = set(threading.enumerate())
+    yield
+    for thread in set(threading.enumerate()) - before:
+        if thread.name.endswith("(keepalive)"):
+            thread.join(5)
+
+
 @pytest.fixture
 def redact_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """Turn the redact_secrets toggle on for one test."""

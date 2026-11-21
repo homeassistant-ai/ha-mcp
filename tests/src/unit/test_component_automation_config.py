@@ -17,7 +17,6 @@ import probatio
 import pytest
 from homeassistant.components import automation as automation_core
 from homeassistant.components.automation import config as automation_core_config
-from homeassistant.components.automation import const as automation_core_const
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import condition, trigger
@@ -475,20 +474,6 @@ async def test_core_missing_a_lookup_part_is_unavailable(
     got = await _command(component_ws, action="lookup", entity_id=MORNING)
     assert got["status"] == "unavailable"
     assert not _bridge_failed(caplog)
-
-
-async def test_component_key_is_read_from_the_package_on_older_core(
-    hass: HomeAssistant,
-    component_ws: MockHAClientWebSocket,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Core 2026.10 defines DATA_COMPONENT in the automation package and only
-    2026.11 moves it to automation.const; reading const alone left the lookup
-    "unavailable" on every 2026.10 install."""
-    await _load(hass, _MORNING)
-    monkeypatch.delattr(automation_core_const, "DATA_COMPONENT")
-    got = await _command(component_ws, action="lookup", entity_id=MORNING)
-    assert got["loaded"] is True
 
 
 # --- registration ---------------------------------------------------------------

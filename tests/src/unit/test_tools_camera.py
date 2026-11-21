@@ -25,6 +25,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnecti
 from ha_mcp.tools import response_helpers, tools_camera
 from ha_mcp.tools.tools_camera import CameraTools
 
+from ._camera_test_helpers import png_bytes as _png
 from ._module_clock import set_module_clock
 from ._tool_errors import error_of
 
@@ -33,19 +34,6 @@ JPEG_MAGIC = b"\xff\xd8\xff\xe0"
 # No container the sniff recognizes: the declared Content-Type decides.
 UNSNIFFABLE = b"some image data"
 FALLBACK_NOTE = "+00:00 (UTC — could not determine the Home Assistant timezone)"
-
-
-def _png(width: int, height: int) -> bytes:
-    """Minimal structurally-valid PNG header with the given dimensions."""
-    ihdr_payload = (
-        width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x06\x00\x00\x00"
-    )
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + len(ihdr_payload).to_bytes(4, "big")
-        + b"IHDR"
-        + ihdr_payload
-    )
 
 
 def _jpeg(width: int, height: int) -> bytes:
@@ -128,8 +116,8 @@ async def test_non_camera_entity_is_refused_naming_its_domain(
         )
     error = error_of(exc_info)
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert "not a camera entity" in error["message"]
-    assert "Domain is 'sensor', expected 'camera'" in error["message"]
+    assert "not a camera or image entity" in error["message"]
+    assert "Domain is 'sensor', expected 'camera' or 'image'" in error["message"]
 
 
 async def test_snapshot_comes_back_as_image_with_format_and_retrieval_time(
@@ -150,6 +138,20 @@ async def test_snapshot_comes_back_as_image_with_format_and_retrieval_time(
         r"\d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}",
         text,
     )
+
+
+async def test_oversize_camera_snapshot_is_refused(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tools_camera, "MAX_IMAGE_PAYLOAD_BYTES", len(JPEG_MAGIC) - 1)
+    await serve(hass, JPEG_MAGIC)
+
+    with pytest.raises(ToolError) as exc_info:
+        await CameraTools(core_client).ha_get_camera_image(entity_id=ENTITY_ID)
+
+    assert error_of(exc_info)["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
 
 
 async def test_info_text_reports_the_served_image_size(
@@ -323,6 +325,7 @@ async def test_camera_without_an_image_is_reported_as_a_failed_call(
     assert error["code"] == "SERVICE_CALL_FAILED"
     assert "HTTP 500" in error["message"]
     assert "may be offline" in error["message"]
+    assert "Home Assistant" in error["suggestion"]
 
 
 async def test_unreachable_home_assistant_is_reported_as_a_connection_failure(

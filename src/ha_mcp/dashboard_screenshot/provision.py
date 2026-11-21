@@ -108,9 +108,8 @@ _INSTALL_HELP = (
     "Dashboard screenshot mode is enabled, but no supported screenshot "
     "engine app is installed. On HA OS / Supervised, add either balloob's "
     f"repository ({_PUPPET_REPO_URL}) or WPE Screenshot Engine's repository "
-    f"({_WPE_REPO_URL}) under Settings > Apps > Install app > ⋮ > Repositories "
-    "(Settings > Add-ons > Add-on store before Home Assistant 2026.2), then "
-    "install and start Puppet or WPE Screenshot Engine. "
+    f"({_WPE_REPO_URL}) under Settings > Apps > Install app > ⋮ > Repositories, "
+    "then install and start Puppet or WPE Screenshot Engine. "
     f"{TOKEN_HINT}. On Docker / Container, run "
     "one of these engines as a sidecar and set "
     "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL to its reachable URL."
@@ -118,8 +117,7 @@ _INSTALL_HELP = (
 
 _NOT_STARTED_HELP = (
     "The supported screenshot engine app is installed but not started. Open "
-    "Settings > Apps > the selected engine (Settings > Add-ons before Home "
-    f"Assistant 2026.2), {TOKEN_HINT}. "
+    f"Settings > Apps > the selected engine, {TOKEN_HINT}. "
     "Enable 'Start on boot' to keep it available."
 )
 

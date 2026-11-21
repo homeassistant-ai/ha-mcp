@@ -589,17 +589,6 @@ class HelperConfigTools:
                 default=None,
             ),
         ] = None,
-        show_advanced_options: Annotated[
-            bool,
-            Field(
-                description=(
-                    "When helper_type='config_subentry', ask older Home "
-                    "Assistant versions to expose advanced flow options. No-op "
-                    "on HA 2026.6+; pending removal before HA 2027.6."
-                ),
-                default=False,
-            ),
-        ] = False,
         icon: Annotated[
             str | None,
             Field(
@@ -784,7 +773,6 @@ class HelperConfigTools:
                     flow_id=flow_id,
                     menu_choice=menu_choice,
                     abort=abort,
-                    show_advanced_options=show_advanced_options,
                 )
 
             await require_helper_type(self._client, helper_type)

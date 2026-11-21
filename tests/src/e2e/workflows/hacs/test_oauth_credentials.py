@@ -1,4 +1,4 @@
-"""Standalone OAuth must use the consenting user's HA token for HACS (#2687)."""
+"""Standalone OAuth must use the consenting user's HA token for the store tools (#2687)."""
 
 import logging
 from pathlib import Path
@@ -21,7 +21,7 @@ from ...utilities.oauth_flow import (
     register_public_client,
     wait_for_discovery,
 )
-from .test_auto_refresh_startup import HACS_WS_READY_TIMEOUT, _wait_for_hacs_ws_ready
+from .test_auto_refresh_startup import STORE_READY_TIMEOUT, _wait_for_marketplace
 
 logger = logging.getLogger(__name__)
 pytestmark = [pytest.mark.container_only, pytest.mark.hacs]
@@ -34,27 +34,29 @@ async def _authorize(http: httpx.AsyncClient, ha_token: str) -> str:
     """Complete public-client PKCE registration and consent over real HTTP."""
     await wait_for_discovery(http)
     client_id = await register_public_client(
-        http, REDIRECT_URI, client_name="HACS OAuth regression"
+        http, REDIRECT_URI, client_name="Store OAuth regression"
     )
     code, verifier = await consent(
-        http, client_id, REDIRECT_URI, ha_token, state="hacs-regression"
+        http, client_id, REDIRECT_URI, ha_token, state="store-regression"
     )
     issued = await exchange(http, client_id, REDIRECT_URI, code, verifier)
     assert issued.status_code == 200, issued.text
     return issued.json()["access_token"]
 
 
-# Allow launcher startup, OAuth requests, MCP calls, and teardown after HACS is ready.
-@pytest.mark.timeout(HACS_WS_READY_TIMEOUT + 180)
-async def test_hacs_uses_admin_oauth_session_instead_of_global_placeholder(
+# Allow launcher startup, OAuth requests, MCP calls, and teardown after the
+# Marketplace is ready.
+@pytest.mark.timeout(STORE_READY_TIMEOUT + 180)
+async def test_store_tools_use_admin_oauth_session_instead_of_global_placeholder(
     ha_container_with_fresh_config: dict,
     ha_client: HomeAssistantClient,
     tmp_path: Path,
     unused_tcp_port: int,
 ) -> None:
-    """A real admin login must reach HACS as well as dashboards through OAuth."""
+    """A real admin login must reach the Marketplace as well as dashboards
+    through OAuth."""
     container = ha_container_with_fresh_config
-    await _wait_for_hacs_ws_ready(container)
+    await _wait_for_marketplace(container)
     identity = await ha_client.send_websocket_message({"type": "auth/current_user"})
     assert identity["result"]["is_admin"] is True
     base_url = f"http://127.0.0.1:{unused_tcp_port}"

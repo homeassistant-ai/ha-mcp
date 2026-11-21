@@ -601,17 +601,15 @@ async def get_entity_state_or_none(
 
 
 def ws_failure_code(result: dict[str, Any]) -> ErrorCode:
-    """Map Core's WS error code: ``invalid_format``, ``invalid_info`` (a
-    registry refusing an update, e.g. a rename into another domain),
+    """Map Core's WS error code: every ``invalid_<what>`` (``invalid_format``;
+    ``invalid_info``, a registry refusing an update such as a rename into
+    another domain; the recorder's ``invalid_start_time``),
     ``service_validation_error`` and ``not_supported`` (e.g. ``todo/item/move``
     on a list without reordering) refuse the caller's input; ``not_found`` is an
     item Core does not hold (e.g. a YAML-configured helper)."""
     code = result.get("error_code")
-    if code in (
-        "invalid_format",
-        "invalid_info",
-        "service_validation_error",
-        "not_supported",
+    if code in ("service_validation_error", "not_supported") or (
+        isinstance(code, str) and code.startswith("invalid_")
     ):
         return ErrorCode.VALIDATION_INVALID_PARAMETER
     if code == "not_found":

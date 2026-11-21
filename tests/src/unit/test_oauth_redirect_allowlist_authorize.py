@@ -12,14 +12,18 @@ from collections.abc import Iterator
 
 import pytest
 from aiohttp import ClientResponse
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 
 from custom_components.ha_mcp_tools import oauth_autoapprove, oauth_dcr
 from custom_components.ha_mcp_tools.const import (
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_NONE,
+)
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
+    MAX_OAUTH_CALLBACK_LENGTH,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
 
 from ._oauth_autoapprove_core import (
@@ -36,23 +40,11 @@ CHATGPT = "https://chatgpt.example/connector/cb"
 REFUSED_LINE = "not on the OAuth callback list"
 
 
-class RefusalClock:
-    """The clock the refusal log's rate limit reads, moved only by the test."""
-
-    def __init__(self, now: float) -> None:
-        self.now = now
-
-    def monotonic(self) -> float:
-        return self.now
-
-
 @pytest.fixture(autouse=True)
-def refusal_clock(monkeypatch: pytest.MonkeyPatch) -> Iterator[RefusalClock]:
-    """Each test gets a fixed clock and a refusal log with no earlier refusal."""
-    clock = RefusalClock(1_000.0)
-    monkeypatch.setattr(oauth_autoapprove, "time", clock)
+def fresh_refusal_log() -> Iterator[None]:
+    """Each test starts with a refusal log that holds no earlier refusal."""
     oauth_autoapprove.reset_callback_refusal_log()
-    yield clock
+    yield
     oauth_autoapprove.reset_callback_refusal_log()
 
 
@@ -171,10 +163,54 @@ async def test_a_refusal_is_logged_with_the_callback(
     assert any(CHATGPT in line for line in refusal_lines(caplog))
 
 
+@pytest.mark.parametrize(
+    ("callback", "listable"),
+    [(CHATGPT, True), ("https://user:pw@chatgpt.example/connector/cb", False)],
+    ids=["unlisted", "carries-credentials"],
+)
+async def test_a_refusal_blames_the_list_only_for_a_callback_the_list_could_hold(
+    open_oauth_surface: OpenSurface,
+    caplog: pytest.LogCaptureFixture,
+    callback: str,
+    listable: bool,
+) -> None:
+    """Configure refuses a callback carrying credentials, so telling the
+    administrator to list one sends them to a setting that cannot help."""
+    surface = await open_oauth_surface(WEBHOOK_AUTH_NONE)
+
+    with caplog.at_level(logging.WARNING):
+        resp = await authorize(surface, redirect_uri=callback)
+
+    page = await resp.text()
+    logged = [r.getMessage() for r in caplog.records if CHATGPT in r.getMessage()]
+    assert resp.status == 400
+    assert ("add this exact address" in page) is listable
+    assert len(logged) == 1
+    assert (REFUSED_LINE in logged[0]) is listable
+
+
+async def test_a_refusal_log_holds_no_credentials_or_query_from_the_callback(
+    open_oauth_surface: OpenSurface, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The callback's password and query string must not reach the Home
+    Assistant log in clear text; its host and path still name the client."""
+    password, token = uuid.uuid4().hex, uuid.uuid4().hex
+    callback = f"https://user:{password}@chatgpt.example/connector/cb?token={token}"
+    surface = await open_oauth_surface(WEBHOOK_AUTH_NONE)
+
+    with caplog.at_level(logging.WARNING):
+        await authorize(surface, redirect_uri=callback)
+
+    logged = [m for m in caplog.messages if "chatgpt.example/connector/cb" in m]
+    assert len(logged) == 1
+    assert password not in caplog.text
+    assert token not in caplog.text
+
+
 async def test_a_burst_of_refusals_writes_one_line_then_a_count(
     open_oauth_surface: OpenSurface,
     caplog: pytest.LogCaptureFixture,
-    refusal_clock: RefusalClock,
+    freezer: FrozenDateTimeFactory,
 ) -> None:
     """The view is anonymous: a burst of refusals writes one line, then a count."""
     surface = await open_oauth_surface(WEBHOOK_AUTH_NONE)
@@ -183,7 +219,7 @@ async def test_a_burst_of_refusals_writes_one_line_then_a_count(
         for n in range(5):
             await authorize(surface, redirect_uri=f"https://chatgpt.example/cb{n}")
         assert len(refusal_lines(caplog)) == 1
-        refusal_clock.now += 3600
+        freezer.tick(3600)
         await authorize(surface, redirect_uri="https://chatgpt.example/last")
 
     lines = refusal_lines(caplog)
@@ -308,6 +344,30 @@ async def test_the_switch_still_refuses_a_malformed_callback(
 
     assert resp.status == 400
     assert "Location" not in resp.headers
+
+
+async def test_a_callback_too_long_for_any_list_is_refused_for_its_length(
+    open_oauth_surface: OpenSurface, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No list can hold a callback over the length bound, so the switch must
+    refuse it too, and the page and log must give its length as the reason
+    rather than send the administrator to a list that refuses it."""
+    callback = f"{CHATGPT}?" + "a" * MAX_OAUTH_CALLBACK_LENGTH
+    surface = await open_oauth_surface(
+        WEBHOOK_AUTH_NONE, options={OPT_OAUTH_ALLOW_ANY_CALLBACK: True}
+    )
+
+    with caplog.at_level(logging.WARNING):
+        resp = await authorize(surface, redirect_uri=callback)
+
+    page = await resp.text()
+    logged = [m for m in caplog.messages if CHATGPT in m]
+    assert resp.status == 400
+    assert "Location" not in resp.headers
+    assert "add this exact address" not in page
+    assert f"{MAX_OAUTH_CALLBACK_LENGTH} characters" in page
+    assert len(logged) == 1
+    assert "too long" in logged[0]
 
 
 async def test_ha_auth_mode_still_accepts_a_callback_with_userinfo(

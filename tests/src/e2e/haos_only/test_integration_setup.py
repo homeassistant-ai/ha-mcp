@@ -48,10 +48,8 @@ pytestmark = [pytest.mark.haos_only]
 # this commit. Their premise — that installing the ESPHome or Node-RED
 # addon auto-registers a companion HA integration — is incorrect.
 # Verified live (CI run on 287c5ced): with both addons installed and
-# running, ``ha_get_integration`` returns only ['backup', 'demo',
-# 'go2rtc', 'google_translate', 'ha_mcp_tools', 'hacs', 'hassio',
-# 'local_calendar', 'mcp_proxy', 'radio_browser', 'shopping_list',
-# 'sun'] — neither esphome nor nodered. Both addons require the user
+# running, ``ha_get_integration`` lists neither esphome nor nodered,
+# only the seeded and built-in integrations. Both addons require the user
 # to set up the integration via Settings → Integrations (config flow),
 # they don't auto-register on addon install. A future test could
 # drive the config flow explicitly via ``ha_client.start_config_flow``

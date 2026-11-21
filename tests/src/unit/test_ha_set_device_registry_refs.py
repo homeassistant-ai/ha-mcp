@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from typing import cast
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -219,25 +219,3 @@ class TestSetDeviceCoreAnswers:
         # message says what is wrong.
         suggests_lookup = "ha_get_device" in json.dumps(error_data["error"])
         assert suggests_lookup == (code == "not_found")
-
-    async def test_unknown_id_before_core_2026_9_suggests_the_lookup(
-        self,
-        tools: RegistryTools,
-        device: dr.DeviceEntry,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Core before 2026.9 had no not_found check: its registry raised
-        KeyError for an unknown id, which Core answers as unknown_error."""
-        monkeypatch.setattr(
-            dr.DeviceRegistry,
-            "async_update_device",
-            Mock(side_effect=KeyError(device.id)),
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_device(device_id=device.id, name="Den")
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert error_data["ha_error_code"] == "unknown_error"
-        assert "ha_get_device" in json.dumps(error_data["error"])

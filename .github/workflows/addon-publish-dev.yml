@@ -76,7 +76,7 @@ jobs:
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           # Same script as publish-dev.yml, so the dev app reports the same
-          # version as the PyPI/Docker/HACS builds of this commit.
+          # version as the PyPI/Docker/component builds of this commit.
           DEV_VERSION=$(scripts/dev_version.sh)
 
           echo "dev_version=$DEV_VERSION" >> "$GITHUB_OUTPUT"

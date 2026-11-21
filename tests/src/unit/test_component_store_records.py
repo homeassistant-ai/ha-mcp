@@ -1,25 +1,22 @@
 """Two installed store records for the integration get a fixable repair (#2993).
 
-HACS let a download of the main repository land on top of a mirror install,
-and the Marketplace then refuses to update or uninstall either record. The
-component files a repair, and its fix forgets the duplicate through the store
-manager so the kept record updates again.
+With both the main repository and its mirror installed, the Marketplace
+refuses to update or uninstall either record. The component files a repair,
+and its fix forgets the duplicate through the Marketplace's manager so the
+kept record updates again.
 
 Core sets its Marketplace up from stored records (``_marketplace_records``), so
-the fix is read back from what the Marketplace saved. HACS, which is not part
-of Core, publishes the same manager shape in ``hass.data``; the Marketplace's
-manager, which Core took over from it, plays it here.
+the fix is read back from what the Marketplace saved.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.components.marketplace.base import MarketplaceManager
-from homeassistant.components.marketplace.enums import DisabledReason
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, HomeAssistant
@@ -32,8 +29,6 @@ from custom_components.ha_mcp_tools.const import DOMAIN, ISSUE_STORE_RECORDS_CON
 
 from ._hacs_marketplace import REPOSITORIES_KEY, add_marketplace
 from ._marketplace_records import (
-    Hacs,
-    hacs_store,
     loaded_marketplace,
     own_records,
     stored_record,
@@ -60,10 +55,17 @@ async def marketplace(
 
 
 @pytest.fixture
-def hacs(hass: HomeAssistant) -> Iterator[Hacs]:
-    """HACS, whose flow handler stays registered for the whole test."""
-    with hacs_store(hass) as store:
-        yield store
+def unloadable_marketplace(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    hass_storage: dict[str, Any],
+) -> MockConfigEntry:
+    """The Marketplace entry with both records stored by a newer Home Assistant,
+    which the Marketplace refuses to load until the file is put back."""
+    records = own_records(main=True, mirror=True)
+    entry = add_marketplace(hass, aioclient_mock, hass_storage, records)
+    hass_storage[REPOSITORIES_KEY]["version"] = 99
+    return entry
 
 
 def _installed(built: MarketplaceManager, full_name: str) -> bool:
@@ -246,32 +248,11 @@ async def test_startup_files_the_repair_once_home_assistant_has_started(
     assert _issue(issue_registry) is not None
 
 
-async def test_a_disabled_hacs_is_unknown_not_clean(
-    hass: HomeAssistant,
-    issue_registry: ir.IssueRegistry,
-    hass_storage: dict[str, Any],
-    hacs: Hacs,
-) -> None:
-    """HACS that failed its restore has an empty repository list until it
-    retries; the issue must not be cleared on that."""
-    _file_issue(hass)
-    manager = await hacs.restore(hass, hass_storage)
-    assert await hass.config_entries.async_setup(hacs.entry.entry_id)
-    # HACS is not part of Core, so its failed restore cannot happen here. Real
-    # HACS uses its own reason, which Core's enum lacks; any reason sets
-    # ``system.disabled``, the only field the check reads.
-    manager.disable(DisabledReason.RATE_LIMIT)
-
-    assert store_records.conflicting_records(hass) is None
-    assert store_records.async_check_store_records(hass) is False
-    assert _issue(issue_registry) is not None
-
-
 def test_no_store_integration_means_nothing_to_wait_for(
     hass: HomeAssistant, issue_registry: ir.IssueRegistry, checks: MagicMock
 ) -> None:
-    """A Core without HACS or the Marketplace: the check ends at once and the
-    guard clears, with an existing repair left alone."""
+    """No Marketplace entry: the check ends at once and the guard clears, with
+    an existing repair left alone."""
     _file_issue(hass)
 
     store_records.async_schedule_store_records_check(hass)
@@ -282,40 +263,24 @@ def test_no_store_integration_means_nothing_to_wait_for(
     assert checks.call_count == 2
 
 
-@pytest.mark.parametrize("store_domain", ["hacs", "marketplace"])
 @pytest.mark.usefixtures("marketplace")
 async def test_an_unloaded_store_entry_is_checked_when_its_state_changes(
     hass: HomeAssistant,
     issue_registry: ir.IssueRegistry,
     checks: MagicMock,
-    aioclient_mock: AiohttpClientMocker,
     hass_storage: dict[str, Any],
-    request: pytest.FixtureRequest,
-    store_domain: str,
+    unloadable_marketplace: MockConfigEntry,
 ) -> None:
     """The store entry failing its setup, then set up again: the check runs
     again on its state change, files the repair once the manager answers,
     then lets go of the entry."""
-    hacs: Hacs | None = None
-    entry: MockConfigEntry
-    if store_domain == "hacs":
-        fixture: Hacs = request.getfixturevalue("hacs")
-        hacs, entry = fixture, fixture.entry
-    else:
-        records = own_records(main=True, mirror=True)
-        entry = add_marketplace(hass, aioclient_mock, hass_storage, records)
-        # Written by a newer Home Assistant: the Marketplace refuses to load it.
-        hass_storage[REPOSITORIES_KEY]["version"] = 99
-
+    entry = unloadable_marketplace
     store_records.async_schedule_store_records_check(hass)
 
     assert not await hass.config_entries.async_setup(entry.entry_id)  # no manager
     assert _issue(issue_registry) is None
 
-    if hacs is not None:
-        await hacs.restore(hass, hass_storage, main=True, mirror=True)
-    else:
-        hass_storage[REPOSITORIES_KEY]["version"] = 1  # restored from a backup
+    hass_storage[REPOSITORIES_KEY]["version"] = 1  # restored from a backup
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -330,18 +295,18 @@ async def test_an_unloaded_store_entry_is_checked_when_its_state_changes(
 
 
 async def test_a_registration_while_waiting_adds_no_second_listener(
-    hass: HomeAssistant, checks: MagicMock, hacs: Hacs
+    hass: HomeAssistant, checks: MagicMock, unloadable_marketplace: MockConfigEntry
 ) -> None:
     """Two entries setting up while the store is not loaded share the one
     pending check instead of each subscribing to the store."""
-    entry = hacs.entry
+    entry = unloadable_marketplace
     changes: list[ConfigEntryState] = []
     entry.async_on_state_change(lambda: changes.append(entry.state))
 
     store_records.async_schedule_store_records_check(hass)
     store_records.async_schedule_store_records_check(hass)
     ran = checks.call_count
-    assert not await hass.config_entries.async_setup(entry.entry_id)  # not ready
+    assert not await hass.config_entries.async_setup(entry.entry_id)  # no manager
 
     assert changes
     assert checks.call_count == ran + len(changes)

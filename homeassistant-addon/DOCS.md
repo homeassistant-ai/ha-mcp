@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This app enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 86+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This app enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 87+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -373,7 +373,7 @@ Requires app restart to take effect; clients see the new text after they reconne
 
 **Default:** `false`
 
-Replaces the full tool catalog (~86 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~87 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if your client has its own built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code).** The two search layers conflict — running both at once does not work — and the client's built-in tool search is the better choice there anyway. Leave this off in those clients. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.
 
@@ -721,7 +721,7 @@ If the app is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 86+ MCP tools for controlling Home Assistant:
+The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -753,7 +753,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_config_set_calendar_event` — Create a new event in a calendar, or update an existing one.
 
 ### Camera
-- `ha_get_camera_image` — Get a snapshot image from a Home Assistant camera entity.
+- `ha_get_camera_image` — Get a snapshot image from a Home Assistant camera or image entity.
 
 ### Dashboard
 - `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get rendered images of a Home Assistant Lovelace dashboard view.
@@ -795,8 +795,8 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_config_set_group` — Create or update a service-based Home Assistant entity group via the group.set service.
 
 ### HACS
-- `ha_get_hacs_info` — Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
-- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
+- `ha_get_hacs_info` — Get data from Home Assistant's Marketplace, what HACS became in 2026.11.
+- `ha_manage_hacs` — Manage Home Assistant's Marketplace (what HACS became in 2026.11): install, update, remove and add repositories.
 
 ### Helper Entities
 - `ha_config_list_helpers` — List Home Assistant helpers of a specific type with their configurations.
@@ -807,6 +807,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_get_automation_traces` — Get execution traces for automations and scripts to debug issues.
 - `ha_get_history` — Get historical data from Home Assistant's recorder.
 - `ha_get_logs` — Get Home Assistant logs from various sources.
+- `ha_manage_logs` — Manage Home Assistant's recorder, its long-term statistics and its logs.
 
 ### Integrations
 - `ha_get_integration` — Get integration (config entry) information with pagination.

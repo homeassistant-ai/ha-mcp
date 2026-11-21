@@ -142,16 +142,16 @@ class TestCategories:
 
         assert entry["category"] == category
 
-    @pytest.mark.parametrize("integration", ["hacs", "marketplace"])
     async def test_store_repository_update_is_hacs_whatever_its_entity_id(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, integration: str
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
-        """The Marketplace (Core 2026.11) names its entities after the repository
-        alone, so update.ha_mcp_custom_component carries no "hacs"."""
+        """The Marketplace names its entities after the repository alone, so
+        update.ha_mcp_custom_component carries nothing the category could be
+        read from."""
         await set_up_updates(
             hass,
             SoftwareUpdate("update.ha_mcp_custom_component"),
-            integration=integration,
+            integration="marketplace",
         )
 
         result = await manage_updates(core_client)

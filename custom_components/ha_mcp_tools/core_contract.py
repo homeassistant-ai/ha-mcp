@@ -12,14 +12,14 @@ import logging
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from .helper_collections import _INVALID_ERRORS, _convert, _optional_attr
+from probatio import UNSUPPORTED, to_json_schema
+
+from .helper_collections import _INVALID_ERRORS
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
-_UNSUPPORTED = _optional_attr("probatio", "UNSUPPORTED")
-_TO_JSON_SCHEMA = _optional_attr("probatio", "to_json_schema")
 COMMAND = "ha_mcp_tools/core_contract"
 CAPABILITY = "core_contract"
 INTEGRATION_COMMAND = "ha_mcp_tools/integration_commands"
@@ -29,6 +29,15 @@ COMMANDS = (
     "energy/save_prefs",
     "history/history_during_period",
     "recorder/statistics_during_period",
+    "recorder/statistic_during_period",
+    "recorder/list_statistic_ids",
+    "recorder/validate_statistics",
+    "recorder/update_statistics_issues",
+    "recorder/clear_statistics",
+    "recorder/update_statistics_metadata",
+    "recorder/change_statistics_unit",
+    "recorder/adjust_sum_statistics",
+    "recorder/import_statistics",
 )
 
 
@@ -49,8 +58,7 @@ def _entry_schema(command: str, entry: Any) -> Any:
 def _schema(hass: HomeAssistant, command: str) -> Any:
     if command not in COMMANDS:
         raise ValueError("Unsupported Core contract")
-    entry = (hass.data.get("websocket_api") or {}).get(command)
-    return entry[1] if entry else None
+    return _entry_schema(command, (hass.data.get("websocket_api") or {}).get(command))
 
 
 def validate_request(
@@ -87,16 +95,16 @@ def _core_serializer(node: Any, *, strict: bool = False) -> Any:
         not inspect.isfunction(node)
         or node.__module__ != "homeassistant.helpers.config_validation"
     ):
-        return _UNSUPPORTED
+        return UNSUPPORTED
     if node.__qualname__ != "key_value_schemas.<locals>.key_value_validator":
-        return _UNSUPPORTED
+        return UNSUPPORTED
     closure = inspect.getclosurevars(node).nonlocals
     alternatives = closure.get("value_schemas")
     if not isinstance(alternatives, dict) or closure.get("default_schema") is not None:
-        return _UNSUPPORTED
+        return UNSUPPORTED
     return {
         "anyOf": [
-            _TO_JSON_SCHEMA(
+            to_json_schema(
                 schema,
                 strict=strict,
                 custom_serializer=partial(_core_serializer, strict=strict),
@@ -117,22 +125,18 @@ def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
 def _describe(schema: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
     try:
-        if _TO_JSON_SCHEMA is not None:
-            try:
-                result["schema"] = _TO_JSON_SCHEMA(
-                    schema,
-                    strict=True,
-                    custom_serializer=partial(_core_serializer, strict=True),
-                )
-                result["description_complete"] = True
-            except Exception:
-                _LOGGER.debug("Core contract needs lossy serialization", exc_info=True)
-                result["schema"] = _TO_JSON_SCHEMA(
-                    schema, custom_serializer=_core_serializer
-                )
-                result["description_complete"] = False
-        else:
-            result["fields"] = _convert(schema)
+        try:
+            result["schema"] = to_json_schema(
+                schema,
+                strict=True,
+                custom_serializer=partial(_core_serializer, strict=True),
+            )
+            result["description_complete"] = True
+        except Exception:
+            _LOGGER.debug("Core contract needs lossy serialization", exc_info=True)
+            result["schema"] = to_json_schema(
+                schema, custom_serializer=_core_serializer
+            )
             result["description_complete"] = False
     except Exception:
         _LOGGER.debug("Core contract cannot be serialized", exc_info=True)
@@ -244,5 +248,7 @@ async def statistics_metadata(
         if converter and converter.UNIT_CLASS in units:
             output = requested if requested in converter.VALID_UNITS else stored
         record["output_unit_of_measurement"] = output
+        # The unit class to ask Core for that unit under, which the metadata's
+        # own unit_class leaves out for some statistics.
         record["conversion_unit_class"] = converter.UNIT_CLASS if converter else None
     return {"records": records}

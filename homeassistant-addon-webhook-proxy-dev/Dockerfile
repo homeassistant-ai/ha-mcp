@@ -9,6 +9,7 @@ ARG PYTHON_BASE=public.ecr.aws/docker/library/python:3.14-slim@sha256:9aaa474097
 FROM ${PYTHON_BASE}
 
 COPY start.py /
+COPY app_options.py /
 COPY mcp_proxy_dev /opt/mcp_proxy_dev
 
 ARG BUILD_VERSION

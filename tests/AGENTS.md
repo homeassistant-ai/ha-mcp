@@ -72,7 +72,7 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
 - **The in-process "server" config entry** of that same component (#1527) is
   the embedded backend only, seeded separately. That one IS lane-specific.
 
-In production the component is optional (it ships via HACS), so server code
+In production the component is optional (it ships via the Marketplace), so server code
 reading component-only data must degrade honestly for installs without it.
 
 ## Combined PR lanes (`E2E_COMBINE_TOPOLOGIES=1`)
@@ -131,7 +131,7 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and
 `_conftest_haos._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
 (HAOS). The qcow2 edit is offline and per-worker, like the recorder seed
-staging and the HACS refresher, and raises rather than warning: a silent no-op would leave the
+staging and the Marketplace token injection, and raises rather than warning: a silent no-op would leave the
 entry in place and the lane would re-test the ordinary topology while
 reporting green.
 

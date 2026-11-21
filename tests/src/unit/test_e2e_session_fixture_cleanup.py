@@ -1,13 +1,12 @@
 """A failed testcontainer setup must not leave the staged config on disk.
 
 The staged config is seeded from ``initial_test_state`` and, when
-``GITHUB_TOKEN`` is set, that token is written into its HACS config entry. The
-session fixture used to remove the directory only in the post-``yield``
-``finally``, so any failure before the yield — a staging step, an unreachable
-base host, a readiness timeout, a boot error — skipped cleanup and left the
-token behind. The fixture now creates the directory and registers its removal
-as a request finalizer before staging starts; pytest runs finalizers on setup
-failure too.
+``GITHUB_TOKEN`` is set, that token is written into its Marketplace config
+entry. A failure before the session fixture's ``yield`` (a staging step, an
+unreachable base host, a readiness timeout, a boot error) skips its
+post-``yield`` ``finally``, so the fixture creates the directory and registers
+its removal as a request finalizer before staging starts; pytest runs
+finalizers on setup failure too.
 
 Each test runs the real fixture (``_e2e_session``): real staging, the real
 container build, and readiness gates that ask the unit tests' real Home

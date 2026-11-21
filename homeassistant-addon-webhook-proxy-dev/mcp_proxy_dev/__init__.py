@@ -687,7 +687,7 @@ async def _setup_legacy_oauth(
 
 
 async def _setup_none_autoapprove(
-    hass: HomeAssistant, webhook_id: str, hass_data: dict
+    hass: HomeAssistant, webhook_id: str, proxy_config: dict, hass_data: dict
 ) -> bool:
     """Set up none-mode auto-approve discovery (OAuth off — issue #1969).
 
@@ -717,7 +717,7 @@ async def _setup_none_autoapprove(
         dcr_signing_key = await hass.async_add_executor_job(load_or_create_dcr_secret)
         # Host-derived base URLs (public_base_url=None), like ha_auth: the same
         # install must work via any external URL.
-        provider = AutoApproveProvider(hass, webhook_id, None)
+        provider = AutoApproveProvider(hass, webhook_id, None, proxy_config)
         # All three view bundles bind at most once per HA session (guarded); a
         # none<->ha_auth switch reuses them, so no restart is needed. The one
         # exception is a webhook id rotated mid-session: the path-scoped
@@ -794,7 +794,7 @@ async def _setup_oauth_section(
     # / the AUTOAPPROVE_PROVIDER_KEY-not-"oauth" split). None mode still has ONE
     # restart case: the operator rotated the webhook id mid-session, and the
     # path-scoped discovery URL for the new id can only be bound at startup.
-    return await _setup_none_autoapprove(hass, webhook_id, hass_data)
+    return await _setup_none_autoapprove(hass, webhook_id, proxy_config, hass_data)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

@@ -411,7 +411,7 @@ class HomeAssistantWebSocketClient:
     ) -> None:
         """Handle an incoming event message."""
         if message_id is not None:
-            # Continuous subscriptions take priority: a single ``hacs/subscribe``
+            # Continuous subscriptions take priority: a single ``marketplace/subscribe``
             # can deliver many events sharing one id and the one-shot
             # ``_event_responses`` future would only catch the first.
             # Events delivered to a subscription queue do NOT also
@@ -956,7 +956,7 @@ class HomeAssistantWebSocketClient:
 
         For commands that establish a long-lived stream sharing the
         command's ``id`` for every event (HA's ``subscribe_events``,
-        HACS' ``hacs/subscribe`` with a ``signal`` field, etc.).
+        the Marketplace's ``marketplace/subscribe`` with a ``signal`` field, etc.).
         ``subscribe_events`` has its own dedicated entrypoint above
         because it has additional callers wired to the legacy
         event-type handler registry; use this method for everything
@@ -1097,7 +1097,7 @@ class HomeAssistantWebSocketClient:
     ) -> None:
         """Tear down a subscription opened via :meth:`subscribe_command`.
 
-        HACS' ``hacs/subscribe`` slots into HA's standard
+        The Marketplace's ``marketplace/subscribe`` slots into HA's standard
         ``connection.subscriptions`` map, so ``unsubscribe_events`` cancels
         it the same way it cancels a native ``subscribe_events`` stream
         — ``unsubscribe_type`` is exposed only for the rare case a
@@ -1315,7 +1315,7 @@ class WebSocketManager:
         # Key on the EFFECTIVE verification mode: a caller passing the
         # resolved settings default (send_websocket_message) must share
         # the pooled connection with callers that omit the argument
-        # (listener, HACS, installer) — only a genuine override such as
+        # (listener, store, installer) — only a genuine override such as
         # verify_ssl=False gets its own isolated connection.
         key = (
             f"{self._client_key(ws_url, ws_token)}"

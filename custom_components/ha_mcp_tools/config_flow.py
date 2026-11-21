@@ -77,7 +77,6 @@ from .const import (
     EXPOSURE_FULL,
     EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
-    MAX_OAUTH_CALLBACKS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_ACCESS_OFF_AFTER_RESTART,
     OPT_ADMIN_TOKEN_REPLACEMENT,
@@ -91,7 +90,6 @@ from .const import (
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_OAUTH_REGENERATE,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
@@ -107,6 +105,8 @@ from .const import (
     WEBHOOK_AUTH_NONE,
 )
 from .oauth_redirect_allowlist import (
+    MAX_OAUTH_CALLBACKS,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
     effective_allowlist,
     normalize_allowlist,
     stored_allowlist,
@@ -512,7 +512,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     # override is suggested; the normalized "no override" state
                     # renders an EMPTY field — the help text says "Leave empty",
                     # and pre-filling DEFAULT_PIP_SPEC would show the stable dist
-                    # name even when a HACS pre-release pins ha-mcp-dev.
+                    # name even when a pre-release pins ha-mcp-dev.
                     description={
                         "suggested_value": suggested_values.get(OPT_PIP_SPEC, "")
                     },

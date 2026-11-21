@@ -231,7 +231,7 @@ class Settings(BaseSettings):
         bool, Setting(surface="advanced", section="operations")
     ] = Field(False, alias="HAMCP_ENABLE_HISTORY_QUERY_GUARDRAILS")
 
-    # Opt-in: ask HACS / the Marketplace to refresh the component's repository
+    # Opt-in: ask the Marketplace to refresh the component's repository
     # at startup after a server update (hacs_auto_refresh). An install that ran
     # the refresh before it became opt-in has it turned on once, on its behalf.
     hacs_refresh_after_update: Annotated[

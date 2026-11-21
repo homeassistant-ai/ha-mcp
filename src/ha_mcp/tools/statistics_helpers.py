@@ -102,10 +102,11 @@ def statistics_warnings(entities: list[dict[str, Any]]) -> list[str]:
     ]
 
 
-async def resolve_requested_units(
-    client: Any, entities: list[dict[str, Any]], units: dict[str, Any]
+async def converter_records(
+    client: Any, statistic_ids: list[str], units: dict[str, Any]
 ) -> dict[str, dict[str, Any]]:
-    """Resolve explicit units and default converters absent from recorder metadata."""
+    """Core's converter choice and output unit for each statistic, through the
+    component; empty without it."""
     from ..client.websocket_client import get_websocket_client
     from .component_api import (
         component_supports,
@@ -114,40 +115,46 @@ async def resolve_requested_units(
         is_unknown_command,
     )
 
-    if not units:
-        entities = [
-            entity
-            for entity in entities
-            if (record := entity.get("statistics_metadata"))
-            and record.get("unit_class") is None
-            and record.get("display_unit_of_measurement")
-            != record.get("statistics_unit_of_measurement")
-        ]
-    if not entities:
-        return {}
-    records: dict[str, dict[str, Any]] = {}
     try:
         caps = await get_component_caps(client)
-        if component_supports(caps, "core_contract"):
-            ws = await get_websocket_client(
-                url=client.base_url,
-                token=client.token,
-                verify_ssl=getattr(client, "verify_ssl", None),
-            )
-            response = await ws.send_command(
-                "ha_mcp_tools/statistics_units",
-                statistic_ids=[e["entity_id"] for e in entities],
-                units=units,
-            )
-            records = {r["statistic_id"]: r for r in response["result"]["records"]}
+        if not component_supports(caps, "core_contract"):
+            return {}
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
+        response = await ws.send_command(
+            "ha_mcp_tools/statistics_units", statistic_ids=statistic_ids, units=units
+        )
+        return {r["statistic_id"]: r for r in response["result"]["records"]}
     except Exception as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
         logger.warning("Statistics converter resolution failed", exc_info=True)
-    if not units:
-        # Default labels already come from recorder metadata; this lookup only
-        # supplies converter classes needed to recover reset timestamps.
-        return records
+        return {}
+
+
+async def resolve_requested_units(
+    client: Any, entities: list[dict[str, Any]], units: dict[str, Any]
+) -> None:
+    """Label each entity with the unit Core converts to for explicitly requested ``units``."""
+    if not units or not entities:
+        return
+    label_requested_units(
+        entities,
+        await converter_records(client, [e["entity_id"] for e in entities], units),
+        units,
+    )
+
+
+def label_requested_units(
+    entities: list[dict[str, Any]],
+    records: dict[str, dict[str, Any]],
+    units: dict[str, Any],
+) -> None:
+    """Label each entity from Core's converter ``records``; one it has no record
+    for loses its label only when ``units`` asked for its unit class."""
     for entity in entities:
         record = records.get(entity["entity_id"])
         if record is not None and "output_unit_of_measurement" in record:
@@ -156,14 +163,14 @@ async def resolve_requested_units(
             entity.pop("unit_reason", None)
         else:
             unit_class = (entity.get("statistics_metadata") or {}).get("unit_class")
-            if isinstance(unit_class, str) and unit_class not in units:
+            # Nothing was requested, or not for this statistic's unit class.
+            if not units or (isinstance(unit_class, str) and unit_class not in units):
                 continue
             entity.update(
                 unit_of_measurement=None,
                 unit_source="unknown",
                 unit_reason="requested_unit_resolution_unavailable",
             )
-    return records
 
 
 def _parse_statistic_types(

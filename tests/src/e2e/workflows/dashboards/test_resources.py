@@ -529,7 +529,7 @@ class TestDashboardResourceUrlPatterns:
         logger.info("External URL pattern test completed successfully")
 
     async def test_hacsfiles_url_pattern(self, mcp_client):
-        """Test /hacsfiles/ URL pattern (HACS resources)."""
+        """A /hacsfiles/ URL: Home Assistant serves www/community there too."""
         logger.info("Starting hacsfiles URL pattern test")
         mcp = MCPAssertions(mcp_client)
 

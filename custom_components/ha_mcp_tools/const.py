@@ -38,12 +38,9 @@ ENTRY_TYPE_SERVER = "server"
 TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
 TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
 SERVER_ENTRY_TITLE = "HA-MCP Server"
-# Kept level with the HACS floor in hacs.json: from component 2.1.3 the manifest
-# declares voluptuous-openapi, which Core releases before 2026.7 pin to an older
-# version so the requirement cannot resolve there, and
-# that requirement gates the whole integration before any entry's config flow
-# runs, so a lower runtime floor here would promise what the load cannot keep.
-MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.8.0"
+# Kept level with the Home Assistant minimum in hacs.json, the first release
+# with the built-in Marketplace the component is installed and updated from.
+MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.11.0"
 
 # Allowed directories for file operations (relative to config dir).
 # "blueprints" is read-only BY DEFAULT — in ALLOWED_READ_DIRS but not
@@ -338,31 +335,9 @@ OPT_ACCESS_OFF_AFTER_RESTART = "access_off_after_restart"
 # straight into entry.data (_adopt_token); it is never stored in options or
 # shown back.
 OPT_ADMIN_TOKEN_REPLACEMENT = "admin_token_replacement"
-# The callback URLs the none-mode auto-approve /authorize may redirect to
-# (#2427). Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a saved list, even an
-# empty one, replaces it. Read per request, so a change needs no reload.
-OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
 # When True, the none-mode /authorize accepts any well-formed callback instead
 # of only the allowlist: the administrator's choice to turn the list off.
 OPT_OAUTH_ALLOW_ANY_CALLBACK = "oauth_allow_any_callback"
-# The common OAuth clients' published callbacks. Clients whose callback is
-# unique per app or connector need their own entry: ChatGPT apps on
-# chatgpt.com/connector/oauth/<id>, and Copilot Studio's per-connector
-# global.consent.azure-apim.net/redirect/<connector> URL.
-DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
-    "https://claude.ai/api/mcp/auth_callback",
-    # Anthropic's announced future callback domain.
-    "https://claude.com/api/mcp/auth_callback",
-    # Claude Code (any port, per the loopback rule).
-    "http://localhost/callback",
-    "http://127.0.0.1/callback",
-    "https://chatgpt.com/connector_platform_oauth_redirect",
-    # Gemini Enterprise.
-    "https://vertexaisearch.cloud.google.com/oauth-redirect",
-)
-# Bounds every writer of the list applies (Configure, the panel's WS command).
-MAX_OAUTH_CALLBACKS = 50
-MAX_OAUTH_CALLBACK_LENGTH = 2048
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"
@@ -437,11 +412,8 @@ DATA_LLM_API_UNSUB = "llm_api_unsub"
 WEBHOOK_AUTH_NONE = "none"  # secret webhook URL is the shared secret
 WEBHOOK_AUTH_HA = "ha_auth"  # HA-native bearer (HA core is the OAuth AS)
 # Self-hosted OAuth 2.1 authorization server with a static client_id/secret,
-# ported from the webhook-proxy add-on's "legacy" mode. Originally needed
-# because HA core's /auth/authorize did not fetch Client ID Metadata Documents
-# for cross-origin redirect_uris before 2026.9 (home-assistant/core#176282,
-# fixed by #176286), which Google Gemini Spark's custom connected apps require;
-# kept as the pasted-credential fallback for clients that want one.
+# ported from the webhook-proxy add-on's "legacy" mode: the pasted-credential
+# option for clients that want one.
 WEBHOOK_AUTH_LEGACY = "legacy"
 
 # Default bind host + port. 9584 (not the add-on's 9583) so this in-process
@@ -495,8 +467,8 @@ ISSUE_TOKEN_NEEDED = "server_token_needed"
 # Repair issue surfaced when the installed ha-mcp server requires a newer
 # custom component than the one running. Each component release pins the
 # server it was built with, so this only fires for a pip-spec override that
-# installs a newer server; it points the user at the HACS component update
-# (non-blocking).
+# installs a newer server; it points the user at the component update in the
+# Marketplace (non-blocking).
 ISSUE_COMPONENT_OUTDATED = "component_outdated"
 # Repair issue surfaced when the legacy OAuth mode's root /authorize + /token
 # views are out of sync with the CONFIGURED webhook_auth mode — either just

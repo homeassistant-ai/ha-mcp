@@ -1,10 +1,12 @@
-"""Static compatibility checks for the HACS custom component."""
+"""Static compatibility checks for the custom component."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
 from pathlib import Path
+
+from awesomeversion import AwesomeVersion
 
 _REPO_ROOT = Path(__file__).parents[3]
 
@@ -21,9 +23,8 @@ def test_hacs_requires_supported_home_assistant_version() -> None:
     Across all 106 release tags from 2024.11.0 to 2026.9.0, ``2026.7.0`` is
     the first whose pin -- ``voluptuous-openapi==0.4.1`` -- the manifest
     requirement resolves against; every earlier release pins a lower version,
-    and 2026.9.0 is the only one with no such pin at all, Core having moved to
-    ``probatio``. The floor sits deliberately one release above that minimum
-    rather than at it (#2361).
+    and from 2026.9.0 Core has no such pin at all, having moved to
+    ``probatio`` (#2361).
     """
     metadata = json.loads((_REPO_ROOT / "hacs.json").read_text(encoding="utf-8"))
 
@@ -37,7 +38,7 @@ def test_hacs_requires_supported_home_assistant_version() -> None:
     spec.loader.exec_module(const)
     assert metadata["homeassistant"] == const.MIN_EMBEDDED_HOME_ASSISTANT_VERSION
 
-    assert metadata["homeassistant"] == "2026.8.0"
+    assert AwesomeVersion(metadata["homeassistant"]) >= AwesomeVersion("2026.7.0")
 
 
 def test_manifest_declares_the_pre_probatio_schema_converter() -> None:
@@ -52,7 +53,7 @@ def test_manifest_declares_the_pre_probatio_schema_converter() -> None:
     would put that fallback back in the path with every test still green
     (#2361).
 
-    Asserted beside the HACS floor above because the two constrain each other:
+    Asserted beside the ``hacs.json`` minimum above because the two constrain each other:
     Core resolves this requirement against the constraints of the oldest
     release the floor admits.
     """

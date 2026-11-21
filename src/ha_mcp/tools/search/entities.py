@@ -75,7 +75,7 @@ _COMPOSED_NAME_FIELD = "name"
 # the component would have answered.
 _NO_COMPONENT_EMPTY_SEARCH_HINT = (
     "No ha_mcp_tools component detected; for full search functionality, "
-    "install it via HACS (the Marketplace on Home Assistant 2026.11+)."
+    "install it via the Marketplace."
 )
 _OLD_COMPONENT_EMPTY_SEARCH_HINT = (
     "The installed ha_mcp_tools component is out of date; for full search "

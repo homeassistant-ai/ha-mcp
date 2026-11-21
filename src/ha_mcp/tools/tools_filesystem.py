@@ -143,7 +143,7 @@ async def _bootstrap_service_state(client: Any) -> tuple[bool, bool]:
 
     - No ``ha_mcp_tools`` services at all — the component's "HA-MCP File &
       YAML Tools" config entry was never added (the services register only in
-      that entry's setup), or the component isn't installed. A HACS update
+      that entry's setup), or the component isn't installed. An update
       cannot fix this.
     - Domain services present but no ``get_caller_token`` — a genuinely old
       (<0.5.0) component that pre-dates the bootstrap service; the call would
@@ -160,8 +160,8 @@ def _raise_tools_entry_not_set_up() -> NoReturn:
 
     Installing the HA-MCP integration is not enough for the file / YAML
     tools: they need the separate "HA-MCP File & YAML Tools" config entry,
-    which users routinely miss. Lead with the "Add entry" step; the full
-    HACS install is the fallback for a component that isn't there at all.
+    which users routinely miss. Lead with the "Add entry" step; installing
+    the component is the fallback for one that isn't there at all.
     """
     raise_tool_error(
         create_error_response(
@@ -188,15 +188,15 @@ def _raise_tools_entry_not_set_up() -> NoReturn:
 
 
 def _raise_component_too_old(detail: str) -> NoReturn:
-    """Single actionable 'update via HACS' error path."""
+    """Single actionable 'update via the Marketplace' error path."""
     raise_tool_error(
         create_error_response(
             ErrorCode.COMPONENT_NOT_INSTALLED,
             f"The installed ha_mcp_tools custom component is too old: {detail}. "
             f"This ha-mcp release requires >= {MIN_COMPONENT_VERSION}. "
-            "Update via HACS or the Marketplace and restart Home Assistant.",
+            "Update it in the Marketplace and restart Home Assistant.",
             suggestions=[
-                "Settings → System → Updates → HA-MCP → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
+                "Settings → System → Updates → HA-MCP → Update",
                 "Restart Home Assistant after update completes",
                 "Then retry the operation",
                 (
@@ -217,7 +217,7 @@ async def _fetch_caller_token(client: Any) -> str:
     1. No ``ha_mcp_tools`` services registered at all — the "HA-MCP File &
        YAML Tools" config entry was never added (or the component isn't
        installed). Surface the "add the entry" error, NOT an update prompt:
-       a current component in this state misled users into fruitless HACS
+       a current component in this state misled users into fruitless
        updates when the old code lumped it in with "too old" (#1996).
     2. Domain present but no ``get_caller_token`` — pre-0.5.0 components
        don't ship the bootstrap service. Surface an actionable "update"
@@ -280,7 +280,7 @@ async def _fetch_caller_token(client: Any) -> str:
     except ValueError:
         # A malformed version (non-numeric segment like "1.x.0", or a
         # future suffixed/date scheme _version_tuple can't parse) is a
-        # different failure mode from "too old": a HACS update won't help
+        # different failure mode from "too old": an update won't help
         # if the reported version itself is wrong. Point at reinstall /
         # issue-filing instead of the version-bump remediation.
         raise_tool_error(
@@ -290,7 +290,7 @@ async def _fetch_caller_token(client: Any) -> str:
                 f"malformed version: {version!r}, so ha-mcp can't verify it "
                 f"meets the required >= {MIN_COMPONENT_VERSION}.",
                 suggestions=[
-                    "Reinstall ha_mcp_tools via HACS or the Marketplace",
+                    "Reinstall ha_mcp_tools via the Marketplace",
                     "Restart Home Assistant after reinstalling",
                     "If the version is still malformed, file an issue at "
                     + "https://github.com/homeassistant-ai/ha-mcp/issues",
@@ -433,7 +433,7 @@ async def _assert_file_edits_supported(client: Any) -> None:
             "ha_write_file(edits=...) needs a newer ha_mcp_tools custom component: "
             f"the installed one has no {EDIT_FILE_SERVICE} service.",
             suggestions=[
-                "Settings → System → Updates → HA-MCP → Update (HACS, or the Marketplace on Home Assistant 2026.11+)",
+                "Settings → System → Updates → HA-MCP → Update",
                 "Restart Home Assistant after the update completes",
                 "Or send the whole file with content= instead of edits",
             ],

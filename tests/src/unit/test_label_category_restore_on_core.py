@@ -408,7 +408,7 @@ async def test_a_second_restore_without_the_component_says_it_matched_in_another
     (warning,) = [w for w in outcome["result"]["warnings"] if "order" in w]
     assert "aliases" in warning
     assert "only the ha_mcp_tools component can tell" in warning
-    assert "install or update it via HACS" in warning
+    assert "install or update it via the Marketplace" in warning
 
 
 async def test_a_second_restore_does_not_take_an_area_whose_ordered_list_differs(

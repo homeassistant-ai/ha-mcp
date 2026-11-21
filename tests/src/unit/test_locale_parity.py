@@ -126,12 +126,7 @@ ENGLISH_ONLY_SURFACES = {
     ),
 }
 
-VENDORED_SURFACES = {
-    "tests/initial_test_state/custom_components/hacs/translations": (
-        "third-party HACS integration, vendored to seed the e2e container — "
-        "upstream's catalogs, not ours to translate"
-    ),
-}
+VENDORED_SURFACES: dict[str, str] = {}
 
 
 def _discover_translation_surfaces() -> set[str]:

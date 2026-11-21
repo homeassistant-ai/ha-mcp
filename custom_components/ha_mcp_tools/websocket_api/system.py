@@ -288,7 +288,8 @@ async def _server_entry_update_prep(
        its legacy options-flow submit.
     2. Require ``pip_spec``. ``channel`` is still accepted (servers before the
        paired-release change send it) but ignored: each component release pins
-       its server, and development builds come from HACS's Pre-release switch.
+       its server, and development builds come from the Marketplace's
+       Pre-release switch.
        A frame carrying ONLY ``channel`` is refused with that explanation.
     3. Snapshot the ``delta`` (the provided fields, keyed by the OPT_* option keys)
        and the CURRENT ``entry.options`` — used ONLY for the no-op check and the
@@ -335,8 +336,7 @@ async def _server_entry_update_prep(
             "server_entry_update needs pip_spec. The release channel can no "
             "longer be chosen here: each HA-MCP component release installs the "
             "server it was released with, and development builds come from "
-            "this repository's Pre-release switch in HACS, or its Pre-release "
-            "entity in the Marketplace (Home Assistant 2026.11+)."
+            "this repository's Pre-release switch in the Marketplace."
         )
 
     options = getattr(entry, "options", None)

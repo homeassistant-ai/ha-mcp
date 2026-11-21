@@ -4,16 +4,13 @@
 container and waits on its readiness gates. Docker is the one thing replaced:
 testcontainers' client answers as the daemon does for a running container whose
 port 8123 is published on the port Core's test server listens on, so every gate
-asks the real ``hass``. GitHub, where staging fetches the HACS frontend, is
-unreachable, as on a machine without network.
+asks the real ``hass``.
 """
 
 from __future__ import annotations
 
 import inspect
 import tempfile
-import urllib.error
-import urllib.request
 from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -124,10 +121,6 @@ class Session:
         return staged
 
 
-def _offline(*args: object, **kwargs: object) -> object:
-    raise urllib.error.URLError("no network in a unit test")
-
-
 def plain_container_session(
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
@@ -145,7 +138,6 @@ def plain_container_session(
         monkeypatch.delenv(name)
     monkeypatch.setenv(_conftest_knobs.BASE_HOST_ENV_VAR, "127.0.0.1")
     monkeypatch.setattr(e2e_conftest, "TEST_TOKEN", token)
-    monkeypatch.setattr(urllib.request, "urlopen", _offline)
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
     client = MagicMock(name="docker_client")
