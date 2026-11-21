@@ -415,3 +415,42 @@ async def test_an_undo_keeps_a_permission_saved_during_the_import(
         "allowed_dirs": ["media"],
         "extra_yaml_keys": [],
     }
+
+
+async def test_a_lost_permission_reply_that_cannot_be_undone_is_reported(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    hass_access_token: str,
+) -> None:
+    await make_file_service(hass, allowed="pyscript")
+    bundle = await _export(monkeypatch, core_client)
+    # The component stores ["www"] for this list.
+    bundle["entries"]["tools"] = {
+        "allowed_dirs": ["www", "../outside"],
+        "extra_yaml_keys": [],
+    }
+    impatient = HomeAssistantClient(
+        base_url=core_client.base_url,
+        token=hass_access_token,
+        verify_ssl=False,
+        timeout=2,
+    )
+    save = Store.async_save
+
+    async def slow_save(store: Store, data: Any) -> None:
+        if data == {"paths": ["www"]}:
+            # Past the client's timeout: Core stores the list, the reply is lost.
+            await asyncio.sleep(3)
+        await save(store, data)
+
+    monkeypatch.setattr(Store, "async_save", slow_save)
+    try:
+        response = await post_settings(monkeypatch, impatient, IMPORT, bundle)
+    finally:
+        await impatient.close()
+
+    assert (response.status_code, response.json()["error"]) == (
+        500,
+        "rollback_incomplete",
+    )

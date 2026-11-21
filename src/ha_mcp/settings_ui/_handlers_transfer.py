@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+import anyio
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -292,7 +293,11 @@ async def _undo(
             reply = await _tools_service(
                 server, write, {key: values, "only_if": only_if}
             )
-            if reply.get("kept"):
+            if reply.get("kept") and len(written[name]) == 1:
+                # Its write got no reply, so what it stored is unknown.
+                logger.error("Settings import could not undo %s", name)
+                complete = False
+            elif reply.get("kept"):
                 logger.warning("Kept %s because it changed during the import", name)
         except Exception:
             logger.exception("Settings import could not undo %s", name)
@@ -341,7 +346,9 @@ async def import_bundle(
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        await asyncio.wait({task})
+        # An anyio cancel scope (how MCP cancels a call) re-cancels every await.
+        with anyio.CancelScope(shield=True):
+            await asyncio.wait({task})
         raise
 
 

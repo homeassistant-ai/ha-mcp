@@ -9,7 +9,6 @@ import asyncio
 import os
 import sys
 import threading
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -502,7 +501,11 @@ class TestSettingsTransfer:
             "allowed_dirs": ["www"],
             "extra_yaml_keys": ["mqtt"],
         }
-        first_written, release = asyncio.Event(), asyncio.Event()
+        first_written, release, returned = (
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+        )
         save = Store.async_save
 
         async def pause_after_the_first_write(store: Store, data: Any) -> None:
@@ -512,20 +515,33 @@ class TestSettingsTransfer:
                 await release.wait()
 
         monkeypatch.setattr(Store, "async_save", pause_after_the_first_write)
-        # The MCP server cancels a tool call through an anyio cancel scope.
-        async with anyio.create_task_group() as calls:
-            calls.start_soon(
-                partial(
-                    served.ha_dev_manage_settings,
-                    action="import_settings",
-                    settings_file=settings_file,
-                )
-            )
-            await first_written.wait()
-            calls.cancel_scope.cancel()
+        scopes: list[anyio.CancelScope] = []
+
+        async def call() -> None:
+            with anyio.CancelScope() as scope:
+                scopes.append(scope)
+                try:
+                    await served.ha_dev_manage_settings(
+                        action="import_settings", settings_file=settings_file
+                    )
+                finally:
+                    returned.set()
+
+        try:
+            async with anyio.create_task_group() as calls:
+                calls.start_soon(call)
+                await first_written.wait()
+                # The MCP server cancels a tool call through an anyio cancel scope.
+                scopes[0].cancel()
+                await asyncio.sleep(0.3)
+                # The call waits for the import it started instead of leaving it half done.
+                assert not returned.is_set()
+                release.set()
+                with anyio.fail_after(10):
+                    await returned.wait()
+        finally:
             release.set()
         await hass.async_block_till_done()
-        await asyncio.sleep(0.2)
 
         exported = await served.ha_dev_manage_settings(action="export_settings")
         assert exported["settings_file"]["entries"]["tools"] == {
