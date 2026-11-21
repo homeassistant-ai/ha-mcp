@@ -779,21 +779,21 @@
   {
     "name": "ha_get_camera_image",
     "title": "Get Camera Image",
-    "description": "Get a snapshot image from a Home Assistant camera entity.\n\nFetches the current camera image and returns it directly for\nvisual analysis (security checks, delivery verification,\nconfirming a garage door actually closed), in the format Home\nAssistant serves (JPEG, PNG, or GIF), alongside a short text\nblock stating the served snapshot's size and retrieval time in\nHome Assistant local time.\n\nDo not use it to inspect the camera's state or attributes — use\nha_search or ha_get_state for those; it returns an image, not\nstate. Use it when you need to see the current scene, and on\nhigh-resolution cameras pass width and height to reduce token\nusage.\n\nEXAMPLE: ha_get_camera_image(entity_id=\"camera.backyard\", width=640, height=480)",
+    "description": "Get a snapshot image from a Home Assistant camera or image entity.\n\nReturns the image in its served format, with its available dimensions\nand retrieval time in Home Assistant local time. Use ha_get_state for\nentity state and attributes. Use this tool to inspect a camera scene\nor view content such as a QR code, album cover, or map.\n\nEXAMPLES:\nha_get_camera_image(entity_id=\"camera.backyard\", width=640, height=480)\nha_get_camera_image(entity_id=\"image.album_art\")",
     "inputSchema": {
       "properties": {
         "entity_id": {
           "type": "str",
-          "description": "Camera entity ID (e.g., 'camera.front_door')"
+          "description": "Camera or image entity ID (e.g., 'camera.front_door', 'image.album_art')"
         },
         "width": {
           "type": "int | None",
-          "description": "Width for the resized image. Home Assistant rescales only when both width and height are given and the camera serves JPEG.",
+          "description": "Requested width in pixels.",
           "default": null
         },
         "height": {
           "type": "int | None",
-          "description": "Height for the resized image. Home Assistant rescales only when both width and height are given and the camera serves JPEG.",
+          "description": "Requested height in pixels.",
           "default": null
         }
       },
@@ -805,7 +805,7 @@
       "readOnlyHint": true,
       "destructiveHint": false,
       "idempotentHint": true,
-      "openWorldHint": false
+      "openWorldHint": true
     },
     "tags": [
       "Camera"

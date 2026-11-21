@@ -753,7 +753,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_config_set_calendar_event` — Create a new event in a calendar, or update an existing one.
 
 ### Camera
-- `ha_get_camera_image` — Get a snapshot image from a Home Assistant camera entity.
+- `ha_get_camera_image` — Get a snapshot image from a Home Assistant camera or image entity.
 
 ### Dashboard
 - `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get rendered images of a Home Assistant Lovelace dashboard view.
