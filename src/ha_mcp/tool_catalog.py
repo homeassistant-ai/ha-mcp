@@ -22,9 +22,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from ha_mcp._vendor import mcp_types as mt
+from ha_mcp._vendor.fastmcp.server.caching import CacheScope
 from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
     CallNext,
     Middleware,
@@ -40,23 +41,12 @@ CatalogMode = Literal["full", "search"]
 CATALOG_MODES: tuple[CatalogMode, ...] = ("full", "search")
 
 
-class CacheHintArgs(TypedDict):
-    """FastMCP's server-level SEP-2549 caching arguments."""
-
-    cache_ttl: int
-    cache_scope: Literal["public", "private"]
-
-
-# MCP 2026-07-28 (SEP-2549) puts ``ttlMs``/``cacheScope`` on every cacheable
-# result: tools/list, prompts/list, resources/list, resources/templates/list,
-# resources/read and server/discover. Each is the same for every caller of an
-# endpoint (the catalog follows the deployment's settings and the URL, never
-# the credential; the resources are the bundled skill files), so the scope is
-# ``public`` and shared caches such as MCP gateways may serve one copy to all
-# users. The SDK default, ``private``, makes them treat it as per-user. The TTL
-# bounds staleness after a live settings change, such as Read Only Mode
-# toggled without a restart; the write blocker still applies at call time.
-CATALOG_CACHE_HINT: Final[CacheHintArgs] = {"cache_ttl": 300, "cache_scope": "public"}
+# SEP-2549 cache hint for every cacheable result. The catalog is the same for
+# every caller of an endpoint, and gateways read ``private`` (the SDK default)
+# as a per-user catalog. The TTL is FastMCP's smallest accepted value, so a
+# client or gateway honouring it never serves a stale catalog for long.
+CATALOG_CACHE_TTL_S: Final = 1
+CATALOG_CACHE_SCOPE: Final[CacheScope] = "public"
 
 _endpoint_mode: ContextVar[CatalogMode | None] = ContextVar(
     "ha_mcp_endpoint_catalog_mode", default=None
