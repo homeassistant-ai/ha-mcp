@@ -2,7 +2,8 @@
 
 Covers skill content attached to write responses (the ``MandatoryBPS``
 parameter), entity category lookup and assignment, reference-validator
-metadata, and the config reload waiter.
+metadata, the config reload waiter, and the refusal of a write by a bare id
+that names another storage key.
 """
 
 import asyncio
@@ -21,13 +22,42 @@ from ..client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
+from ..errors import ErrorCode, create_error_response
 from ..utils.skill_loader import (
     BEST_PRACTICES_SKILL_NAME as _HA_BEST_PRACTICES_SKILL_NAME,
 )
 from .component_registries import category_list_reply
+from .helpers import raise_tool_error
 from .ws_waiters import _get_waiter_ws_client, _ws_cleanup, _ws_subscribe_all
 
 logger = logging.getLogger(__name__)
+
+
+def refuse_write_by_bare_id_of_another_key(
+    domain: str, identifier: str, storage_key: str | None
+) -> None:
+    """Refuse a write by a bare id that resolved to another storage key.
+
+    The resolvers return another key for a bare id only when nothing is stored
+    under it and the entity ``<domain>.<id>`` belongs to that key; writing there
+    would overwrite that object instead of creating one under the bare key.
+    """
+    if storage_key in (None, identifier) or identifier.startswith(f"{domain}."):
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_FAILED,
+            f"No {domain} is stored under key '{identifier}', so nothing was "
+            f"written; {domain}.{identifier} is the {domain} whose storage key "
+            f"is '{storage_key}'",
+            suggestions=[
+                f"Pass '{domain}.{identifier}' to update that {domain}",
+                f"To create a new {domain}, pass a key whose {domain}.<key> "
+                f"entity_id no other {domain} has",
+            ],
+            context={f"{domain}_id": identifier, "storage_key": storage_key},
+        )
+    )
 
 
 async def fetch_registry_entry(

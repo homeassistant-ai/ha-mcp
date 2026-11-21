@@ -6,7 +6,8 @@ component:
 - Entity resolution maps storage keys to live registry entity IDs.
   ``entity_registration.resolve_entity_id_after_write`` polls after scene/script
   writes against one deadline. ``_resolve_scene_entity_id`` uses a single retry
-  before scene removal. The component's ``entity_lookup`` returns only matching
+  before scene removal. ``entity_registration.lookup_entity_id`` is one strict
+  lookup for the script get, run and remove, which raises on a failed read. The component's ``entity_lookup`` returns only matching
   rows instead of a full registry/state listing. A hit is authoritative at once,
   but an empty read can precede HA's asynchronous entity registration even when
   performed in-process, so post-write callers must continue polling.
@@ -35,12 +36,13 @@ policies.
 **GET-path invariant:** the automation/script/scene *config-get* tools never
 read the config body through the component — its in-process ``raw_config``
 freshness lags the config file between a write and the next completed reload,
-so the body always comes from Core's REST config endpoint. The script and scene
-resolvers gate the whole component branch (caps probe included) behind
+so the body always comes from Core's REST config endpoint. The scene resolver
+gates the whole component branch (caps probe included) behind
 ``allow_component`` for removals, and the dedicated post-write resolver is never
-called from a config-get. The automation tools resolve through
-``component_automation.automation_lookup`` instead, which reads the registry,
-never the body.
+called from a config-get; the script config-get looks up the entity of its
+category with ``entity_registration.lookup_entity_id``.
+The automation tools resolve through ``component_automation.automation_lookup``
+instead, which reads the registry, never the body.
 """
 
 from __future__ import annotations

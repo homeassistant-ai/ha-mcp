@@ -472,10 +472,6 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
         configs: dict[str, dict[str, Any]] = {}
 
         # Attempt C: parallel per-id REST calls under a wall-clock budget
-        skipped_count = 0
-        failed_count = 0
-        yaml_skipped_count = 0
-        timeout_count = 0
         # One representative summary — ``record_first_failure`` (which holds
         # the guard) keeps the first ``failed``-class exception, upgrading
         # once to the first HTTP 500 so a fast-failing outlier can't suppress
@@ -601,24 +597,21 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
             e for e in all_entities if e.get("entity_id", "").startswith("script.")
         ]
 
+        storage_keys: dict[str, str] = {}
         # Phase 1: Score all scripts by name (instant)
         scored: list[tuple[str, str, str | None, int]] = []
         for entity in script_entities:
             entity_id = entity.get("entity_id", "")
             friendly_name = entity.get("attributes", {}).get("friendly_name", entity_id)
-            script_id = entity_id.replace("script.", "")
             name_score = self.fuzzy_searcher._calculate_entity_score(
                 entity_id, friendly_name, "script", query_lower
             )
-            scored.append((entity_id, friendly_name, script_id, name_score))
+            # Fetched by entity_id: a bare slug can be another script's key.
+            scored.append((entity_id, friendly_name, entity_id, name_score))
 
         configs: dict[str, dict[str, Any]] = {}
 
         # Attempt C: parallel individual fetch with budget (see #879)
-        skipped_count = 0
-        failed_count = 0
-        yaml_skipped_count = 0
-        timeout_count = 0
         # One representative summary — ``record_first_failure`` (which holds
         # the guard) keeps the first ``failed``-class exception, upgrading
         # once to the first HTTP 500 so a fast-failing outlier can't suppress
@@ -636,6 +629,7 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
                     self.client.get_script_config(sid),
                     timeout=self.config_timeout,
                 )
+                storage_keys[sid] = config_resp.get("script_id") or sid
                 return (sid, config_resp.get("config", {}), None)
             except HomeAssistantAPIError as e:
                 if e.status_code == 404:
@@ -686,10 +680,7 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
             else SCRIPT_CONFIG_TIME_BUDGET,
             "Script",
             "scripts",
-            deprioritize={
-                entity_id.removeprefix("script.")
-                for entity_id in graph_entity_ids or ()
-            },
+            deprioritize=set(graph_entity_ids or ()),
         )
         configs.update(fetched_configs)
 
@@ -697,7 +688,7 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
         matches = [
             {
                 "entity_id": m["entity_id"],
-                "script_id": m["key"],
+                "script_id": storage_keys.get(m["key"], m["key"]),
                 "friendly_name": m["friendly_name"],
                 "score": m["score"],
                 "match_in_name": m["match_in_name"],

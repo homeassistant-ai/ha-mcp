@@ -93,6 +93,36 @@ def has_dynamic_selector_targets(name: str, args: dict[str, Any]) -> bool:
     return name == "ha_bulk_control" and args.get("selector") is not None
 
 
+def has_unresolved_scene_members(name: str, args: dict[str, Any]) -> bool:
+    """Whether a scene write adds device entities the gate cannot see.
+
+    ``capture_devices`` members are read from the device registry inside the
+    tool, after this module has judged the call, and can change between calls.
+    """
+    return name == "ha_config_set_scene" and bool(args.get("capture_devices"))
+
+
+def _with_captured_entities(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """``args`` with each ``capture_entities`` id also a key of ``config.entities``.
+
+    The tool adds the captured states there, keyed by Core's lowercase
+    entity_id, so a rule on those keys judges them like ones the caller wrote.
+    Shapes the tool or Core refuses are returned unchanged.
+    """
+    captured = args.get("capture_entities")
+    config = args.get("config")
+    if tool_name != "ha_config_set_scene" or not isinstance(captured, list):
+        return args
+    if not isinstance(config, dict):
+        return args
+    entities = config.get("entities", {})
+    if not isinstance(entities, dict):
+        return args
+    added: dict[str, Any] = {e.lower(): {} for e in captured if isinstance(e, str)}
+    # A captured state replaces the caller's value for that entity.
+    return {**args, "config": {**config, "entities": {**entities, **added}}}
+
+
 KEYS_SEGMENT = "*~"
 """Path segment that fans out over a dict's keys (see ``iter_path_values``)."""
 
@@ -330,7 +360,20 @@ def match_rule(
 ) -> bool:
     if rule.tool_name not in ("*", tool_name):
         return False
-    return all(match_predicate(p, args, strict=strict) for p in rule.when)
+    captured = _with_captured_entities(tool_name, args)
+    if captured is args:
+        return all(match_predicate(p, args, strict=strict) for p in rule.when)
+    if strict:
+        # Under an allow list a condition must hold for the entities the scene
+        # will store; only the whole argument object lists capture_entities itself.
+        return all(
+            match_predicate(p, args if p.path == "args" else captured, strict=True)
+            for p in rule.when
+        )
+    # In a require-approval list the captured ids may only add matches.
+    return all(
+        match_predicate(p, args) or match_predicate(p, captured) for p in rule.when
+    )
 
 
 def find_matching_rule(
@@ -374,6 +417,33 @@ def _predicate_reaches_operations(path: str) -> bool:
     return parts[0] == "*" and (len(parts) == 1 or parts[1] == "*")
 
 
+def _rule_reads_scene_capture(rule: Rule, tool_name: str, args: dict[str, Any]) -> bool:
+    """Whether ``rule`` can reach what a scene capture writes after the gate:
+    the states it stores in ``args.config.entities``, the ``metadata`` it
+    marks, and the keys of ``config``, which gains both. With
+    ``capture_entities`` alone the entity keys are the call's own, which
+    ``_with_captured_entities`` adds, so a path ending at them is judged as
+    usual. Each of the path's first two segments is the literal or ``*``; a
+    path that stops above the field reaches it too, except bare ``args``,
+    which compares the whole call."""
+    devices = has_unresolved_scene_members(tool_name, args)
+    entities = tool_name == "ha_config_set_scene" and args.get("capture_entities")
+    if not (devices or entities):
+        return False
+    for p in rule.when:
+        parts = p.path.split(".")
+        parts = parts[1:] if parts[0] == "args" else parts
+        if not devices and parts[1:] == ["entities", KEYS_SEGMENT]:
+            continue
+        if parts[1:] == [KEYS_SEGMENT] and parts[0] in ("config", "*"):
+            return True
+        for field in ("entities", "metadata"):
+            pairs = zip(parts, ("config", field), strict=False)
+            if parts and all(seg in (want, "*") for seg, want in pairs):
+                return True
+    return False
+
+
 def _rule_needs_resolved_operations(rule: Rule) -> bool:
     """Whether ``rule`` inspects fields only known after selector resolution.
 
@@ -406,15 +476,19 @@ def _evaluate_allow_list(
     Unmatched calls, a ``ws_command`` call included, already require
     approval here (a bare ``ha_call_service`` or ``*`` rule does approve
     one), so the require-approval list's first fail-safe has
-    no counterpart. The selector one does: a rule that inspects
+    no counterpart. The other two do: a rule that inspects
     ``args.operations`` cannot see the targets a selector call resolves to
-    later, so it must not be what approves that call.
+    later, and one that can reach what a scene capture writes after the gate
+    (``_rule_reads_scene_capture``) cannot see it, so neither may approve
+    that call.
     """
     dynamic = has_dynamic_selector_targets(tool_name, args)
     for rule in policy.rules:
         if not match_rule(rule, tool_name, args, strict=True):
             continue
         if dynamic and _rule_needs_resolved_operations(rule):
+            continue
+        if _rule_reads_scene_capture(rule, tool_name, args):
             continue
         return Verdict.ALLOW
     return Verdict.REQUIRE_APPROVAL
@@ -425,14 +499,17 @@ def _evaluate_require_approval_list(
 ) -> Verdict:
     """Require-approval mode (the default): gate matching calls.
 
-    A normal rule match (``find_matching_rule``) decides most calls. Two
+    A normal rule match (``find_matching_rule``) decides most calls. Three
     fail-safes broaden approval beyond an exact predicate match, each only
     when the operator has SOME rule that could plausibly apply: an
     unmatched ``ha_call_service`` ``ws_command`` call (no ``domain``/
     ``service`` args for a domain/service-keyed rule to match), and an
     ``ha_bulk_control`` selector call whose matching rule needs fields
     (``args.operations.*``) that don't exist yet at gate time, resolved
-    only later inside the tool. See the fail-safe blocks below for the
+    only later inside the tool, and an ``ha_config_set_scene`` call with
+    ``capture_entities`` or ``capture_devices`` when a rule for that tool or
+    ``*`` can reach what the capture writes after the gate
+    (``_rule_reads_scene_capture``). See the fail-safe blocks below for the
     full reasoning behind each.
     """
     if find_matching_rule(tool_name, args, policy) is not None:
@@ -465,6 +542,13 @@ def _evaluate_require_approval_list(
     if has_dynamic_selector_targets(tool_name, args) and any(
         rule.tool_name in ("ha_bulk_control", "*")
         and _rule_needs_resolved_operations(rule)
+        for rule in policy.rules
+    ):
+        return Verdict.REQUIRE_APPROVAL
+    # The same for what a scene capture writes inside the tool.
+    if any(
+        rule.tool_name in ("ha_config_set_scene", "*")
+        and _rule_reads_scene_capture(rule, tool_name, args)
         for rule in policy.rules
     ):
         return Verdict.REQUIRE_APPROVAL

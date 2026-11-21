@@ -328,6 +328,38 @@ async def test_genuine_not_found_lists_only_visible_ids(
     assert all(hidden_object_id not in item for item in listed)
 
 
+async def test_a_not_found_hint_omits_an_id_that_runs_a_hidden_script(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    core_client: HomeAssistantClient,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """``script.key_a`` is a visible script's entity_id and also runs the hidden
+    script stored as ``key_a``: listing it would refuse the whole not-found."""
+    hidden: _Row = ("script.first", "key_a", "script")
+    _register_rows(
+        hass,
+        entity_registry,
+        hidden,
+        ("script.key_a", "key_b", "script"),
+        ("script.wake_up", "wake_up", "script"),
+    )
+    enforce_hiding(set_config, hidden[0])
+    mw = _ChainedEnforcement(lambda: core_client)
+
+    async def _run_tool(_context: Any) -> Any:
+        return await ConfigScriptTools(core_client).ha_config_get_script(
+            script_id="no_such"
+        )
+
+    with pytest.raises(ToolError) as exc:
+        await mw.on_call_tool(make_context("ha_config_get_script", {}), _run_tool)
+
+    body = error_body(exc)
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert body["available_script_ids"] == ["script.wake_up"]
+
+
 def _takes_bare_identifier(tool_name: str, param_name: str) -> bool:
     if param_name in ("script_id", "scene_id", "automation_id"):
         return True

@@ -347,7 +347,7 @@ Skills can still be installed manually for clients that prefer local skill files
 
 ## 🔍 Tool Discovery for AI Agents
 
-By default, the full tool catalog (~86 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (claude.ai, Claude Desktop, Claude Code) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
+By default, the full tool catalog (~87 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (claude.ai, Claude Desktop, Claude Code) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
 
 For setups *without* deferred tool support — models like Claude Haiku, Gemini, OpenAI-compatible local models and smaller open-weights models, or clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI) — listing the full tool catalog up front adds a lot of idle context and can overwhelm smaller models. To address that, the server ships with a **search-based discovery mode** built on top of FastMCP's BM25 search transform.
 
@@ -382,7 +382,7 @@ A `ha_manage_*` tool combines several operations, so it is reachable from more t
 ### When to enable
 
 - **Claude Haiku, OpenAI-compatible local models, Gemini, or any model without native deferred tool support** — large idle-context savings. The same applies to clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI, even when running Claude Sonnet/Opus).
-- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 86.
+- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 87.
 - **Cost-sensitive deployments** — fewer idle tokens per turn.
 
 Leave it off in clients with deferred tool loading (claude.ai, Claude Desktop, Claude Code); the full catalog has no idle cost there, direct calls skip the search step, and the client's built-in tool search is the better choice — there is no benefit to running ha-mcp's on top of it. Whether tools are deferred depends on the client and model combination: the same model can behave differently per client — GitHub Copilot CLI running Claude Sonnet/Opus inlines the full catalog and still benefits from tool search here. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.

@@ -117,6 +117,7 @@ from .backup_registry_items import fetch_label as _fetch_label
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
+from .backup_scenes import fetch_scene, restore_scene, scene_key
 from .backup_snapshot_identity import (
     entity_id_aliases as _entity_id_aliases,
 )
@@ -1676,6 +1677,8 @@ class BackupManager:
             return await current_entity_id(self._client, target, data["config"])
         if domain == "todo_item":
             return todo_current_key(target, data["config"])
+        if domain == "scene":
+            return scene_key(data["config"]) or target
         return target
 
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
@@ -2069,12 +2072,13 @@ async def _ws_send(client: Any, message: Mapping[str, Any]) -> Any:
     return envelope
 
 
-# Automation / Script / Scene — reuse the typed client helpers, which
-# handle id-resolution (entity_id ↔ unique_id) and unwrap response envelopes
+# Automation / Script — reuse the typed client helpers, which handle
+# id-resolution (entity_id ↔ unique_id) and unwrap response envelopes
 # identically to how ``ha_config_set_<domain>`` itself fetches state for
 # the existing optimistic-locking flow. Going through these helpers
 # guarantees the snapshot's ``config`` shape matches what the restorer
-# will re-POST.
+# will re-POST. A bare script id skips them and is read as a storage key only,
+# as the scene fetch in backup_scenes does.
 
 
 async def _fetch_automation(client: Any, entity_id: str) -> Any:
@@ -2092,7 +2096,10 @@ async def _restore_automation(client: Any, entity_id: str, config: Any) -> Any:
 
 
 async def _fetch_script(client: Any, entity_id: str) -> Any:
+    # A bare id is a storage key: its snapshot holds only the script stored there.
     try:
+        if not entity_id.startswith("script."):
+            return await client._request("GET", f"config/script/config/{entity_id}")
         result = await client.get_script_config(entity_id)
     except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
@@ -2104,21 +2111,10 @@ async def _fetch_script(client: Any, entity_id: str) -> Any:
 
 
 async def _restore_script(client: Any, entity_id: str, config: Any) -> Any:
-    return await client.upsert_script_config(config, entity_id)
-
-
-async def _fetch_scene(client: Any, entity_id: str) -> Any:
-    try:
-        result = await client.get_scene_config(entity_id)
-    except HomeAssistantError as err:
-        if getattr(err, "status_code", None) == 404:
-            return None
-        raise
-    return result.get("config", result) if isinstance(result, dict) else result
-
-
-async def _restore_scene(client: Any, entity_id: str, config: Any) -> Any:
-    return await client.upsert_scene_config(config, entity_id)
+    # Resolving a removed bare key could reach the script whose entity is
+    # script.<id> and overwrite it.
+    key = None if entity_id.startswith("script.") else entity_id
+    return await client.upsert_script_config(config, entity_id, resolved_id=key)
 
 
 def _require_list(value: Any, endpoint: str) -> list[Any]:
@@ -3340,7 +3336,7 @@ _KNOWN_HELPER_TYPES = sorted(_HELPER_LIST_TYPES)
 def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("automation", _fetch_automation, _restore_automation))
     mgr.register(DomainHandler("script", _fetch_script, _restore_script))
-    mgr.register(DomainHandler("scene", _fetch_scene, _restore_scene))
+    mgr.register(DomainHandler("scene", fetch_scene, restore_scene))
     mgr.register(DomainHandler("dashboard", fetch_dashboard, restore_dashboard))
     mgr.register(
         DomainHandler(

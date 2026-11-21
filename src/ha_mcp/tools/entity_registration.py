@@ -1,4 +1,4 @@
-"""Resolve storage keys after writes while Home Assistant registers entities."""
+"""Resolve scene and script storage keys to their registry entity IDs."""
 
 import asyncio
 import logging
@@ -36,10 +36,54 @@ def _matching_entity_id(
     return None
 
 
-async def _lookup_entity_id(
+LOOKUP_ERRORS = (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
+
+
+async def script_entity_id(
+    client: Any, script_id: str, storage_key: str | None = None
+) -> str | None:
+    """The entity of the script ``script_id`` names, matched by its storage
+    key: a renamed script's entity is not ``script.<key>``, and an
+    unregistered ``script.<x>`` names the script stored under ``<x>``.
+    None: the registry has no entity for the key. A failed registry read
+    raises."""
+    bare_id = script_id.removeprefix("script.")
+    storage_key = storage_key or await client._resolve_script_id(script_id)
+    if storage_key != bare_id:
+        # Only the registry entry of script.<bare_id> resolves to another
+        # key (HomeAssistantClient._resolve_script_id).
+        return f"script.{bare_id}"
+    # No guess: script.<key> can be another script's entity, and Core
+    # registers every loaded script under its key.
+    return await lookup_entity_id(client, storage_key, "script")
+
+
+async def script_entity_or_warning(
+    client: Any,
+    script_id: str,
+    storage_key: str | None,
+    warnings: list[str],
+    failure: str,
+) -> str | None:
+    """:func:`script_entity_id`, with a failed lookup added to ``warnings``
+    as ``"<failure> for <script_id>: <error>"`` and None returned."""
+    try:
+        return await script_entity_id(client, script_id, storage_key)
+    except LOOKUP_ERRORS as e:
+        warnings.append(f"{failure} for {script_id}: {e}")
+        return None
+
+
+async def lookup_entity_id(
     client: Any, storage_key: str, domain: Literal["scene", "script"]
 ) -> str | None:
-    """Read once; an unavailable component falls back to the legacy registry."""
+    """One lookup without retry; an unavailable component falls back to the
+    legacy registry reads. None: the registry has no entry for the key. A
+    failed registry read raises; no id is constructed."""
     matches = await fetch_entity_lookup_via_component(
         client, storage_key, domain=domain
     )
@@ -82,15 +126,15 @@ async def resolve_entity_id_after_write(
     An empty registry read can precede asynchronous registration even inside
     the component. Retry against one deadline, checking component availability
     on every attempt. A positive budget includes in-flight lookups and sleeps;
-    zero requests one lookup without a time limit, for test fixtures and for
-    callers that need an existing entity without waiting (a standalone script
-    run). Known API failures retain the best-effort fallback. Errors escaping
-    the component adapter propagate unless listed below; cancellation always
+    zero requests one lookup without a time limit, for test fixtures. Known
+    API failures retain the best-effort fallback. Errors escaping the component
+    adapter propagate unless listed below; cancellation always
     propagates.
     ``fallback_entity_id`` overrides the constructed ID on failure; registry
     matching always uses the storage key.
 
-    Config reads and removals must use their existing resolution paths. Bulk
+    Config reads, removals and runs do not use this helper: it turns a failed
+    read into the fallback id. Bulk
     writes with neither a state wait nor a category update should skip this
     helper entirely. The optional budget and interval support deterministic
     tests without extending production waits.
@@ -102,7 +146,7 @@ async def resolve_entity_id_after_write(
     try:
         async with asyncio.timeout(budget if budget > 0 else None):
             while True:
-                entity_id = await _lookup_entity_id(client, storage_key, domain)
+                entity_id = await lookup_entity_id(client, storage_key, domain)
                 if entity_id is not None:
                     return entity_id
                 remaining = deadline - time.monotonic()
@@ -118,7 +162,7 @@ async def resolve_entity_id_after_write(
         HomeAssistantConnectionError,
     ) as exc:
         logger.warning(
-            "Post-write registry resolve failed for %s.%s (%s: %s); using %s",
+            "Registry resolve failed for %s.%s (%s: %s); using %s",
             domain,
             storage_key,
             type(exc).__name__,

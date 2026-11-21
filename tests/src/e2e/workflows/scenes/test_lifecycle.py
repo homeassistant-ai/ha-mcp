@@ -19,25 +19,15 @@ import asyncio
 import logging
 import time
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def _extract_scene_config(get_data: dict[str, Any]) -> dict[str, Any]:
-    """Pull the inner scene body out of the get response.
-
-    The get response wraps the scene config as ``{"config": {"config": <body>}}``
-    (REST-wrapper inside the tool wrapper). Mirror the script extractor.
-    """
-    config_wrapper = get_data.get("config", {})
-    if isinstance(config_wrapper, dict) and "config" in config_wrapper:
-        return config_wrapper.get("config", {})
-    return config_wrapper
 
 
 async def _wait_for_scene_registered(
@@ -59,7 +49,7 @@ async def _wait_for_scene_registered(
             )
             if state_data.get("success"):
                 return True
-        except Exception as e:  # noqa: BLE001
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"Scene registration check failed: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -68,21 +58,40 @@ async def _wait_for_scene_registered(
     return False
 
 
+def _error_code(data: dict[str, Any]) -> str | None:
+    error = data.get("error")
+    return error.get("code") if isinstance(error, dict) else None
+
+
 async def _wait_for_scene_removed(
-    mcp_client, scene_id: str, timeout: int = 15, poll_interval: float = 1.0
+    mcp_client,
+    scene_id: str,
+    entity_id: str,
+    timeout: int = 15,
+    poll_interval: float = 1.0,
 ) -> bool:
-    """Poll until the scene is no longer queryable."""
+    """Poll until ``entity_id``'s state read and then the config read both
+    answer ``ENTITY_NOT_FOUND``; any other config answer is read again.
+
+    Polling the config read alone is not enough: it answers ``CONFIG_NOT_FOUND``
+    while the entity still lives. Any other failed read, an auth error say, does
+    not count as removed. The caller reads the entity before the delete, so a
+    wrong ``entity_id`` cannot pass as removed.
+    """
     start_time = time.monotonic()
     while time.monotonic() - start_time < timeout:
         try:
-            get_data = await safe_call_tool(
-                mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
+            state_data = await safe_call_tool(
+                mcp_client, "ha_get_state", {"entity_id": entity_id}
             )
-            # Either success=False OR an empty/missing config means it's gone.
-            if not get_data.get("success") or not get_data.get("config"):
-                return True
-        except Exception:  # noqa: BLE001
-            return True
+            if _error_code(state_data) == "ENTITY_NOT_FOUND":
+                get_data = await safe_call_tool(
+                    mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
+                )
+                if _error_code(get_data) == "ENTITY_NOT_FOUND":
+                    return True
+        except _POLLING_TRANSIENT_ERRORS as e:
+            logger.debug(f"Scene removal check failed: {e}")
         await asyncio.sleep(poll_interval)
     return False
 
@@ -129,7 +138,7 @@ class TestSceneLifecycle:
             mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
         )
         assert get_data_1.get("success") is True
-        body_1 = _extract_scene_config(get_data_1)
+        body_1 = get_data_1["config"]
         assert "entities" in body_1
         assert "light.bed_light" in body_1["entities"]
         hash_1 = get_data_1.get("config_hash")
@@ -165,17 +174,18 @@ class TestSceneLifecycle:
         get_data_3 = await safe_call_tool(
             mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
         )
-        body_3 = _extract_scene_config(get_data_3)
+        body_3 = get_data_3["config"]
         assert "light.kitchen_lights" in body_3.get("entities", {})
 
         # 4. Delete
-        delete_data = await safe_call_tool(
-            mcp_client, "ha_config_remove_scene", {"scene_id": scene_id, "wait": True}
+        await MCPAssertions(mcp_client).call_tool_success(
+            "ha_get_state", {"entity_id": "scene.e2e_basic"}
         )
-        # 405 on add-on / YAML-mode is an acceptable outcome — tested separately.
-        if delete_data.get("success"):
-            removed = await _wait_for_scene_removed(mcp_client, scene_id)
-            assert removed, f"Scene {scene_id} still queryable after delete"
+        await MCPAssertions(mcp_client).call_tool_success(
+            "ha_config_remove_scene", {"scene_id": scene_id, "wait": True}
+        )
+        removed = await _wait_for_scene_removed(mcp_client, scene_id, "scene.e2e_basic")
+        assert removed, f"Scene {scene_id} still queryable after delete"
 
     async def test_scene_python_transform_surgical_edit(
         self, mcp_client, cleanup_tracker
@@ -226,7 +236,7 @@ class TestSceneLifecycle:
         verify_data = await safe_call_tool(
             mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
         )
-        body = _extract_scene_config(verify_data)
+        body = verify_data["config"]
         assert (
             body.get("entities", {}).get("light.bed_light", {}).get("brightness") == 220
         )
@@ -277,29 +287,64 @@ class TestSceneLifecycle:
             mcp_client, "ha_config_remove_scene", {"scene_id": scene_id, "wait": False}
         )
 
-    async def test_set_scene_rejects_list_shaped_entities(
+    async def test_remove_names_the_automation_using_the_scene(
         self, mcp_client, cleanup_tracker
     ):
-        """Common LLM-misroute: list-shaped entities (the automation/script confusion) is rejected upfront."""
-        scene_id = "test_wrong_shape_e2e_scene"
+        """Core's related search finds the automation that turns the scene on;
+        the scene is removed anyway, with a warning naming it. The unit tests
+        set ``search`` up themselves; this one proves a real install has it."""
+        scene_id = f"related_e2e_{uuid4().hex[:8]}"
+        automation = f"uses_{scene_id}"
         cleanup_tracker.track("scene", f"scene.{scene_id}")
-
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_config_set_scene",
-            {
-                "scene_id": scene_id,
-                "config": {
-                    "name": "Wrong shape",
-                    # Looks like an automation action list — must be rejected.
-                    "entities": [{"entity_id": "light.bed_light", "state": "on"}],
+        cleanup_tracker.track("automation", automation)
+        mcp = MCPAssertions(mcp_client)
+        try:
+            await mcp.call_tool_success(
+                "ha_config_set_scene",
+                {
+                    "scene_id": scene_id,
+                    # The scene's entity_id comes from its name.
+                    "config": {**_make_test_scene_config("Related"), "name": scene_id},
                 },
-            },
-        )
-        assert data.get("success") is False
-        err = data.get("error") or {}
-        msg = (err.get("message") or "").lower()
-        assert "dict" in msg and "entities" in msg
+            )
+            created = await mcp.call_tool_success(
+                "ha_config_set_automation",
+                {
+                    "entity_id": automation,
+                    "config": {
+                        "alias": automation,
+                        "triggers": [{"trigger": "event", "event_type": automation}],
+                        "actions": [
+                            {
+                                "action": "scene.turn_on",
+                                "target": {"entity_id": f"scene.{scene_id}"},
+                            }
+                        ],
+                    },
+                },
+            )
+            await mcp.call_tool_success(
+                "ha_get_state", {"entity_id": f"scene.{scene_id}"}
+            )
+            removed = await mcp.call_tool_success(
+                "ha_config_remove_scene", {"scene_id": scene_id}
+            )
+            # Checked before the cleanup below could remove it a second time.
+            automation_id = created["automation_id"]
+            assert removed["referenced_by"] == {"automation": [automation_id]}
+            assert any(automation_id in w for w in removed["warnings"])
+            assert await _wait_for_scene_removed(
+                mcp_client, scene_id, f"scene.{scene_id}"
+            )
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_automation",
+                {"entity_id": f"automation.{automation}"},
+            )
+            await safe_call_tool(
+                mcp_client, "ha_config_remove_scene", {"scene_id": scene_id}
+            )
 
     async def test_scene_rename_decouples_entity_id_from_storage_key(
         self, mcp_client, cleanup_tracker
@@ -480,3 +525,64 @@ class TestSceneLifecycle:
             "ha_config_remove_scene",
             {"scene_id": scene_id, "wait": False},
         )
+
+    async def test_a_captured_entity_is_saved_with_its_state(
+        self, mcp_client, cleanup_tracker
+    ):
+        """capture_entities through the MCP schema stores the light's live state.
+        How a capture merges into the config is pinned in the unit tests."""
+        scene_id = f"capture_entity_{uuid4().hex[:8]}"
+        cleanup_tracker.track("scene", f"scene.{scene_id}")
+        mcp = MCPAssertions(mcp_client)
+        try:
+            await mcp.call_tool_success(
+                "ha_config_set_scene",
+                {
+                    "scene_id": scene_id,
+                    "config": {"name": scene_id},
+                    "capture_entities": ["light.bed_light"],
+                },
+            )
+            stored = await mcp.call_tool_success(
+                "ha_config_get_scene", {"scene_id": scene_id}
+            )
+            assert "friendly_name" in stored["config"]["entities"]["light.bed_light"]
+        finally:
+            await safe_call_tool(
+                mcp_client, "ha_config_remove_scene", {"scene_id": scene_id}
+            )
+
+    @pytest.mark.requires_component_surface
+    async def test_a_captured_device_is_saved_as_the_scene_editor_saves_it(
+        self, mcp_client, cleanup_tracker
+    ):
+        """capture_devices saves the device's light without entity_only, as the
+        editor saves a picked device. The membership rules are pinned in the
+        unit tests; this one sends capture_devices through the MCP schema to
+        the component's device read and its read of the frontend's ignored
+        domains."""
+        scene_id = f"capture_device_{uuid4().hex[:8]}"
+        cleanup_tracker.track("scene", f"scene.{scene_id}")
+        mcp = MCPAssertions(mcp_client)
+        entity = await mcp.call_tool_success(
+            "ha_get_entity", {"entity_id": "light.bed_light"}
+        )
+        device_id = entity["entity_entry"]["device_id"]
+        try:
+            await mcp.call_tool_success(
+                "ha_config_set_scene",
+                {
+                    "scene_id": scene_id,
+                    "config": {"name": scene_id},
+                    "capture_devices": [device_id],
+                },
+            )
+            stored = await mcp.call_tool_success(
+                "ha_config_get_scene", {"scene_id": scene_id}
+            )
+            assert "light.bed_light" in stored["config"]["entities"]
+            assert "light.bed_light" not in stored["config"].get("metadata", {})
+        finally:
+            await safe_call_tool(
+                mcp_client, "ha_config_remove_scene", {"scene_id": scene_id}
+            )

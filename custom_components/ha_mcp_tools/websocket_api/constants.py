@@ -16,6 +16,7 @@ from .. import (
     flow_record,
     helper_collections,
     recorder_status,
+    scene_editor,
     todo_items,
 )
 from ..oauth_redirect_allowlist import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
@@ -239,6 +240,7 @@ CAPABILITIES: list[str] = [
     todo_items.CAPABILITY,
     flow_record.CAPABILITY,
     flow_outline.CAPABILITY,
+    scene_editor.CAPABILITY,
     automation_config.CAPABILITY,
     config_references.CAPABILITY,
     recorder_status.CAPABILITY,

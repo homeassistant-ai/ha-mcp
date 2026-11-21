@@ -142,6 +142,9 @@ the info handshake carries no capability entry:
   state, and whether it records an entity, which Core's API does not serve;
   with ``wait``, held until the recorder has finished its work. See
   ``recorder_status.py``.
+* ``ha_mcp_tools/scene_ignored_domains`` — the domains the scene editor leaves
+  out of a picked device's entities, read from the installed frontend build,
+  the only place the list exists. See ``scene_editor.py``.
 * ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set
@@ -370,6 +373,7 @@ from .. import (
     flow_record,
     helper_collections,
     recorder_status,
+    scene_editor,
     todo_items,
 )
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
@@ -557,6 +561,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *todo_items.command_specs(vol),
         *flow_record.command_specs(vol),
         *flow_outline.command_specs(vol),
+        *scene_editor.command_specs(vol),
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
         *recorder_status.command_specs(vol),

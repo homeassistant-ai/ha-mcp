@@ -166,7 +166,10 @@ class SceneSearchMixin(ConfigFetchMixin):
         scene's ``name``, never re-keying storage). Comparing them directly
         classified every renamed HA scene as integration-managed and skipped
         its fetch, so its config never loaded. ``slug_to_storage_id`` -- built
-        by the registry walk for exactly this mapping -- translates first.
+        by the registry walk for exactly this mapping -- translates first. A
+        slug it does not map belongs to an unregistered scene (``scene.create``,
+        a YAML scene without an id): it has no stored config and is counted as
+        skipped too.
 
         Returns ``(sids_to_fetch, integration_skipped_count)``, in SLUG terms:
         the caller fetches by storage key but keys the result by slug, which
@@ -181,7 +184,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         for _, _, sid, _ in scored:
             if not sid:
                 continue
-            if slug_to_storage_id.get(sid, sid) in homeassistant_scene_uids:
+            if slug_to_storage_id.get(sid) in homeassistant_scene_uids:
                 sids.append(sid)
             else:
                 integration_skipped += 1
@@ -199,9 +202,9 @@ class SceneSearchMixin(ConfigFetchMixin):
           1. ``scene_config["id"]`` -- present whenever the per-id config carried it.
           2. ``slug_to_storage_id`` -- registry-derived; covers integration-
              managed scenes and any scene whose config omitted ``id``.
-          3. ``scene_id`` itself (the entity-id slug) -- final fallback when the
-             registry walk also failed; surfaced via ``logger.warning`` so the
-             silent-slug-mismatch path becomes observable.
+          3. ``scene.<scene_id>``, the entity_id -- final fallback when the
+             registry walk also failed, surfaced via ``logger.warning``; the bare
+             slug could be another scene's storage key.
         """
         config_id = scene_config.get("id") if isinstance(scene_config, dict) else None
         if isinstance(config_id, str):
@@ -209,13 +212,12 @@ class SceneSearchMixin(ConfigFetchMixin):
         if scene_id in slug_to_storage_id:
             return slug_to_storage_id[scene_id]
         logger.warning(
-            "ha_search scene result fell back to entity-id slug for "
+            "ha_search scene result fell back to its entity_id for "
             "scene_id=%r -- neither the per-id config nor the registry walk produced a "
-            "storage key. ``ha_config_get_scene`` will rely on its resolver "
-            "remap to land on the right scene.",
+            "storage key. ``ha_config_get_scene`` resolves it through the registry.",
             scene_id,
         )
-        return scene_id
+        return f"scene.{scene_id}" if scene_id else None
 
     async def _fetch_one_scene_config(
         self,
@@ -233,8 +235,8 @@ class SceneSearchMixin(ConfigFetchMixin):
         ``"yaml_skipped"``, ``"timeout"`` or ``"failed"``.
         """
         # Hand the client the resolution this scan already made instead of the
-        # bare storage key. The client's own resolver treats its input as an
-        # entity-id slug ("scene.<input>" registry/state lookups), so a bare
+        # bare storage key. The client's own resolver looks a bare id up as
+        # "scene.<input>" in the registry and state machine, so a bare
         # storage key that differs from the name-derived slug misses BOTH
         # lookups and every not-a-storage-scene 404 degrades to the bare
         # "vanished" case — round-6 of #2302's no-component lane caught exactly
@@ -242,9 +244,10 @@ class SceneSearchMixin(ConfigFetchMixin):
         # the 404 classification working AND drops the per-scene registry
         # round-trip the internal re-resolve used to pay.
         #
-        # ONLY when the registry walk succeeded, though: on the failed walk the
-        # map is empty, and a synthesized (sid, registry_hit=False) resolution
-        # would suppress the client's own per-scene resolver — which may work
+        # ONLY when the registry walk succeeded, though, where
+        # ``_select_scene_ids_to_fetch`` passed only slugs the map holds. On the
+        # failed walk the map is empty, and a synthesized resolution would
+        # suppress the client's own per-scene resolver — which may work
         # again by fetch time on a transient list failure, and is the only way
         # a UI-renamed storage scene (storage key != slug) can still resolve.
         # Leaving resolution unset there restores the pre-#2302 per-scene
@@ -253,16 +256,18 @@ class SceneSearchMixin(ConfigFetchMixin):
             None
             if registry_failed
             else SceneResolution(
-                storage_key=slug_to_storage_id.get(sid, sid),
-                registry_hit=sid in slug_to_storage_id,
-                platform=None,
+                storage_key=slug_to_storage_id[sid], registry_hit=True, platform=None
             )
         )
         try:
             config_resp = await asyncio.wait_for(
                 # Fetch by STORAGE key (what the endpoint indexes on),
                 # return under the SLUG (what the scoring pass looks up).
-                self.client.get_scene_config(sid, resolution=resolution),
+                # ``sid`` is an entity slug: unresolved, it goes as the entity
+                # id, since a bare id would open a storage key of that name.
+                self.client.get_scene_config(
+                    sid if resolution else f"scene.{sid}", resolution=resolution
+                ),
                 timeout=self.config_timeout,
             )
             return (sid, config_resp.get("config", {}), None)
@@ -288,14 +293,15 @@ class SceneSearchMixin(ConfigFetchMixin):
             return (sid, None, "yaml_skipped")
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                # A bare 404 (not the subclass above) means the entity is in
-                # neither the registry nor the state machine: it vanished
-                # between get_states() and this fetch. That IS a real gap in
-                # this result, so it belongs in the failed bucket with a
-                # representative sample.
+                # A bare 404 (not the subclass above) means the entity
+                # vanished between get_states() and this fetch, or
+                # ``scene.<sid>`` is unregistered while key ``<sid>`` holds a
+                # scene. That IS a gap in this result, so it belongs in the
+                # failed bucket with a representative sample.
                 logger.debug(
                     f"Scene individual config fetch ({sid}) returned 404 "
-                    "— entity no longer exists since enumeration."
+                    "— the entity vanished since enumeration, or its slug is "
+                    "another scene's storage key."
                 )
             else:
                 logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
@@ -561,9 +567,9 @@ class SceneSearchMixin(ConfigFetchMixin):
                 "Entity-registry fetch failed; integration-platform filter "
                 "unavailable, attempted all scenes (false-positive failures "
                 "expected for integration-managed scenes). The registry is "
-                "also where a scene's storage key comes from, so the returned "
-                "`scene_id` values fall back to the entity-id slug and will "
-                "not resolve for a scene that was renamed in the UI."
+                "also where a scene's storage key comes from, so a scene whose "
+                "config could not be read is returned with its entity_id as "
+                "`scene_id`."
             )
         # Use the standardised " ; " separator (matches
         # ``_merge_payload_metadata`` and ``_apply_per_type_partial_flag``).

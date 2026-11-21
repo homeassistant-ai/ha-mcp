@@ -154,7 +154,7 @@ export function pushUiClientSteps(ctx, instructions) {
           </div>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
             <p class="text-amber-300 text-sm font-medium">Using a smaller or local LLM (Ollama, etc.)?</p>
-            <p class="text-amber-200/80 text-xs mt-1">If the model can't see the tools or your Home Assistant, it may be getting handed all 86 tools at once. It's recommended to try the following to see if it helps:</p>
+            <p class="text-amber-200/80 text-xs mt-1">If the model can't see the tools or your Home Assistant, it may be getting handed all 87 tools at once. It's recommended to try the following to see if it helps:</p>
             <ul class="text-amber-200/80 text-xs mt-1 space-y-1 list-disc list-inside">
               <li>Enable tool search (app option <code class="bg-amber-900/30 px-1 rounded">enable_tool_search</code>, or <code class="bg-amber-900/30 px-1 rounded">ENABLE_TOOL_SEARCH=true</code>): the full catalog is deferred behind a search interface so tools load on demand instead of all at once.</li>
               <li>Raise your model's context window above the default (in Ollama, <code class="bg-amber-900/30 px-1 rounded">num_ctx</code>) so the tool definitions and your conversation fit.</li>
