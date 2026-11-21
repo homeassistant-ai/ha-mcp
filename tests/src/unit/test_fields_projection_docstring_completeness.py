@@ -99,7 +99,8 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "docstring": ("tools/tools_history.py", "ha_get_history"),
         "var_harvest": [
             ("tools/tools_history.py", "_fetch_history", "history_data"),
-            ("tools/tools_history.py", "_fetch_statistics", "statistics_data"),
+            ("tools/statistics_reads.py", "fetch_statistics", "statistics_data"),
+            ("tools/statistics_reads.py", "fetch_statistics_totals", "data"),
         ],
         "return_harvest": [],
     },
