@@ -5,9 +5,7 @@ the tool on the server's own client against a real ``hass`` whose ``image``
 integration serves an entity of a test integration, so every reply is Core's.
 """
 
-from contextlib import AbstractContextManager
 from typing import Any
-from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -55,28 +53,18 @@ async def _serve(hass: HomeAssistant, *images: TestImage) -> None:
     await hass.async_block_till_done()
 
 
-def _spy_on_requests(
-    client: HomeAssistantClient,
-) -> AbstractContextManager[MagicMock]:
-    """A spy on the client's streaming request; Core still answers."""
-    return patch.object(client.httpx_client, "stream", wraps=client.httpx_client.stream)
-
-
-@pytest.mark.parametrize("dimension", ["width", "height"])
-async def test_dimensions_rejected_for_image_entities(
-    hass: HomeAssistant, core_client: HomeAssistantClient, dimension: str
+async def test_image_with_requested_dimensions_returns_original(
+    hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    await _serve(hass, TestImage(hass, "qr code", _png(4, 4)))
+    original = _png(4, 4)
+    await _serve(hass, TestImage(hass, "qr code", original))
 
-    with _spy_on_requests(core_client) as stream, pytest.raises(ToolError) as exc_info:
-        await CameraTools(core_client).ha_get_camera_image(
-            entity_id="image.qr_code", **{dimension: 320}
-        )
+    text, image = await CameraTools(core_client).ha_get_camera_image(
+        entity_id="image.qr_code", width=320, height=240
+    )
 
-    error = error_of(exc_info)
-    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert dimension in error["message"]
-    stream.assert_not_called()
+    assert image.data == original
+    assert "4x4" in text
 
 
 @pytest.mark.parametrize("domain", ["camera", "image"])

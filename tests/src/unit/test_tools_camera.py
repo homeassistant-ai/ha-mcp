@@ -140,6 +140,20 @@ async def test_snapshot_comes_back_as_image_with_format_and_retrieval_time(
     )
 
 
+async def test_oversize_camera_snapshot_is_refused(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tools_camera, "MAX_IMAGE_PAYLOAD_BYTES", len(JPEG_MAGIC) - 1)
+    await serve(hass, JPEG_MAGIC)
+
+    with pytest.raises(ToolError) as exc_info:
+        await CameraTools(core_client).ha_get_camera_image(entity_id=ENTITY_ID)
+
+    assert error_of(exc_info)["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
+
+
 async def test_info_text_reports_the_served_image_size(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
