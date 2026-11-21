@@ -29,6 +29,15 @@ COMMANDS = (
     "energy/save_prefs",
     "history/history_during_period",
     "recorder/statistics_during_period",
+    "recorder/statistic_during_period",
+    "recorder/list_statistic_ids",
+    "recorder/validate_statistics",
+    "recorder/update_statistics_issues",
+    "recorder/clear_statistics",
+    "recorder/update_statistics_metadata",
+    "recorder/change_statistics_unit",
+    "recorder/adjust_sum_statistics",
+    "recorder/import_statistics",
 )
 
 
