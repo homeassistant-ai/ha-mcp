@@ -222,6 +222,18 @@ def _theme_write(args: dict[str, Any]) -> str | None:
     return f"action={args.get('action')!r}"
 
 
+def _logs_write(args: dict[str, Any]) -> str | None:
+    # Reads (allowed): Core's statistics listing and its validation issues,
+    # and describe=True, which sends no operation. Strict ``is True`` for the
+    # reason given at dry_run above.
+    if args.get("describe") is True or args.get("action") in (
+        "recorder/list_statistic_ids",
+        "recorder/validate_statistics",
+    ):
+        return None
+    return f"action={args.get('action')!r}"
+
+
 def _radio_write(args: dict[str, Any]) -> str | None:
     action = args.get("action")
     # Reads (allowed): per-node diagnostics, the integration/network summary,
@@ -319,6 +331,14 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
     "ha_manage_security_policy": ReadOnlyExemption(
         _security_policy_write,
         "reading the policy document (action='get')",
+    ),
+    # The recorder's statistics listing and Core's issues with them exist
+    # only here.
+    "ha_manage_logs": ReadOnlyExemption(
+        _logs_write,
+        "listing the recorder's statistics (action='recorder/list_statistic_ids'), "
+        "reading Core's issues with them (action='recorder/validate_statistics') "
+        "and describing any action (describe=true)",
     ),
     # Blueprint listing and reading exist only here — ha_get_blueprint was
     # merged into this tool (issue #2329), so hiding it would remove the read

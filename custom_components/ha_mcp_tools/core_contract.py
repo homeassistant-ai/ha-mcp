@@ -29,6 +29,15 @@ COMMANDS = (
     "energy/save_prefs",
     "history/history_during_period",
     "recorder/statistics_during_period",
+    "recorder/statistic_during_period",
+    "recorder/list_statistic_ids",
+    "recorder/validate_statistics",
+    "recorder/update_statistics_issues",
+    "recorder/clear_statistics",
+    "recorder/update_statistics_metadata",
+    "recorder/change_statistics_unit",
+    "recorder/adjust_sum_statistics",
+    "recorder/import_statistics",
 )
 
 
@@ -49,8 +58,7 @@ def _entry_schema(command: str, entry: Any) -> Any:
 def _schema(hass: HomeAssistant, command: str) -> Any:
     if command not in COMMANDS:
         raise ValueError("Unsupported Core contract")
-    entry = (hass.data.get("websocket_api") or {}).get(command)
-    return entry[1] if entry else None
+    return _entry_schema(command, (hass.data.get("websocket_api") or {}).get(command))
 
 
 def validate_request(
@@ -240,4 +248,7 @@ async def statistics_metadata(
         if converter and converter.UNIT_CLASS in units:
             output = requested if requested in converter.VALID_UNITS else stored
         record["output_unit_of_measurement"] = output
+        # The unit class to ask Core for that unit under, which the metadata's
+        # own unit_class leaves out for some statistics.
+        record["conversion_unit_class"] = converter.UNIT_CLASS if converter else None
     return {"records": records}
