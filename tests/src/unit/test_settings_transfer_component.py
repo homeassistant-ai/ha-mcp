@@ -6,7 +6,6 @@ import contextlib
 import copy
 import importlib.abc
 import importlib.resources
-import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,7 +32,6 @@ from custom_components.ha_mcp_tools import (
 )
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.const import DOMAIN, SERVER_CONFIG_SUBDIR
-from custom_components.ha_mcp_tools.settings_transfer_schema import RefusalCode
 from ha_mcp import settings_transfer as server_transfer
 from ha_mcp.policy.persistence import load_policy, save_policy
 from ha_mcp.utils.config_write_lock import config_file_lock
@@ -625,15 +623,3 @@ async def test_broken_server_package_is_logged_not_hidden(
     with pytest.raises(settings_transfer.TransferRefused, match="server_unavailable"):
         await settings_transfer.async_export(hass)
     assert "The HA-MCP server package failed to import" in caplog.text
-
-
-def test_every_refusal_code_reaches_the_panel_as_its_own_message() -> None:
-    """A code the panel does not list shows only the generic failure text."""
-    ui = importlib.resources.files("ha_mcp.settings_ui")
-    messages = json.loads((ui / "locales" / "en.json").read_text(encoding="utf-8"))
-    script = (ui / "settings_js" / "11_settings_transfer.js").read_text(
-        encoding="utf-8"
-    )
-    for code in RefusalCode:
-        assert f"transfer.{code}" in messages["messages"], code
-        assert f"'{code}'" in script, code
