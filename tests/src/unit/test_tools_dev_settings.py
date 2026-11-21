@@ -34,6 +34,7 @@ from ._tools_dev_core import (
     write_overrides,
 )
 from ._tools_dev_core import dev_tools as dev_tools
+from ._tools_dev_core import served as served
 from ._tools_dev_core import supervisor as supervisor
 
 DEV_TOOLS = {"ha_dev_manage_server", "ha_dev_manage_settings"}
@@ -387,3 +388,74 @@ class TestBackupConfig:
         assert supervisor.saved == [{"enable_auto_backup": False}]
         assert result["data"]["mode"] == "addon"
         assert result["data"]["restart_required"] is True
+
+
+class TestSettingsTransfer:
+    async def test_an_export_restores_the_settings_it_was_taken_from(
+        self, served: DevTools
+    ) -> None:
+        write_overrides({"redact_secrets": True})
+        exported = await served.ha_dev_manage_settings(action="export_settings")
+        settings_file = exported["settings_file"]
+        assert settings_file["contains_credentials"] is False
+        write_overrides({"redact_secrets": False})
+
+        result = await served.ha_dev_manage_settings(
+            action="import_settings", settings_file=settings_file
+        )
+
+        assert result["success"] is True
+        assert stored_overrides() == {"redact_secrets": True}
+
+    async def test_an_unusable_file_is_refused_as_invalid_configuration(
+        self, served: DevTools
+    ) -> None:
+        with pytest.raises(ToolError, match="invalid_backup"):
+            await served.ha_dev_manage_settings(
+                action="import_settings", settings_file={"format": "other"}
+            )
+        with pytest.raises(ToolError, match="needs settings_file"):
+            await served.ha_dev_manage_settings(action="import_settings")
+
+    async def test_an_agent_import_keeps_the_human_only_settings(
+        self, served: DevTools
+    ) -> None:
+        write_overrides({"custom_instructions": "set by a person"})
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["features"] = {
+            "custom_instructions": "from the file",
+            "redact_secrets": True,
+        }
+
+        await served.ha_dev_manage_settings(
+            action="import_settings", settings_file=settings_file
+        )
+
+        assert stored_overrides() == {
+            "custom_instructions": "set by a person",
+            "redact_secrets": True,
+        }
+
+    async def test_an_agent_import_of_a_policy_needs_policy_access(
+        self, served: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["policy"] = {"wait_seconds": 12}
+
+        with pytest.raises(ToolError, match="security-policy access is disabled"):
+            await served.ha_dev_manage_settings(
+                action="import_settings", settings_file=settings_file
+            )
+        monkeypatch.setenv("HAMCP_DEV_SECURITY_POLICY_ACCESS", "true")
+        reset_global_settings()
+        await served.ha_dev_manage_settings(
+            action="import_settings", settings_file=settings_file
+        )
+        exported = await served.ha_dev_manage_settings(action="export_settings")
+        assert (
+            exported["settings_file"]["server_settings"]["policy"]["wait_seconds"] == 12
+        )

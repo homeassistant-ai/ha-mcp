@@ -43,7 +43,9 @@ _RESTART_DOCUMENTS = {"tools", "features"}
 _APP_SECTIONS = ("features", "backup")
 
 
-class _ImportFailed(Exception):
+class TransferFailed(Exception):
+    """A refused or failed transfer, with its panel code and HTTP status."""
+
     def __init__(self, code: str, status: int) -> None:
         super().__init__(code)
         self.code = code
@@ -60,14 +62,14 @@ def _error(code: str, status: int) -> JSONResponse:
 
 async def _read_body(request: Request) -> Any:
     if request.headers.get("content-type", "").split(";")[0] != "application/json":
-        raise _ImportFailed("invalid_request", 415)
+        raise TransferFailed("invalid_request", 415)
     body = await request.body()
     if len(body) > transfer.MAX_BYTES:
-        raise _ImportFailed("too_large", 413)
+        raise TransferFailed("too_large", 413)
     try:
         return json.loads(body)
     except (ValueError, RecursionError) as err:
-        raise _ImportFailed("invalid_backup", 400) from err
+        raise TransferFailed("invalid_backup", 400) from err
 
 
 async def _tools_service(
@@ -95,20 +97,14 @@ async def _read_tools(
     return values
 
 
-async def _export(
-    server: HomeAssistantSmartMCPServer | None, request: Request
-) -> Response:
-    try:
-        if await _read_body(request) != {}:
-            return _error("invalid_request", 400)
-    except _ImportFailed as err:
-        return _error(err.code, err.status)
+async def export_bundle(server: HomeAssistantSmartMCPServer | None) -> dict[str, Any]:
+    """This server's settings file: no connection, which only the HA entry has."""
     try:
         settings = await asyncio.to_thread(
             transfer.export_server_settings, get_data_dir()
         )
-    except transfer.LocalSettingsUnusable:
-        return _error("invalid_server_settings", 400)
+    except transfer.LocalSettingsUnusable as err:
+        raise TransferFailed("invalid_server_settings", 400) from err
     if is_running_in_addon():
         live = await _supervisor._live_addon_options(server)
         for section in _APP_SECTIONS:
@@ -116,13 +112,24 @@ async def _export(
             settings[section] = {**(settings[section] or {}), **app} or None
         settings = transfer.validate_server_settings(settings, strict=False)
     tools = await _read_tools(server)
-    bundle = {
+    return {
         "format": transfer.FORMAT,
         "version": transfer.VERSION,
         "contains_credentials": False,
         "entries": {} if tools is None else {"tools": tools},
         "server_settings": settings,
     }
+
+
+async def _export(
+    server: HomeAssistantSmartMCPServer | None, request: Request
+) -> Response:
+    try:
+        if await _read_body(request) != {}:
+            return _error("invalid_request", 400)
+        bundle = await export_bundle(server)
+    except TransferFailed as err:
+        return _error(err.code, err.status)
     return Response(
         json.dumps(bundle, ensure_ascii=False).encode("utf-8"),
         media_type="application/json",
@@ -141,15 +148,15 @@ async def _restore_files(
             transfer.restore_server_settings, get_data_dir(), settings
         )
     except transfer.DecisionPinRequired as err:
-        raise _ImportFailed("decision_pin_required", 400) from err
+        raise TransferFailed("decision_pin_required", 400) from err
     except transfer.LocalSettingsUnusable as err:
-        raise _ImportFailed("invalid_server_settings", 400) from err
+        raise TransferFailed("invalid_server_settings", 400) from err
     except (OSError, ValueError) as err:
         if transfer.INCOMPLETE_ROLLBACK_NOTE in getattr(err, "__notes__", ()):
-            raise _ImportFailed("rollback_incomplete", 500) from err
+            raise TransferFailed("rollback_incomplete", 500) from err
         if isinstance(err, OSError):
-            raise _ImportFailed("restore_failed", 500) from err
-        raise _ImportFailed("invalid_backup", 400) from err
+            raise TransferFailed("restore_failed", 500) from err
+        raise TransferFailed("invalid_backup", 400) from err
 
 
 async def _write_tools(
@@ -159,7 +166,7 @@ async def _write_tools(
         _, write, key = _TOOLS_SERVICES[name]
         # The component applies what it accepts, so a refusal still wrote.
         if (await _tools_service(server, write, {key: values})).get("rejected"):
-            raise _ImportFailed("invalid_backup", 400)
+            raise TransferFailed("invalid_backup", 400)
 
 
 async def _apply_app_options(
@@ -188,7 +195,7 @@ async def _apply_app_options(
             "Settings import could not update the app options (%s)",
             err.kind if err else "unknown",
         )
-        raise _ImportFailed("restore_failed", 500)
+        raise TransferFailed("restore_failed", 500)
     return True
 
 
@@ -217,17 +224,16 @@ async def _undo(
     return complete
 
 
-async def _import(
-    server: HomeAssistantSmartMCPServer | None, request: Request
-) -> JSONResponse:
+async def import_bundle(
+    server: HomeAssistantSmartMCPServer | None, bundle: Any
+) -> dict[str, Any]:
+    """Apply an export's settings and permissions; roll everything back on failure."""
     try:
-        backup = transfer.read_backup(await _read_body(request))
-    except _ImportFailed as err:
-        return _error(err.code, err.status)
-    except transfer.IncompatibleVersion:
-        return _error("incompatible_version", 400)
-    except ValueError:
-        return _error("invalid_backup", 400)
+        backup = transfer.read_backup(bundle)
+    except transfer.IncompatibleVersion as err:
+        raise TransferFailed("incompatible_version", 400) from err
+    except ValueError as err:
+        raise TransferFailed("invalid_backup", 400) from err
     skipped = ["connection"] if backup.has_connection else []
     async with get_config_write_lock():
         changes = tools = None
@@ -242,27 +248,33 @@ async def _import(
                     await _write_tools(server, backup.tools)
             app_changed = await _apply_app_options(server, backup.server_settings)
         except Exception as err:
-            if isinstance(err, _ImportFailed):
+            if isinstance(err, TransferFailed):
                 logger.info("Settings import refused (%s)", err.code)
                 failure = err
             else:
                 logger.exception("Settings import failed")
-                failure = _ImportFailed("restore_failed", 500)
-            complete = await _undo(server, changes, tools)
-            return _error(
-                failure.code if complete else "rollback_incomplete", failure.status
-            )
+                failure = TransferFailed("restore_failed", 500)
+            if not await _undo(server, changes, tools):
+                failure = TransferFailed("rollback_incomplete", failure.status)
+            raise failure from err
     reset_global_settings()
     changed = {d.key for d in changes.documents} if changes else set()
-    return JSONResponse(
-        {
-            "success": True,
-            "restart_required": app_changed or bool(changed & _RESTART_DOCUMENTS),
-            "restart": "server",
-            "skipped": skipped,
-        },
-        headers={"Cache-Control": "no-store"},
-    )
+    return {
+        "success": True,
+        "restart_required": app_changed or bool(changed & _RESTART_DOCUMENTS),
+        "restart": "server",
+        "skipped": skipped,
+    }
+
+
+async def _import(
+    server: HomeAssistantSmartMCPServer | None, request: Request
+) -> JSONResponse:
+    try:
+        result = await import_bundle(server, await _read_body(request))
+    except TransferFailed as err:
+        return _error(err.code, err.status)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 def build_transfer_handlers(
