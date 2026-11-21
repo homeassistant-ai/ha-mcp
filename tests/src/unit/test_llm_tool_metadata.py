@@ -38,7 +38,7 @@ def _annotated(**hints: bool) -> ServedTool:
 
 
 class TestCoreToolMetadata:
-    """Home Assistant 2026.10 reads tool titles, safety hints and ToolResult."""
+    """Home Assistant reads tool titles, safety hints and ToolResult."""
 
     @pytest.mark.parametrize("sdk", ["v1", "v2"])
     async def test_mirrored_tool_carries_the_servers_metadata(

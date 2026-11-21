@@ -6,7 +6,7 @@ that let the server answer read queries (search, config-get, overview, ...)
 from HA's live registries in a single round-trip, instead of the multi-fetch
 REST/WS pipelines the server uses today.
 
-Because the component ships over HACS on its own release cadence, a given
+Because the component ships through the Marketplace on its own cadence, a given
 install may be at any version — old (no WS surface at all), new (full surface),
 or somewhere in between. This module negotiates that with a single cached
 ``ha_mcp_tools/info`` probe per client:
@@ -606,12 +606,10 @@ def webhook_auth(info: InfoResult | None) -> str | None:
     return auth if isinstance(auth, str) else None
 
 
-COMPONENT_VIA_HACS = (
-    "via HACS (the Marketplace on Home Assistant 2026.11+) and restart Home Assistant."
-)
+COMPONENT_VIA_MARKETPLACE = "via the Marketplace and restart Home Assistant."
 # Said wherever a response is poorer for want of a component command.
 COMPONENT_INSTALL_HINT = (
-    f"Install or update the ha_mcp_tools component {COMPONENT_VIA_HACS}"
+    f"Install or update the ha_mcp_tools component {COMPONENT_VIA_MARKETPLACE}"
 )
 
 
@@ -633,11 +631,11 @@ def component_unusable_warning(caps: ComponentCaps | None, without: str) -> str:
     if caps is None:
         return (
             f"No ha_mcp_tools component answered, so {without}. "
-            f"Install it {COMPONENT_VIA_HACS}"
+            f"Install it {COMPONENT_VIA_MARKETPLACE}"
         )
     return (
         f"The ha_mcp_tools component is too old, so {without}. "
-        f"Update it {COMPONENT_VIA_HACS}"
+        f"Update it {COMPONENT_VIA_MARKETPLACE}"
     )
 
 

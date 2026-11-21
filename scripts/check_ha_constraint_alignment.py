@@ -42,8 +42,8 @@ collision with an image-shipped transitive package empirically.
 
 Scope limit worth knowing: rules 1-2 read ``[project.dependencies]`` only;
 rule 3 covers the transitive packages HA pins exactly, for the image's Core
-only. A transitive package HA pins loosely, and every package at the HACS
-floor, is the no-stomp guard's job, which diffs the real install against the
+only. A transitive package HA pins loosely, and every package at the
+hacs.json minimum, is the no-stomp guard's job, which diffs the real install against the
 real image.
 
 Usage:

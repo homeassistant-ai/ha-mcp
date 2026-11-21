@@ -2,7 +2,7 @@
 
 Devices are Core's own, main and child; the commands run through Core's
 WebSocket API (``component_ws``). A registry Core cannot be made to produce (one
-that fails, holds one id twice or has the 2026.8 shape) has one Core accessor
+that fails or holds one id twice) has one Core accessor
 replaced for the duration of the command. ``test_component_device_seam.py``
 covers the rows the tools read from these commands.
 """
@@ -185,7 +185,7 @@ async def test_main_and_child_devices_list_in_a_stable_order(
     config_entry: MockConfigEntry,
     areas: dict[str, str],
 ) -> None:
-    """Core 2026.9 keeps child devices in a collection of their own."""
+    """Core keeps child devices in a collection of their own."""
     parent = _device(device_registry, config_entry, "parent", area_id=areas["office"])
     ordinary = _device(
         device_registry, config_entry, "ordinary", area_id=areas["garage"]

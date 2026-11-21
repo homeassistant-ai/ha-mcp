@@ -512,7 +512,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     # override is suggested; the normalized "no override" state
                     # renders an EMPTY field — the help text says "Leave empty",
                     # and pre-filling DEFAULT_PIP_SPEC would show the stable dist
-                    # name even when a HACS pre-release pins ha-mcp-dev.
+                    # name even when a pre-release pins ha-mcp-dev.
                     description={
                         "suggested_value": suggested_values.get(OPT_PIP_SPEC, "")
                     },

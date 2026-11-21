@@ -100,7 +100,7 @@ def _do_registry_fields(hass: HomeAssistant, params: dict[str, Any]) -> dict[str
 
     Only declared fields are named (read by attribute); a row key that is a
     property, such as a device's deprecated ``config_entries``, is never
-    named; on Core 2026.10 and later, reading it reports its use.
+    named, since reading it reports its use.
 
     Raises ``HomeAssistantError`` when Core registers no update command for the
     registry, and, with ``item_id``, for a ``category`` without ``scope`` and

@@ -38,7 +38,7 @@ async def warn_if_non_admin_token() -> None:
 
 @asynccontextmanager
 async def server_lifespan(server: Any) -> AsyncIterator[dict[str, Any]]:
-    """Run the HACS nudge, admin-token check and app discovery for the server's lifetime.
+    """Run the Marketplace nudge, admin-token check and app discovery for the server's lifetime.
 
     Attached as the FastMCP ``lifespan`` so it runs on every launcher, including
     the app's ``start.py``, which calls ``mcp.run()`` directly.

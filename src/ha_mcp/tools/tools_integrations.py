@@ -431,17 +431,6 @@ class IntegrationTools:
                 default=None,
             ),
         ] = None,
-        show_advanced_options: Annotated[
-            bool,
-            Field(
-                description=(
-                    "When include_subentry_schema=True, ask older Home Assistant "
-                    "versions to expose advanced flow options. No-op on HA "
-                    "2026.6+; pending removal before HA 2027.6."
-                ),
-                default=False,
-            ),
-        ] = False,
         exact_match: Annotated[
             bool,
             Field(
@@ -627,7 +616,6 @@ class IntegrationTools:
             include_diagnostics_bool = include_diagnostics
             include_subentries_bool = include_subentries
             include_subentry_schema_bool = include_subentry_schema
-            show_advanced_options_bool = show_advanced_options
             exact_match_bool = exact_match
             limit_int = limit
             offset_int = offset
@@ -667,7 +655,6 @@ class IntegrationTools:
                     include_subentry_schema=include_subentry_schema_bool,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
-                    show_advanced_options=show_advanced_options_bool,
                     include_diagnostics=include_diagnostics_bool,
                     include_ws_commands=include_ws_commands,
                     device_id=device_id,
@@ -708,7 +695,6 @@ class IntegrationTools:
                 include_subentry_schema=include_subentry_schema_bool,
                 subentry_type=subentry_type,
                 subentry_id=subentry_id,
-                show_advanced_options=show_advanced_options_bool,
             )
             if ignored_detail_params:
                 result.setdefault("warnings", []).append(
@@ -746,7 +732,6 @@ class IntegrationTools:
         include_subentry_schema: bool,
         subentry_type: str | None,
         subentry_id: str | None,
-        show_advanced_options: bool,
         include_diagnostics: bool,
         include_ws_commands: bool,
         device_id: str | None,
@@ -764,7 +749,6 @@ class IntegrationTools:
             include_subentry_schema=include_subentry_schema,
             subentry_type=subentry_type,
             subentry_id=subentry_id,
-            show_advanced_options=show_advanced_options,
         )
         if include_diagnostics:
             resp["diagnostics"] = await fetch_integration_diagnostics(
@@ -824,7 +808,6 @@ class IntegrationTools:
         include_subentry_schema: bool,
         subentry_type: str | None,
         subentry_id: str | None,
-        show_advanced_options: bool,
     ) -> list[str]:
         """Detail-only subentry params that are ignored in list mode."""
         ignored_detail_params: list[str] = []
@@ -836,8 +819,6 @@ class IntegrationTools:
             ignored_detail_params.append("subentry_type")
         if subentry_id is not None:
             ignored_detail_params.append("subentry_id")
-        if show_advanced_options:
-            ignored_detail_params.append("show_advanced_options")
         return ignored_detail_params
 
     async def _get_single_entry(
@@ -849,7 +830,6 @@ class IntegrationTools:
         include_subentry_schema: bool,
         subentry_type: str | None,
         subentry_id: str | None,
-        show_advanced_options: bool,
     ) -> dict[str, Any]:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
@@ -863,7 +843,6 @@ class IntegrationTools:
                     include_subentry_schema=include_subentry_schema,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
-                    show_advanced_options=show_advanced_options,
                 )
 
             result = await self._client.get_config_entry(entry_id)
@@ -920,7 +899,6 @@ class IntegrationTools:
                     resp,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
-                    show_advanced_options=show_advanced_options,
                 )
 
             return resp
@@ -968,7 +946,6 @@ class IntegrationTools:
         include_subentry_schema: bool,
         subentry_type: str | None,
         subentry_id: str | None,
-        show_advanced_options: bool,
     ) -> dict[str, Any]:
         """Build the single-entry response from a component ``config_entries`` read.
 
@@ -1053,7 +1030,6 @@ class IntegrationTools:
                 resp,
                 subentry_type=subentry_type,
                 subentry_id=subentry_id,
-                show_advanced_options=show_advanced_options,
             )
 
         return resp

@@ -1,4 +1,4 @@
-"""Stamp the HACS component's version and the ha-mcp build it pins.
+"""Stamp the ha_mcp_tools component's version and the ha-mcp build it pins.
 
 semantic-release writes a stable release's version into ``manifest.json``
 (``version`` and the ``ha-mcp==`` requirement) and ``const.py`` in the release

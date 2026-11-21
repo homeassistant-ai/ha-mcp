@@ -4,7 +4,7 @@ Themes are YAML/file-based: Home Assistant itself exposes no API to create or
 edit theme files. This module covers what CAN be managed at runtime - listing
 the installed themes and selecting the backend default themes through Core's
 ``frontend.set_theme``. Theme files are edited with the file and YAML tools and
-installed through HACS.
+installed through the Marketplace.
 """
 
 import logging
@@ -356,8 +356,8 @@ class ThemesTools:
         """Manage Home Assistant frontend themes.
 
         When NOT to use: themes are YAML files - Home Assistant has no API to
-        create or edit them. Installing community themes goes through HACS
-        (the Marketplace on 2026.11+, both via ha_manage_hacs); theme files
+        create or edit them. Installing community themes goes through the
+        Marketplace (ha_manage_hacs); theme files
         are edited with ha_write_file or ha_config_set_yaml (beta), which
         reload themes after the edit. After any other change to theme files,
         ha_reload_core(target='themes') loads them.

@@ -5,10 +5,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Integrations whose update entities are store repositories; Home Assistant
-# 2026.11 moved them from the HACS integration to the built-in Marketplace,
-# whose entities carry no "hacs" in their entity_id.
-_STORE_PLATFORMS = frozenset({"hacs", "marketplace"})
+# The integration whose update entities are store repositories. Its entities
+# are named after the repository alone, so only the platform tells them apart.
+_STORE_PLATFORM = "marketplace"
 
 
 async def update_platforms(client: Any) -> dict[str, str]:
@@ -30,7 +29,7 @@ def categorize_update(
     entity_id: str, attributes: dict[str, Any], platform: str = ""
 ) -> str:
     """Categorize an update entity by its integration, entity_id and attributes."""
-    if platform in _STORE_PLATFORMS:
+    if platform == _STORE_PLATFORM:
         return "hacs"
 
     entity_lower = entity_id.lower()

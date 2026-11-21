@@ -545,7 +545,7 @@ class BugReportTools:
                 "(“HA-MCP Custom Component” on older installs), or install the component first"
             )
         if not bootstrap_registered:
-            return "set up, but the component is pre-0.5.0 (update via HACS or the Marketplace)"
+            return "set up, but the component is pre-0.5.0 (update it)"
         return "set up (ha_mcp_tools services registered)"
 
     async def _detect_server_entry_status(self, info: InfoResult | None) -> str | None:

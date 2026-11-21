@@ -69,7 +69,7 @@ def create_local_calendar(base_url: str) -> str:
     # Start the flow
     init_r = requests.post(
         f"{base_url}/api/config/config_entries/flow",
-        json={"handler": "local_calendar", "show_advanced_options": False},
+        json={"handler": "local_calendar"},
         headers=headers,
         timeout=10,
     )

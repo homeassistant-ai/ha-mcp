@@ -114,15 +114,15 @@ Run it **from your fork only**. The job refuses to run in
      The server reinstalls and comes back within a few minutes;
      `ha_dev_manage_server(action="info")` shows the spec it runs. The run
      starts from a wheel built from your branch's checkout.
-   - Component: add your fork to HACS once with
+   - Component: add your fork to the Marketplace once with
      `ha_manage_hacs(action="add_repository", repository="<you>/ha-mcp",
      category="integration")`, redownload your branch with
      `ha_manage_hacs(action="download", repository_id=<id>, version="<branch>")`,
-     then restart Core with `ha_restart`. Right after a push, HACS can still
+     then restart Core with `ha_restart`. Right after a push, the Marketplace can still
      fetch the previous commit: wait a minute and read a changed `.py` file
      with `ha_read_file` before restarting. The component keeps its pending
-     version number across dev builds, so HACS's `installed_version` (the
-     branch) is what names the build.
+     version number across dev builds, so the Marketplace's installed version
+     (the branch) is what names the build.
    - App: install your branch's build as a second app and update it like
      any app. Stage the checkout as an app repository and push it to a
      branch of your fork:
@@ -154,7 +154,7 @@ Run it **from your fork only**. The job refuses to run in
 
    The instance is a normal HA you can change. On HAOS, change the Core
    version from Settings → System → Updates, or run
-   `ha core update --version 2026.10.0` in the Advanced SSH app's terminal;
+   `ha core update --version 2026.11.0` in the Advanced SSH app's terminal;
    apps, integrations and the component install and uninstall as usual. IPv6
    is under Settings → System → Network; the HAOS VM's LAN address is in
    `fec0::/64`. Docker

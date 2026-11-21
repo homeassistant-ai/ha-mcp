@@ -1,7 +1,7 @@
-"""The server-side HACS auto-refresh nudge, on a real ``hass``.
+"""The server-side Marketplace auto-refresh nudge, on a real ``hass``.
 
-On a startup where the version picture changed, the server asks the store
-(Core's Marketplace on 2026.11+, HACS before it) to re-fetch the ha_mcp_tools
+On a startup where the version picture changed, the server asks Core's
+Marketplace to re-fetch the ha_mcp_tools
 component's repository info, so an external install surfaces the paired
 component update instead of waiting out the store's cache.
 
@@ -39,7 +39,7 @@ from ha_mcp.hacs_auto_refresh import (
     maybe_refresh_hacs_after_update,
 )
 from ha_mcp.server import HomeAssistantSmartMCPServer
-from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
+from ha_mcp.tools.hacs_backend import GITHUB_COMMAND_TIMEOUT
 from ha_mcp.update_check import get_update_info
 from ha_mcp.utils.data_paths import get_data_dir
 
@@ -190,7 +190,7 @@ class TestRefresh:
         assert sorted(refreshed(seen)) == sorted([MIRROR_ID, MAIN_ID])
         assert len(seen[LIST]) == 1
         # The due-pass line is what the HAOS add-on lane greps for.
-        assert "HACS auto-refresh: startup pass due" in caplog.text
+        assert "Marketplace auto-refresh: startup pass due" in caplog.text
         # The one info line is the operator-visible signal for this feature.
         assert MIRROR in caplog.text
         assert MAIN in caplog.text
@@ -327,7 +327,7 @@ class TestWhenDue:
         not_due = [
             record
             for record in caplog.records
-            if "HACS auto-refresh: pass not due" in record.getMessage()
+            if "Marketplace auto-refresh: pass not due" in record.getMessage()
         ]
         assert [record.levelno for record in not_due] == [logging.DEBUG]
 
@@ -369,7 +369,7 @@ class TestWhenDue:
             caplog.clear()
             with caplog.at_level(logging.INFO):
                 await maybe_refresh_hacs_after_update()
-            assert "HACS auto-refresh: startup pass due" in caplog.text
+            assert "Marketplace auto-refresh: startup pass due" in caplog.text
             # Back to the first one, written with a trailing slash: the same target.
             monkeypatch.setenv("HOMEASSISTANT_URL", core_client.base_url + "/")
             reset_global_settings()
@@ -482,16 +482,16 @@ class TestRetries:
 
         with sent_commands(socket) as spy:
             task = asyncio.create_task(maybe_refresh_hacs_after_update())
-            await armed(hass, HACS_REFRESH_TIMEOUT, RETRY, besides)
+            await armed(hass, GITHUB_COMMAND_TIMEOUT, RETRY, besides)
             assert markers() == []
-            await outwait(hass, HACS_REFRESH_TIMEOUT, RETRY, besides)
+            await outwait(hass, GITHUB_COMMAND_TIMEOUT, RETRY, besides)
             await asyncio.gather(task)
-            # The Marketplace first, then HACS, on each attempt.
-            assert command_types(spy) == [LIST, "hacs/repositories/list"] * 2
+            # One list per attempt; nothing else is asked.
+            assert command_types(spy) == [LIST] * 2
             await maybe_refresh_hacs_after_update()
 
         assert len(markers()) == 1
-        assert len(spy.call_args_list) == 4
+        assert len(spy.call_args_list) == 2
 
     async def test_an_unreachable_home_assistant_is_retried_at_the_next_startup(
         self,
@@ -508,8 +508,8 @@ class TestRetries:
         with caplog.at_level(logging.DEBUG):
             await maybe_refresh_hacs_after_update()
 
-        assert "HACS auto-refresh: startup pass due" in caplog.text
-        assert "HACS repository refresh attempt failed" in caplog.text
+        assert "Marketplace auto-refresh: startup pass due" in caplog.text
+        assert "Marketplace repository refresh attempt failed" in caplog.text
         assert markers() == []
 
     async def test_a_socket_closed_mid_send_uses_a_retry(
@@ -527,7 +527,7 @@ class TestRetries:
             AsyncMock(side_effect=websockets.exceptions.WebSocketException("closed")),
         ):
             task = asyncio.create_task(maybe_refresh_hacs_after_update())
-            await outwait(hass, HACS_REFRESH_TIMEOUT, RETRY, besides)
+            await outwait(hass, GITHUB_COMMAND_TIMEOUT, RETRY, besides)
             await asyncio.gather(task)
 
         assert markers() == []
@@ -541,7 +541,7 @@ class TestLifespan:
         monkeypatch.setenv("HOMEASSISTANT_URL", refused_url())
         reset_global_settings()
 
-        with logged("HACS repository refresh attempt failed") as failed:
+        with logged("Marketplace repository refresh attempt failed") as failed:
             async with hacs_refresh_lifespan(None):
                 await failed.wait()
                 [nudge] = [
@@ -566,6 +566,6 @@ class TestLifespan:
         mcp_server = HomeAssistantSmartMCPServer(client=core_client)
         app = mcp_server.mcp.http_app()
 
-        with logged("HACS auto-refresh: off") as ran:
+        with logged("Marketplace auto-refresh: off") as ran:
             async with app.router.lifespan_context(app):
                 await ran.wait()

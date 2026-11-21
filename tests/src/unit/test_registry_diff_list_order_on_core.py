@@ -152,7 +152,7 @@ async def test_a_diff_without_the_component_reports_the_order_and_says_so(
     (warning,) = diff["warnings"]
     assert "connections, identifiers, labels" in warning
     assert "only the ha_mcp_tools component can tell" in warning
-    assert "install or update it via HACS" in warning
+    assert "install or update it via the Marketplace" in warning
 
 
 async def test_a_diff_the_component_names_no_set_for_reports_the_order_only(
@@ -347,7 +347,7 @@ async def test_a_device_diff_without_the_component_reports_modified_at_and_says_
     (warning,) = diff["warnings"]
     assert "reports modified_at as" in warning
     assert "only the ha_mcp_tools component can tell" in warning
-    assert "install or update it via HACS" in warning
+    assert "install or update it via the Marketplace" in warning
 
 
 async def test_a_device_diff_names_a_list_the_snapshot_does_not_hold(

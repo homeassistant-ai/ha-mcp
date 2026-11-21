@@ -1,8 +1,8 @@
 # Custom component development
 
 Read this document before changing `custom_components/ha_mcp_tools/` or a
-server feature that depends on the component. The HACS component and the
-`ha-mcp` server ship through separate installation paths; see
+server feature that depends on the component. The component (installed through
+the Marketplace) and the `ha-mcp` server ship through separate installation paths; see
 [Compatibility](#compatibility) for which version skew matters.
 
 ## Version cycle
@@ -16,7 +16,7 @@ commit (`version_variables` in `pyproject.toml`). The PR **Component Version
 Gate** fails a pull request that moves one of the component's three, and a
 unit test holds the floor to the component's version.
 
-HACS installs the component from this repository; the
+The Marketplace installs the component from this repository; the
 `homeassistant-ai/ha-mcp-integration` mirror stays for installs made from it and
 receives the same releases (#2763). Releases follow from that:
 
@@ -33,10 +33,10 @@ receives the same releases (#2763). Releases follow from that:
   semantic-release would cut) and pins the exact build it uploaded,
   `ha-mcp-dev==<next>.dev<N>` (the version `scripts/dev_version.sh` gave
   that run, handed over as its `dev-version` artifact), and tags it
-  `v<next>-dev.<N>` as a HACS pre-release once PyPI serves that build. As
+  `v<next>-dev.<N>` as a GitHub pre-release once PyPI serves that build. As
   here, the stamp is on a commit only that tag references: the mirror's `main`
   carries master's component unstamped. Both
-  repositories keep their newest five dev pre-releases, because HACS reads a
+  repositories keep their newest five dev pre-releases, because the Marketplace reads a
   repository's 30 newest releases and installs the default branch when none
   of them is stable (#2881).
 
@@ -59,7 +59,8 @@ service or argument added since the last release therefore gates on its own
 signal, as `ha_write_file(edits=...)` does by finding `edit_file` in the
 service registry (`_assert_file_edits_supported`). Only an external server is
 affected; the in-process server runs the build its component release pins.
-This gap is accepted: pre-release users update the component from HACS.
+This gap is accepted: pre-release users update the component from the
+Marketplace.
 
 ## Compatibility
 
@@ -136,7 +137,7 @@ provides advance notice of upcoming Core regressions.
 The minimum-version check does not prove transitive installability or runtime
 behavior there. These checks also do not cover every intervening release,
 every installed third-party integration, or future API compatibility.
-Keep the HACS minimum honest; passing current-Core E2E alone does not justify
+Keep the `hacs.json` minimum honest; passing current-Core E2E alone does not justify
 raising a dependency floor past what older releases need.
 
 The `hacs.json` minimum is the oldest Core that HA-MCP installs and runs on, not

@@ -21,7 +21,6 @@ from ..utils.device_registry_semantics import (
 )
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
-from .component_api import UNKNOWN_COMMAND_CODE
 from .component_devices import (
     fetch_device_list_via_component,
     fetch_device_via_component,
@@ -663,10 +662,7 @@ class RegistryTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                # An unknown id: Core 2026.9+ answers not_found; older Core
-                # answers unknown_error, which newer Core also uses for other
-                # failures.
-                unknown = result.get("error_code") in ("not_found", "unknown_error")
+                unknown = result.get("error_code") == "not_found"
                 raise_core_refusal(
                     "Failed to update device",
                     result,
@@ -995,19 +991,8 @@ class RegistryTools:
             )
             device = await _lookup_device_for_remove(self._client, device_id)
             result = await self._client.send_websocket_message(
-                {"type": "config/device_registry/remove", "device_id": device_id},
-                expected_error_codes=frozenset({UNKNOWN_COMMAND_CODE}),
+                {"type": "config/device_registry/remove", "device_id": device_id}
             )
-            if result.get("error_code") == UNKNOWN_COMMAND_CODE:
-                # Core before 2026.9 has no ``remove``; its predecessor detaches
-                # the device's one config entry, which removes the device.
-                result = await self._client.send_websocket_message(
-                    {
-                        "type": "config/device_registry/remove_config_entry",
-                        "device_id": device_id,
-                        "config_entry_id": device["config_entry_id"],
-                    }
-                )
             if not result.get("success"):
                 raise_core_refusal(
                     "Failed to remove device",

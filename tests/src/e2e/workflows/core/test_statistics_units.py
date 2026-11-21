@@ -109,16 +109,9 @@ async def test_core_display_conversion_labels_the_converted_values(
         assert entity["statistics"][1]["change"] == pytest.approx(
             expected[1] - expected[0]
         )
-        can_recover_reset = unit_class is not None or component_surface_available()
-        if can_recover_reset:
-            assert [r["last_reset"] for r in entity["statistics"]] == [
-                int(reset.timestamp() * 1000)
-            ] * 3
-        else:
-            assert all("last_reset" not in row for row in entity["statistics"])
-            assert any(
-                "last_reset omitted" in warning for warning in result["warnings"]
-            )
+        assert [r["last_reset"] for r in entity["statistics"]] == [
+            int(reset.timestamp() * 1000)
+        ] * 3
         explicit = assert_mcp_success(
             await mcp_client.call_tool(
                 "ha_get_history",
@@ -130,15 +123,9 @@ async def test_core_display_conversion_labels_the_converted_values(
             )
         )
         explicit_entity = explicit.get("data", explicit)["entities"][0]
-        if can_recover_reset:
-            assert [r["last_reset"] for r in explicit_entity["statistics"]] == [
-                int(reset.timestamp() * 1000)
-            ] * 3
-        else:
-            assert all("last_reset" not in row for row in explicit_entity["statistics"])
-            assert any(
-                "last_reset omitted" in warning for warning in explicit["warnings"]
-            )
+        assert [r["last_reset"] for r in explicit_entity["statistics"]] == [
+            int(reset.timestamp() * 1000)
+        ] * 3
         if component_surface_available():
             assert explicit_entity["unit_of_measurement"] == display
             assert explicit_entity["unit_source"] == "core_converter"

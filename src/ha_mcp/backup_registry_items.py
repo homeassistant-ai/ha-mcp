@@ -153,11 +153,11 @@ def _without(row: dict[str, Any], *keys: str) -> dict[str, Any]:
 
 def _get_the_component() -> str:
     # Import cycle, as _rows.
-    from .tools.component_api import COMPONENT_VIA_HACS
+    from .tools.component_api import COMPONENT_VIA_MARKETPLACE
 
     return (
         "If the component is missing or older than this server, install or "
-        f"update it {COMPONENT_VIA_HACS}"
+        f"update it {COMPONENT_VIA_MARKETPLACE}"
     )
 
 

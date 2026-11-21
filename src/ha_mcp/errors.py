@@ -238,10 +238,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Report this issue if it persists",
     ],
     ErrorCode.COMPONENT_NOT_INSTALLED: [
-        (
-            "Install the required custom component via HACS (the Marketplace on "
-            "Home Assistant 2026.11+)"
-        ),
+        "Install the required custom component via the Marketplace",
         "Restart Home Assistant after installation",
     ],
 }

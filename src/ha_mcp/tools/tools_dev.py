@@ -1825,7 +1825,7 @@ class DevTools:
         """Manage the running ha-mcp server itself (developer mode).
 
         When NOT to use: to restart Home Assistant use ha_restart; to
-        update Home Assistant Apps (add-ons) or HACS packages use
+        update Home Assistant Apps (add-ons) or Marketplace repositories use
         ha_manage_app / ha_manage_hacs.
 
         Caveats: update_source changes ONLY the ha_mcp_tools custom

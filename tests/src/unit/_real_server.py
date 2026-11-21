@@ -2,7 +2,7 @@
 
 Construction runs the real ``_initialize_server``, so the middleware chain a
 test reads from ``server.mcp.middleware`` is the one the server registers.
-The FastMCP lifespan (HACS nudge, admin-token check, app discovery) is this
+The FastMCP lifespan (Marketplace nudge, admin-token check, app discovery) is this
 repository's own collaborator and talks to the network, so it is replaced.
 """
 

@@ -472,8 +472,8 @@ async def test_store_repair_waits_when_no_store_is_loaded(
     flows: RepairsFlowManager,
     issue_registry: ir.IssueRegistry,
 ) -> None:
-    """HACS disabled or the Marketplace entry still retrying: the card cannot
-    tell, so it says so instead of claiming the problem is gone."""
+    """The Marketplace entry not loaded (still retrying, or disabled): the card
+    cannot tell, so it says so instead of claiming the problem is gone."""
     result = await _open(flows, hass, ISSUE_STORE_RECORDS_CONFLICT)
 
     assert (result["type"], result["reason"]) == ("abort", "store_unavailable")

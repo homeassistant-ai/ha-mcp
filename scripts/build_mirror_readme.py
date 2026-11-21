@@ -1,7 +1,7 @@
-"""Compose the HACS mirror README from the prefix blurb and the main README.
+"""Compose the distribution mirror README from the prefix blurb and the main README.
 
 The mirror repository (homeassistant-ai/ha-mcp-integration) renders its own
-README on the HACS page. This script keeps the mirror's permanent prefix blurb
+README on its Marketplace page. This script keeps the mirror's permanent prefix blurb
 followed by the main repository README, rewriting repo-relative links and
 images to absolute main-repo URLs so nothing 404s on the mirror page.
 """
