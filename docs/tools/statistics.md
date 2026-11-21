@@ -44,6 +44,13 @@ observed in the returned rows.
 Reset timestamps come from the same query as the values: Core converts the
 numeric values to the requested unit and leaves `last_reset` as stored.
 
+With `summary=True` the tool asks Core's `recorder/statistic_during_period`
+for one total per statistic over the window instead of rows. A statistic that
+returns nothing is named in `warnings`: the recorder has no statistics under
+that ID, or none in the window, with Core's own `recorder/validate_statistics`
+issues for it. `ha_manage_logs` lists the recorder's statistics and runs Core's
+statistics commands on them.
+
 A reported null display unit is a known unitless result, including conversions
 from percent. `core_options` passes additional native recorder options, such as
 `{"units": {"energy": "MWh"}}`. It cannot override the tool's controlled

@@ -5,8 +5,8 @@ This module provides tools for accessing historical data from Home Assistant's
 recorder component via a single consolidated tool:
 
 ha_get_history -- Retrieve historical data with source-selectable mode:
-  - source="history" (default): Raw state changes, ~10 day retention
-  - source="statistics": Pre-aggregated long-term statistics, permanent retention
+  - source="history" (default): recorded state changes
+  - source="statistics": the recorder's aggregated statistics
 """
 
 import logging
@@ -32,12 +32,13 @@ from .helpers import (
     register_tool_methods,
     safe_progress,
 )
+from .history_coverage import history_coverage_warnings
 from .history_response import (
     format_history_response,
     summarize_states,
     summary_warnings,
 )
-from .recorder_errors import raise_recorder_ws_failure as _raise_recorder_ws_failure
+from .recorder_errors import raise_recorder_refusal
 from .response_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
@@ -48,13 +49,7 @@ from .statistics_calendar import (
     _CALENDAR_STATISTICS_PERIODS,
     _statistics_scan_window,
 )
-from .statistics_helpers import (
-    _parse_statistic_types,
-    fetch_statistics_metadata,
-    format_entity_statistics,
-    resolve_requested_units,
-    statistics_warnings,
-)
+from .statistics_reads import fetch_statistics, fetch_statistics_totals
 from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
@@ -186,9 +181,10 @@ class HistoryTools:
             Literal["history", "statistics"],
             Field(
                 description=(
-                    'Data source: "history" for raw state changes at full resolution (~10 '
-                    'day retention), or "statistics" for pre-aggregated long-term data '
-                    "(permanent, requires state_class)."
+                    'Data source: "history" for recorded state changes at full '
+                    'resolution, or "statistics" for the recorder\'s aggregated '
+                    "statistics, where entity_ids are statistic IDs (an entity's ID, "
+                    'or an external statistic\'s "domain:name").'
                 ),
                 default="history",
             ),
@@ -257,7 +253,7 @@ class HistoryTools:
             str | list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description='Native Core statistics types (for example "sum", "change", "last_reset"). Default: Core chooses all. Use include_schema=True to discover the installed contract. Ignored when source="history"',
+                description='Native Core statistics types (for example "sum", "change", "last_reset"). Default: Core chooses all. Core accepts a different set with summary=True; include_schema=True shows the one for the call made. Ignored when source="history"',
                 default=None,
             ),
         ] = None,
@@ -284,7 +280,10 @@ class HistoryTools:
                     "without changes), and per state its periods (separate spells) and "
                     "duration_s (seconds, up to end_time or now, whichever is "
                     "earlier). distinct_states counts every state, listed or not. "
-                    'Ignored when source="statistics".'
+                    'With source="statistics": one max, mean, min and change per '
+                    "statistic over the whole window, computed by Core; "
+                    "statistic_types selects among them, and period and limit "
+                    "are ignored."
                 ),
             ),
         ] = False,
@@ -297,7 +296,10 @@ class HistoryTools:
                     "Return only the specified keys within data to reduce response "
                     "size. None = full response. History keys: success, source, entities, "
                     "period, query_params. Statistics keys: success, source, entities, "
-                    "period_type, time_range, statistic_types, query_params. Warnings and timezone metadata remain outside data and are always retained."
+                    "period_type, time_range, statistic_types, query_params (a "
+                    "statistics summary has no period_type or statistic_types). "
+                    "Warnings and timezone metadata remain outside data and are "
+                    "always retained."
                 ),
             ),
         ] = None,
@@ -321,7 +323,9 @@ class HistoryTools:
         WHEN NOT TO USE:
         For current values, use ha_get_state. To inspect Energy Dashboard
         preferences and configured statistics, use
-        ha_manage_energy_prefs(mode="get", include_statistics=True).
+        ha_manage_energy_prefs(mode="get", include_statistics=True). To list the
+        recorder's statistics, see Core's issues with them, or change recorded
+        data, use ha_manage_logs.
 
         WHEN TO USE:
         Use source="history" (default) to troubleshoot why a value changed, check
@@ -331,6 +335,8 @@ class HistoryTools:
         averages.
 
         CAVEATS:
+        When the recorder holds less than the requested window, the rows it has
+        come back with the reason in warnings.
         History rows rename Core's compact keys once: s -> state, a -> attributes,
         lu -> last_updated, lc -> last_changed. History event times are ISO strings
         in HA's timezone (UTC if unavailable). When Core omits lc, last_changed
@@ -348,7 +354,7 @@ class HistoryTools:
         All data is fetched from HA before slicing; limit/offset are client-side.
         With multiple entity_ids, offset must be 0 — use a single entity_id for
         offset > 0. Use has_more and next_offset from the response to paginate.
-        With source="history", summary=True does not combine with offset > 0.
+        summary=True does not combine with offset > 0.
         Administrators can optionally enable recorder workload guardrails in
         Advanced settings. When enabled, oversized entity/time workloads are
         rejected before the recorder query is issued; narrow the time range or
@@ -375,7 +381,7 @@ class HistoryTools:
             _validate_offset(
                 offset,
                 entity_count=len(entity_id_list),
-                summary=summary and source == "history",
+                summary=summary,
             )
 
             default_hours = _DEFAULT_START_HOURS_BY_SOURCE[source]
@@ -387,11 +393,14 @@ class HistoryTools:
                 self._client, start_dt, end_dt
             )
             query_settings = get_global_settings()
+            # A statistics summary sends one fixed window and no period;
+            # it is budgeted as an hourly scan of that window.
+            guard_period = "hour" if source == "statistics" and summary else period
             statistics_timezone = await _prepare_guardrail_query(
                 self._client,
                 enabled=query_settings.enable_history_query_guardrails,
                 source=source,
-                period=period,
+                period=guard_period,
                 start_dt=start_dt,
                 end_dt=end_dt,
                 end_time_was_provided=end_time is not None,
@@ -403,7 +412,7 @@ class HistoryTools:
                 end_dt=end_dt,
                 minimal_response=minimal_response,
                 significant_changes_only=significant_changes_only,
-                period=period,
+                period=guard_period,
                 enforce_budget=query_settings.enable_history_query_guardrails,
                 statistics_timezone=statistics_timezone,
             )
@@ -430,8 +439,17 @@ class HistoryTools:
             # Route through the shared pooled WebSocket (issue #1813) instead of
             # a dedicated connect/auth handshake per call. Statistics also fetches
             # native recorder metadata through the same pooled client.
-            if source == "statistics":
-                inner = await _fetch_statistics(
+            if source == "statistics" and summary:
+                inner = await fetch_statistics_totals(
+                    self._client,
+                    entity_id_list,
+                    start_dt,
+                    end_dt,
+                    statistic_types,
+                    core_options,
+                )
+            elif source == "statistics":
+                inner = await fetch_statistics(
                     self._client,
                     entity_id_list,
                     start_dt,
@@ -459,11 +477,13 @@ class HistoryTools:
                     summary_until=min(end_dt, now) if summary else None,
                 )
             if include_schema:
-                command = (
-                    "recorder/statistics_during_period"
-                    if source == "statistics"
-                    else "history/history_during_period"
-                )
+                command = "history/history_during_period"
+                if source == "statistics":
+                    command = (
+                        "recorder/statistic_during_period"
+                        if summary
+                        else "recorder/statistics_during_period"
+                    )
                 await include_core_contract(self._client, inner, command)
             await safe_progress(
                 ctx,
@@ -492,19 +512,7 @@ class HistoryTools:
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
-            if source == "statistics":
-                suggestions = [
-                    "Check Home Assistant connection",
-                    "Verify entities have state_class attribute",
-                    "Ensure recorder component is enabled with statistics",
-                ]
-            else:
-                suggestions = [
-                    "Check Home Assistant connection",
-                    "Verify entity IDs are correct",
-                    "Ensure recorder component is enabled",
-                ]
-            exception_to_structured_error(e, suggestions=suggestions)
+            exception_to_structured_error(e)
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL
             )
@@ -900,22 +908,14 @@ async def _fetch_history(
     }
 
     command_params = merge_core_options(command_params, core_options)
+    # The late-rows warning rests on this state; core_options may drop it.
+    command_params.setdefault("include_start_time_state", True)
     response = await client.send_websocket_message(
         {"type": "history/history_during_period", **command_params}
     )
 
     if not response.get("success"):
-        _raise_recorder_ws_failure(
-            "history",
-            response.get("error", "Unknown error"),
-            entity_id_list,
-            error_code=response.get("error_code"),
-            suggestions=[
-                "Verify entity IDs exist using ha_search()",
-                "Check that entities are recorded (not excluded from recorder)",
-                "Ensure time range is within recorder retention period (~10 days)",
-            ],
-        )
+        raise_recorder_refusal("history", response, entity_id_list)
 
     result_data = response.get("result", {})
     if summary_until is not None:
@@ -977,118 +977,17 @@ async def _fetch_history(
             "summary": summary_until is not None,
         },
     }
-    if summary_until is not None:  # add_timezone_metadata drops an empty list
-        history_data["warnings"] = summary_warnings(result_data, summaries, start_ts)
+    # add_timezone_metadata drops an empty list
+    history_data["warnings"] = summary_warnings(
+        summaries
+    ) + await history_coverage_warnings(
+        client,
+        {
+            entity_id: rows[0]["lu"] if (rows := result_data.get(entity_id)) else None
+            for entity_id in entity_id_list
+        },
+        start_ts,
+        window_start_state=bool(command_params["include_start_time_state"]),
+    )
 
     return history_data
-
-
-async def _fetch_statistics(
-    client: Any,
-    entity_id_list: list[str],
-    start_dt: datetime,
-    end_dt: datetime,
-    period: str,
-    statistic_types: str | list[str] | None,
-    limit: int | None,
-    offset: int | None,
-    core_options: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Execute the recorder/statistics_during_period WebSocket call.
-
-    Returns the unwrapped statistics dict; the caller is responsible for projection
-    and wrapping with ``add_timezone_metadata``.
-    """
-    effective_limit = limit if limit is not None else _DEFAULT_HISTORY_LIMIT
-    effective_offset = offset if offset is not None else 0
-
-    stat_types_list = _parse_statistic_types(statistic_types)
-
-    command_params: dict[str, Any] = {
-        "start_time": start_dt.isoformat(),
-        "end_time": end_dt.isoformat(),
-        "statistic_ids": entity_id_list,
-        "period": period,
-    }
-    command_params = merge_core_options(
-        {**command_params, "types": stat_types_list}, core_options
-    )
-    if stat_types_list is None:
-        command_params.pop("types")
-
-    response = await client.send_websocket_message(
-        {"type": "recorder/statistics_during_period", **command_params}
-    )
-
-    if not response.get("success"):
-        _raise_recorder_ws_failure(
-            "statistics",
-            response.get("error", "Unknown error"),
-            entity_id_list,
-            error_code=response.get("error_code"),
-            suggestions=[
-                "Verify entities have state_class attribute (measurement, total, total_increasing)",
-                "Use ha_search() to check entity attributes",
-                "Statistics are only available for entities that track numeric values",
-            ],
-        )
-
-    result_data = response.get("result", {})
-    metadata, metadata_failure = await fetch_statistics_metadata(client, entity_id_list)
-    entities_statistics = format_entity_statistics(
-        result_data,
-        entity_id_list,
-        period,
-        effective_offset,
-        effective_limit,
-        metadata,
-        metadata_failure,
-    )
-    await resolve_requested_units(
-        client, entities_statistics, command_params.get("units", {})
-    )
-    all_stat_types = (
-        stat_types_list
-        if stat_types_list is not None
-        else sorted(
-            {
-                key
-                for rows in result_data.values()
-                for row in rows
-                for key in row
-                if key not in {"start", "end"}
-            }
-        )
-    )
-
-    empty_entities: list[str] = [
-        str(e["entity_id"]) for e in entities_statistics if e["count"] == 0
-    ]
-
-    statistics_data: dict[str, Any] = {
-        "success": True,
-        "source": "statistics",
-        "entities": entities_statistics,
-        "period_type": period,
-        "time_range": {
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
-        },
-        "statistic_types": all_stat_types,
-        "query_params": {
-            "statistic_types": stat_types_list,
-            "limit": effective_limit,
-            "offset": effective_offset,
-        },
-    }
-
-    warnings = statistics_warnings(entities_statistics)
-    if empty_entities:
-        warnings += [
-            f"No statistics found for: {', '.join(empty_entities)}. "
-            "These entities may not have state_class attribute or may not have recorded data yet."
-        ]
-
-    if warnings:
-        statistics_data["warnings"] = warnings
-    return statistics_data

@@ -18,7 +18,7 @@ from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools import tools_history
+from ha_mcp.tools import statistics_reads, tools_history
 from ha_mcp.tools.statistics_helpers import fetch_statistics_metadata
 
 STATISTIC_ID = "sensor.energy"
@@ -178,7 +178,7 @@ async def test_missing_metadata_keeps_values_and_explains_unknown_unit(
         await async_wait_recording_done(hass)
         return await fetch_statistics_metadata(client, statistic_ids)
 
-    with patch.object(tools_history, "fetch_statistics_metadata", clear_then_read):
+    with patch.object(statistics_reads, "fetch_statistics_metadata", clear_then_read):
         result = await query(core_client)
     entity = result["entities"][0]
     assert entity["statistics"][0]["sum"] == 2.0
@@ -216,7 +216,9 @@ async def test_metadata_failure_does_not_discard_numeric_results(
             AsyncMock(side_effect=HomeAssistantError("metadata unavailable")),
         )
     else:
-        failing = patch.object(tools_history, "fetch_statistics_metadata", read_offline)
+        failing = patch.object(
+            statistics_reads, "fetch_statistics_metadata", read_offline
+        )
     with failing:
         result = await query(core_client)
     entity = result["entities"][0]
@@ -256,7 +258,7 @@ async def test_import_committing_between_reads_never_yields_rows_without_unit(
         await import_hour(hass, "kWh", 1.0)
         return await fetch_statistics_metadata(client, statistic_ids)
 
-    with patch.object(tools_history, "fetch_statistics_metadata", import_then_read):
+    with patch.object(statistics_reads, "fetch_statistics_metadata", import_then_read):
         result = await query(core_client, statistic_types=None)
 
     entity = result["entities"][0]

@@ -40,6 +40,10 @@ _SEED_CRITICAL = "test/test"
 
 # A repository the catalog does not list, so it can be added as a custom one.
 _CUSTOM_REPOSITORY = "homeassistant-ai/ha-mcp-integration"
+# A theme whose file sits directly under themes/, where Core's Marketplace
+# installs from. One kept in a subfolder resolves to the themes folder itself,
+# which Core refuses to replace (backup_protected).
+_THEME = "home-assistant-community-themes/midnight"
 
 
 def _session_has_github_token() -> bool:
@@ -328,10 +332,9 @@ class TestWrites:
 
     async def test_download_then_remove_roundtrip(self, mcp_client):
         """After the remove the repository no longer reports installed."""
-        found = await search(mcp_client, category="theme", max_results=5)
-        target = next((r for r in found["results"] if not r["installed"]), None)
-        if target is None:
-            pytest.skip("No theme that is not installed")
+        found = await search(mcp_client, category="theme", query=_THEME, max_results=5)
+        target = next(r for r in found["results"] if r["full_name"] == _THEME)
+        assert not target["installed"], target
         repo_id = str(target["id"])
         await accept_warning(mcp_client)
 
