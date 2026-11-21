@@ -1,8 +1,4 @@
 {
-  "011ba78e1028": [
-    "custom_components/ha_mcp_tools/oauth_redirect_allowlist.py::_is_valid_redirect_uri",
-    "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_is_valid_redirect_uri"
-  ],
   "0457553b0835": [
     "custom_components/ha_mcp_tools/oauth_legacy.py::_handle_refresh",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_handle_refresh"
@@ -325,10 +321,6 @@
   "ed5d4e154c39": [
     "custom_components/ha_mcp_tools/oauth_autoapprove.py::_json_error",
     "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_autoapprove.py::_json_error"
-  ],
-  "f001bc10d799": [
-    "custom_components/ha_mcp_tools/oauth_redirect_allowlist.py::_is_loopback_host",
-    "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py::_is_loopback_host"
   ],
   "fbca60b1fbf8": [
     "custom_components/ha_mcp_tools/oauth_ha_auth.py::EnvelopeState",
