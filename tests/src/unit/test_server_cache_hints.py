@@ -3,7 +3,8 @@
 Under MCP 2026-07-28 every ``tools/list`` result carries ``ttlMs`` and
 ``cacheScope``. The SDK default is ``private``, which shared caches such as MCP
 gateways read as a per-user catalog. ha-mcp's catalog depends only on the
-deployment's settings and the endpoint, so it advertises ``public``.
+deployment's settings and the endpoint, so it advertises ``public``; under
+OAuth each caller's own capability probe shapes it, so it stays ``private``.
 """
 
 from __future__ import annotations
@@ -12,9 +13,9 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp.server import HomeAssistantSmartMCPServer
-from ha_mcp.tool_catalog import CATALOG_CACHE_HINT
+from ha_mcp.tool_catalog import CATALOG_CACHE_TTL_S
 
-TTL_MS = CATALOG_CACHE_HINT["cache_ttl"] * 1000
+TTL_MS = CATALOG_CACHE_TTL_S * 1000
 
 
 @pytest.fixture
@@ -54,3 +55,21 @@ async def test_legacy_tools_list_carries_no_cache_fields(
     assert result.tools
     assert "cacheScope" not in dumped
     assert "ttlMs" not in dumped
+
+
+async def test_oauth_proxy_catalog_stays_private(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Per-user credentials shape the catalog (admin-only capability probe), so
+    # a shared cache must not replay one user's tools/list to another.
+    from ha_mcp.__main__ import OAuthProxyClient
+
+    monkeypatch.setenv("HOMEASSISTANT_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("HOMEASSISTANT_TOKEN", "unused")
+    server = HomeAssistantSmartMCPServer(
+        client=OAuthProxyClient("http://127.0.0.1:9")  # type: ignore[arg-type]
+    )
+    async with Client(server.mcp, mode="2026-07-28") as client:
+        result = await client.list_tools_mcp()
+    assert result.cache_scope == "private"
+    assert result.ttl_ms == TTL_MS

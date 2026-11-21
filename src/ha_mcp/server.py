@@ -35,8 +35,8 @@ from .server_tool_text import (
     SKILL_USE_BEFORE_KEYWORDS,
 )
 from .tool_catalog import (
-    CATALOG_CACHE_HINT,
     CATALOG_MODES,
+    catalog_cache_hint,
     default_catalog_mode,
     install_catalog_instructions,
     set_search_available,
@@ -132,7 +132,7 @@ class HomeAssistantSmartMCPServer:
             version=server_version,
             instructions=self._instructions[default_catalog_mode()],
             lifespan=server_lifespan,
-            **CATALOG_CACHE_HINT,
+            **catalog_cache_hint(client),
         )
 
         # Register all tools and expert prompts
