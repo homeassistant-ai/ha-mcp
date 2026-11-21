@@ -9,6 +9,7 @@ from contextlib import AbstractContextManager
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from homeassistant.components.image import ImageEntity
 from homeassistant.core import HomeAssistant
@@ -82,14 +83,19 @@ async def test_dimensions_rejected_for_image_entities(
 async def test_entity_id_stays_in_one_proxy_path_segment(
     core_client: HomeAssistantClient, domain: str
 ) -> None:
-    http = core_client.httpx_client
-    with patch.object(http, "send", wraps=http.send) as send, pytest.raises(ToolError):
+    paths: list[bytes] = []
+
+    async def record_path(request: httpx.Request) -> None:
+        paths.append(request.url.raw_path)
+
+    core_client.httpx_client.event_hooks["request"].append(record_path)
+    with pytest.raises(ToolError):
         await CameraTools(core_client).ha_get_camera_image(
             entity_id=f"{domain}.missing/extra"
         )
 
-    request = send.call_args.args[0]
-    assert request.url.raw_path.endswith(b".missing%2Fextra")
+    assert len(paths) == 1
+    assert paths[0].endswith(b".missing%2Fextra")
 
 
 async def test_declared_oversize_is_refused(

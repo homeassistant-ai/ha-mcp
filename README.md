@@ -213,7 +213,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **🔍 Search** | Fuzzy entity search, deep config search, system overview |
 | **🏠 Control** | Any service, bulk device control, real-time states |
 | **🔧 Manage** | Automations, scripts, helpers, [dashboards](docs/dashboard-edits.md), areas, zones, groups, calendars, blueprints |
-| **📊 Monitor** | History, statistics, camera snapshots, automation traces, ZHA devices |
+| **📊 Monitor** | History, statistics, camera snapshots and image entities, automation traces, ZHA devices |
 | **💾 System** | Backup/restore, updates, apps, device registry |
 | **🔒 Safety** | Read Only Mode toggle, per-tool enable/disable, tool security policies (user approval), automatic edit backups |
 
