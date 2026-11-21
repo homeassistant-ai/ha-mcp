@@ -223,7 +223,7 @@ async def test_traces_report_each_step_of_their_branch(
 # --- ha_get_hacs_info ---------------------------------------------------------
 
 
-async def test_hacs_search_reports_check_fetch_filter_and_match(
+async def test_marketplace_search_reports_status_fetch_filter_and_match(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     aioclient_mock: AiohttpClientMocker,
@@ -251,8 +251,8 @@ async def test_hacs_search_reports_check_fetch_filter_and_match(
     assert_reported(
         log,
         [
-            (0, 3, "checking HACS availability"),
-            (1, 3, "fetching HACS repository list"),
+            (0, 3, "reading the Marketplace status"),
+            (1, 3, "fetching the Marketplace repository list"),
             (2, 3, "filtering"),
             (3, 3, f"matched {matched} repositories"),
         ],

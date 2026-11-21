@@ -4,14 +4,14 @@
 #
 # <next release> is what semantic-release would cut from the commits since the
 # last stable tag, so a dev build sorts between the release it follows and the
-# one it previews, and the HACS pre-release component (which reports the plain
+# one it previews, and the component's pre-release (which reports the plain
 # <next release>) satisfies a MIN_COMPONENT_VERSION floor raised for that
 # release. The commit count makes every surface (PyPI, Docker, the dev app and
-# the HACS pre-release) report the same number for the same commit.
+# the component's pre-release) report the same number for the same commit.
 #
 # A push build counts its own commit. origin/master may already hold a later
 # push, and two builds sharing a number would make PyPI (skip-existing) keep the
-# older build, while the newer build and the HACS pre-release pinning that
+# older build, while the newer build and the component's pre-release pinning that
 # number report it as theirs. A manual dispatch counts origin/master instead, so
 # a dispatch on an older ref never mints a number an earlier build already used.
 #

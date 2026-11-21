@@ -153,12 +153,71 @@ def _with_help(
         _with_help(field.get("fields", []), help_text, f"{field['name']}.")
 
 
+def _translated_selects(
+    schema: Any, prefix: str = ""
+) -> dict[str, tuple[str, list[Any]]]:
+    """Each select whose options Core labels in its ``selector`` strings, by
+    field name (``<section>.<field>`` in a section, as ``_with_help`` keys
+    it): the translation key and the option values."""
+    selects: dict[str, tuple[str, list[Any]]] = {}
+    for field in schema if isinstance(schema, list) else []:
+        if not isinstance(field, dict):
+            continue
+        if isinstance(field.get("schema"), list):
+            selects.update(
+                _translated_selects(field["schema"], f"{field.get('name')}.")
+            )
+            continue
+        selector = field.get("selector")
+        cfg = selector.get("select") if isinstance(selector, dict) else None
+        if isinstance(cfg, dict) and isinstance(cfg.get("translation_key"), str):
+            # The options compact_field keeps; its remainder marker has no label.
+            options = _option_values(
+                cfg.get("options") or [], suggestions=bool(cfg.get("custom_value"))
+            )
+            selects[f"{prefix}{field.get('name')}"] = (cfg["translation_key"], options)
+    return selects
+
+
+def _put_labels(
+    fields: list[dict[str, Any]], labels: dict[str, dict[str, str]], prefix: str = ""
+) -> None:
+    for field in fields:
+        key = f"{prefix}{field['name']}"
+        if key in labels:
+            field["option_labels"] = labels[key]
+        _put_labels(field.get("fields", []), labels, f"{field['name']}.")
+
+
+async def _with_option_labels(
+    client: Any, domain: str, fields: list[dict[str, Any]], schema: Any
+) -> str | None:
+    """The label the HA UI shows for each option of a translated select; a
+    warning when Core's strings could not be read."""
+    selects = _translated_selects(schema)
+    if not selects:
+        return None
+    strings = await fetch_flow_strings(client, domain, "selector")
+    if strings is None:
+        return strings_unread_warning(domain)
+    labels: dict[str, dict[str, str]] = {}
+    for name, (key, options) in selects.items():
+        prefix = f"component.{domain}.selector.{key}.options."
+        found = {
+            o: strings[f"{prefix}{o}"] for o in options if f"{prefix}{o}" in strings
+        }
+        if found:
+            labels[name] = found
+    _put_labels(fields, labels)
+    return None
+
+
 async def describe_form(
     client: Any, domain: str | None, path: str, step: dict[str, Any]
 ) -> dict[str, Any]:
-    """A flow form in brief: ``fields`` with HA's help text for each,
-    ``more_forms``/``note`` unless the form is the flow's last, and
-    ``warnings`` when Core's strings could not be read.
+    """A flow form in brief: ``fields`` with HA's help text for each (and a
+    select's ``option_labels``), ``more_forms``/``note`` unless the form is
+    the flow's last, and ``warnings`` when Core's strings could not be read.
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
     or ``config_subentries.<type>``. Without a ``domain`` there is no help
@@ -174,6 +233,11 @@ async def describe_form(
             described["warnings"] = [strings_unread_warning(domain)]
         else:
             _with_help(fields, field_help(strings, domain, path, step_id))
+        unread = await _with_option_labels(
+            client, domain, fields, step.get("data_schema")
+        )
+        if unread and unread not in described.get("warnings", []):
+            described.setdefault("warnings", []).append(unread)
     declared = None
     outline_lost = False
     if step_id and domain and path in ("config", "options"):

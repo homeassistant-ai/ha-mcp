@@ -6,7 +6,7 @@ from typing import Any
 
 from .component_api import (
     COMPONENT_INSTALL_HINT,
-    COMPONENT_VIA_HACS,
+    COMPONENT_VIA_MARKETPLACE,
     component_supports,
     get_component_caps,
 )
@@ -58,7 +58,7 @@ async def response_call_failed_hint(client: Any, return_response: bool) -> str |
     if component_supports(await get_component_caps(client), "call_service"):
         return (
             f"{RESPONSE_CALL_FAILED_HINT} A current ha_mcp_tools component reports "
-            f"a refused response as such: update an older one {COMPONENT_VIA_HACS}"
+            f"a refused response as such: update an older one {COMPONENT_VIA_MARKETPLACE}"
         )
     return (
         f"{RESPONSE_CALL_FAILED_HINT} The ha_mcp_tools component reports a "

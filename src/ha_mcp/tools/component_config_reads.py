@@ -131,8 +131,7 @@ async def fetch_entity_lookup_via_component(
 
 
 _INSTALL_HINT = (
-    "install the ha_mcp_tools component via HACS (the Marketplace on Home "
-    "Assistant 2026.11+) and restart Home Assistant"
+    "install the ha_mcp_tools component via the Marketplace and restart Home Assistant"
 )
 
 
@@ -197,8 +196,7 @@ async def fetch_config_references_via_component(
         )
     outdated = _unavailable(
         "references were not checked: the installed ha_mcp_tools component "
-        "predates the reference check; update it via HACS (the Marketplace on "
-        "Home Assistant 2026.11+)"
+        "predates the reference check; update it via the Marketplace"
     )
     if not component_supports(caps, CONFIG_REFERENCES):
         return outdated

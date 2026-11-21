@@ -2,16 +2,16 @@
 
 Two store repositories carry this integration: the main repository, listed in
 the default catalog, and the distribution mirror earlier installs came from.
-Both extract to ``custom_components/ha_mcp_tools``. HACS let a download
-of the second one land on top of the first, and the Marketplace in Home
-Assistant 2026.11 then refuses to update either record and refuses to
-uninstall either while any config entry of this domain exists. The store's own
-UI has no way out, so the repair here flips the duplicate record back to "not
-installed" through the store's own manager, the same state the store keeps
-for a repository it never downloaded.
+Both extract to ``custom_components/ha_mcp_tools``. When both records are
+installed, the Marketplace refuses to update either and refuses to uninstall
+either while any config entry of this domain exists. The store's own UI has no
+way out, so the repair here flips the duplicate record back to "not installed"
+through the Marketplace's own manager, the same state it keeps for a
+repository it never downloaded.
 
-The store managers are private to Home Assistant, so every access is guarded:
-a store that is missing or shaped differently leaves no issue and no change.
+The Marketplace manager is private to Home Assistant, so every access is
+guarded: a store that is missing or shaped differently leaves no issue and no
+change.
 """
 
 from __future__ import annotations
@@ -30,24 +30,18 @@ _LOGGER = logging.getLogger(__name__)
 MAIN_REPOSITORY = "homeassistant-ai/ha-mcp"
 MIRROR_REPOSITORY = "homeassistant-ai/ha-mcp-integration"
 OWN_REPOSITORIES = (MAIN_REPOSITORY, MIRROR_REPOSITORY)
+_STORE_DOMAIN = "marketplace"
 
 
 def _store_manager(hass: HomeAssistant) -> Any | None:
-    """Return the loaded Marketplace (2026.11+) or HACS manager, or None."""
-    # The Marketplace (2026.11+) keeps its manager on its single config
-    # entry; HACS kept it in hass.data. Not imported, so hassfest does not ask
-    # for a dependency on a component older Core releases do not have.
-    for entry in hass.config_entries.async_loaded_entries("marketplace"):
+    """Return the loaded Marketplace entry's manager, or None."""
+    # Read off the entry rather than imported, so hassfest asks for no
+    # manifest dependency on the Marketplace.
+    for entry in hass.config_entries.async_loaded_entries(_STORE_DOMAIN):
         manager = getattr(entry, "runtime_data", None)
         if manager is not None:
             return manager
-    hacs = hass.data.get("hacs")
-    # HACS publishes its manager before restoring its records and, when that
-    # restore fails, disables itself and tries again 15 minutes later; until
-    # then its repository list is empty, not clean.
-    if hacs is not None and getattr(getattr(hacs, "system", None), "disabled", False):
-        return None
-    return hacs
+    return None
 
 
 def _installed_own_records(manager: Any) -> list[Any] | None:
@@ -91,9 +85,8 @@ def async_check_store_records(hass: HomeAssistant) -> bool:
         async_clear_store_records_issue(hass)
         return True
     _LOGGER.warning(
-        "%s are all installed in the store and claim custom_components/%s; on "
-        "Home Assistant 2026.11 the Marketplace refuses to update any of them "
-        "until one is forgotten. The repair under Settings > System > Repairs "
+        "%s are all installed in the store and claim custom_components/%s; "
+        "the Marketplace refuses to update any of them until one is forgotten. The repair under Settings > System > Repairs "
         "keeps %s",
         " and ".join(records),
         DOMAIN,
@@ -160,7 +153,6 @@ async def async_resolve_store_records(hass: HomeAssistant) -> str | None:
 
 
 _SCHEDULED_KEY = "store_records_check_scheduled"
-_STORE_DOMAINS = ("marketplace", "hacs")
 
 
 def async_schedule_store_records_check(hass: HomeAssistant) -> None:
@@ -198,17 +190,10 @@ def async_schedule_store_records_check(hass: HomeAssistant) -> None:
             return
         if unsubscribers:
             return
-        entries = [
-            entry
-            for domain in _STORE_DOMAINS
-            for entry in hass.config_entries.async_entries(domain)
-        ]
+        entries = hass.config_entries.async_entries(_STORE_DOMAIN)
         if not entries:
             _done()
             return
-        # HACS whose start failed leaves its entry in setup error and retries
-        # on its own 15 minutes later without changing the entry's state; that
-        # case waits for the next start.
         unsubscribers.extend(entry.async_on_state_change(_check) for entry in entries)
 
     async_at_started(hass, _check)

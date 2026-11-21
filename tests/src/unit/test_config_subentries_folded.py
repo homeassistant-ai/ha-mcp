@@ -12,7 +12,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import probatio
 import pytest
@@ -201,26 +201,18 @@ async def test_a_subentry_schema_read_shows_the_form_and_closes_its_flow(
     hass: HomeAssistant, parent: MockConfigEntry, client: HomeAssistantClient
 ) -> None:
     """The flow is opened only to read its form: none is left open in Home
-    Assistant, and show_advanced_options reaches it (Home Assistant before
-    2026.6 reads it)."""
-    with patch.object(
-        client, "start_config_subentry_flow", wraps=client.start_config_subentry_flow
-    ) as started:
-        result = await _get(
-            client,
-            entry_id=parent.entry_id,
-            include_subentry_schema=True,
-            subentry_type="model",
-            show_advanced_options=True,
-        )
+    Assistant."""
+    result = await _get(
+        client,
+        entry_id=parent.entry_id,
+        include_subentry_schema=True,
+        subentry_type="model",
+    )
 
     schema = result["subentry_schema"]
     assert schema["flow_type"] == "form"
     assert [field["name"] for field in schema["fields"]] == ["name", "max_tokens"]
     assert open_flow_ids(hass) == []
-    started.assert_awaited_once_with(
-        parent.entry_id, "model", subentry_id=None, show_advanced_options=True
-    )
 
 
 async def test_a_subentry_menu_schema_shows_the_menu_and_closes_its_flow(
@@ -302,10 +294,10 @@ async def test_a_user_core_will_not_list_subentries_for_gets_cores_refusal(
 async def test_list_mode_warns_only_about_the_detail_parameters_given(
     parent: MockConfigEntry, client: HomeAssistantClient
 ) -> None:
-    result = await _get(client, include_subentries=True, show_advanced_options=True)
+    result = await _get(client, include_subentries=True, subentry_type="model")
 
     (warning,) = [w for w in result["warnings"] if "include_subentries" in w]
-    assert "show_advanced_options" in warning
+    assert "subentry_type" in warning
     assert "include_diagnostics" not in warning
 
 
@@ -316,25 +308,17 @@ async def test_a_created_subentry_is_named_by_its_id_beside_an_existing_one(
     parent: MockConfigEntry, client: HomeAssistantClient
 ) -> None:
     """Core's create result carries no id: the new one is found among the
-    entry's subentries, not mistaken for the one already there.
-    show_advanced_options reaches the flow (Home Assistant before 2026.6)."""
-    with patch.object(
-        client, "start_config_subentry_flow", wraps=client.start_config_subentry_flow
-    ) as started:
-        created = await _set_subentry(
-            client,
-            parent,
-            "model",
-            config={"name": "Local Model", "max_tokens": 8},
-            show_advanced_options=True,
-        )
+    entry's subentries, not mistaken for the one already there."""
+    created = await _set_subentry(
+        client,
+        parent,
+        "model",
+        config={"name": "Local Model", "max_tokens": 8},
+    )
 
     assert created["operation"] == "created"
     assert created["subentry_id"] != _EXISTING
     assert parent.subentries[created["subentry_id"]].title == "Local Model"
-    started.assert_awaited_once_with(
-        parent.entry_id, "model", subentry_id=None, show_advanced_options=True
-    )
 
 
 async def test_concurrent_creates_each_return_their_own_subentry(

@@ -22,7 +22,7 @@ class WebSocketConnectionState:
             str, set[Callable[[dict[str, Any]], Awaitable[None]]]
         ] = defaultdict(set)
         # Continuous-subscription queues keyed by the subscribe command's
-        # message_id. Long-lived subscriptions (e.g. HACS' ``hacs/subscribe``)
+        # message_id. Long-lived subscriptions (e.g. ``marketplace/subscribe``)
         # deliver many events sharing one id; the one-shot
         # ``_event_responses`` future can't handle that. When a queue is
         # registered for a given id, every event with that id is pushed

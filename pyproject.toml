@@ -63,7 +63,7 @@ dependencies = [
     # Shared with the embedded HA process: admit Core's versions, including
     # compatible updates, instead of requiring it to keep our exact pin.
     # uv.lock selects standalone versions; HA's own constraints select
-    # the embedded versions. Check both the HACS minimum and current Core
+    # the embedded versions. Check both the hacs.json minimum and current Core
     # before raising these floors; standalone lock updates can move independently.
     # A vendored bump can raise them automatically; Fast Checks' Core constraint
     # check then fails one that excludes a version either Core pins exactly.
@@ -467,9 +467,9 @@ dev = [
     "pytest-rerunfailures>=15.0",
     # Real voluptuous-openapi for the embedded e2e LLM-API test: it converts
     # the REAL tool-schema catalog exactly like llm_api.py does at runtime.
-    # HA core shipped it through 2026.8; from 2026.9 the component manifest
-    # is what installs it. aiohttp, voluptuous and probatio (what core 2026.9
-    # converts with) come with homeassistant above.
+    # Core does not ship it; the component manifest is what installs it.
+    # aiohttp, voluptuous and probatio (what Core converts with) come with
+    # homeassistant above.
     "voluptuous-openapi>=0.4.1",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
@@ -538,9 +538,9 @@ hamcp-test-env = { path = "tests/test-env", editable = true }
 # Semantic versioning configuration
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-# The HACS component shares the server's version and pins the server build it
-# ships with, and the server's file and YAML tools need the component of its
-# own release, so each release commit stamps all four below as well as
+# The ha_mcp_tools component shares the server's version and pins the server
+# build it ships with, and the server's file and YAML tools need the component
+# of its own release, so each release commit stamps all four below as well as
 # project.version (#2427).
 version_variables = [
     "custom_components/ha_mcp_tools/manifest.json:version",

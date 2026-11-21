@@ -1,7 +1,8 @@
 """``subscribe_command``: a subscription whose every event lands in one queue.
 
-Used for streams such as ``render_template``, ``backup/subscribe_events`` and
-HACS' ``hacs/subscribe``, where many events share the command's id. The queue
+Used for streams such as ``render_template``, ``backup/subscribe_events``,
+``config_entries/subscribe`` and ``marketplace/subscribe``, where many events
+share the command's id. The queue
 is registered before the command goes out, and a call that fails or is given
 up leaves neither a queue nor a subscription behind.
 """

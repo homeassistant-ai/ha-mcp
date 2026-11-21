@@ -20,7 +20,7 @@ from custom_components.ha_mcp_tools import websocket_api
 from custom_components.ha_mcp_tools.websocket_api import system
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.component_api import (
-    COMPONENT_VIA_HACS,
+    COMPONENT_VIA_MARKETPLACE,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     ENTITY_ENRICH_FULL_NAME,
 )
@@ -108,7 +108,7 @@ async def test_a_component_that_predates_full_name_says_so(
         assert "full_name" not in entry
         assert warnings == [
             "The ha_mcp_tools component predates full_name, so the entries come "
-            "without it. Update it " + COMPONENT_VIA_HACS
+            "without it. Update it " + COMPONENT_VIA_MARKETPLACE
         ]
 
 
@@ -121,7 +121,7 @@ async def test_without_a_component_the_rows_say_to_install_it(
         assert "full_name" not in entry
         assert warnings == [
             f"No ha_mcp_tools component answered, so {_WITHOUT_ENRICHMENT}. "
-            "Install it " + COMPONENT_VIA_HACS
+            "Install it " + COMPONENT_VIA_MARKETPLACE
         ]
 
 
@@ -148,7 +148,7 @@ async def test_a_component_too_old_for_the_enrichment_says_to_update_it(
         assert "area" not in entry
         assert warnings == [
             f"The ha_mcp_tools component is too old, so {_WITHOUT_ENRICHMENT}. "
-            "Update it " + COMPONENT_VIA_HACS
+            "Update it " + COMPONENT_VIA_MARKETPLACE
         ]
 
 
@@ -163,7 +163,7 @@ async def test_an_advertised_enrich_command_core_does_not_know_says_to_update(
     assert "area" not in result["entity_entry"]
     assert result["warnings"] == [
         f"The ha_mcp_tools component is too old, so {_WITHOUT_ENRICHMENT}. "
-        "Update it " + COMPONENT_VIA_HACS
+        "Update it " + COMPONENT_VIA_MARKETPLACE
     ]
 
 
@@ -198,7 +198,7 @@ async def test_an_advertised_exposure_command_core_does_not_know_says_to_update(
     assert "entity_info" not in result
     assert result["warnings"] == [
         f"The ha_mcp_tools component is too old, so {_WITHOUT_ENTITY_INFO}. "
-        "Update it " + COMPONENT_VIA_HACS
+        "Update it " + COMPONENT_VIA_MARKETPLACE
     ]
 
 
@@ -247,7 +247,7 @@ async def test_without_a_component_the_listing_says_to_install_it(
     assert "entity_info" not in result
     assert result["warnings"] == [
         f"No ha_mcp_tools component answered, so {_WITHOUT_ENTITY_INFO}. "
-        "Install it " + COMPONENT_VIA_HACS
+        "Install it " + COMPONENT_VIA_MARKETPLACE
     ]
 
 
@@ -266,7 +266,7 @@ async def test_a_component_too_old_for_the_listing_says_to_update_it(
     assert "entity_info" not in result
     assert result["warnings"] == [
         f"The ha_mcp_tools component is too old, so {_WITHOUT_ENTITY_INFO}. "
-        "Update it " + COMPONENT_VIA_HACS
+        "Update it " + COMPONENT_VIA_MARKETPLACE
     ]
 
 

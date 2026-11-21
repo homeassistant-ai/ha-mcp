@@ -6,8 +6,8 @@ to set a rich release body -- so the body has to travel inside the annotated
 tag message itself. This script produces that message. For a stable release
 the component and the ha-mcp server it installs share one version (#2427), so
 the notes name that server and summarize what changed in the custom component
-(custom_components/ha_mcp_tools/) since the previous stable release, so HACS
-shows real release notes instead of a generic stub. For a development
+(custom_components/ha_mcp_tools/) since the previous stable release, so the
+Marketplace shows real release notes instead of a generic stub. For a development
 pre-release (``--dev-pin``) they list the changes since the previous dev build,
 one line per merged pull request.
 """
@@ -110,7 +110,7 @@ def format_release_notes(
         "",
         "**Upgrading from component 2.x:** The Release channel, Automatic server "
         "updates and server update entity are removed; update the component "
-        "through HACS or manually. In secret-URL "
+        "through the Marketplace or manually. In secret-URL "
         "(`none`) mode, existing OAuth clients may need their callback added "
         "to the allowlist before they can sign in again. "
         f"[Upgrade guide]({_UPGRADE_GUIDE_URL}).",
@@ -153,7 +153,7 @@ def format_dev_release_notes(
         ),
         "",
         (
-            "You receive these builds because the HACS **Pre-release** switch is "
+            "You receive these builds because the Marketplace **Pre-release** switch is "
             "enabled for this repository; turn it off to return to stable releases."
         ),
         "",

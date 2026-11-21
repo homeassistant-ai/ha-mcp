@@ -29,7 +29,7 @@ from ..utils.registry_update_lock import registry_update_locks
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
-    COMPONENT_VIA_HACS,
+    COMPONENT_VIA_MARKETPLACE,
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     ENTITY_ENRICH_FULL_NAME,
     ComponentDiscoveryError,
@@ -1865,7 +1865,7 @@ class EntityTools:
             return None
         return (
             "The ha_mcp_tools component predates full_name, so the entries come "
-            f"without it. Update it {COMPONENT_VIA_HACS}"
+            f"without it. Update it {COMPONENT_VIA_MARKETPLACE}"
         )
 
     async def _bulk_remove_entities(self, entity_ids: list[str]) -> dict[str, Any]:

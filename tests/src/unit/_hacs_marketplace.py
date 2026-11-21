@@ -1,24 +1,23 @@
-"""The stores the HACS tools talk to, on a real ``hass``.
+"""The Marketplace the store tools talk to, on a real ``hass``.
 
-Home Assistant 2026.11 ships the Marketplace: ``set_up_marketplace`` sets up
-Core's own integration from its stored repositories, with GitHub unreachable
-(Core's HTTP session answers every request with a connection error), so every
-``marketplace/*`` reply is Core's. What only GitHub could make happen, an
-install that downloads, is reached by replacing Core's install step and
-raising Core's own exceptions from it.
+``set_up_marketplace`` sets up Core's own integration from its stored
+repositories, with GitHub unreachable (Core's HTTP session answers every
+request with a connection error), so every ``marketplace/*`` reply is Core's.
+A test that needs GitHub to answer, an install that downloads among them,
+serves it first (``_hacs_actions_core``).
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import aiohttp
-from homeassistant.components.marketplace.repositories.base import Repository
+from homeassistant.components.marketplace.enums import MarketplaceSignal
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry, MockModule, mock_integration
@@ -36,6 +35,7 @@ MAIN_ID = "1056618941"
 MIRROR_ID = "1289599380"
 CARD_ID = "441028036"
 REPOSITORIES_KEY = "marketplace.repositories"
+CRITICAL_KEY = "marketplace.critical"
 
 # Core still starts the catalog fetch at startup (it fails offline); a stored
 # fetch time keeps a later catalog answer from taking the stored record over.
@@ -48,12 +48,15 @@ def stored(
     *,
     installed: str | None = None,
     domain: str | None = None,
+    **fields: Any,
 ) -> dict[str, Any]:
-    """A repository as the Marketplace stores it in ``marketplace.repositories``."""
+    """A repository as the Marketplace stores it in ``marketplace.repositories``;
+    ``fields`` are more of its stored keys (``new``, ``stargazers_count``, ...)."""
     record: dict[str, Any] = {
         "full_name": full_name,
         "category": category,
         "last_fetched": _FETCHED,
+        **fields,
     }
     if domain:
         record["domain"] = domain
@@ -95,6 +98,20 @@ def add_marketplace(
     return entry
 
 
+def serve_removed(aioclient_mock: AiohttpClientMocker, rows: list[Any]) -> None:
+    """The catalog's feed of removed repositories answers with ``rows``.
+
+    Call it before the Marketplace is added: ``aioclient_mock`` answers with
+    the first match, and ``add_marketplace`` refuses every other request.
+    """
+    aioclient_mock.get(re.compile(r".*/removed/data\.json$"), json=rows)
+
+
+def store_critical(hass_storage: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    """The critical repositories the Marketplace saved from the catalog."""
+    hass_storage[CRITICAL_KEY] = {"version": 1, "key": CRITICAL_KEY, "data": rows}
+
+
 def store_repositories(
     hass_storage: dict[str, Any], repositories: dict[str, dict[str, Any]]
 ) -> None:
@@ -120,18 +137,24 @@ async def set_up_marketplace(
     return entry
 
 
-@contextmanager
-def core_install(**behaviour: Any) -> Iterator[MagicMock]:
-    """Replace the Marketplace's install step, the one that downloads from GitHub.
-
-    ``behaviour`` is ``side_effect=`` one of Core's exceptions for a refused
-    install; without it the install succeeds. The Core command handler around
-    it, and its reply, are Core's.
-    """
-    with patch.object(
-        Repository, "async_install_repository", autospec=True, **behaviour
-    ) as install:
-        yield install
+@asynccontextmanager
+async def install_progress_events(
+    socket: HomeAssistantWebSocketClient,
+) -> AsyncIterator[list[dict[str, Any]]]:
+    """Every install progress Core dispatched while the block ran, as
+    ``marketplace/subscribe`` streams it."""
+    sub_id, queue = await socket.subscribe_command(
+        "marketplace/subscribe",
+        signal=MarketplaceSignal.REPOSITORY_INSTALL_PROGRESS.value,
+    )
+    events: list[dict[str, Any]] = []
+    try:
+        yield events
+    finally:
+        # Releasing the subscription drops what is still queued.
+        while not queue.empty():
+            events.append(queue.get_nowait()["event"])
+        await socket.release_subscription(sub_id)
 
 
 async def pooled_socket(client: HomeAssistantClient) -> HomeAssistantWebSocketClient:
@@ -143,6 +166,16 @@ async def pooled_socket(client: HomeAssistantClient) -> HomeAssistantWebSocketCl
 
 def command_types(spy: AsyncMock) -> list[str]:
     return [call.args[0] for call in spy.call_args_list]
+
+
+def store_commands(spy: AsyncMock) -> list[str]:
+    """The ``marketplace/*`` commands the spy saw, in order."""
+    return [c for c in command_types(spy) if c.startswith("marketplace/")]
+
+
+def suggestions(body: dict[str, Any]) -> list[str]:
+    """Every suggestion of a rejection body, one or several."""
+    return body["error"].get("suggestions") or [body["error"]["suggestion"]]
 
 
 def sent_with(spy: AsyncMock, command: str) -> list[dict[str, Any]]:

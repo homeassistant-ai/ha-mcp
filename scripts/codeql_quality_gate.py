@@ -28,10 +28,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-# Findings under these path prefixes are dropped before gating. These are
-# vendored / third-party trees we do not own and ruff already excludes them
-# (see ``extend-exclude`` in pyproject.toml). Keep this in sync with that list.
+# Findings under these path prefixes are dropped before gating; ruff excludes
+# them too (see ``extend-exclude`` in pyproject.toml). Keep this in sync with
+# that list.
 PATHS_IGNORE: tuple[str, ...] = (
+    # The Home Assistant configuration E2E sessions boot from, with the
+    # third-party custom components it seeds.
     "tests/initial_test_state/",
     # Vendored websockets (synced by scripts/vendor_websockets.py from the
     # pin in src/ha_mcp/_vendor/requirements.txt) — upstream's code, not

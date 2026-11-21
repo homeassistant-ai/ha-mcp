@@ -1649,17 +1649,12 @@ class HomeAssistantClient:
         subentry_type: str,
         *,
         subentry_id: str | None = None,
-        show_advanced_options: bool | None = None,
     ) -> dict[str, Any]:
         """Start a config subentry create or reconfigure flow."""
-        # HA 2026.6+ treats show_advanced_options as a no-op; keep passing it
-        # for older HA versions until the server-side property is removed.
         # HA requires the handler as [parent_entry_id, subentry_type].
         payload: dict[str, Any] = {"handler": [entry_id, subentry_type]}
         if subentry_id is not None:
             payload["subentry_id"] = subentry_id
-        if show_advanced_options is not None:
-            payload["show_advanced_options"] = show_advanced_options
 
         logger.debug(
             "Starting config subentry flow for entry %s and type %s",
