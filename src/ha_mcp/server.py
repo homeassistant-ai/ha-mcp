@@ -35,6 +35,7 @@ from .server_tool_text import (
     SKILL_USE_BEFORE_KEYWORDS,
 )
 from .tool_catalog import (
+    CATALOG_CACHE_HINT,
     CATALOG_MODES,
     default_catalog_mode,
     install_catalog_instructions,
@@ -97,10 +98,8 @@ class HomeAssistantSmartMCPServer:
         server_version: str = _PACKAGE_VERSION,
     ):
         """Initialize the smart MCP server with lazy loading support."""
-        # Load settings first (fast operation)
         self.settings = get_global_settings()
 
-        # Store provided client or mark for lazy creation
         self._client: HomeAssistantClient | None = client
         self._client_provided = client is not None
 
@@ -133,6 +132,7 @@ class HomeAssistantSmartMCPServer:
             version=server_version,
             instructions=self._instructions[default_catalog_mode()],
             lifespan=server_lifespan,
+            **CATALOG_CACHE_HINT,
         )
 
         # Register all tools and expert prompts
