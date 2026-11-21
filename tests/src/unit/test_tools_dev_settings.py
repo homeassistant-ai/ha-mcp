@@ -6,6 +6,10 @@ add-on, at the Supervisor upstream (``_tools_dev_core.supervisor``).
 """
 
 import asyncio
+import os
+import sys
+import threading
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -99,6 +103,61 @@ class TestSettingsMatrix:
             action="set", setting="log_level", value="ERROR"
         )
         assert stored_overrides() == {"debug": True, "log_level": "ERROR"}
+
+    async def test_cancelled_set_holds_file_lock_until_replace_finishes(
+        self, dev_tools: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        writing = threading.Event()
+        resume = threading.Event()
+        finished = threading.Event()
+
+        target = override_path()
+        replace = os.replace
+
+        def paused_replace(source: str, destination: str) -> None:
+            if Path(destination) != target:
+                replace(source, destination)
+                return
+            try:
+                writing.set()
+                assert resume.wait(10)
+                replace(source, destination)
+            finally:
+                finished.set()
+
+        monkeypatch.setattr(os, "replace", paused_replace)
+        setter = asyncio.create_task(
+            dev_tools.ha_dev_manage_settings(
+                action="set", setting="log_level", value="DEBUG"
+            )
+        )
+        try:
+            assert await asyncio.to_thread(writing.wait, 10)
+            setter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await setter
+
+            # A second writer must still contend on a separately opened lockfile.
+            with (
+                override_path().with_name(".config_write.lock").open("r+b") as lockfile,
+                pytest.raises(OSError),
+            ):
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    msvcrt.locking(lockfile.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lockfile.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            resume.set()
+            assert await asyncio.to_thread(finished.wait, 10)
+
+        await dev_tools.ha_dev_manage_settings(
+            action="set", setting="debug", value=True
+        )
+        assert stored_overrides() == {"log_level": "DEBUG", "debug": True}
 
     async def test_set_refuses_a_setting_pinned_by_its_env_var(
         self, dev_tools: DevTools, monkeypatch: pytest.MonkeyPatch
@@ -203,7 +262,7 @@ class TestSettingsMatrix:
             await dev_tools.ha_dev_manage_settings(action="reset", setting="log_level")
 
     async def test_overlapping_sets_both_land(self, dev_tools: DevTools) -> None:
-        """The shared override-file lock keeps one write from clobbering the other."""
+        """The config write lock keeps one write from clobbering the other."""
         await asyncio.gather(
             dev_tools.ha_dev_manage_settings(
                 action="set", setting="log_level", value="DEBUG"

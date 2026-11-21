@@ -41,8 +41,7 @@ _THEME_PREF_VALUES: dict[str, tuple[str, ...]] = {
 _CUSTOM_COLOR_PARTS = ("bg", "text", "accent")
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-# Same single-loop rationale as ``_OVERRIDE_FILE_LOCK`` in _persistence;
-# separate lock because it serializes a different file (``theme_prefs.json``).
+# Process-wide; the save under it never awaits, so it never binds to a loop.
 _THEME_PREFS_LOCK: asyncio.Lock | None = None
 
 # Keys already warned about by ``_load_theme_prefs`` — it runs on every

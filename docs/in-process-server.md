@@ -236,7 +236,8 @@ loopback URL - the same experience as the app "Open Web UI" button.
 The panel is admin-only. Opening it establishes a short-lived session for
 your Home Assistant login, and every request re-checks that the account is
 still an active administrator. No token or secret ever appears in a URL,
-and the secret path stays on the loopback side of the proxy.
+and the secret path stays on the loopback side of the proxy, except in the
+settings export file an administrator downloads on purpose.
 
 ## Independent from the app
 

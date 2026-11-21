@@ -122,6 +122,17 @@ async def settings_http(
         yield http
 
 
+async def post_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    client: HomeAssistantClient,
+    path: str,
+    body: Any,
+) -> httpx.Response:
+    """POST ``body`` to ``path`` on a real server's settings routes."""
+    async with settings_http(app_server(monkeypatch, client)) as http:
+        return await http.post(path, json=body)
+
+
 @asynccontextmanager
 async def mounted_http(
     mcp: FastMCP, *, peer: str = "127.0.0.1"

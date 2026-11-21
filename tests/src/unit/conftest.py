@@ -149,6 +149,10 @@ def _unit_test_env(monkeypatch):
         clear = getattr(sys.modules.get(module), reset, None)
         if clear is not None:
             clear()
+    # A server whose search transform failed marks search unavailable for the
+    # whole process; the next test on this worker must not inherit that.
+    if (tool_catalog := sys.modules.get("ha_mcp.tool_catalog")) is not None:
+        tool_catalog.set_search_available(True)
 
 
 @pytest.fixture

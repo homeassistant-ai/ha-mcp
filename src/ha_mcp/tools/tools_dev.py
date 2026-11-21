@@ -713,27 +713,17 @@ class DevTools:
 
     @staticmethod
     async def _merge_file_override(changes: dict[str, Any]) -> None:
-        """Read-merge-write ``changes`` into the shared override file.
-
-        Uses the settings UI's override-file lock and atomic-write
-        helper so a concurrent web-UI save can't interleave and
-        clobber this write (or vice versa). Refuses to overwrite an
-        unreadable or corrupt existing file — same data-loss guard as
-        the web UI save handlers.
-        """
+        """Merge changes atomically, refusing to overwrite unreadable or corrupt JSON."""
         from ..config import _FEATURE_FLAG_OVERRIDE_FILENAME
-        from ..settings_ui._persistence import (
-            _atomic_write_json,
-            _get_override_file_lock,
-        )
+        from ..settings_ui._persistence import _atomic_write_json
+        from ..utils.config_write_lock import get_config_write_lock, run_with_file_lock
         from ..utils.data_paths import get_data_dir
 
-        path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-        async with _get_override_file_lock():
+        def merge() -> None:
+            path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
             existing: dict[str, Any] = {}
             try:
-                # Executor thread: file I/O must not block the event loop.
-                existing_raw = await asyncio.to_thread(path.read_text)
+                existing_raw = path.read_text()
             except FileNotFoundError:
                 existing_raw = None
             except OSError as exc:
@@ -768,7 +758,12 @@ class DevTools:
                     existing.pop(key, None)
                 else:
                     existing[key] = val
-            await asyncio.to_thread(_atomic_write_json, path, existing)
+            _atomic_write_json(path, existing)
+
+        # The worker owns the file lock through the replace, even if the
+        # awaiting tool call is cancelled while the worker is still running.
+        async with get_config_write_lock():
+            await asyncio.to_thread(run_with_file_lock, merge)
 
     # ----- server-entry helpers -----
 
