@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
@@ -731,6 +732,41 @@ class TestStorageKeyPrecedence:
         assert "registry unavailable" in body["error"]["message"]
         names = {s["id"]: s["name"] for s in await stored_scenes(hass)}
         assert names == {"key_a": "First", "key_b": "Key A"}
+
+    @pytest.mark.parametrize("wait", [False, True])
+    @pytest.mark.parametrize("mode", ["config", "transform"])
+    async def test_a_write_the_registry_cannot_look_up_activates_no_other_scene(
+        self, hass: HomeAssistant, collided: ConfigSceneTools, mode: str, wait: bool
+    ) -> None:
+        """After the write a failed lookup is no answer: ``scene.key_a``, the
+        entity id key ``key_a`` would have by its key, is key_b's."""
+        cat = cr.async_get(hass).async_create(name="Mood", scope="scene").category_id
+        before = hass.states.get("scene.key_a")
+        assert before is not None
+        edit: dict[str, Any] = (
+            {
+                "python_transform": "config['icon'] = 'mdi:one'",
+                "config_hash": await config_hash(collided, "key_a"),
+            }
+            if mode == "transform"
+            else {"config": {"name": "First", "entities": TV_ON}}
+        )
+        with registry_lookup_failing(hass, "config/entity_registry/list"):
+            result = await collided.ha_config_set_scene(
+                scene_id="key_a", activate=True, wait=wait, category=cat, **edit
+            )
+        await hass.async_block_till_done()
+
+        after = hass.states.get("scene.key_a")
+        assert after is not None and after.state == before.state
+        entry = er.async_get(hass).async_get("scene.key_a")
+        assert entry is not None and entry.categories == {}
+        assert result["activated"] is False
+        # The skip warning alone: no step ran on another object's entity.
+        (warning,) = result["warnings"]
+        assert "registry unavailable" in warning
+        assert "activate" in warning and "category" in warning
+        assert ("wait" in warning) is wait
 
     async def test_a_repeated_remove_by_key_leaves_the_other_scene(
         self, hass: HomeAssistant, collided: ConfigSceneTools

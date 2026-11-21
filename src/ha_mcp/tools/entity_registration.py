@@ -119,28 +119,23 @@ async def resolve_entity_id_after_write(
     *,
     timeout: float | None = None,
     poll_interval: float = 0.2,
-    fallback_entity_id: str | None = None,
-) -> str:
-    """Poll for the actual entity ID before a post-write wait/category update.
+) -> str | None:
+    """Poll for the actual entity ID before the post-write steps.
 
     An empty registry read can precede asynchronous registration even inside
     the component. Retry against one deadline, checking component availability
     on every attempt. A positive budget includes in-flight lookups and sleeps;
-    zero requests one lookup without a time limit, for test fixtures. Known
-    API failures retain the best-effort fallback. Errors escaping the component
-    adapter propagate unless listed below; cancellation always
+    zero requests one lookup without a time limit, for test fixtures. No entry
+    within the budget returns None, also when the budget ends during a lookup
+    or a sleep; no id is constructed, since ``<domain>.<key>`` can be another
+    object's entity. A failed registry read raises; cancellation always
     propagates.
-    ``fallback_entity_id`` overrides the constructed ID on failure; registry
-    matching always uses the storage key.
 
-    Config reads, removals and runs do not use this helper: it turns a failed
-    read into the fallback id. Bulk
-    writes with neither a state wait nor a category update should skip this
-    helper entirely. The optional budget and interval support deterministic
-    tests without extending production waits.
+    Config reads, removals and runs do not use this helper. Writes that request
+    no post-write step should skip it entirely. The optional budget and interval
+    support deterministic tests without extending production waits.
     """
     storage_key = storage_key.removeprefix(f"{domain}.")
-    fallback = fallback_entity_id or f"{domain}.{storage_key}"
     budget = RESOLVE_TIMEOUT if timeout is None else timeout
     deadline = time.monotonic() + budget
     try:
@@ -155,25 +150,60 @@ async def resolve_entity_id_after_write(
                 await asyncio.sleep(min(poll_interval, remaining))
                 if time.monotonic() >= deadline:
                     break
-    except (
-        TimeoutError,
-        HomeAssistantAPIError,
-        HomeAssistantAuthError,
-        HomeAssistantConnectionError,
-    ) as exc:
+    except TimeoutError:
+        # The timer cancels the lookup or sleep in flight at the deadline.
+        pass
+    logger.debug("Post-write registry budget exhausted for %s.%s", domain, storage_key)
+    return None
+
+
+async def post_write_entity(
+    client: Any,
+    storage_key: str,
+    domain: Literal["scene", "script"],
+    result: dict[str, Any],
+    *,
+    wait: bool,
+    category: str | None,
+    activate: bool = False,
+    caller_id: str | None = None,
+) -> str | None:
+    """Resolve the entity for the post-write steps (wait, category, activate).
+
+    With none of them requested this returns None without a lookup. When no
+    entity is found, a warning in ``result`` names the cause and the skipped
+    steps, and a requested activation is reported as ``activated: False``.
+    ``<domain>.<caller_id>`` stands in only when the caller's id resolved to
+    another storage key before the write: callers take that key from the
+    registry entry of ``<domain>.<caller_id>`` and refuse a bare id that names
+    another key, so the registry named it as this object's entity.
+    """
+    steps = {"wait": wait, "category": category, "activate": activate}
+    if not any(steps.values()):
+        return None
+    storage_key = storage_key.removeprefix(f"{domain}.")
+    bare_id = (caller_id or storage_key).removeprefix(f"{domain}.")
+    fallback = f"{domain}.{bare_id}" if bare_id != storage_key else None
+    cause = f"the entity registry showed no entity for {domain} '{storage_key}' in time"
+    try:
+        # With a wait the lookup also gets the 10 s state-wait budget: 5 s + 10 s.
+        entity_id = await resolve_entity_id_after_write(
+            client, storage_key, domain, timeout=3 * RESOLVE_TIMEOUT if wait else None
+        )
+    except LOOKUP_ERRORS as exc:
         logger.warning(
-            "Registry resolve failed for %s.%s (%s: %s); using %s",
-            domain,
-            storage_key,
-            type(exc).__name__,
-            exc,
-            fallback,
+            "Post-write registry read for %s.%s failed: %r", domain, storage_key, exc
         )
-    else:
-        logger.debug(
-            "Post-write registry budget exhausted for %s.%s; using %s",
-            domain,
-            storage_key,
-            fallback,
+        entity_id = None
+        cause = (
+            f"the entity registry read for {domain} '{storage_key}' failed ({exc!r})"
         )
-    return fallback
+    entity_id = entity_id or fallback
+    if entity_id is None:
+        result.setdefault("warnings", []).append(
+            f"Saved, but {cause}, so these steps were skipped: "
+            f"{', '.join(name for name, on in steps.items() if on)}; retry them later"
+        )
+        if activate:
+            result["activated"] = False
+    return entity_id

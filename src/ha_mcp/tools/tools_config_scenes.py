@@ -50,7 +50,7 @@ from .config_write_helpers import (
     merge_validation_meta,
     refuse_write_by_bare_id_of_another_key,
 )
-from .entity_registration import resolve_entity_id_after_write
+from .entity_registration import post_write_entity
 from .helpers import (
     core_error_message,
     exception_to_structured_error,
@@ -149,8 +149,9 @@ class ConfigSceneTools:
         ``component_config_reads``. An empty component result is rechecked
         once; component unavailability falls through to the legacy path.
 
-        Post-write waits and categories use ``resolve_entity_id_after_write``:
-        their registration window requires deadline-based polling (#2426).
+        Post-write waits, categories and activation use
+        ``entity_registration.post_write_entity``: their registration window
+        requires deadline-based polling (#2426).
         """
         scene_id = scene_id.removeprefix("scene.")
         if allow_component:
@@ -977,12 +978,16 @@ class ConfigSceneTools:
         # post-upsert finalisation the full-config branch runs. Without
         # these, ``wait`` and ``category`` are silently dropped on
         # python_transform calls.
-        entity_id = (
-            await resolve_entity_id_after_write(self._client, resolved_id, "scene")
-            if wait or category or activate
-            else f"scene.{resolved_id}"
+        entity_id = await post_write_entity(
+            self._client,
+            resolved_id,
+            "scene",
+            result,
+            wait=wait,
+            category=category,
+            activate=activate,
         )
-        if wait:
+        if wait and entity_id:
             try:
                 registered = await wait_for_entity_registered(self._client, entity_id)
                 if not registered:
@@ -1005,7 +1010,7 @@ class ConfigSceneTools:
                 result,
                 "scene",
             )
-        if activate:
+        if activate and entity_id:
             await self._activate_scene(result, entity_id, standalone=False)
 
         # Issue #1168 R3 blocker 6: build the response from
@@ -1158,14 +1163,18 @@ class ConfigSceneTools:
         # Resolve actual entity_id via registry — HA derives scene
         # entity_ids from the 'name' slug, not the scene_id storage key,
         # so f"scene.{scene_id}" is wrong whenever a name is supplied.
-        entity_id = (
-            await resolve_entity_id_after_write(self._client, resolved_id, "scene")
-            if wait or effective_category or activate
-            else f"scene.{resolved_id}"
+        entity_id = await post_write_entity(
+            self._client,
+            resolved_id,
+            "scene",
+            result,
+            wait=wait,
+            category=effective_category,
+            activate=activate,
         )
 
         # Wait for scene to be queryable
-        if wait:
+        if wait and entity_id:
             try:
                 registered = await wait_for_entity_registered(self._client, entity_id)
                 if not registered:
@@ -1190,7 +1199,7 @@ class ConfigSceneTools:
                 result,
                 "scene",
             )
-        if activate:
+        if activate and entity_id:
             await self._activate_scene(result, entity_id, standalone=False)
 
         merge_validation_meta(result, references)

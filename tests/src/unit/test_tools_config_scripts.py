@@ -21,7 +21,7 @@ from homeassistant.util.yaml import dump, load_yaml_dict
 from ha_mcp.backup_manager import BackupManager
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import entity_registration, tools_config_scripts
-from ha_mcp.tools.entity_registration import resolve_entity_id_after_write
+from ha_mcp.tools.entity_registration import post_write_entity
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.tools.ws_waiters import wait_for_entity_registered
@@ -99,8 +99,8 @@ def _resolutions() -> Any:
     """Spy on the post-write registry resolution; it still reads Core."""
     return patch.object(
         tools_config_scripts,
-        "resolve_entity_id_after_write",
-        wraps=resolve_entity_id_after_write,
+        "post_write_entity",
+        wraps=post_write_entity,
     )
 
 
@@ -765,6 +765,34 @@ class TestCollidingIds:
         assert fired == []
         assert got["config"]["alias"] == "A"
         assert "category" not in got["config"]
+
+    @pytest.mark.parametrize("mode", WRITE_MODES)
+    async def test_a_write_the_registry_cannot_look_up_lends_no_category(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+        mode: str,
+    ) -> None:
+        """After the write a failed lookup is no answer: script.key_a is B's."""
+        category_id = category_registry.async_create(
+            name="Lighting", scope="script"
+        ).category_id
+        arguments = await _write_arguments(tools, mode, "key_a")
+
+        with registry_lookup_failing(hass, "config/entity_registry/list"):
+            result = await tools.ha_config_set_script(
+                script_id="key_a", category=category_id, **arguments
+            )
+
+        assert result["success"] is True
+        entry = entity_registry.async_get("script.key_a")
+        assert entry is not None and entry.categories == {}
+        # The skip warning alone: no step ran on another object's entity.
+        (warning,) = result["warnings"]
+        assert "registry unavailable" in warning
+        assert "wait" in warning and "category" in warning
 
     @pytest.mark.parametrize(
         ("script_id", "entity_id"),

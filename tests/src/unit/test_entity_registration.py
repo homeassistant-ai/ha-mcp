@@ -198,7 +198,7 @@ async def test_component_disappearing_during_registration_uses_legacy(
 
 
 @pytest.mark.parametrize("domain", ["scene", "script"])
-async def test_absence_uses_whole_budget_then_constructed_fallback(
+async def test_absence_uses_whole_budget_then_constructs_no_id(
     hass: HomeAssistant,
     client: HomeAssistantClient,
     clock: PollClock,
@@ -213,11 +213,10 @@ async def test_absence_uses_whole_budget_then_constructed_fallback(
             client, KEY, domain, timeout=0.55, poll_interval=0.2
         )
 
-    assert result == f"{domain}.{KEY}"
+    assert result is None
     assert clock.now == pytest.approx(0.55)
     assert clock.sleeps == pytest.approx([0.2, 0.2, 0.15])
     assert "budget exhausted" in caplog.text
-    assert f"{domain}.{KEY}" in caplog.text
     if _uses_component(hass):
         send.assert_not_awaited()
 
@@ -279,7 +278,7 @@ async def test_lookup_duration_consumes_registration_budget(
             component_core_client, KEY, "scene", timeout=0.4
         )
 
-    assert result == f"scene.{KEY}"
+    assert result is None
     assert clock.now == pytest.approx(0.4)
     assert clock.sleeps == pytest.approx([0.1])
 
@@ -292,7 +291,7 @@ async def test_zero_budget_performs_one_lookup(
             component_core_client, KEY, "scene", timeout=0
         )
 
-    assert result == f"scene.{KEY}"
+    assert result is None
     lookup.assert_awaited_once()
     assert clock.sleeps == []
 
@@ -342,27 +341,87 @@ async def test_caller_fallback_waits_for_registration_budget(
     entity_registry: er.EntityRegistry,
     component_core_client: HomeAssistantClient,
     clock: PollClock,
+    monkeypatch: pytest.MonkeyPatch,
     registered: bool,
 ) -> None:
+    """A caller id stored under another key stands in only after the budget."""
+    monkeypatch.setattr(registration, "RESOLVE_TIMEOUT", 0.8)
     if registered:
         clock.on_sleep[3] = lambda: _register(entity_registry, "script")
+    result: dict[str, Any] = {}
 
-    result = await registration.resolve_entity_id_after_write(
+    entity_id = await registration.post_write_entity(
         component_core_client,
         KEY,
         "script",
-        timeout=0.8,
-        fallback_entity_id="script.caller_alias",
+        result,
+        wait=False,
+        category="lighting",
+        caller_id="script.caller_alias",
     )
 
-    assert result == ("script.friendly_name" if registered else "script.caller_alias")
+    assert entity_id == (
+        "script.friendly_name" if registered else "script.caller_alias"
+    )
     assert clock.now == pytest.approx(0.6 if registered else 0.8)
+    assert result == {}
 
 
-async def test_stalled_lookup_is_bounded_and_cancelled(
+@pytest.mark.parametrize("caller_id", [None, KEY, f"scene.{KEY}"])
+@pytest.mark.parametrize("wait", [False, True])
+async def test_post_write_without_a_registry_entry_skips_the_steps(
     component_core_client: HomeAssistantClient,
+    clock: PollClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caller_id: str | None,
+    wait: bool,
 ) -> None:
-    """The timeout must bound network awaits as well as polling sleeps."""
+    """A caller id naming the written key is no fallback: ``scene.<key>`` can
+    be another scene's entity. A wait adds the state-wait budget."""
+    monkeypatch.setattr(registration, "RESOLVE_TIMEOUT", 0.4)
+    result: dict[str, Any] = {}
+
+    entity_id = await registration.post_write_entity(
+        component_core_client,
+        KEY,
+        "scene",
+        result,
+        wait=wait,
+        category=None,
+        activate=True,
+        caller_id=caller_id,
+    )
+
+    assert entity_id is None
+    assert clock.now == pytest.approx(1.2 if wait else 0.4)
+    assert result["activated"] is False
+    (warning,) = result["warnings"]
+    assert "showed no entity" in warning
+    assert "activate" in warning and ("wait" in warning) is wait
+    assert "category" not in warning
+
+
+async def test_post_write_without_steps_looks_nothing_up(
+    component_core_client: HomeAssistantClient, clock: PollClock
+) -> None:
+    with _component_lookups() as lookups:
+        entity_id = await registration.post_write_entity(
+            component_core_client, KEY, "scene", {}, wait=False, category=None
+        )
+
+    assert entity_id is None
+    lookups.assert_not_called()
+
+
+@pytest.mark.parametrize("stalls", [True, False])
+async def test_budget_on_the_real_clock_ends_in_no_entity(
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    stalls: bool,
+) -> None:
+    """The timeout bounds a stalled lookup as well as the sleeps, and its
+    expiry reads as no entity in time, not as a failed registry read."""
+    monkeypatch.setattr(registration, "RESOLVE_TIMEOUT", 0.05)
     cancelled = asyncio.Event()
 
     async def stall(*args: Any, **kwargs: Any) -> None:
@@ -371,22 +430,24 @@ async def test_stalled_lookup_is_bounded_and_cancelled(
         finally:
             cancelled.set()
 
-    with patch.object(
-        registration, "fetch_entity_lookup_via_component", AsyncMock(side_effect=stall)
-    ):
+    lookup = AsyncMock(side_effect=stall if stalls else registration.lookup_entity_id)
+    result: dict[str, Any] = {}
+    with patch.object(registration, "lookup_entity_id", lookup):
         async with asyncio.timeout(1.0):
-            result = await registration.resolve_entity_id_after_write(
-                component_core_client, KEY, "scene", timeout=0.01
+            entity_id = await registration.post_write_entity(
+                component_core_client, KEY, "scene", result, wait=False, category="c"
             )
 
-    assert result == f"scene.{KEY}"
-    assert cancelled.is_set()
+    assert entity_id is None
+    assert cancelled.is_set() is stalls
+    (warning,) = result["warnings"]
+    assert "showed no entity" in warning
 
 
 async def test_cancellation_propagates(
     client: HomeAssistantClient, clock: PollClock
 ) -> None:
-    """A cancelled caller is not turned into a fallback ID."""
+    """A cancelled caller is not turned into None."""
     in_flight = asyncio.Event()
 
     async def lookup(*args: Any, **kwargs: Any) -> Any:
@@ -408,31 +469,37 @@ async def test_cancellation_propagates(
         assert task.cancelled()
 
 
-async def test_registry_rejection_returns_fallback_with_diagnostic_detail(
-    core_client: HomeAssistantClient,
-    clock: PollClock,
-    caplog: pytest.LogCaptureFixture,
+async def test_registry_rejection_names_the_cause_without_retry(
+    core_client: HomeAssistantClient, clock: PollClock
 ) -> None:
-    """Without Core's config API the registry read is refused: no retry."""
-    result = await registration.resolve_entity_id_after_write(core_client, KEY, "scene")
+    """Without Core's config API the registry read is refused: no retry, and
+    the warning says the read failed, not that nothing is registered."""
+    result: dict[str, Any] = {}
 
-    assert result == f"scene.{KEY}"
+    entity_id = await registration.post_write_entity(
+        core_client, KEY, "scene", result, wait=True, category=None
+    )
+
+    assert entity_id is None
     assert clock.sleeps == []
-    assert "Unknown command" in caplog.text
-    assert "unknown_command" in caplog.text
+    (warning,) = result["warnings"]
+    assert "read for scene 'storage_key' failed" in warning
+    assert "Unknown command" in warning
 
 
-async def test_lost_connection_returns_fallback_without_retry(
+async def test_lost_connection_names_the_cause_without_retry(
     legacy_client: HomeAssistantClient, clock: PollClock
 ) -> None:
+    result: dict[str, Any] = {}
     with patch.object(
         legacy_client,
         "send_websocket_message",
         side_effect=HomeAssistantConnectionError("offline"),
     ):
-        result = await registration.resolve_entity_id_after_write(
-            legacy_client, KEY, "scene"
+        entity_id = await registration.post_write_entity(
+            legacy_client, KEY, "scene", result, wait=False, category="c"
         )
 
-    assert result == f"scene.{KEY}"
+    assert entity_id is None
     assert clock.sleeps == []
+    assert "offline" in result["warnings"][0]

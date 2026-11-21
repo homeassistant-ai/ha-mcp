@@ -5,10 +5,12 @@ component:
 
 - Entity resolution maps storage keys to live registry entity IDs.
   ``entity_registration.resolve_entity_id_after_write`` polls after scene/script
-  writes against one deadline. ``_resolve_scene_entity_id`` uses a single retry
-  before scene removal. ``entity_registration.lookup_entity_id`` is one strict
-  lookup for the script get, run and remove, which raises on a failed read. The component's ``entity_lookup`` returns only matching
-  rows instead of a full registry/state listing. A hit is authoritative at once,
+  writes against one deadline and constructs no id when it finds none.
+  ``_resolve_scene_entity_id`` uses a single retry before scene removal.
+  ``entity_registration.lookup_entity_id`` is one strict lookup for the script
+  get, run and remove, which raises on a failed read. The component's
+  ``entity_lookup`` returns only matching rows instead of a full
+  registry/state listing. A hit is authoritative at once,
   but an empty read can precede HA's asynchronous entity registration even when
   performed in-process, so post-write callers must continue polling.
 - The reference validator (``validate_config_references``) asks the
