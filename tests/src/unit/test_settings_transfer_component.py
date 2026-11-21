@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import copy
 import importlib.abc
+import importlib.resources
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +33,7 @@ from custom_components.ha_mcp_tools import (
 )
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.const import DOMAIN, SERVER_CONFIG_SUBDIR
+from custom_components.ha_mcp_tools.settings_transfer_schema import RefusalCode
 from ha_mcp import settings_transfer as server_transfer
 from ha_mcp.policy.persistence import load_policy, save_policy
 from ha_mcp.utils.config_write_lock import config_file_lock
@@ -178,7 +181,7 @@ async def test_invalid_backup_cannot_change_even_an_earlier_valid_field(
         invalid["entries"]["tools"][field] = value
     else:
         invalid["entries"]["server"][section][field] = value
-    with pytest.raises(settings_transfer.InvalidBackup):
+    with pytest.raises(settings_transfer.TransferRefused):
         await settings_transfer.async_import(hass, invalid)
     assert await settings_transfer.async_export(hass) == original
 
@@ -201,7 +204,7 @@ async def test_import_rejects_a_transitioning_tools_entry_before_writing(
     candidate = copy.deepcopy(original)
     candidate["server_settings"]["backup"] = {"auto_backup_retain_per_entity": 18}
     async with target.setup_lock if locked else contextlib.nullcontext():
-        with pytest.raises(settings_transfer.InvalidBackup, match="tools_entry_busy"):
+        with pytest.raises(settings_transfer.TransferRefused, match="tools_entry_busy"):
             await settings_transfer.async_import(hass, candidate)
     assert await settings_transfer.async_export(hass) == original
 
@@ -225,7 +228,7 @@ async def test_import_requires_enabled_tools_to_be_loaded(
     candidate = copy.deepcopy(original)
     candidate["server_settings"]["backup"] = {"auto_backup_retain_per_entity": 18}
     with pytest.raises(
-        settings_transfer.InvalidBackup, match="tools_entry_unavailable"
+        settings_transfer.TransferRefused, match="tools_entry_unavailable"
     ):
         await settings_transfer.async_import(hass, candidate)
     assert await settings_transfer.async_export(hass) == original
@@ -402,7 +405,7 @@ async def test_conflicting_tools_permissions_cannot_change_the_destination(
             "extra_yaml_keys": [],
         }
 
-    with pytest.raises(settings_transfer.InvalidBackup) as failure:
+    with pytest.raises(settings_transfer.TransferRefused) as failure:
         await settings_transfer.async_import(hass, backup)
     assert failure.value.code == error
     assert await settings_transfer.async_export(hass) == original
@@ -474,7 +477,7 @@ async def test_backup_whose_webhook_another_integration_owns_changes_nothing(
     webhook.async_register(hass, "other", "Other", "taken-hook", AsyncMock())
     candidate = copy.deepcopy(original)
     candidate["entries"]["server"]["data"]["webhook_id"] = "taken-hook"
-    with pytest.raises(settings_transfer.InvalidBackup, match="webhook_in_use"):
+    with pytest.raises(settings_transfer.TransferRefused, match="webhook_in_use"):
         await settings_transfer.async_import(hass, candidate)
     assert await settings_transfer.async_export(hass) == original
 
@@ -548,7 +551,7 @@ async def test_unreadable_destination_file_is_not_blamed_on_the_backup(
         settings_transfer.async_export(hass),
         settings_transfer.async_import(hass, backup),
     ):
-        with pytest.raises(settings_transfer.InvalidBackup) as failure:
+        with pytest.raises(settings_transfer.TransferRefused) as failure:
             await transfer
         assert failure.value.code == "invalid_server_settings"
 
@@ -596,7 +599,7 @@ async def test_import_onto_an_ignored_tools_discovery_says_why_it_stopped(
     original = await settings_transfer.async_export(hass)
     backup = copy.deepcopy(original)
     backup["entries"]["tools"] = {"allowed_dirs": [], "extra_yaml_keys": []}
-    with pytest.raises(settings_transfer.InvalidBackup, match="restore_failed"):
+    with pytest.raises(settings_transfer.TransferRefused, match="restore_failed"):
         await settings_transfer.async_import(hass, backup)
     assert "could not add the File & YAML Tools entry (already_configured)" in (
         caplog.text
@@ -619,6 +622,18 @@ async def test_broken_server_package_is_logged_not_hidden(
     monkeypatch.delitem(sys.modules, "ha_mcp.settings_transfer")
     monkeypatch.delattr("ha_mcp.settings_transfer")
     monkeypatch.setattr(sys, "meta_path", [BrokenDependency(), *sys.meta_path])
-    with pytest.raises(settings_transfer.InvalidBackup, match="server_unavailable"):
+    with pytest.raises(settings_transfer.TransferRefused, match="server_unavailable"):
         await settings_transfer.async_export(hass)
     assert "The HA-MCP server package failed to import" in caplog.text
+
+
+def test_every_refusal_code_reaches_the_panel_as_its_own_message() -> None:
+    """A code the panel does not list shows only the generic failure text."""
+    ui = importlib.resources.files("ha_mcp.settings_ui")
+    messages = json.loads((ui / "locales" / "en.json").read_text(encoding="utf-8"))
+    script = (ui / "settings_js" / "11_settings_transfer.js").read_text(
+        encoding="utf-8"
+    )
+    for code in RefusalCode:
+        assert f"transfer.{code}" in messages["messages"], code
+        assert f"'{code}'" in script, code

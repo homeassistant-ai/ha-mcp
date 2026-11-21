@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +18,46 @@ VERSION = 1
 MAX_BYTES = 4 * 1024 * 1024
 
 
-class InvalidBackup(ValueError):
-    """A stable error code that may be returned without revealing input values."""
+class RefusalCode(StrEnum):
+    """Why a transfer was refused. Each code has a ``transfer.*`` panel message."""
 
-    def __init__(self, code: str) -> None:
-        super().__init__(code)
+    INVALID_BACKUP = "invalid_backup"
+    INCOMPATIBLE_VERSION = "incompatible_version"
+    INVALID_SERVER_SETTINGS = "invalid_server_settings"
+    DECISION_PIN_REQUIRED = "decision_pin_required"
+    RESTORE_FAILED = "restore_failed"
+    SERVER_UNAVAILABLE = "server_unavailable"
+    WEBHOOK_IN_USE = "webhook_in_use"
+    EXTRA_TOOLS_ENTRY = "extra_tools_entry"
+    TOOLS_MUST_BE_ENABLED = "tools_must_be_enabled"
+    TOOLS_MUST_BE_DISABLED = "tools_must_be_disabled"
+    TOOLS_ENTRY_BUSY = "tools_entry_busy"
+    TOOLS_ENTRY_UNAVAILABLE = "tools_entry_unavailable"
+
+    @property
+    def http_status(self) -> int:
+        """409 when this installation's state blocks the transfer, else 400."""
+        return 409 if self in _CONFLICTS else 400
+
+
+_CONFLICTS = frozenset(
+    {
+        RefusalCode.SERVER_UNAVAILABLE,
+        RefusalCode.WEBHOOK_IN_USE,
+        RefusalCode.EXTRA_TOOLS_ENTRY,
+        RefusalCode.TOOLS_MUST_BE_ENABLED,
+        RefusalCode.TOOLS_MUST_BE_DISABLED,
+        RefusalCode.TOOLS_ENTRY_BUSY,
+        RefusalCode.TOOLS_ENTRY_UNAVAILABLE,
+    }
+)
+
+
+class TransferRefused(ValueError):
+    """A refusal whose code may be returned without revealing input values."""
+
+    def __init__(self, code: RefusalCode) -> None:
+        super().__init__(code.value)
         self.code = code
 
 
@@ -142,15 +178,15 @@ def validate(bundle: Any, config_dir: Path, *, stored: bool = False) -> dict[str
     """
     # Another version may have another shape, so check it before the v1 schema.
     if not isinstance(bundle, dict) or bundle.get("format") != FORMAT:
-        raise InvalidBackup("invalid_backup")
+        raise TransferRefused(RefusalCode.INVALID_BACKUP)
     if type(bundle.get("version")) is not int or bundle["version"] != VERSION:
-        raise InvalidBackup("incompatible_version")
+        raise TransferRefused(RefusalCode.INCOMPATIBLE_VERSION)
     try:
         checked: dict[str, Any] = _ENVELOPE(bundle)
     except (vol.Invalid, TypeError, ValueError) as err:
-        raise InvalidBackup("invalid_backup") from err
+        raise TransferRefused(RefusalCode.INVALID_BACKUP) from err
     if checked["contains_credentials"] is not True:
-        raise InvalidBackup("invalid_backup")
+        raise TransferRefused(RefusalCode.INVALID_BACKUP)
     server = checked["entries"][c.ENTRY_TYPE_SERVER]
     legacy_fields = {
         c.DATA_OAUTH_CLIENT_ID,
@@ -160,14 +196,14 @@ def validate(bundle: Any, config_dir: Path, *, stored: bool = False) -> dict[str
     has_legacy = server["options"].get(c.OPT_WEBHOOK_AUTH) == c.WEBHOOK_AUTH_LEGACY
     if has_legacy or legacy_fields.intersection(server["data"]):
         if not legacy_fields.issubset(server["data"]):
-            raise InvalidBackup("invalid_backup")
+            raise TransferRefused(RefusalCode.INVALID_BACKUP)
     if tools := checked["entries"].get(c.ENTRY_TYPE_TOOLS):
         paths = [
             _normalize_extra_dir(item, config_dir) for item in tools["allowed_dirs"]
         ]
         keys, dropped = _normalize_extra_yaml_keys(tools["extra_yaml_keys"])
         if not stored and (None in paths or dropped):
-            raise InvalidBackup("invalid_backup")
+            raise TransferRefused(RefusalCode.INVALID_BACKUP)
         tools["allowed_dirs"] = list(dict.fromkeys(p for p in paths if p is not None))
         tools["extra_yaml_keys"] = keys
     return checked
