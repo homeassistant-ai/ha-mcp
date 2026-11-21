@@ -228,6 +228,8 @@ def test_failed_import_never_renders_arbitrary_error_text() -> None:
     [
         (500, "rollback_incomplete", "some settings could not be restored"),
         (403, "origin_denied", "Open the panel from the sidebar"),
+        (409, "permissions_changed", "Import the file again"),
+        (409, "component_outdated", "Update HA-MCP in Marketplace"),
     ],
 )
 def test_import_errors_explain_next_action(

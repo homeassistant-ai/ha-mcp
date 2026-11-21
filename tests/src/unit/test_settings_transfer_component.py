@@ -159,7 +159,7 @@ async def test_mirror_backup_restores_connection_and_permissions_on_main(
         ("options", "external_url", "https://example.invalid/\nnext"),
         ("tools", "allowed_dirs", ["../outside"]),
         ("tools", "extra_yaml_keys", ["homeassistant"]),
-        ("data", "secret_path", "/"),
+        ("data", "secret_path", "/mcp?token=1"),
         ("options", "enable_webhook", "false"),
         ("options", "webhook_auth", "legacy"),
     ],
@@ -676,3 +676,16 @@ async def test_a_file_without_permissions_ignores_an_unloaded_tools_entry(
 
     after = await settings_transfer.async_export(hass)
     assert after["server_settings"]["backup"] == {"auto_backup_retain_per_entity": 22}
+
+
+async def test_a_root_connection_path_saved_in_configure_exports(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replace_server(monkeypatch)
+    entry = add_server_entry(hass, options={"secret_path_override": "/"})
+    assert await set_up(hass, entry)
+    assert entry.data["secret_path"] == "/"
+
+    bundle = await settings_transfer.async_export(hass)
+
+    assert bundle["entries"]["server"]["data"]["secret_path"] == "/"

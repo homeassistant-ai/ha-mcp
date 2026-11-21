@@ -97,7 +97,9 @@ class TestSettingsTransfer:
     ) -> None:
         # An old entry can carry a root-only direct URL, which would expose
         # a destination server without its required secret path.
-        add_options_entry(hass, data={"webhook_id": "private-hook", "secret_path": "/"})
+        add_options_entry(
+            hass, data={"webhook_id": "private-hook", "secret_path": "/mcp?token=1"}
+        )
         client = await hass_client_no_auth()
         response = await client.post(
             _APP + "api/settings/transfer/export",

@@ -90,14 +90,9 @@ def _callbacks(values: list[str]) -> list[str]:
 
 
 def _path_value(value: str) -> str:
-    # The Configure form supports nested paths, with or without a leading
-    # slash and with a trailing slash. Keep the operator's exact URL.
-    if (
-        not value.strip("/")
-        or value.startswith("//")
-        or any(ch in "\\?#%" or ch.isspace() or ord(ch) < 32 for ch in value)
-        or any(segment in (".", "..") for segment in value.split("/"))
-    ):
+    # What Configure saves: any path, "/" included, without a query, fragment,
+    # percent escape or whitespace. Keep the operator's exact URL.
+    if not value or any(ch in "?#%" or ch.isspace() or ord(ch) < 32 for ch in value):
         raise vol.Invalid("invalid connection path")
     return value
 

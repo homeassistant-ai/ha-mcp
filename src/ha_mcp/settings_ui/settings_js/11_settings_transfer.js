@@ -47,7 +47,7 @@ function initSettingsTransfer() {
     }
     const importErrors = ['invalid_backup', 'incompatible_version', 'webhook_in_use', 'decision_pin_required',
       'extra_tools_entry', 'tools_must_be_disabled', 'tools_must_be_enabled', 'tools_entry_busy',
-      'tools_entry_unavailable', 'rollback_incomplete'];
+      'tools_entry_unavailable', 'rollback_incomplete', 'permissions_changed', 'component_outdated'];
     report(fallback === 'restore_failed' && importErrors.includes(failure?.error) ? failure.error : fallback, true);
   }
 

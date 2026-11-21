@@ -124,6 +124,12 @@ async def _app_options(
 
 async def export_bundle(server: HomeAssistantSmartMCPServer | None) -> dict[str, Any]:
     """This server's settings file: no connection, which only the HA entry has."""
+    # Waits for an import in progress, which may still roll its writes back.
+    async with get_config_write_lock():
+        return await _export_bundle(server)
+
+
+async def _export_bundle(server: HomeAssistantSmartMCPServer | None) -> dict[str, Any]:
     try:
         settings = await asyncio.to_thread(
             transfer.export_server_settings, get_data_dir()
@@ -214,17 +220,55 @@ async def _write_tools(
     limits: ImportLimits | None,
     written: dict[str, list[list[str]]],
 ) -> None:
-    """Write ``wanted``, recording in ``written`` what each write may have stored."""
+    """Write ``wanted`` over the ``current`` lists this import read.
+
+    ``written`` records what each write may have stored: the list sent, then
+    what the component kept once it answers.
+    """
     if limits and not limits.allow({"permissions": current}, {"permissions": wanted}):
         raise TransferFailed("access_required", 403)
+    if not await _conditional_writes_supported(server):
+        raise TransferFailed("component_outdated", 409)
     for name, values in wanted.items():
         _, write, key = _TOOLS_SERVICES[name]
         written[name] = [values]
-        reply = await _tools_service(server, write, {key: values})
+        reply = await _tools_service(
+            server, write, {key: values, "only_if": [current[name]]}
+        )
+        if reply.get("kept"):
+            # Someone saved this list after the import read it.
+            del written[name]
+            raise TransferFailed("permissions_changed", 409)
         written[name].append(list(reply.get(key, values)))
         # The component applies what it accepts, so a refusal still wrote.
         if reply.get("rejected"):
             raise TransferFailed("invalid_backup", 400)
+
+
+async def _conditional_writes_supported(
+    server: HomeAssistantSmartMCPServer | None,
+) -> bool:
+    """Whether the component's permission setters take ``only_if``.
+
+    The undo depends on it, and a component released before it refuses the
+    argument; its service descriptions say which it is.
+    """
+    from ..tools.tools_filesystem import _registered_tool_services
+
+    if server is not None:
+        services = await _registered_tool_services(server.client)
+    else:
+        from ..client.rest_client import HomeAssistantClient
+
+        client = HomeAssistantClient()
+        try:
+            services = await _registered_tool_services(client)
+        finally:
+            await client.close()
+    return all(
+        "only_if" in (((services or {}).get(write) or {}).get("fields") or {})
+        for _, write, _ in _TOOLS_SERVICES.values()
+    )
 
 
 async def _apply_app_options(
@@ -299,6 +343,10 @@ async def _undo(
                 complete = False
             elif reply.get("kept"):
                 logger.warning("Kept %s because it changed during the import", name)
+            elif reply.get("rejected") or list(reply.get(key, values)) != values:
+                # A directory that no longer passes the component's checks.
+                logger.error("Settings import could not fully restore %s", name)
+                complete = False
         except Exception:
             logger.exception("Settings import could not undo %s", name)
             complete = False

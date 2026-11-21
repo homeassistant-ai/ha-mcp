@@ -86,6 +86,8 @@
     "transfer.invalid_server_settings": "HA-MCP could not read one of its settings files on this installation. The Home Assistant log names the file. Fix or delete it, then try again.",
     "transfer.origin_denied": "The request did not come from the HA-MCP sidebar panel at this Home Assistant address. Open the panel from the sidebar. A reverse proxy must pass the original Host header.",
     "transfer.read_failed": "Could not read the selected file. Select the file again.",
+    "transfer.permissions_changed": "The File & YAML Tools permissions changed while importing, so the import stopped and kept them. Import the file again.",
+    "transfer.component_outdated": "Update HA-MCP in Marketplace and restart Home Assistant, then import again: the installed File & YAML Tools cannot undo a failed permission import.",
     "server.sidecar.disable": "Permanently disable settings server",
     "server.sidecar.disable_title": "Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable.",
     "backups.loading": "Loading backup state…",
