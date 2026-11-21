@@ -18,6 +18,7 @@ is importable as a package.
 import copy
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -176,3 +177,43 @@ def test_a_document_without_a_tools_entry_is_left_untouched() -> None:
     before = copy.deepcopy(doc)
     assert haos_runtime.remove_tools_entry(doc) == []
     assert doc == before
+
+
+def _timing_out(times: int, calls: list[list[str]]) -> Any:
+    """A ``subprocess.run`` whose first ``times`` calls run past their limit."""
+
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if len(calls) <= times:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    return run
+
+
+def test_a_timed_out_seed_copy_is_tried_once_more(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seed = tmp_path / "seed.db"
+    seed.write_bytes(b"seed")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(haos_runtime.subprocess, "run", _timing_out(1, calls))
+
+    haos_runtime.stage_recorder_seed_in_qcow2(tmp_path / "image.qcow2", seed)
+
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+
+
+def test_a_seed_copy_that_times_out_twice_fails_the_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seed = tmp_path / "seed.db"
+    seed.write_bytes(b"seed")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(haos_runtime.subprocess, "run", _timing_out(2, calls))
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        haos_runtime.stage_recorder_seed_in_qcow2(tmp_path / "image.qcow2", seed)
+
+    assert len(calls) == 2

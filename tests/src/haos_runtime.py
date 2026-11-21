@@ -413,49 +413,34 @@ def stage_recorder_seed_in_qcow2(image_path: Path, seed_db: Path) -> None:
 
     workdir = Path(tempfile.mkdtemp(prefix="haos-recorder-seed-"))
     db_local = workdir / "home-assistant_v2.db"
+    home = "/supervisor/homeassistant"
+    # copy-in keeps the source's basename. The bake leaves Core's -wal / -shm
+    # beside its own database: a stale WAL next to a different .db makes Core
+    # mark the database corrupt and boot with an empty one, so both go.
+    script = f"run : mount /dev/sda8 / : copy-in {db_local} {home}/"
+    script += f" : rm-f {home}/home-assistant_v2.db-wal"
+    script += f" : rm-f {home}/home-assistant_v2.db-shm"
+    command = ["guestfish", "--rw", "-a", str(image_path), *script.split()]
     try:
-        # copy-in keeps the source's basename.
         shutil.copyfile(seed_db, db_local)
-        # The bake leaves Core's -wal / -shm beside its own database. A stale
-        # WAL next to a different .db makes Core mark the database corrupt
-        # and boot with an empty one, so both sidecars are removed.
-        try:
-            subprocess.run(
-                [
-                    "guestfish",
-                    "--rw",
-                    "-a",
-                    str(image_path),
-                    "run",
-                    ":",
-                    "mount",
-                    "/dev/sda8",
-                    "/",
-                    ":",
-                    "copy-in",
-                    str(db_local),
-                    "/supervisor/homeassistant/",
-                    ":",
-                    "rm-f",
-                    "/supervisor/homeassistant/home-assistant_v2.db-wal",
-                    ":",
-                    "rm-f",
-                    "/supervisor/homeassistant/home-assistant_v2.db-shm",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-        except subprocess.CalledProcessError as err:
-            LOG.error(
-                "guestfish recorder seed copy-in failed (exit %s)\n"
-                "stdout:\n%s\nstderr:\n%s",
-                err.returncode,
-                err.stdout,
-                err.stderr,
-            )
-            raise
+        # This is a worker's first guestfish call, and one has run past its
+        # limit on a CI runner: a timeout gets one more try.
+        for last in (False, True):
+            try:
+                subprocess.run(
+                    command, check=True, capture_output=True, text=True, timeout=180
+                )
+                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as err:
+                LOG.error(
+                    "guestfish recorder seed copy-in failed (%s)\n"
+                    "stdout:\n%s\nstderr:\n%s",
+                    type(err).__name__,
+                    err.stdout,
+                    err.stderr,
+                )
+                if last or isinstance(err, subprocess.CalledProcessError):
+                    raise
         LOG.info("Staged recorder seed in %s", image_path)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

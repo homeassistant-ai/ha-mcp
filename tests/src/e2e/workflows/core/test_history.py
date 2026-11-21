@@ -22,6 +22,7 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.topology import component_surface_available
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +261,39 @@ class TestGetHistory:
         (entity,) = data.get("data", data)["entities"]
         assert entity["entity_id"] == "sensor.nonexistent_test_xyz_12345"
         assert entity["states"] == []
+        # An empty result names the entity instead of passing for a quiet one.
+        assert any(
+            "sensor.nonexistent_test_xyz_12345" in warning
+            for warning in data["warnings"]
+        )
+
+    @pytest.mark.component_topology
+    async def test_a_window_older_than_the_recorder_holds_says_why(
+        self, mcp_client: Client
+    ) -> None:
+        """The seed spans under ten days, so a window ending 30 days ago is empty.
+
+        The recorder's own oldest state and purge settings come through the
+        component; without it the result says they were not read.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_get_history",
+                {
+                    "entity_ids": "input_number.e2e_pagination_seed",
+                    "start_time": "60d",
+                    "end_time": "30d",
+                },
+            )
+        (entity,) = result.get("data", result)["entities"]
+        assert entity["states"] == []
+        warnings = " ".join(result["warnings"])
+        assert "No recorded states in this window" in warnings
+        if component_surface_available():
+            assert "The recorder's oldest state is from" in warnings
+            assert "purge_keep_days" in warnings
+        else:
+            assert "purge settings were not read" in warnings
 
     async def test_get_history_entity_ids_as_comma_string(self, mcp_client):
         """Test history with comma-separated entity_ids string."""
@@ -404,10 +438,9 @@ class TestGetHistory:
         ) == pytest.approx((end - start).total_seconds(), abs=0.01)
         assert result["data"]["entities"][1]["summary"]["distinct_states"] == 0
         # Only the unrecorded entity is flagged; the seed has a window-start state.
-        assert len(result["warnings"]) == 1, result["warnings"]
         assert "No recorded states" in result["warnings"][0]
         assert missing in result["warnings"][0]
-        assert target not in result["warnings"][0]
+        assert not any(target in warning for warning in result["warnings"])
 
 
 @pytest.mark.asyncio
@@ -451,6 +484,27 @@ class TestGetHistoryStatisticsSource:
                 assert isinstance(row["sum"], (int, float))
                 assert isinstance(row["change"], (int, float))
                 assert row["end"] > row["start"]
+
+    async def test_statistics_summary_is_one_total_per_statistic(
+        self, mcp_client: Client
+    ) -> None:
+        """summary=True asks Core for the window's total instead of its rows."""
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_get_history",
+                {
+                    "source": "statistics",
+                    "entity_ids": "sensor.total_energy_kwh",
+                    "start_time": "7d",
+                    "summary": True,
+                    "statistic_types": ["change"],
+                },
+            )
+        (entity,) = result.get("data", result)["entities"]
+        assert "statistics" not in entity
+        # The seeded total only rises, so a week of it is a positive change.
+        assert entity["summary"]["change"] > 0
+        assert entity["unit_of_measurement"] == "kWh"
 
     async def test_statistics_units_survive_pagination(self, mcp_client):
         """Metadata must not depend on which rows happen to be on the returned page."""
@@ -530,7 +584,10 @@ class TestGetHistoryStatisticsSource:
         # sun.sun records no statistics, so the warning is always there,
         # beside data and not inside it.
         assert "warnings" not in data.get("data", data)
-        assert any("No statistics found for: sun.sun" in w for w in data["warnings"])
+        assert any(
+            "The recorder has no statistics under: sun.sun" in w
+            for w in data["warnings"]
+        )
 
 
 @pytest.mark.core
@@ -573,22 +630,13 @@ class TestGetHistoryNegativeInputs:
     """Negative-input tests for ha_get_history."""
 
     async def test_empty_string_entity_id_rejected(self, mcp_client: Any) -> None:
-        """Rejects an invalid entity ID that cannot be resolved by the WebSocket handler.
-
-        The empty string reaches the WS history handler which replies with
-        ``success=False``. That failure is raised as
-        ``HomeAssistantCommandError`` and classified by the terminal
-        ``command failed:`` branch as ``SERVICE_CALL_FAILED`` (a WS
-        command failure is a known failure mode, not an unexpected
-        internal error).
-        """
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_get_history",
-            {"entity_ids": "", "start_time": "1h"},
-        )
-        assert result["success"] is False
-        assert result["error"]["code"] == "SERVICE_CALL_FAILED"
+        """Core refuses an entity ID it cannot parse; its own code reaches the caller."""
+        async with MCPAssertions(mcp_client) as mcp:
+            refusal = await mcp.call_tool_failure(
+                "ha_get_history", {"entity_ids": "", "start_time": "1h"}
+            )
+        assert refusal["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert refusal["ha_error_code"] == "invalid_entity_ids"
 
     async def test_empty_list_entity_ids_rejected(self, mcp_client: Any) -> None:
         """Rejects an empty list before any network call is made."""
