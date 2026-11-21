@@ -41,14 +41,16 @@ fails Fast Checks on a wording test anywhere else and has no list.
 
 ## Choose the authoritative path
 
-The component is part of the native contract, not an exception to it. The
-`ha_mcp_tools` component runs inside Core, so a path through it reaches Core's
-own registries, schemas, collections, flows and processors directly, the way
-`ha_search` and the logbook read do. Prefer that path whenever the component
-gives in-process access to the Core object a tool wraps. Gate the choice on
-the component's `capabilities` handshake, and update the component producer,
-server consumer, capability gate and any fallback in the same pull request, on
-both component entry topologies.
+The `ha_mcp_tools` component runs inside Core and gives tools such as
+`ha_search` direct access to its registries, schemas, collections, flows and
+processors. Prefer the component when in-process access adds a capability,
+preserves Core behaviour the public API cannot express, or removes a copy of
+Core logic. Use Core's REST or WebSocket endpoint directly when it already
+provides the same behaviour and a new bridge would only relay the response.
+
+Gate component bridges on the component's `capabilities` handshake. Update
+the component producer, server consumer, capability gate and any fallback in
+the same pull request, on both component entry topologies.
 
 What a tool already does without the component keeps working when the tool
 changes: its REST/WebSocket path stays as the fallback. That fallback may grow

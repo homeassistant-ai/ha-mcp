@@ -34,11 +34,6 @@ from .tool_hints import read_only_hints
 
 logger = logging.getLogger(__name__)
 
-# Image entities are handed to the model inline, so the server bounds what it
-# will read. Same ceiling the dashboard screenshot tool uses for inline images.
-MAX_IMAGE_ENTITY_BYTES = MAX_IMAGE_PAYLOAD_BYTES
-
-
 # Subtypes that denote JPEG under an alternate spelling. Every other
 # image/* subtype is reported verbatim (image/webp -> "webp"); the JPEG
 # default applies only when the header names no image subtype at all.
@@ -141,39 +136,32 @@ class CameraTools:
                 )
             )
 
-    async def _fetch_image_entity(self, entity_id: str) -> tuple[bytes, str]:
-        """Fetch an image entity's bytes through HA's image proxy, size-bounded.
-
-        Core serves ``/api/image_proxy/<entity_id>``, the route its own
-        frontend uses. The body is streamed so an oversized image is
-        refused without being buffered in full.
-        """
-        limit = MAX_IMAGE_ENTITY_BYTES
-        endpoint = f"/image_proxy/{quote(entity_id, safe='')}"
-        async with self._client.httpx_client.stream("GET", endpoint) as response:
-            self._check_status(response, entity_id, "image")
-
-            content_type = response.headers.get("content-type", "")
+    async def _fetch_image(
+        self, entity_id: str, domain: str, params: dict[str, int]
+    ) -> tuple[bytes, str]:
+        """Stream the Core proxy response up to HA-MCP's inline image limit."""
+        limit = MAX_IMAGE_PAYLOAD_BYTES
+        endpoint = f"/{domain}_proxy/{quote(entity_id, safe='')}"
+        async with self._client.httpx_client.stream(
+            "GET", endpoint, params=params
+        ) as response:
+            self._check_status(response, entity_id, domain)
             declared = _declared_content_length(response)
             if declared is not None and declared > limit:
                 self._raise_too_large(entity_id, limit, declared)
             body, exceeded = await _read_limited_response(response, limit)
             if exceeded:
                 self._raise_too_large(entity_id, limit, None)
-
-        return body, content_type
+            return body, response.headers.get("content-type", "")
 
     @staticmethod
     def _raise_too_large(entity_id: str, limit: int, declared: int | None) -> NoReturn:
         raise_tool_error(
             create_error_response(
                 ErrorCode.IMAGE_PAYLOAD_TOO_LARGE,
-                f"Image entity {entity_id} exceeds the server's safe "
+                f"The image from {entity_id} exceeds the server's safe "
                 f"inline-image limit of {limit} bytes.",
-                suggestions=[
-                    "Reduce the source image size or choose a smaller image entity. "
-                    "Home Assistant's image proxy cannot resize it."
-                ],
+                suggestions=["Reduce the source resolution or choose a smaller image."],
                 context={
                     "entity_id": entity_id,
                     "limit_bytes": limit,
@@ -181,20 +169,6 @@ class CameraTools:
                 },
             )
         )
-
-    async def _fetch_camera(
-        self, entity_id: str, width: int | None, height: int | None
-    ) -> tuple[bytes, str]:
-        params = {}
-        if width is not None:
-            params["width"] = str(width)
-        if height is not None:
-            params["height"] = str(height)
-        response = await self._client.httpx_client.get(
-            f"/camera_proxy/{quote(entity_id, safe='')}", params=params or None
-        )
-        self._check_status(response, entity_id, "camera")
-        return response.content, response.headers.get("content-type", "image/jpeg")
 
     @tool(
         name="ha_get_camera_image",
@@ -212,20 +186,10 @@ class CameraTools:
             ),
         ],
         width: Annotated[
-            int | None,
-            Field(
-                description="Width for a camera snapshot. Rejected for image entities. Home Assistant "
-                "rescales only when both width and height are given and "
-                "the camera serves JPEG."
-            ),
+            int | None, Field(description="Requested width in pixels.")
         ] = None,
         height: Annotated[
-            int | None,
-            Field(
-                description="Height for a camera snapshot. Rejected for image entities. Home Assistant "
-                "rescales only when both width and height are given and "
-                "the camera serves JPEG."
-            ),
+            int | None, Field(description="Requested height in pixels.")
         ] = None,
     ) -> tuple[str, Image]:
         """Get a snapshot image from a Home Assistant camera or image entity.
@@ -259,22 +223,14 @@ class CameraTools:
                 )
             )
 
-        if domain == "image" and (width is not None or height is not None):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "width and height apply only to camera entities. Home "
-                    "Assistant's image proxy cannot resize image entities.",
-                    context={"entity_id": entity_id},
-                )
-            )
         try:
-            if domain == "image":
-                body, content_type = await self._fetch_image_entity(entity_id)
-                label = "Image"
-            else:
-                body, content_type = await self._fetch_camera(entity_id, width, height)
-                label = "Camera snapshot"
+            params = {}
+            if width is not None:
+                params["width"] = width
+            if height is not None:
+                params["height"] = height
+            body, content_type = await self._fetch_image(entity_id, domain, params)
+            label = "Image" if domain == "image" else "Camera snapshot"
             retrieved_at = datetime.now(UTC)
 
             image_format, image_size = resolve_image_info(

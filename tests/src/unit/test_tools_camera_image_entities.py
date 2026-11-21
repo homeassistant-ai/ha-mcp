@@ -100,7 +100,7 @@ async def test_oversize_image_is_refused(
     if not declared_length:
         core_client.httpx_client.event_hooks["response"].append(omit_length)
 
-    monkeypatch.setattr(tools_camera, "MAX_IMAGE_ENTITY_BYTES", 1024)
+    monkeypatch.setattr(tools_camera, "MAX_IMAGE_PAYLOAD_BYTES", 1024)
     payload = _png(4, 4) + b"0" * 2048
     await _serve(hass, TestImage(hass, "huge", payload))
 
@@ -110,7 +110,6 @@ async def test_oversize_image_is_refused(
     assert error_of(exc_info)["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
     body = error_body(exc_info)
     assert body["declared_bytes"] == (len(payload) if declared_length else None)
-    assert "cannot resize" in body["error"]["suggestion"]
     assert body["limit_bytes"] == 1024
     assert body["entity_id"] == "image.huge"
 
@@ -119,7 +118,7 @@ async def test_image_exactly_at_the_limit_is_served(
     hass: HomeAssistant, core_client: HomeAssistantClient, monkeypatch: Any
 ) -> None:
     body = _png(4, 4)
-    monkeypatch.setattr(tools_camera, "MAX_IMAGE_ENTITY_BYTES", len(body))
+    monkeypatch.setattr(tools_camera, "MAX_IMAGE_PAYLOAD_BYTES", len(body))
     await _serve(hass, TestImage(hass, "small", body))
 
     _, image = await CameraTools(core_client).ha_get_camera_image(
