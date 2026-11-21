@@ -307,15 +307,15 @@ class TestWrites:
         repo_id = str(target["id"])
         await accept_warning(mcp_client)
 
-        download = await store_call(
-            mcp_client,
-            "ha_manage_hacs",
-            {"action": "download", "repository_id": repo_id},
-        )
-        skip_on_github(download)
-        assert download.get("success"), download
         removed = False
         try:
+            download = await store_call(
+                mcp_client,
+                "ha_manage_hacs",
+                {"action": "download", "repository_id": repo_id},
+            )
+            skip_on_github(download)
+            assert download.get("success"), download
             async with MCPAssertions(mcp_client) as mcp:
                 await mcp.call_tool_success(
                     "ha_manage_hacs", {"action": "remove", "repository_id": repo_id}
@@ -326,6 +326,8 @@ class TestWrites:
                 )
             assert info["data"]["installed"] is False
         finally:
+            # Also after a download that failed or timed out: Core may have
+            # installed it anyway, and refuses the remove when it did not.
             with CleanupSteps() as cleanup:
                 if not removed:
                     with cleanup.step():
