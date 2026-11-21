@@ -12,8 +12,10 @@ steps skip on that refusal's code, never on its wording. Any other failure
 fails.
 """
 
+import asyncio
 import logging
 import os
+import time
 
 import pytest
 
@@ -26,6 +28,7 @@ from ...utilities.assertions import (
     tool_error_to_result,
 )
 from ...utilities.cleanup import CleanupSteps
+from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,30 @@ async def store_call(mcp_client, tool_name: str, params: dict) -> dict:
         return extract_store_data(await mcp_client.call_tool(tool_name, params))
     except ToolError as exc:
         return tool_error_to_result(exc)
+
+
+async def remove_once_settled(mcp_client, repo_id: str, timeout: float = 120) -> None:
+    """Uninstall ``repo_id`` whatever an earlier install left, and fail when it
+    stays installed: Core refuses the remove with ``repository_busy`` while an
+    install is still running."""
+    deadline = time.monotonic() + timeout
+    while True:
+        result = await safe_call_tool(
+            mcp_client, "ha_manage_hacs", {"action": "remove", "repository_id": repo_id}
+        )
+        if result.get("ha_error_code") != "repository_busy":
+            break
+        if time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(2)
+    await wait_for_tool_result(
+        mcp_client,
+        "ha_get_hacs_info",
+        {"action": "info", "repository_id": repo_id},
+        lambda data: data["data"]["installed"] is False,
+        timeout=30,
+        description=f"{repo_id} uninstalled",
+    )
 
 
 def skip_on_github(data: dict) -> None:
@@ -326,16 +353,12 @@ class TestWrites:
                 )
             assert info["data"]["installed"] is False
         finally:
-            # Also after a download that failed or timed out: Core may have
-            # installed it anyway, and refuses the remove when it did not.
+            # Also after a download that failed or timed out: Core may still be
+            # installing it, or have installed it anyway.
             with CleanupSteps() as cleanup:
                 if not removed:
                     with cleanup.step():
-                        await safe_call_tool(
-                            mcp_client,
-                            "ha_manage_hacs",
-                            {"action": "remove", "repository_id": repo_id},
-                        )
+                        await remove_once_settled(mcp_client, repo_id)
 
     async def test_beta_versions_are_shown_and_hidden(self, mcp_client):
         found = await search(mcp_client, max_results=1)
