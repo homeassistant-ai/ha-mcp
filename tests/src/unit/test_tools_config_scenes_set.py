@@ -283,13 +283,13 @@ class TestConfigWrite:
         reads.assert_not_awaited()
         assert {"id": "brand_new", **new} in await stored_scenes(hass)
 
-    async def test_slug_writes_the_renamed_scenes_storage_key(
+    async def test_entity_id_writes_the_renamed_scenes_storage_key(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """``led_desk_strip`` is the entity_id slug of the scene stored as
+        """``scene.led_desk_strip`` is the entity of the scene stored as
         ``night_light_led_desk_strip``; the write updates that scene."""
         tools = await scene_tools(
             hass,
@@ -299,7 +299,7 @@ class TestConfigWrite:
         )
 
         result = await tools.ha_config_set_scene(
-            scene_id="led_desk_strip",
+            scene_id="scene.led_desk_strip",
             config={"name": "LED Desk Strip", "entities": TV_OFF},
             wait=False,
         )
@@ -325,12 +325,12 @@ class TestConfigWrite:
             monkeypatch,
             [scene("night_light_led_desk_strip", "LED Desk Strip")],
         )
-        fresh = await config_hash(tools, "led_desk_strip")
+        fresh = await config_hash(tools, "scene.led_desk_strip")
 
         with upserts(core_client) as upsert:
             body = await set_refused(
                 tools,
-                scene_id="led_desk_strip",
+                scene_id="scene.led_desk_strip",
                 config={"name": "New Name", "entities": TV_OFF},
                 config_hash="stale-hash-value",
                 wait=False,
@@ -380,9 +380,9 @@ class TestConfigWrite:
         )
 
         await tools.ha_config_set_scene(
-            scene_id="renamed_scene",
+            scene_id="scene.renamed_scene",
             config={"entities": TV_OFF},
-            config_hash=await config_hash(tools, "renamed_scene"),
+            config_hash=await config_hash(tools, "scene.renamed_scene"),
             wait=False,
         )
 
@@ -433,14 +433,14 @@ class TestConfigWrite:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A config read back from ``ha_config_get_scene`` carries the storage
-        key, not the slug the caller names the scene by."""
+        key, not the entity_id the caller names the scene by."""
         tools = await scene_tools(
             hass, core_client, monkeypatch, [scene("storage_key", "Renamed Scene")]
         )
         new = {"id": "storage_key", "name": "Renamed Scene", "entities": TV_OFF}
 
         await tools.ha_config_set_scene(
-            scene_id="renamed_scene", config=dict(new), wait=False
+            scene_id="scene.renamed_scene", config=dict(new), wait=False
         )
 
         assert await stored_scenes(hass) == [new]
@@ -503,7 +503,7 @@ class TestPythonTransform:
         result = await _transform(
             tools,
             "config['entities']['input_boolean.tv']['state'] = 'off'",
-            scene_id="renamed_scene",
+            scene_id="scene.renamed_scene",
         )
 
         assert result["scene_id"] == "storage_key"

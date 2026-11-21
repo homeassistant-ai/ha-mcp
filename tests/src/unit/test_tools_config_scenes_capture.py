@@ -5,9 +5,12 @@ device, with the states read over REST or in one component frame.
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import hass_frontend
 import pytest
 from homeassistant.core import HomeAssistant, StateMachine
 from homeassistant.exceptions import HomeAssistantError
@@ -16,6 +19,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from pytest_homeassistant.common import MockConfigEntry
 
+from custom_components.ha_mcp_tools import scene_editor
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import scene_capture
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
@@ -586,3 +590,89 @@ class TestDeviceCapture:
 
         assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
         assert await stored_scenes(hass) == before
+
+    async def test_without_the_editors_domains_it_says_so_unwritten(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        tools: ConfigSceneTools,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The component found no ignored domains in the frontend build."""
+        monkeypatch.setattr(scene_editor, "ignored_domains", lambda: None)
+        lamp = _lamp(hass, entity_registry)
+        before = await stored_scenes(hass)
+
+        body = await set_refused(
+            tools, scene_id="movie", config={"name": "Movie"}, capture_devices=[lamp]
+        )
+
+        assert body["error"]["code"] == "INTERNAL_ERROR"
+        assert "installed frontend" in body["error"]["message"]
+        assert await stored_scenes(hass) == before
+
+    async def test_a_component_without_the_editors_domains_says_so_unwritten(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        tools: ConfigSceneTools,
+    ) -> None:
+        """An older component serves the device read but not the domains."""
+        lamp = _lamp(hass, entity_registry)
+        before = await stored_scenes(hass)
+
+        with patch.object(scene_capture, "ask_component", AsyncMock(return_value=None)):
+            body = await set_refused(
+                tools,
+                scene_id="movie",
+                config={"name": "Movie"},
+                capture_devices=[lamp],
+            )
+
+        assert body["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+        assert await stored_scenes(hass) == before
+
+
+# The frontend's delete call of the scene config API (src/data/scene.ts).
+SCENE_API = 'callApi("DELETE",`config/scene/config/'
+
+
+class TestIgnoredDomainsFromTheFrontend:
+    """The component reads the scene editor's ignored domains from the build
+    Core serves, and answers ``None`` for a build it cannot read them from."""
+
+    @pytest.fixture
+    def build(self, tmp_path: Path) -> Path:
+        """The installed build's files that hold the scene config API."""
+        for path in (hass_frontend.where() / "frontend_latest").glob("*.js"):
+            if SCENE_API in path.read_text(encoding="utf-8"):
+                shutil.copy(path, tmp_path)
+        return tmp_path
+
+    def test_the_installed_build_names_them(self, build: Path) -> None:
+        domains = scene_editor.read_ignored_domains(build)
+
+        assert domains is not None
+        assert {"scene", "sensor"} <= set(domains)
+        assert "light" not in domains
+        assert len(list(build.glob("*.js"))) > 1
+
+    def test_copies_that_differ_are_no_answer(self, build: Path) -> None:
+        path = next(build.glob("*.js"))
+        text = path.read_text(encoding="utf-8")
+        path.write_text(text.replace('"sensor",', "", 1), encoding="utf-8")
+
+        assert scene_editor.read_ignored_domains(build) is None
+
+    def test_a_second_array_in_the_module_is_no_answer(self, build: Path) -> None:
+        for path in build.glob("*.js"):
+            text = path.read_text(encoding="utf-8")
+            anchor = text.index(SCENE_API)
+            path.write_text(
+                f'{text[:anchor]}["light"],{text[anchor:]}', encoding="utf-8"
+            )
+
+        assert scene_editor.read_ignored_domains(build) is None
+
+    def test_a_build_without_the_scene_api_is_no_answer(self, tmp_path: Path) -> None:
+        assert scene_editor.read_ignored_domains(tmp_path) is None

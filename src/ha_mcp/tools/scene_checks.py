@@ -1,6 +1,6 @@
 """Refusals of the scene tools: the write checks return their problems,
-``raise_problems`` reports all of a call's problems in one response, and
-``raise_scene_id_refusal`` refuses at once."""
+``raise_problems`` reports all of a call's problems in one response, and the
+``raise_*`` refusals refuse at once."""
 
 from __future__ import annotations
 
@@ -166,5 +166,58 @@ def raise_bare_id_of_another_key(scene_id: str, storage_key: str) -> NoReturn:
                 "Use ha_search(domain_filter='scene') to find storage keys",
             ],
             context={"scene_id": scene_id, "storage_key": storage_key},
+        )
+    )
+
+
+def raise_scene_not_storage_error(
+    scene_id: str, platform: str | None, *, remove: bool = False
+) -> NoReturn:
+    """Raise ``CONFIG_NOT_FOUND`` for a scene that exists but has no editable config.
+
+    The scene entity was confirmed to exist - in the entity registry, or, for an
+    ``id``-less YAML scene that has no registry entry, in the state machine - but
+    ``config/scene/config/{id}``, backed only by the managed ``scenes.yaml``, has
+    no entry for it. That is the not-a-storage-scene case (a Hue/vendor scene, or
+    a scene defined directly in YAML): the entity EXISTS, so ``ENTITY_NOT_FOUND``
+    would be wrong (issue #1971). ``platform`` names the owning integration when
+    the registry exposed it; the message stays generic otherwise. ``remove``
+    names the entity_id form, by which a scene from ``scene.create`` is deleted.
+    """
+    entity_id = f"scene.{scene_id.removeprefix('scene.')}"
+    suggestions = [
+        f"Activate it with ha_config_set_scene(scene_id='{entity_id}', activate=True).",
+    ]
+    if platform and platform != "homeassistant":
+        platform_note = (
+            f" It is provided by the '{platform}' integration, which manages its "
+            "own scenes outside Home Assistant's editable scene storage."
+        )
+        suggestions.append(
+            f"Edit this scene in the '{platform}' integration or its companion app; "
+            "ha_config_get_scene / ha_config_set_scene only edit Home Assistant "
+            "UI/storage scenes."
+        )
+    else:
+        platform_note = ""
+        suggestions.append(
+            "ha_config_get_scene / ha_config_set_scene only read and edit Home "
+            "Assistant UI/storage scenes (Settings > Automations & Scenes > Scenes). "
+            "Scenes defined directly in YAML or made by scene.create are not "
+            "editable through this API."
+        )
+        if remove and not scene_id.startswith("scene."):
+            suggestions.insert(
+                0,
+                f"Pass '{entity_id}' to delete it if scene.create made it; a bare "
+                "id names a storage key only.",
+            )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.CONFIG_NOT_FOUND,
+            f"Scene '{entity_id}' exists but has no editable Home Assistant "
+            f"storage configuration.{platform_note}",
+            suggestions=suggestions,
+            context={"scene_id": scene_id, "platform": platform},
         )
     )

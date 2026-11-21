@@ -6,21 +6,10 @@ from typing import Any
 
 from ..client.exceptions import HomeAssistantAPIError, HomeAssistantError
 from ..errors import ErrorCode, create_error_response
+from .component_api import ask_component
 from .component_devices import fetch_device_via_component
 from .helpers import exception_to_structured_error, raise_tool_error
 from .search.state import fetch_states_via_component
-
-# The scene editor leaves these domains out of a picked device's entities
-# and of its entity picker: frontend 20261028.6, src/data/scene.ts
-# SCENE_IGNORED_DOMAINS, a frontend-only list.
-SCENE_IGNORED_DOMAINS = frozenset(
-    {
-        "binary_sensor", "button", "configuration", "device_tracker", "event",
-        "image_processing", "infrared", "input_button", "persistent_notification",
-        "person", "radio_frequency", "scene", "schedule", "script", "sensor", "sun",
-        "update", "weather", "zone",
-    }
-)  # fmt: skip
 
 
 async def _read_states(client: Any, entity_ids: list[str]) -> list[dict[str, Any]]:
@@ -53,20 +42,48 @@ async def _device_members(
     client: Any, device_ids: list[str], problems: list[dict[str, Any]]
 ) -> dict[str, list[str]]:
     """Each device's entities as the scene editor's device picker lists them:
-    its registry entries with no entity category, not hidden, outside
-    ``SCENE_IGNORED_DOMAINS``. The rows come from the component's device read;
-    an unknown device is added to ``problems``."""
+    its registry entries with no entity category, not hidden, outside the
+    domains the editor ignores, which the component reads from the installed
+    frontend. The rows come from the component's device read; an unknown
+    device is added to ``problems``."""
     members: dict[str, list[str]] = {}
+    if not device_ids:
+        return members
+    editor = await ask_component(client, "scene_ignored_domains")
+    if editor is not None and editor.get("domains") is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                "The ha_mcp_tools component found no list of the domains the "
+                "scene editor ignores in the installed frontend, so the device's "
+                "entities cannot be picked as the editor picks them; nothing was "
+                "written",
+                suggestions=[
+                    (
+                        "Capture the device's entities with capture_entities; "
+                        "the scene editor then lists them as single entities"
+                    ),
+                    "Report it with ha_report_issue: the frontend moved the list",
+                ],
+                context={"device_ids": device_ids},
+            )
+        )
+    ignored = (editor or {}).get("domains")
     for device_id in device_ids:
         reply = await fetch_device_via_component(
             client, device_id, include_entities=True
         )
-        if reply is None or not isinstance(reply.get("entities"), list):
+        if (
+            ignored is None
+            or reply is None
+            or not isinstance(reply.get("entities"), list)
+        ):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.COMPONENT_NOT_INSTALLED,
                     "capture_devices needs the ha_mcp_tools component's device "
-                    "read, which is missing or did not answer; nothing was written",
+                    "read and its read of the domains the scene editor ignores, "
+                    "one of which is missing or did not answer; nothing was written",
                     suggestions=[
                         "Install or update the ha_mcp_tools component",
                         (
@@ -96,7 +113,7 @@ async def _device_members(
             for row in reply["entities"]
             if not row.get("entity_category")
             and not row.get("hidden_by")
-            and row["entity_id"].split(".")[0] not in SCENE_IGNORED_DOMAINS
+            and row["entity_id"].split(".")[0] not in ignored
         ]
     return members
 

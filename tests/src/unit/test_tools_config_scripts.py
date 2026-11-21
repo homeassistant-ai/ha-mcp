@@ -18,6 +18,7 @@ from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util.yaml import dump, load_yaml_dict
 
+from ha_mcp.backup_manager import BackupManager
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import entity_registration, tools_config_scripts
 from ha_mcp.tools.entity_registration import resolve_entity_id_after_write
@@ -339,12 +340,8 @@ async def test_get_puts_the_category_into_the_body(
 
 
 @pytest.mark.parametrize(
-    ("mode", "with_hash", "threaded_key"),
-    [
-        ("full_config", False, None),
-        ("full_config", True, KEY),
-        ("transform", True, KEY),
-    ],
+    ("mode", "with_hash"),
+    [("full_config", False), ("full_config", True), ("transform", True)],
     ids=["full_config", "full_config_with_hash", "transform"],
 )
 async def test_write_to_a_renamed_script_updates_its_storage_key(
@@ -354,12 +351,10 @@ async def test_write_to_a_renamed_script_updates_its_storage_key(
     entity_registry: er.EntityRegistry,
     mode: str,
     with_hash: bool,
-    threaded_key: str | None,
 ) -> None:
-    """A write by the renamed entity's name updates the script rather than
-    creating a second one under that name. A hash-checked write already
-    resolved the key and hands it over instead of looking it up again
-    (#1813)."""
+    """A write by the renamed entity's id updates the script rather than
+    creating a second one under that name. The tool resolved the key and
+    hands it over instead of looking it up again (#1813)."""
     renamed = await _rename(hass, entity_registry, "renamed_script")
     arguments = await _write_arguments(tools, mode, renamed)
     if with_hash and mode == "full_config":
@@ -379,7 +374,7 @@ async def test_write_to_a_renamed_script_updates_its_storage_key(
     assert stored[KEY] != BODY
     args, kwargs = upserts.call_args
     assert args[1] == renamed
-    assert kwargs["resolved_id"] == threaded_key
+    assert kwargs["resolved_id"] == KEY
 
 
 async def test_write_without_alias_keeps_the_callers_name(
@@ -596,6 +591,62 @@ class TestCollidingIds:
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert any("'script.key_a'" in s for s in body["error"]["suggestions"])
         assert set(await _stored(hass)) == {"key_b"}
+
+    @pytest.mark.parametrize("mode", ["config", "hashed", "transform"])
+    async def test_a_recreate_by_a_removed_key_leaves_the_other_script(
+        self, hass: HomeAssistant, tools: ConfigScriptTools, mode: str
+    ) -> None:
+        """Once key_a is gone, a set by key_a must not overwrite key_b, whose
+        entity is script.key_a."""
+        await tools.ha_config_remove_script(script_id="key_a", wait=False)
+        edit: dict[str, Any] = (
+            {"python_transform": TRANSFORM}
+            if mode == "transform"
+            else {"config": {**BODY, "alias": "A again"}}
+        )
+        if mode != "config":
+            got = await tools.ha_config_get_script(script_id="key_a")
+            edit["config_hash"] = got["config_hash"]
+
+        body = await rejected_call_body(
+            tools.ha_config_set_script(script_id="key_a", wait=False, **edit)
+        )
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert any("'script.key_a'" in s for s in body["error"]["suggestions"])
+        assert {k: s["alias"] for k, s in (await _stored(hass)).items()} == {
+            "key_b": "B"
+        }
+
+    async def test_restoring_a_removed_key_leaves_the_other_script(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        backup_manager: BackupManager,
+    ) -> None:
+        """A snapshot taken by the bare key key_a restores key_a, not key_b,
+        whose entity is script.key_a."""
+        path = await backup_manager.maybe_snapshot("script", "key_a", force=True)
+        assert path is not None
+        await tools.ha_config_remove_script(script_id="key_a", wait=False)
+
+        await backup_manager.restore_snapshot(path.name)
+
+        assert {k: s["alias"] for k, s in (await _stored(hass)).items()} == {
+            "key_a": "A",
+            "key_b": "B",
+        }
+
+    async def test_a_removed_key_has_no_snapshot(
+        self, tools: ConfigScriptTools, backup_manager: BackupManager
+    ) -> None:
+        """A snapshot by the bare key key_a never holds key_b, whose entity is
+        script.key_a."""
+        await tools.ha_config_remove_script(script_id="key_a", wait=False)
+
+        assert (
+            await backup_manager.maybe_snapshot("script", "key_a", force=True) is None
+        )
 
     @pytest.mark.parametrize(
         ("script_id", "event"),

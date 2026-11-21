@@ -26,6 +26,7 @@ from custom_components.ha_mcp_tools import (
     flow_outline,
     flow_record,
     helper_collections,
+    scene_editor,
     todo_items,
 )
 from custom_components.ha_mcp_tools.const import (
@@ -134,6 +135,7 @@ async def test_every_command_is_registered_and_config_get_is_not(
         config_references.WS_CONFIG_REFERENCES,
         flow_record.WS_FLOW_RECORD,
         flow_outline.WS_FLOW_OUTLINE,
+        scene_editor.WS_SCENE_IGNORED_DOMAINS,
     }
     assert "ha_mcp_tools/config_get" not in registered
 

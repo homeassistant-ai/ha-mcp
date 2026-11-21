@@ -2095,7 +2095,10 @@ async def _restore_automation(client: Any, entity_id: str, config: Any) -> Any:
 
 
 async def _fetch_script(client: Any, entity_id: str) -> Any:
+    # A bare id is a storage key: its snapshot holds only the script stored there.
     try:
+        if not entity_id.startswith("script."):
+            return await client._request("GET", f"config/script/config/{entity_id}")
         result = await client.get_script_config(entity_id)
     except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
@@ -2107,7 +2110,10 @@ async def _fetch_script(client: Any, entity_id: str) -> Any:
 
 
 async def _restore_script(client: Any, entity_id: str, config: Any) -> Any:
-    return await client.upsert_script_config(config, entity_id)
+    # Resolving a removed bare key could reach the script whose entity is
+    # script.<id> and overwrite it.
+    key = None if entity_id.startswith("script.") else entity_id
+    return await client.upsert_script_config(config, entity_id, resolved_id=key)
 
 
 def _require_list(value: Any, endpoint: str) -> list[Any]:

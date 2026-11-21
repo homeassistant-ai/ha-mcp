@@ -131,9 +131,11 @@ async def test_reading_a_missing_script_is_not_found(
 async def test_a_script_with_a_sequence_is_written(
     config_client: HomeAssistantClient,
 ) -> None:
+    """No ``operation`` field: Core answers a create and an update alike."""
     result = await config_client.upsert_script_config(dict(SCRIPT), "test_script")
 
     assert (result["success"], result["script_id"]) == (True, "test_script")
+    assert "operation" not in result
     assert (await _stored(config_client, "test_script"))["sequence"] == SEQUENCE
 
 

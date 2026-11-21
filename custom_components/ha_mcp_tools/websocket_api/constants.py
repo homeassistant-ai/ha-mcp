@@ -15,6 +15,7 @@ from .. import (
     flow_outline,
     flow_record,
     helper_collections,
+    scene_editor,
     todo_items,
 )
 from ..const import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
@@ -238,6 +239,7 @@ CAPABILITIES: list[str] = [
     todo_items.CAPABILITY,
     flow_record.CAPABILITY,
     flow_outline.CAPABILITY,
+    scene_editor.CAPABILITY,
     automation_config.CAPABILITY,
     config_references.CAPABILITY,
     *card_definitions.CAPABILITIES,

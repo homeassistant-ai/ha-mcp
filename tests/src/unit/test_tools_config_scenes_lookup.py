@@ -344,6 +344,62 @@ class TestNotAStorageScene:
         # A bare id never sends a delete to another key.
         delete.assert_not_called()
 
+    async def test_remove_by_entity_id_deletes_a_scene_from_scene_create(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """Core's scene.delete removes a scene scene.create made, which has no
+        stored config."""
+        await hass.services.async_call(
+            "scene", "create", {"scene_id": "rv_dyn", "entities": TV_ON}, blocking=True
+        )
+
+        result = await tools.ha_config_remove_scene(scene_id="scene.rv_dyn", wait=True)
+
+        assert result["success"] is True
+        assert hass.states.get("scene.rv_dyn") is None
+        assert await stored_scenes(hass) == [scene("test_scene", "Test Scene")]
+
+    async def test_remove_by_the_bare_id_of_a_scene_from_scene_create_is_refused(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """A bare id is a storage key; the refusal names the entity_id form."""
+        await hass.services.async_call(
+            "scene", "create", {"scene_id": "rv_dyn", "entities": TV_ON}, blocking=True
+        )
+
+        body = await rejected_call_body(
+            tools.ha_config_remove_scene(scene_id="rv_dyn", wait=False)
+        )
+
+        assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+        assert body["error"]["suggestions"][0].startswith("Pass 'scene.rv_dyn'")
+        assert hass.states.get("scene.rv_dyn") is not None
+
+    @pytest.mark.parametrize("owner", ["hue", "yaml"])
+    async def test_remove_by_entity_id_leaves_a_scene_core_will_not_delete(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        owner: str,
+    ) -> None:
+        """Core's scene.delete refuses a scene scene.create did not make."""
+        if owner == "hue":
+            tools = await scene_tools(hass, core_client, monkeypatch, [])
+            entity_id = integration_scene(hass)
+        else:
+            tools = await scene_tools(
+                hass, core_client, monkeypatch, yaml_only=[_UNREGISTERED]
+            )
+            entity_id = "scene.test_scene"
+
+        body = await rejected_call_body(
+            tools.ha_config_remove_scene(scene_id=entity_id, wait=False)
+        )
+
+        assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+        assert hass.states.get(entity_id) is not None
+
     @pytest.mark.parametrize("transform", [False, True])
     async def test_hash_bearing_set_names_the_owning_integration(
         self, hass: HomeAssistant, tools: ConfigSceneTools, transform: bool
@@ -685,6 +741,29 @@ class TestStorageKeyPrecedence:
         assert any("'scene.key_a'" in s for s in body["error"]["suggestions"])
         assert [s["id"] for s in await stored_scenes(hass)] == ["key_b"]
 
+    @pytest.mark.parametrize("mode", ["config", "hashed", "transform"])
+    async def test_a_recreate_by_a_removed_key_leaves_the_other_scene(
+        self, hass: HomeAssistant, collided: ConfigSceneTools, mode: str
+    ) -> None:
+        """A bare id is a storage key: once key_a is gone, a set by key_a must
+        not overwrite key_b, whose entity is scene.key_a."""
+        await collided.ha_config_remove_scene(scene_id="key_a", wait=False)
+        edit: dict[str, Any] = (
+            {"python_transform": "config['icon'] = 'mdi:one'"}
+            if mode == "transform"
+            else {"config": {"name": "First again", "entities": TV_ON}}
+        )
+        if mode != "config":
+            edit["config_hash"] = await config_hash(collided, "key_a")
+
+        body = await rejected_call_body(
+            collided.ha_config_set_scene(scene_id="key_a", wait=False, **edit)
+        )
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert any("'scene.key_a'" in s for s in body["error"]["suggestions"])
+        assert await stored_scenes(hass) == [scene("key_b", "Key A")]
+
 
 class TestEntityIdForm:
     """``scene.<id>`` names an entity: with no such entity it never opens the
@@ -810,6 +889,23 @@ class TestEntityIdForm:
         assert match["config"] is None
         with pytest.raises(ToolError):
             await orphaned_key.ha_config_get_scene(scene_id=match["scene_id"])
+
+    async def test_remove_deletes_a_scene_create_scene_named_after_another_key(
+        self, hass: HomeAssistant, orphaned_key: ConfigSceneTools
+    ) -> None:
+        """scene.key_a from scene.create is no stored scene; key_a stays."""
+        await hass.services.async_call(
+            "scene", "create", {"scene_id": "key_a", "entities": TV_ON}, blocking=True
+        )
+        before = await stored_scenes(hass)
+
+        result = await orphaned_key.ha_config_remove_scene(
+            scene_id="scene.key_a", wait=True
+        )
+
+        assert result["success"] is True
+        assert hass.states.get("scene.key_a") is None
+        assert await stored_scenes(hass) == before
 
     @pytest.mark.parametrize("search_in_config", [False, True])
     async def test_discovery_gives_an_unregistered_scene_neither_key_nor_config(

@@ -2037,7 +2037,6 @@ class HomeAssistantClient:
                 "success": True,
                 "script_id": write_id,
                 "result": response.get("result", "ok"),
-                "operation": "created" if response.get("result") == "ok" else "updated",
             }
         except Exception as e:
             logger.error(f"Failed to upsert script config for {script_id}: {e}")
@@ -2164,8 +2163,8 @@ class HomeAssistantClient:
 
         Scenes may be renamed in the HA UI, changing the entity_id but keeping
         the original storage key. Like :meth:`_resolve_script_id`, this returns
-        the bare storage key and needs a WebSocket entity registry lookup because
-        the state attributes do not surface it, and gives a bare storage key
+        the bare storage key and reads the entity registry, which also holds a
+        scene that has no state (a disabled one), and gives a bare storage key
         precedence. Unlike it, :meth:`_resolve_scene` raises
         :class:`SceneIdNotAnEntityError` for an unregistered ``scene.<id>`` when
         key ``<id>`` holds a scene, and carries ``registry_hit``/``platform``.

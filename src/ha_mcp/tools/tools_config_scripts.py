@@ -48,6 +48,7 @@ from .config_write_helpers import (
     augment_tool_error_with_skill_content,
     fetch_entity_category,
     merge_validation_meta,
+    refuse_write_by_bare_id_of_another_key,
 )
 from .entity_registration import resolve_entity_id_after_write
 from .helpers import (
@@ -351,6 +352,7 @@ class ConfigScriptTools:
             current_hash,
             resolved_id,
         ) = await self._get_script_config_internal(script_id)
+        refuse_write_by_bare_id_of_another_key("script", script_id, resolved_id)
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(
@@ -371,10 +373,9 @@ class ConfigScriptTools:
         """Upsert, threading a pre-resolved storage key when available.
 
         ``script_id`` is always the CALLER's identifier (used to default a
-        missing alias). ``resolved_id`` — set only when ``_fetch_and_verify_hash``
-        already resolved the storage key — is passed as the write target so the
-        REST client skips the redundant entity-registry lookup (issue #1813
-        Phase 0); None lets the REST client resolve. Passing the caller id
+        missing alias). ``resolved_id``, the storage key the tool resolved, is
+        passed as the write target so the REST client skips the redundant
+        entity-registry lookup (issue #1813 Phase 0). Passing the caller id
         separately keeps a renamed script's alias caller-facing (#1935).
         """
         result: dict[str, Any] = await self._client.upsert_script_config(
@@ -470,7 +471,7 @@ class ConfigScriptTools:
         script_id: Annotated[
             str,
             Field(
-                description="Script identifier — bare storage key ('morning_routine') or entity_id ('script.morning_routine'); a bare id names the script stored under that key even when another script's entity is 'script.<id>'."
+                description="Script identifier — bare storage key ('morning_routine') or entity_id ('script.morning_routine'); a bare id writes the script stored under that key; when none is but another script's entity is 'script.<id>', the write is refused (pass 'script.<id>' for that script)."
             ),
         ],
         config: Annotated[
@@ -697,14 +698,16 @@ class ConfigScriptTools:
                 category,
             )
 
-            # Optional hash check for full config updates. When it runs it
-            # resolves ``script_id`` to the storage key — thread that through so
-            # the upsert doesn't re-resolve (issue #1813 Phase 0). Stays None on
-            # the no-hash path (raw script_id resolved once, inside upsert).
-            resolved_key: str | None = None
+            # The storage key is resolved here, by the hash check when it runs,
+            # and threaded through so the upsert doesn't re-resolve (#1813).
             if config_hash:
                 _, resolved_key = await self._fetch_and_verify_hash(
                     script_id, config_hash, "set"
+                )
+            else:
+                resolved_key = await self._client._resolve_script_id(script_id)
+                refuse_write_by_bare_id_of_another_key(
+                    "script", script_id, resolved_key
                 )
 
             # Pre-check for best-practice issues.

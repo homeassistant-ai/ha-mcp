@@ -138,6 +138,9 @@ the info handshake carries no capability entry:
   the flow manager that holds it. Core's flow endpoints do not report it, and
   the server binds a ``flow_id`` it did not open itself (it restarted) to a
   call's target with it. See ``flow_record.py``.
+* ``ha_mcp_tools/scene_ignored_domains`` — the domains the scene editor leaves
+  out of a picked device's entities, read from the installed frontend build,
+  where the list lives only. See ``scene_editor.py``.
 * ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set
@@ -365,6 +368,7 @@ from .. import (
     flow_outline,
     flow_record,
     helper_collections,
+    scene_editor,
     todo_items,
 )
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
@@ -552,6 +556,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *todo_items.command_specs(vol),
         *flow_record.command_specs(vol),
         *flow_outline.command_specs(vol),
+        *scene_editor.command_specs(vol),
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
         *dashboard_cards_ws.command_specs(vol),

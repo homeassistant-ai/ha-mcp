@@ -9,6 +9,8 @@ keyed by entity_id (not a list).
 
 import asyncio
 import logging
+from collections.abc import Callable
+from functools import partial
 from typing import Annotated, Any, NoReturn, cast
 
 from pydantic import Field
@@ -19,8 +21,10 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
     SceneIdNotAnEntityError,
+    SceneResolution,
     SceneStorageConfigNotFoundError,
 )
 from ..errors import (
@@ -47,6 +51,7 @@ from .config_write_helpers import (
     config_reload_waiter,
     fetch_entity_category,
     merge_validation_meta,
+    refuse_write_by_bare_id_of_another_key,
 )
 from .entity_registration import resolve_entity_id_after_write
 from .helpers import (
@@ -64,6 +69,7 @@ from .scene_checks import (
     raise_bare_id_of_another_key,
     raise_problems,
     raise_scene_id_refusal,
+    raise_scene_not_storage_error,
     scene_body_problems,
 )
 from .scene_discovery import discover_scenes
@@ -80,49 +86,6 @@ from .ws_waiters import verify_entity_removed, wait_for_entity_registered
 _SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
 
 logger = logging.getLogger(__name__)
-
-
-def _raise_scene_not_storage_error(scene_id: str, platform: str | None) -> NoReturn:
-    """Raise ``CONFIG_NOT_FOUND`` for a scene that exists but has no editable config.
-
-    The scene entity was confirmed to exist - in the entity registry, or, for an
-    ``id``-less YAML scene that has no registry entry, in the state machine - but
-    ``config/scene/config/{id}``, backed only by the managed ``scenes.yaml``, has
-    no entry for it. That is the not-a-storage-scene case (a Hue/vendor scene, or
-    a scene defined directly in YAML): the entity EXISTS, so ``ENTITY_NOT_FOUND``
-    would be wrong (issue #1971). ``platform`` names the owning integration when
-    the registry exposed it; the message stays generic otherwise.
-    """
-    entity_id = f"scene.{scene_id.removeprefix('scene.')}"
-    suggestions = [
-        f"Activate it with ha_config_set_scene(scene_id='{entity_id}', activate=True).",
-    ]
-    if platform and platform != "homeassistant":
-        platform_note = (
-            f" It is provided by the '{platform}' integration, which manages its "
-            "own scenes outside Home Assistant's editable scene storage."
-        )
-        suggestions.append(
-            f"Edit this scene in the '{platform}' integration or its companion app; "
-            "ha_config_get_scene / ha_config_set_scene only edit Home Assistant "
-            "UI/storage scenes."
-        )
-    else:
-        platform_note = ""
-        suggestions.append(
-            "ha_config_get_scene / ha_config_set_scene only read and edit Home "
-            "Assistant UI/storage scenes (Settings > Automations & Scenes > Scenes). "
-            "Scenes defined directly in YAML are not editable through this API."
-        )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.CONFIG_NOT_FOUND,
-            f"Scene '{entity_id}' exists but has no editable Home Assistant "
-            f"storage configuration.{platform_note}",
-            suggestions=suggestions,
-            context={"scene_id": scene_id, "platform": platform},
-        )
-    )
 
 
 def _activate_once_reloaded(
@@ -384,7 +347,7 @@ class ConfigSceneTools:
             # The entity resolved but scenes.yaml has no config for it - a Hue/
             # vendor or raw-YAML scene. Surface CONFIG_NOT_FOUND, not the
             # ENTITY_NOT_FOUND the generic handler below would emit (#1971).
-            _raise_scene_not_storage_error(e.scene_id, e.platform)
+            raise_scene_not_storage_error(e.scene_id, e.platform)
         except Exception as e:
             # Pass `entity_id` so a 404 from rest_client surfaces as
             # ENTITY_NOT_FOUND (not the generic RESOURCE_NOT_FOUND fallback).
@@ -500,6 +463,7 @@ class ConfigSceneTools:
             current_hash,
             resolved_id,
         ) = await self._get_scene_config_internal(scene_id)
+        refuse_write_by_bare_id_of_another_key("scene", scene_id, resolved_id)
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(
@@ -585,10 +549,11 @@ class ConfigSceneTools:
             str,
             Field(
                 description="Scene storage key (e.g. 'movie_night') or entity_id "
-                "(e.g. 'scene.movie_night'). A bare id names the scene stored "
-                "under that key or, when none is, the scene whose entity is "
-                "scene.<id>; scene.<x> is an entity_id. A new scene takes the "
-                "bare key; Core names its entity after 'name'."
+                "(e.g. 'scene.movie_night'). A bare id writes the scene stored "
+                "under that key; when none is but another scene's entity is "
+                "scene.<id>, the write is refused (pass scene.<id> for that "
+                "scene). A new scene takes the bare key; Core names its entity "
+                "after 'name'."
             ),
         ],
         config: Annotated[
@@ -837,7 +802,7 @@ class ConfigSceneTools:
             # pre-fetch read 404s because the entity has no editable scenes.yaml
             # config (Hue/vendor or raw-YAML). Same CONFIG_NOT_FOUND
             # classification as get/delete (#1971), not a generic write failure.
-            _raise_scene_not_storage_error(e.scene_id, e.platform)
+            raise_scene_not_storage_error(e.scene_id, e.platform)
         except Exception as e:  # noqa: BLE001
             error = exception_to_structured_error(
                 e,
@@ -1155,6 +1120,7 @@ class ConfigSceneTools:
                 resolved_id
             ):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
+                refuse_write_by_bare_id_of_another_key("scene", scene_id, resolved_id)
             else:
                 problems += entity_form_create_problems(scene_id, resolved_id)
         # These input refusals (entity-form create, body, category, captures)
@@ -1266,7 +1232,8 @@ class ConfigSceneTools:
             Field(
                 description="Scene to delete: storage key (e.g. 'old_scene') or "
                 "entity_id (e.g. 'scene.old_scene'). A bare id deletes only the "
-                "scene stored under that key."
+                "scene stored under that key; a scene made by scene.create has "
+                "none and is deleted by its entity_id."
             ),
         ],
         wait: Annotated[
@@ -1281,10 +1248,11 @@ class ConfigSceneTools:
 
         EXAMPLE: ha_config_remove_scene("old_scene")
 
-        Only scenes in Home Assistant's editable scene storage (``scenes.yaml``
+        Scenes in Home Assistant's editable scene storage (``scenes.yaml``
         entries with an ``id``, as the UI and ha_config_set_scene write them)
-        can be deleted; a scene defined elsewhere in YAML or by an integration
-        is CONFIG_NOT_FOUND.
+        can be deleted, and by entity_id a scene made by ``scene.create``,
+        through Core's ``scene.delete``; a scene defined elsewhere in YAML or
+        by an integration is CONFIG_NOT_FOUND.
 
         The scene is deleted even when automations or scripts reference it;
         the ones Home Assistant's related search finds are listed in
@@ -1314,20 +1282,17 @@ class ConfigSceneTools:
             # carries ``registry_hit``/``platform`` so a config-API 404 on a
             # non-storage scene (Hue/vendor, raw-YAML) classifies as
             # CONFIG_NOT_FOUND rather than the misleading generic 404 (#1971).
-            resolution = await self._client._resolve_scene(scene_id)
-            resolved_id = resolution.storage_key
-            if resolved_id != scene_id and not scene_id.startswith("scene."):
-                # A bare id is a storage key: no delete goes to another key.
-                if await self._client._config_exists("scene", resolved_id):
-                    raise_bare_id_of_another_key(scene_id, resolved_id)
-                _raise_scene_not_storage_error(scene_id, resolution.platform)
-
+            resolution, refuse = await self._resolve_scene_to_remove(scene_id)
             # Resolve actual entity_id BEFORE delete — once the registry
             # entry is gone, the unique_id lookup can no longer find it.
-            # Falls back to f"scene.{resolved_id}" if the registry has no
+            # Falls back to f"scene.{key}" if the registry has no
             # matching unique_id (e.g. scene_id-as-entity-id slug case).
-            entity_id = await self._resolve_scene_entity_id(
-                resolved_id, allow_component=True
+            entity_id = (
+                await self._resolve_scene_entity_id(
+                    resolution.storage_key, allow_component=True
+                )
+                if resolution is not None
+                else scene_id
             )
             # A failed lookup only warns: it must not keep the scene alive.
             lookup: list[str] = []
@@ -1336,11 +1301,7 @@ class ConfigSceneTools:
             )
             users = {k: related[k] for k in ("automation", "script") if related.get(k)}
 
-            # Thread the resolution through so delete_scene_config reuses the
-            # storage key (no redundant re-resolve) and can classify a 404.
-            result = await self._client.delete_scene_config(
-                scene_id, resolution=resolution
-            )
+            result = await self._delete_scene(scene_id, resolution, refuse)
             if users:
                 result["referenced_by"] = users
                 names = ", ".join(sorted(i for ids in users.values() for i in ids))
@@ -1357,20 +1318,13 @@ class ConfigSceneTools:
             if wait:
                 await verify_entity_removed(self._client, entity_id, result)
 
-            return {
-                "success": True,
-                "action": "delete",
-                **result,
-                "scene_id": resolved_id,
-            }
+            return {"success": True, "action": "delete", **result}
         except ToolError:
             raise
-        except SceneIdNotAnEntityError as e:
-            raise_scene_id_refusal(e.identifier, e.storage_key)
         except SceneStorageConfigNotFoundError as e:
             # Entity resolved but scenes.yaml has no config for it - a Hue/
             # vendor or raw-YAML scene, not a genuinely missing entity (#1971).
-            _raise_scene_not_storage_error(e.scene_id, e.platform)
+            raise_scene_not_storage_error(e.scene_id, e.platform, remove=True)
         except Exception as e:
             exception_to_structured_error(
                 e,
@@ -1384,6 +1338,68 @@ class ConfigSceneTools:
             # explicit raise makes the function's exit unambiguous (no implicit
             # ``return None`` fall-through) and is never reached at runtime.
             raise
+
+    async def _resolve_scene_to_remove(
+        self, scene_id: str
+    ) -> tuple[SceneResolution | None, Callable[[], NoReturn] | None]:
+        """The resolution of a scene to delete, refusing a bare id that is no
+        storage key. With no resolution, Core's ``scene.delete`` decides and
+        its refusal raises the returned callable."""
+        try:
+            resolution = await self._client._resolve_scene(scene_id)
+        except SceneIdNotAnEntityError as e:
+            return None, partial(raise_scene_id_refusal, e.identifier, e.storage_key)
+        key = resolution.storage_key
+        if key != scene_id and not scene_id.startswith("scene."):
+            # A bare id is a storage key: no delete goes to another key.
+            if await self._client._config_exists("scene", key):
+                raise_bare_id_of_another_key(scene_id, key)
+            raise_scene_not_storage_error(scene_id, resolution.platform, remove=True)
+        return resolution, None
+
+    async def _delete_scene(
+        self,
+        scene_id: str,
+        resolution: SceneResolution | None,
+        refuse: Callable[[], NoReturn] | None,
+    ) -> dict[str, Any]:
+        """Delete the stored scene; ``scene.<id>`` with no stored config goes to
+        Core's ``scene.delete``, which removes only a scene ``scene.create``
+        made, and Core's refusal of any other raises ``refuse``."""
+        if resolution is not None:
+            try:
+                # Reuses the resolved storage key and classifies a 404.
+                return cast(
+                    dict[str, Any],
+                    await self._client.delete_scene_config(
+                        scene_id, resolution=resolution
+                    ),
+                )
+            except SceneStorageConfigNotFoundError as e:
+                if not scene_id.startswith("scene."):
+                    raise
+                refuse = partial(raise_scene_not_storage_error, e.scene_id, e.platform)
+        reply = await self._client.send_websocket_message(
+            {
+                "type": "call_service",
+                "domain": "scene",
+                "service": "delete",
+                "target": {"entity_id": scene_id},
+            },
+            expected_error_codes=frozenset({"service_validation_error"}),
+        )
+        if reply.get("success") is False:
+            if (
+                refuse is not None
+                and reply.get("translation_domain") == "scene"
+                and (
+                    reply.get("translation_key")
+                    in ("entity_not_scene", "entity_not_dynamically_created")
+                )
+            ):
+                refuse()
+            raise HomeAssistantCommandError.from_reply(reply)
+        return {"scene_id": scene_id, "deleted_with": "scene.delete"}
 
 
 def register_config_scene_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

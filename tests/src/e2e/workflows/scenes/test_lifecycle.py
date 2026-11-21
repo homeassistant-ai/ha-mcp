@@ -559,7 +559,8 @@ class TestSceneLifecycle:
         """capture_devices saves the device's light without entity_only, as the
         editor saves a picked device. The membership rules are pinned in the
         unit tests; this one sends capture_devices through the MCP schema to
-        the component's device read."""
+        the component's device read and its read of the frontend's ignored
+        domains."""
         scene_id = f"capture_device_{uuid4().hex[:8]}"
         cleanup_tracker.track("scene", f"scene.{scene_id}")
         mcp = MCPAssertions(mcp_client)
