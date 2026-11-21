@@ -22,7 +22,7 @@ If you *do* run the app, you don't also need `uvx` — that would be a second, s
 
 | Feature | Built-in HA MCP | ha-mcp |
 |---------|-----------------|--------|
-| Tools | ~15 basic tools | 86 comprehensive tools |
+| Tools | ~15 basic tools | 87 comprehensive tools |
 | Focus | Device control | Full system administration |
 | Automations | Limited | Create, edit, debug, trace |
 | Dashboards | No | Full dashboard management |
