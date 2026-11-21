@@ -190,10 +190,11 @@ entity_id, so a Jinja template or sandbox-adjacent computation that *derives* a
 hidden entity's state without naming its entity_id cannot be caught. On enforced
 scannable paths, a matching hidden entity's data is not returned. Existence
 concealment is best-effort: per-tool not-found shapes vary, so a prober comparing
-errors may infer that an id is hidden rather than absent. The boundary covers
-Home Assistant entity data, not physical-world imagery: a visible camera stays
-readable (`ha_get_camera_image`) and could incidentally show a display that
-renders a hidden entity's state — hide that camera when its view is sensitive.
+errors may infer that an id is hidden rather than absent. Enforcement checks the entity requested by
+`ha_get_camera_image`. Pixels from a visible camera or image entity stay
+readable. A camera can show a sensitive display, and an image entity can render
+another entity's data directly in a chart, map, or template image. Hide the
+camera or image entity itself when its output is sensitive.
 Enforce mode is not a defense against an adversarial prompt author deliberately
 trying to exfiltrate a hidden entity's state, nor a substitute for Home
 Assistant's permission model; restrict what the configured token can reach in
