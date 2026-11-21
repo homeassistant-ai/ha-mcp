@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import importlib.resources
 import json
 import re
 
 import pytest
 
+from custom_components.ha_mcp_tools.settings_transfer_schema import RefusalCode
 from ha_mcp.settings_ui import render_settings_html
 
 from ._js_harness import HarnessResult, extract_script_body, run_script
@@ -184,11 +186,8 @@ def test_failed_import_never_renders_arbitrary_error_text() -> None:
 @pytest.mark.parametrize(
     ("status", "code", "message"),
     [
-        (409, "tools_entry_busy", "Wait for it to finish"),
-        (409, "tools_entry_unavailable", "reload the entry"),
         (500, "rollback_incomplete", "some settings could not be restored"),
         (403, "origin_denied", "Open the panel from the sidebar"),
-        (400, "invalid_server_settings", "The Home Assistant log names the file"),
     ],
 )
 def test_import_errors_explain_next_action(
@@ -202,17 +201,22 @@ def test_import_errors_explain_next_action(
     assert message in result.status
 
 
-def test_pin_policy_explains_how_to_complete_import_on_the_destination() -> None:
+_EN = json.loads(
+    (importlib.resources.files("ha_mcp.settings_ui") / "locales" / "en.json").read_text(
+        encoding="utf-8"
+    )
+)["messages"]
+
+
+@pytest.mark.parametrize("code", list(RefusalCode))
+def test_every_refusal_shows_its_own_message(code: RefusalCode) -> None:
     result = _run(
         _choose(_BUNDLE),
         responses={
             _TRANSFER + "import": {
-                "status": 400,
-                "json": {"success": False, "error": "decision_pin_required"},
+                "status": code.http_status,
+                "json": {"success": False, "error": code},
             }
         },
     )
-    assert result.status and result.status.startswith(
-        "alert: This policy requires a decision PIN"
-    )
-    assert "Tool Security Policies" in result.status
+    assert result.status == f"alert: {_EN[f'transfer.{code}']}"
