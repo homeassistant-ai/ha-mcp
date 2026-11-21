@@ -37,8 +37,10 @@ from custom_components.ha_mcp_tools.store_records import (
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_hacs import HacsTools
 
+from ._command_faults import received
 from ._config_flow_core import add_tools_entry
-from ._hacs_marketplace import core_install, pooled_socket, prepare_marketplace
+from ._hacs_actions_core import serve_integration
+from ._hacs_marketplace import pooled_socket, prepare_marketplace
 from ._marketplace_records import (
     REPOSITORY_IDS,
     stored_record,
@@ -48,6 +50,7 @@ from ._marketplace_records import (
 HACS_INSTALL = Path(__file__).parent / "hacs_install"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _INSTALLED = "v9.1.0"
+INSTALL = "marketplace/repository/install"
 
 
 def _own_hacs_records(hacs_record: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -96,12 +99,16 @@ async def adopted(
     aioclient_mock: AiohttpClientMocker,
     hass_storage: dict[str, Any],
 ) -> AsyncIterator[None]:
-    """Home Assistant started on the HACS install, adopted by the Marketplace."""
+    """Home Assistant started on the HACS install, adopted by the Marketplace,
+    with GitHub serving the main listing."""
     entries = await hass.async_add_executor_job(
         _leave_hacs_install, Path(hass.config.config_dir)
     )
     hass_storage[entries["key"]] = entries
     [hacs_entry] = entries["data"]["entries"]
+    serve_integration(
+        aioclient_mock, MAIN_REPOSITORY, int(REPOSITORY_IDS[MAIN_REPOSITORY]), DOMAIN
+    )
     prepare_marketplace(hass, aioclient_mock)
 
     # A start reads the config entries from storage; the test's manager never did.
@@ -147,7 +154,9 @@ async def test_both_listings_from_hacs_get_the_repair_that_keeps_the_main_one(
 
 @pytest.mark.usefixtures("adopted")
 async def test_a_download_of_the_forgotten_mirror_goes_to_the_main_listing(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    core_client: HomeAssistantClient,
 ) -> None:
     """Installing the mirror again would bring the duplicate back."""
     await add_tools_entry(hass, loaded=True)
@@ -155,13 +164,13 @@ async def test_a_download_of_the_forgotten_mirror_goes_to_the_main_listing(
     socket = await pooled_socket(core_client)
     await socket.send_command("marketplace/warning/accept")
 
-    with core_install() as install:
+    with received(hass, INSTALL) as seen:
         result = await HacsTools(core_client).ha_manage_hacs(
             action="download", repository_id=MIRROR_REPOSITORY
         )
 
-    assert install.await_args is not None
-    assert install.await_args.args[0].data.full_name == MAIN_REPOSITORY
+    assert [m["repository"] for m in seen[INSTALL]] == [REPOSITORY_IDS[MAIN_REPOSITORY]]
+    assert "installed" not in stored_record(hass_storage, MIRROR_REPOSITORY)
     [note] = result["warnings"]
     assert "rerouted" in note
     assert MAIN_REPOSITORY in note
