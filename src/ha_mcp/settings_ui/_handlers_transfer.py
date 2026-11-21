@@ -46,6 +46,10 @@ _RESTART_DOCUMENTS = {"tools", "features"}
 _APP_SECTIONS = ("features", "backup")
 
 
+# Imports still finishing after their request was cancelled.
+_RUNNING: set[asyncio.Future[dict[str, Any]]] = set()
+
+
 class TransferFailed(Exception):
     """A refused or failed transfer, with its panel code and HTTP status."""
 
@@ -207,13 +211,18 @@ async def _write_tools(
     current: dict[str, list[str]],
     wanted: dict[str, list[str]],
     limits: ImportLimits | None,
+    written: dict[str, list[list[str]]],
 ) -> None:
+    """Write ``wanted``, recording in ``written`` what each write may have stored."""
     if limits and not limits.allow({"permissions": current}, {"permissions": wanted}):
         raise TransferFailed("access_required", 403)
     for name, values in wanted.items():
         _, write, key = _TOOLS_SERVICES[name]
+        written[name] = [values]
+        reply = await _tools_service(server, write, {key: values})
+        written[name].append(list(reply.get(key, values)))
         # The component applies what it accepts, so a refusal still wrote.
-        if (await _tools_service(server, write, {key: values})).get("rejected"):
+        if reply.get("rejected"):
             raise TransferFailed("invalid_backup", 400)
 
 
@@ -267,13 +276,24 @@ async def _undo(
     server: HomeAssistantSmartMCPServer | None,
     changes: transfer.ServerSettingsChanges | None,
     tools: dict[str, list[str]] | None,
+    written: dict[str, list[list[str]]],
 ) -> bool:
-    """Put back this import's writes; False when any undo failed."""
+    """Put back this import's writes; False when any undo failed.
+
+    A permission someone saved after this import wrote it is kept.
+    """
     complete = True
     for name, values in (tools or {}).items():
+        if name not in written:
+            continue
         _, write, key = _TOOLS_SERVICES[name]
+        only_if = [*written[name], values]
         try:
-            await _tools_service(server, write, {key: values})
+            reply = await _tools_service(
+                server, write, {key: values, "only_if": only_if}
+            )
+            if reply.get("kept"):
+                logger.warning("Kept %s because it changed during the import", name)
         except Exception:
             logger.exception("Settings import could not undo %s", name)
             complete = False
@@ -313,7 +333,25 @@ async def import_bundle(
         raise TransferFailed("incompatible_version", 400) from err
     except ValueError as err:
         raise TransferFailed("invalid_backup", 400) from err
+    # Cancelling the request must not leave half an import: the transaction
+    # finishes (or rolls back) first.
+    task = asyncio.ensure_future(_import_transaction(server, backup, limits))
+    _RUNNING.add(task)
+    task.add_done_callback(_RUNNING.discard)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait({task})
+        raise
+
+
+async def _import_transaction(
+    server: HomeAssistantSmartMCPServer | None,
+    backup: transfer.Backup,
+    limits: ImportLimits | None,
+) -> dict[str, Any]:
     skipped = ["connection"] if backup.has_connection else []
+    written: dict[str, list[list[str]]] = {}
     async with get_config_write_lock():
         changes = tools = None
         try:
@@ -324,7 +362,7 @@ async def import_bundle(
                 if tools is None:
                     skipped.append("file_permissions")
                 else:
-                    await _write_tools(server, tools, backup.tools, limits)
+                    await _write_tools(server, tools, backup.tools, limits, written)
             app_changed = await _apply_app_options(
                 server, backup.server_settings, limits
             )
@@ -335,7 +373,7 @@ async def import_bundle(
             else:
                 logger.exception("Settings import failed")
                 failure = TransferFailed("restore_failed", 500)
-            if not await _undo(server, changes, tools):
+            if not await _undo(server, changes, tools, written):
                 failure = TransferFailed("rollback_incomplete", failure.status)
             raise failure from err
     reset_global_settings()

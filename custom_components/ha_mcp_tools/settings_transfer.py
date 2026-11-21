@@ -18,13 +18,11 @@ from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry, ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from . import (
-    _apply_allowed_paths_locked,
-    _apply_extra_yaml_keys_locked,
-)
+from . import _apply_allowed_paths_locked
 from . import const as c
 from . import settings_transfer_schema as schema
 from .embedded_entry import _reload_relevant
+from .extra_yaml_keys import _apply_extra_yaml_keys_locked
 from .settings_transfer_schema import RefusalCode, TransferRefused
 from .tools_settings_store import (
     ALLOWED_PATHS_KEY,

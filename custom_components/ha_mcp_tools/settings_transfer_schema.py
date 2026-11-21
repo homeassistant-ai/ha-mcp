@@ -9,8 +9,9 @@ from typing import Any
 
 import voluptuous as vol
 
-from . import _normalize_extra_dir, _normalize_extra_yaml_keys
+from . import _normalize_extra_dir
 from . import const as c
+from .extra_yaml_keys import _normalize_extra_yaml_keys
 from .oauth_redirect_allowlist import normalize_allowlist
 
 FORMAT = "ha-mcp-settings"

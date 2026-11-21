@@ -377,3 +377,41 @@ class TestAnUnreadableAppConfiguration:
         )
         assert not (settings_world / "backup_settings.json").exists()
         assert supervisor.sent(*SELF_OPTIONS) == []
+
+
+async def test_an_undo_keeps_a_permission_saved_during_the_import(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+) -> None:
+    administrator = await make_file_service(hass, allowed="pyscript")
+    bundle = await _export(monkeypatch, core_client)
+    # "http" is refused, so the import fails after both writes and undoes them.
+    bundle["entries"]["tools"] = {
+        "allowed_dirs": ["www"],
+        "extra_yaml_keys": ["mqtt", "http"],
+    }
+    save = Store.async_save
+    saves: list[asyncio.Future[Any]] = []
+
+    async def another_save_in_between(store: Store, data: Any) -> None:
+        await save(store, data)
+        if data == {"paths": ["www"]}:
+            # Another administrator saves the directories right after the import.
+            saves.append(
+                asyncio.ensure_future(
+                    administrator("set_allowed_paths", {"paths": ["media"]})
+                )
+            )
+        elif data == {"keys": ["mqtt"]}:
+            await saves[0]
+
+    monkeypatch.setattr(Store, "async_save", another_save_in_between)
+    response = await post_settings(monkeypatch, core_client, IMPORT, bundle)
+
+    assert (response.status_code, response.json()["error"]) == (400, "invalid_backup")
+    monkeypatch.setattr(Store, "async_save", save)
+    assert (await _export(monkeypatch, core_client))["entries"]["tools"] == {
+        "allowed_dirs": ["media"],
+        "extra_yaml_keys": [],
+    }

@@ -9,10 +9,14 @@ import asyncio
 import os
 import sys
 import threading
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
 from ha_mcp import settings_transfer as transfer
 from ha_mcp._vendor.fastmcp import Client
@@ -26,6 +30,7 @@ from ha_mcp.config import (
 from ha_mcp.tools.tools_dev import FEATURE_FLAG, DevTools
 
 from ._dev_tool_env import _isolated_env as _isolated_env
+from ._file_services import make_file_service
 from ._real_server import build_server
 from ._tools_dev_core import (
     Supervisor,
@@ -483,6 +488,50 @@ class TestSettingsTransfer:
             )
 
         assert stored_overrides() == {"dev_tools_security_policy_access": False}
+
+    async def test_a_cancelled_import_still_finishes_as_one_transaction(
+        self, hass: HomeAssistant, served: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HAMCP_DEV_SECURITY_POLICY_ACCESS", "true")
+        reset_global_settings()
+        await make_file_service(hass, allowed="pyscript")
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["entries"]["tools"] = {
+            "allowed_dirs": ["www"],
+            "extra_yaml_keys": ["mqtt"],
+        }
+        first_written, release = asyncio.Event(), asyncio.Event()
+        save = Store.async_save
+
+        async def pause_after_the_first_write(store: Store, data: Any) -> None:
+            await save(store, data)
+            if data == {"paths": ["www"]}:
+                first_written.set()
+                await release.wait()
+
+        monkeypatch.setattr(Store, "async_save", pause_after_the_first_write)
+        # The MCP server cancels a tool call through an anyio cancel scope.
+        async with anyio.create_task_group() as calls:
+            calls.start_soon(
+                partial(
+                    served.ha_dev_manage_settings,
+                    action="import_settings",
+                    settings_file=settings_file,
+                )
+            )
+            await first_written.wait()
+            calls.cancel_scope.cancel()
+            release.set()
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.2)
+
+        exported = await served.ha_dev_manage_settings(action="export_settings")
+        assert exported["settings_file"]["entries"]["tools"] == {
+            "allowed_dirs": ["www"],
+            "extra_yaml_keys": ["mqtt"],
+        }
 
 
 class TestSettingsTransferInTheApp:
