@@ -127,7 +127,9 @@ class CameraTools:
         if response.status_code >= 400:
             message = f"Could not retrieve an image from {entity_id}: HTTP {response.status_code}."
             if response.status_code >= 500:
-                message += f" The {domain} entity may be offline or temporarily unavailable."
+                message += (
+                    f" The {domain} entity may be offline or temporarily unavailable."
+                )
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -313,7 +315,9 @@ class CameraTools:
             raise exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id},
-                suggestions=[f"Ensure the {domain} entity is available in Home Assistant"],
+                suggestions=[
+                    f"Ensure the {domain} entity is available in Home Assistant"
+                ],
             ) from e
 
 
