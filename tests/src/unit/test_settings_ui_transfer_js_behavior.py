@@ -152,6 +152,23 @@ def test_storage_error_identifies_the_affected_setting(
     assert setting in result.status
 
 
+@pytest.mark.parametrize(
+    ("credentials", "prompt"),
+    [(True, "transfer.confirm_connection"), (False, "transfer.confirm")],
+)
+def test_the_confirmation_names_connection_secrets_only_when_the_file_has_them(
+    credentials: bool, prompt: str
+) -> None:
+    bundle = json.dumps(
+        {"format": "ha-mcp-settings", "contains_credentials": credentials}
+    )
+    result = _run(
+        _choose(bundle),
+        responses={_TRANSFER + "import": {"json": {"success": True}}},
+    )
+    assert result.confirms == [_EN[prompt]]
+
+
 @pytest.mark.parametrize("restart", [True, False])
 def test_confirmed_import_sends_original_file_and_reports_next_step(
     restart: bool,

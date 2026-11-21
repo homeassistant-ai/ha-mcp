@@ -97,12 +97,15 @@ function initSettingsTransfer() {
         console.error('HA-MCP could not read the settings file', err);
         return report('read_failed', true);
       }
+      let bundle;
       try {
-        if (JSON.parse(contents)?.format !== 'ha-mcp-settings') return report('invalid_backup', true);
+        bundle = JSON.parse(contents);
       } catch {
         return report('invalid_backup', true);
       }
-      if (!confirm(t('transfer.confirm'))) return;
+      if (bundle?.format !== 'ha-mcp-settings') return report('invalid_backup', true);
+      const prompt = bundle.contains_credentials === true ? 'confirm_connection' : 'confirm';
+      if (!confirm(t('transfer.' + prompt))) return;
       report('importing');
       const response = await post('import', contents);
       if (!response.ok) return await reportFailure(response, 'restore_failed');
