@@ -3,22 +3,21 @@
 ``set_up_marketplace`` sets up Core's own integration from its stored
 repositories, with GitHub unreachable (Core's HTTP session answers every
 request with a connection error), so every ``marketplace/*`` reply is Core's.
-What only GitHub could make happen, an install that downloads, is reached by
-replacing Core's install step and raising Core's own exceptions from it.
+A test that needs GitHub to answer, an install that downloads among them,
+serves it first (``_hacs_actions_core``).
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import aiohttp
 from homeassistant.components.marketplace.enums import MarketplaceSignal
-from homeassistant.components.marketplace.repositories.base import Repository
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry, MockModule, mock_integration
@@ -136,20 +135,6 @@ async def set_up_marketplace(
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
     return entry
-
-
-@contextmanager
-def core_install(**behaviour: Any) -> Iterator[MagicMock]:
-    """Replace the Marketplace's install step, the one that downloads from GitHub.
-
-    ``behaviour`` is ``side_effect=`` one of Core's exceptions for a refused
-    install; without it the install succeeds. The Core command handler around
-    it, and its reply, are Core's.
-    """
-    with patch.object(
-        Repository, "async_install_repository", autospec=True, **behaviour
-    ) as install:
-        yield install
 
 
 @asynccontextmanager

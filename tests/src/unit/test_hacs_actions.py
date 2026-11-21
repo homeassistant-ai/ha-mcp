@@ -14,10 +14,6 @@ from typing import Any
 
 import pytest
 from homeassistant.components.marketplace.const import DOMAIN as MARKETPLACE
-from homeassistant.components.marketplace.exceptions import (
-    MarketplaceError,
-    ReplacesBuiltInNotConfirmedError,
-)
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry, MockUser
@@ -29,6 +25,7 @@ from ha_mcp.__main__ import OAuthProxyClient
 from ha_mcp._vendor.fastmcp.server.auth.auth import AccessToken
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
+    HomeAssistantCommandError,
 )
 from ha_mcp.client.websocket_client import (
     DEFAULT_COMMAND_WAIT_TIMEOUT,
@@ -41,13 +38,14 @@ from ._command_faults import received
 from ._hacs_actions_core import (
     add_connected_marketplace,
     serve_card,
+    serve_files,
+    serve_integration,
     serve_rate_limit,
     serve_repository,
 )
 from ._hacs_marketplace import (
     CARD_ID,
     add_marketplace,
-    core_install,
     pooled_socket,
     sent_with,
     serve_removed,
@@ -62,17 +60,21 @@ from ._tool_errors import rejected_call_body
 from ._tools_addons_core import outwait, timers
 
 CARD = "piitaya/lovelace-mushroom"
+BROKEN_CARD = "someone/broken-card"
+BROKEN_CARD_ID = "566000222"
 STORE_ONLY_ID = "401454435"
 TRACKER_ID = "512345678"
 TRACKER_DOMAIN = "tracker_card_sync"
+YOUTUBE = "someone/youtube"
 YOUTUBE_ID = "555000111"
 REPOSITORIES = {
     CARD_ID: stored(CARD, "plugin", installed="v4.0.0", new=True),
+    BROKEN_CARD_ID: stored(BROKEN_CARD, "plugin"),
     STORE_ONLY_ID: stored("hif2k1/battery_sim", "integration", new=True),
     TRACKER_ID: stored(
         "someone/tracker", "integration", installed="v1.0.0", domain=TRACKER_DOMAIN
     ),
-    YOUTUBE_ID: stored("someone/youtube", "integration", domain="youtube"),
+    YOUTUBE_ID: stored(YOUTUBE, "integration", domain="youtube"),
 }
 LIST = "marketplace/repositories/list"
 REPO_INFO = "marketplace/repository/info"
@@ -107,8 +109,13 @@ async def marketplace(
     aioclient_mock: AiohttpClientMocker,
     hass_storage: dict[str, Any],
 ) -> AsyncIterator[MockConfigEntry]:
-    """The Marketplace with GitHub answering for the card alone."""
+    """The Marketplace with GitHub serving the card and the youtube
+    integration, and a server error for the broken card's file."""
     serve_card(aioclient_mock, CARD, int(CARD_ID))
+    serve_files(aioclient_mock, CARD)
+    serve_integration(aioclient_mock, YOUTUBE, int(YOUTUBE_ID), "youtube")
+    serve_card(aioclient_mock, BROKEN_CARD, int(BROKEN_CARD_ID))
+    serve_files(aioclient_mock, BROKEN_CARD, status=502)
     entry = add_marketplace(hass, aioclient_mock, hass_storage, REPOSITORIES)
     yield await _set_up(hass, entry)
     await hass.config_entries.async_unload(entry.entry_id)
@@ -210,31 +217,41 @@ class TestAcceptWarning:
 @pytest.mark.usefixtures("accepted")
 class TestDownload:
     async def test_no_version_installs_the_latest(
-        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
+        self,
+        hass: HomeAssistant,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
     ) -> None:
-        with sent_commands(socket) as spy, core_install() as install:
+        with sent_commands(socket) as spy, received(hass, INSTALL) as seen:
             result = await tools.ha_manage_hacs(
                 action="download", repository_id=CARD_ID
             )
 
         assert store_commands(spy) == [INSTALL]
-        assert [s["repository"] for s in sent_with(spy, INSTALL)] == [CARD_ID]
-        assert install.await_args is not None
-        assert install.await_args.kwargs["ref"] is None
+        [sent] = seen[INSTALL]
+        assert sent["repository"] == CARD_ID
+        assert "version" not in sent
+        row = await _row(socket, CARD_ID)
+        assert row["installed_version"] == row["available_version"]
         assert result["data"]["version"] == "latest"
 
-    async def test_a_version_reaches_cores_install(self, tools: HacsTools) -> None:
-        with core_install() as install:
+    async def test_a_version_reaches_cores_install(
+        self,
+        hass: HomeAssistant,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
+    ) -> None:
+        with received(hass, INSTALL) as seen:
             await tools.ha_manage_hacs(
                 action="download", repository_id=CARD_ID, version="v2.0.0"
             )
-        assert install.await_args is not None
-        assert install.await_args.kwargs["ref"] == "v2.0.0"
+        assert [m["version"] for m in seen[INSTALL]] == ["v2.0.0"]
+        assert (await _row(socket, CARD_ID))["installed_version"] == "v2.0.0"
 
     async def test_an_owner_repo_name_installs_the_listed_repository(
         self, tools: HacsTools, socket: HomeAssistantWebSocketClient
     ) -> None:
-        with sent_commands(socket) as spy, core_install():
+        with sent_commands(socket) as spy:
             result = await tools.ha_manage_hacs(action="download", repository_id=CARD)
 
         assert store_commands(spy) == [LIST, INSTALL]
@@ -242,47 +259,48 @@ class TestDownload:
         assert result["data"]["repository"] == CARD
 
     async def test_a_built_in_replacement_names_the_confirmation(
-        self, tools: HacsTools
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
     ) -> None:
-        refusal = ReplacesBuiltInNotConfirmedError("someone/youtube", "youtube")
-        with core_install(side_effect=refusal):
-            body = await rejected_call_body(
-                tools.ha_manage_hacs(action="download", repository_id=YOUTUBE_ID)
-            )
+        body = await rejected_call_body(
+            tools.ha_manage_hacs(action="download", repository_id=YOUTUBE_ID)
+        )
         assert body["ha_error_code"] == "replaces_built_in"
         assert body["translation_key"] == "replaces_built_in_not_confirmed"
         assert any("confirm_replace_built_in=True" in s for s in suggestions(body))
+        assert (await _row(socket, YOUTUBE_ID))["installed"] is False
 
     async def test_a_confirmed_replacement_reaches_the_marketplace(
-        self, tools: HacsTools
+        self,
+        hass: HomeAssistant,
+        tools: HacsTools,
+        socket: HomeAssistantWebSocketClient,
     ) -> None:
-        with core_install() as install:
+        with received(hass, INSTALL) as seen:
             await tools.ha_manage_hacs(
                 action="download",
                 repository_id=YOUTUBE_ID,
                 confirm_replace_built_in=True,
             )
-        assert install.await_args is not None
-        assert install.await_args.kwargs["confirm_replace_built_in"] is True
+        assert [m["confirm_replace_built_in"] for m in seen[INSTALL]] == [True]
+        assert (await _row(socket, YOUTUBE_ID))["installed"] is True
 
     async def test_a_refused_install_keeps_the_stores_answer(
-        self, tools: HacsTools
+        self, tools: HacsTools, socket: HomeAssistantWebSocketClient
     ) -> None:
-        failure = MarketplaceError(
-            translation_domain=MARKETPLACE,
-            translation_key="github_failed",
-            translation_placeholders={"error": "502 Bad Gateway"},
+        """GitHub answers the card's file with a server error."""
+        body = await rejected_call_body(
+            tools.ha_manage_hacs(action="download", repository_id=BROKEN_CARD_ID)
         )
-        with core_install(side_effect=failure):
-            body = await rejected_call_body(
-                tools.ha_manage_hacs(action="download", repository_id=CARD_ID)
-            )
+        with pytest.raises(HomeAssistantCommandError) as refused:
+            await socket.send_command(INSTALL, repository=BROKEN_CARD_ID)
+
+        native = refused.value
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "502 Bad Gateway" in body["error"]["message"]
-        assert body["ha_error_code"] == "error"
-        assert body["translation_key"] == "github_failed"
+        assert body["error"]["message"] == str(native)
+        assert body["ha_error_code"] == native.code
+        assert body["translation_key"] == native.translation_key
         assert body["translation_domain"] == MARKETPLACE
-        assert body["translation_placeholders"]["error"] == "502 Bad Gateway"
+        assert body["translation_placeholders"] == native.translation_placeholders
         assert body["command"] == INSTALL
         # A store refusal points at the store, not at a service call.
         assert any("ha_get_hacs_info" in s for s in suggestions(body))
@@ -291,13 +309,12 @@ class TestDownload:
         self, hass: HomeAssistant, tools: HacsTools
     ) -> None:
         before = timers(hass)
-        with core_install():
-            async with held_command(hass, INSTALL):
-                call = asyncio.create_task(
-                    tools.ha_manage_hacs(action="download", repository_id=CARD_ID)
-                )
-                await outwait(hass, 59, 60, before)
-                await asyncio.wait([call])
+        async with held_command(hass, INSTALL):
+            call = asyncio.create_task(
+                tools.ha_manage_hacs(action="download", repository_id=CARD_ID)
+            )
+            await outwait(hass, 59, 60, before)
+            await asyncio.wait([call])
         body = await rejected_call_body(call)
         assert body["timeout_seconds"] == 60.0
         assert any("may still have completed" in s for s in suggestions(body))

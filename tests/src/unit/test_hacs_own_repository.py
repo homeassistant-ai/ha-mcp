@@ -6,8 +6,8 @@ install of it on top of a mirror install left two records claiming
 either. A download of either of ha-mcp's repositories goes to the one that is
 installed, and two installed records are refused with the way out.
 
-The Marketplace is Core's own, set up on a real ``hass``; its refusals are
-Core's replies to Core's own exceptions (``_hacs_marketplace``).
+The Marketplace is Core's own, set up on a real ``hass`` (``_hacs_marketplace``),
+and installs from GitHub served below its library (``_hacs_actions_core``).
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import pytest
-from homeassistant.components.marketplace.exceptions import MarketplaceError
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
@@ -31,16 +30,15 @@ from ha_mcp.client.websocket_client import (
 from ha_mcp.tools.tools_hacs import HacsTools
 
 from ._client_spies import sent_commands
-from ._hacs_actions_core import serve_integration
+from ._command_faults import received
+from ._hacs_actions_core import serve_card, serve_files, serve_integration
 from ._hacs_marketplace import (
     CARD_ID,
     MAIN,
     MAIN_ID,
     MIRROR,
     MIRROR_ID,
-    core_install,
     pooled_socket,
-    sent_with,
     set_up_marketplace,
     store_commands,
     stored,
@@ -50,6 +48,7 @@ from ._held_command import held_command
 from ._tool_errors import rejected_call_body
 from ._tools_addons_core import outwait, timers
 
+CARD = "piitaya/lovelace-mushroom"
 HUE_FORK_ID = "700000001"
 OWN = "ha_mcp_tools"
 LIST = "marketplace/repositories/list"
@@ -69,7 +68,7 @@ def _own_records(installed: str | None) -> Repositories:
             domain=OWN,
         )
         for repository_id, full_name in ((MAIN_ID, MAIN), (MIRROR_ID, MIRROR))
-    } | {CARD_ID: stored("piitaya/lovelace-mushroom", "plugin")}
+    } | {CARD_ID: stored(CARD, "plugin")}
 
 
 DOUBLED = {
@@ -100,10 +99,15 @@ async def marketplace(
     socket: HomeAssistantWebSocketClient,
 ) -> AsyncIterator[OpenMarketplace]:
     """Sets up Core's Marketplace with the repositories a test stores, its
-    first-run warning accepted."""
+    first-run warning accepted, and GitHub serving ha-mcp's two repositories
+    and the card."""
     entries: list[MockConfigEntry] = []
 
     async def open_marketplace(repositories: Repositories) -> MockConfigEntry:
+        serve_integration(aioclient_mock, MAIN, int(MAIN_ID), OWN)
+        serve_integration(aioclient_mock, MIRROR, int(MIRROR_ID), OWN)
+        serve_card(aioclient_mock, CARD, int(CARD_ID))
+        serve_files(aioclient_mock, CARD)
         entry = await set_up_marketplace(
             hass, aioclient_mock, hass_storage, repositories
         )
@@ -117,31 +121,28 @@ async def marketplace(
 
 
 async def _installed(
+    hass: HomeAssistant,
     tools: HacsTools,
     socket: HomeAssistantWebSocketClient,
     requested: str,
     version: str | None = None,
-) -> tuple[list[str], list[str], Any, dict[str, Any]]:
-    """Download ``requested``: the commands sent, the ids installed, the ref
-    Core's install got, and the result."""
-    with sent_commands(socket) as spy, core_install() as install:
+) -> tuple[list[str], str, Any, dict[str, Any]]:
+    """Download ``requested``: the commands sent, the repository and version
+    of the install Core received, and the result of Core's install."""
+    with sent_commands(socket) as spy, received(hass, INSTALL) as seen:
         result = await tools.ha_manage_hacs(
             action="download", repository_id=requested, version=version
         )
-    assert install.await_args is not None
-    return (
-        store_commands(spy),
-        [sent["repository"] for sent in sent_with(spy, INSTALL)],
-        install.await_args.kwargs["ref"],
-        result,
-    )
+    [install] = seen[INSTALL]
+    return store_commands(spy), install["repository"], install.get("version"), result
 
 
 @pytest.mark.parametrize(
     ("requested", "commands"),
-    [(CARD_ID, [INSTALL]), ("piitaya/lovelace-mushroom", [LIST, INSTALL])],
+    [(CARD_ID, [INSTALL]), (CARD, [LIST, INSTALL])],
 )
 async def test_other_repositories_cost_no_extra_store_call(
+    hass: HomeAssistant,
     marketplace: OpenMarketplace,
     tools: HacsTools,
     socket: HomeAssistantWebSocketClient,
@@ -151,9 +152,9 @@ async def test_other_repositories_cost_no_extra_store_call(
     """Another repository is installed as asked: an id is one command, a name
     only adds the lookup of its id."""
     await marketplace(_own_records(installed=MIRROR))
-    sent, installed, _, _ = await _installed(tools, socket, requested)
+    sent, installed, _, _ = await _installed(hass, tools, socket, requested)
     assert sent == commands
-    assert installed == [CARD_ID]
+    assert installed == CARD_ID
 
 
 @pytest.mark.parametrize(
@@ -161,6 +162,7 @@ async def test_other_repositories_cost_no_extra_store_call(
     [(MAIN, MIRROR, MIRROR_ID), (MIRROR, MAIN, MAIN_ID), (MAIN_ID, MIRROR, MIRROR_ID)],
 )
 async def test_the_installed_repository_wins(
+    hass: HomeAssistant,
     marketplace: OpenMarketplace,
     tools: HacsTools,
     socket: HomeAssistantWebSocketClient,
@@ -169,8 +171,10 @@ async def test_the_installed_repository_wins(
     owner_id: str,
 ) -> None:
     await marketplace(_own_records(installed=owner))
-    _, installed, ref, result = await _installed(tools, socket, requested, "v9.1.1")
-    assert (installed, ref) == ([owner_id], "v9.1.1")
+    _, installed, ref, result = await _installed(
+        hass, tools, socket, requested, "v9.1.1"
+    )
+    assert (installed, ref) == (owner_id, "v9.1.1")
     [note] = result["warnings"]
     assert "rerouted" in note
     assert owner in note
@@ -184,44 +188,34 @@ async def test_the_installed_repository_wins(
     ],
 )
 async def test_the_requested_repository_is_kept_when_nothing_else_owns_it(
+    hass: HomeAssistant,
     marketplace: OpenMarketplace,
     tools: HacsTools,
     socket: HomeAssistantWebSocketClient,
     installed: str | None,
 ) -> None:
     await marketplace(_own_records(installed))
-    _, ids, _, result = await _installed(tools, socket, MAIN)
-    assert ids == [MAIN_ID]
-    assert "warnings" not in result
-
-
-async def test_two_installed_records_leave_the_decision_to_the_store(
-    marketplace: OpenMarketplace,
-    tools: HacsTools,
-    socket: HomeAssistantWebSocketClient,
-) -> None:
-    """The Marketplace refuses the download itself; no handwritten copy of
-    its rule stands in front of it."""
-    await marketplace(DOUBLED)
-    _, ids, _, result = await _installed(tools, socket, MAIN)
-    assert ids == [MAIN_ID]
+    _, repository, _, result = await _installed(hass, tools, socket, MAIN)
+    assert repository == MAIN_ID
     assert "warnings" not in result
 
 
 async def test_a_refused_download_on_a_doubled_install_carries_the_way_out(
+    hass: HomeAssistant,
     marketplace: OpenMarketplace,
     tools: HacsTools,
-    aioclient_mock: AiohttpClientMocker,
 ) -> None:
-    """The store's ownership refusal on a doubled install names an owner that
-    cannot be updated either, so the suggestions are the recovery routes, and
-    the tool looks up the installed records behind the refusal."""
-    serve_integration(aioclient_mock, MAIN, int(MAIN_ID), OWN)
+    """The Marketplace refuses the download itself, no handwritten copy of its
+    rule stands in front of it. Its ownership refusal on a doubled install
+    names an owner that cannot be updated either, so the suggestions are the
+    recovery routes, and the tool looks up the installed records behind it."""
     await marketplace(DOUBLED)
-    body = await rejected_call_body(
-        tools.ha_manage_hacs(action="download", repository_id=MAIN)
-    )
+    with received(hass, INSTALL) as seen:
+        body = await rejected_call_body(
+            tools.ha_manage_hacs(action="download", repository_id=MAIN)
+        )
 
+    assert [m["repository"] for m in seen[INSTALL]] == [MAIN_ID]
     hints = " ".join(suggestions(body))
     assert "Repairs" in hints
     assert "Devices & services" in hints
@@ -251,16 +245,23 @@ async def test_another_integrations_refusal_names_its_owner_to_update(
 
 
 async def test_a_message_merely_containing_the_words_is_not_an_ownership_refusal(
-    marketplace: OpenMarketplace, tools: HacsTools
+    marketplace: OpenMarketplace,
+    tools: HacsTools,
+    aioclient_mock: AiohttpClientMocker,
 ) -> None:
-    """A library error inside Core's install-failed sentence that happens to
-    say a directory belongs to someone."""
+    """GitHub's answer inside Core's refusal happens to say a directory
+    belongs to someone."""
+    serve_integration(
+        aioclient_mock,
+        "fork/hue",
+        int(HUE_FORK_ID),
+        "hue_fork",
+        manifest_error="The hue_fork directory belongs to nobody.",
+    )
     await marketplace(DOUBLED)
-    library_error = MarketplaceError("The hue_fork directory belongs to nobody.")
-    with core_install(side_effect=library_error):
-        body = await rejected_call_body(
-            tools.ha_manage_hacs(action="download", repository_id=HUE_FORK_ID)
-        )
+    body = await rejected_call_body(
+        tools.ha_manage_hacs(action="download", repository_id=HUE_FORK_ID)
+    )
 
     assert "belongs to nobody" in body["error"]["message"]
     assert "already provides" not in json.dumps(body)
@@ -275,6 +276,7 @@ async def test_a_message_merely_containing_the_words_is_not_an_ownership_refusal
     ],
 )
 async def test_a_development_ref_is_renamed_for_the_target(
+    hass: HomeAssistant,
     marketplace: OpenMarketplace,
     tools: HacsTools,
     socket: HomeAssistantWebSocketClient,
@@ -286,7 +288,7 @@ async def test_a_development_ref_is_renamed_for_the_target(
     """The repositories tag dev builds differently, so a rerouted dev request
     names the build the way the installed repository tags it."""
     await marketplace(_own_records(installed))
-    _, _, ref, result = await _installed(tools, socket, requested, version)
+    _, _, ref, result = await _installed(hass, tools, socket, requested, version)
     assert ref == expected
     [note] = result["warnings"]
     assert (expected in note) == (expected != version)
@@ -298,12 +300,12 @@ async def test_a_list_lookup_without_an_answer_leaves_the_request_alone(
     tools: HacsTools,
     socket: HomeAssistantWebSocketClient,
 ) -> None:
-    """The download reports the store's trouble with its own context; the
+    """The download reports the store's answer with its own context; the
     lookup never speaks for it. The mirror is installed, so an answered
-    lookup would have rerouted the request."""
+    lookup would have rerouted the request, and Core refuses the main one."""
     await marketplace(_own_records(installed=MIRROR))
     before = timers(hass)
-    with sent_commands(socket) as spy, core_install():
+    with received(hass, INSTALL) as seen:
         async with held_command(hass, LIST, first_only=True):
             call = asyncio.create_task(
                 tools.ha_manage_hacs(action="download", repository_id=MAIN_ID)
@@ -315,8 +317,9 @@ async def test_a_list_lookup_without_an_answer_leaves_the_request_alone(
                 before,
             )
             await asyncio.wait([call])
-    assert call.result()["success"] is True
-    assert [sent["repository"] for sent in sent_with(spy, INSTALL)] == [MAIN_ID]
+    body = await rejected_call_body(call)
+    assert [m["repository"] for m in seen[INSTALL]] == [MAIN_ID]
+    assert body["translation_key"] == "integration_owned"
 
 
 async def test_a_release_the_target_tags_differently_asks_for_its_own_tag(

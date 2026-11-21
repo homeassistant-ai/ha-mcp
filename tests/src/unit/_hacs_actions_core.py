@@ -24,6 +24,7 @@ from pytest_homeassistant.test_util.aiohttp import (
 from ._hacs_marketplace import add_marketplace
 
 _API = "https://api.github.com/repos"
+_RAW = r"https://raw\.githubusercontent\.com"
 _JSON = {"Content-Type": "application/json; charset=utf-8"}
 
 
@@ -60,7 +61,8 @@ def serve_repository(
     """
     owner, name = full_name.split("/")
     repo = f"{_API}/{full_name}"
-    manifest = base64.b64encode(json.dumps({"name": name}).encode()).decode()
+    manifest_json = json.dumps({"name": name})
+    manifest = base64.b64encode(manifest_json.encode()).decode()
     directories = sorted(
         {
             "/".join(path.split("/")[:depth])
@@ -117,6 +119,11 @@ def serve_repository(
         text=json.dumps({"sha": "0" * 40, "truncated": False, "tree": tree}),
         headers=_JSON,
     )
+    # An install reads the hacs.json of the version it installs raw.
+    aioclient_mock.get(
+        re.compile(rf"{_RAW}/{re.escape(full_name)}/.*/hacs\.json"),
+        text=manifest_json,
+    )
 
 
 def serve_rate_limit(aioclient_mock: AiohttpClientMocker, full_name: str) -> None:
@@ -131,24 +138,35 @@ def serve_rate_limit(aioclient_mock: AiohttpClientMocker, full_name: str) -> Non
 
 
 def serve_integration(
-    aioclient_mock: AiohttpClientMocker, full_name: str, github_id: int, domain: str
+    aioclient_mock: AiohttpClientMocker,
+    full_name: str,
+    github_id: int,
+    domain: str,
+    *,
+    manifest_error: str | None = None,
 ) -> None:
     """GitHub's answers for a repository holding the integration ``domain``,
-    its ``manifest.json`` included. Call it before the Marketplace is added."""
+    its ``manifest.json`` included, and the raw files an install downloads.
+    With ``manifest_error`` GitHub answers the read of that ``manifest.json``
+    with a server error carrying it. Call it before the Marketplace is added."""
     path = f"custom_components/{domain}/manifest.json"
-    manifest = {"domain": domain, "name": domain, "version": "1.0.0"}
+    manifest = json.dumps({"domain": domain, "name": domain, "version": "1.0.0"})
+    answer: dict[str, Any] = {
+        "type": "file",
+        "encoding": "base64",
+        "name": "manifest.json",
+        "path": path,
+        "content": base64.b64encode(manifest.encode()).decode(),
+    }
     aioclient_mock.get(
         f"{_API}/{full_name}/contents/{path}",
-        text=json.dumps(
-            {
-                "type": "file",
-                "encoding": "base64",
-                "name": "manifest.json",
-                "path": path,
-                "content": base64.b64encode(json.dumps(manifest).encode()).decode(),
-            }
-        ),
+        status=502 if manifest_error else 200,
+        text=json.dumps({"message": manifest_error} if manifest_error else answer),
         headers=_JSON,
+    )
+    aioclient_mock.get(
+        re.compile(rf"{_RAW}/{re.escape(full_name)}/.*/{re.escape(path)}"),
+        text=manifest,
     )
     serve_repository(
         aioclient_mock,
@@ -156,6 +174,7 @@ def serve_integration(
         github_id,
         (path, f"custom_components/{domain}/__init__.py"),
     )
+    serve_files(aioclient_mock, full_name)
 
 
 def serve_files(
@@ -165,7 +184,7 @@ def serve_files(
     ``aioclient_mock``'s (``side_effect=`` to hold it), a few bytes without
     it. Call it before the Marketplace is added."""
     aioclient_mock.get(
-        re.compile(rf"https://raw\.githubusercontent\.com/{re.escape(full_name)}/.*"),
+        re.compile(rf"{_RAW}/{re.escape(full_name)}/.*"),
         **(answer or {"text": f"// {full_name}"}),
     )
 

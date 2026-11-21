@@ -144,9 +144,10 @@ class HacsTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Only rows with one of these store statuses (action='search'), "
+                    "Only rows whose store status is one of these (action='search'), "
                     "e.g. 'installed', 'pending-upgrade', 'pending-restart', 'new'; "
-                    "'installed' also takes every installed row"
+                    "an installed row waiting for an update or a restart has that "
+                    "status, so use installed_only for every installed row"
                 )
             ),
         ] = None,
@@ -198,8 +199,8 @@ class HacsTools:
 
         This tool only reads; to install, update, add or forget repositories
         use ``ha_manage_hacs``. Use ``search`` to browse, filter or list
-        installed repositories: it filters and pages the store's own list,
-        installed first, then new, then by stars. Use ``info`` for one
+        installed repositories: it filters and pages the store's own list, in
+        the order Core lists it. Use ``info`` for one
         repository's full record as the store sends it (the README is
         ``additional_info``).
 

@@ -22,6 +22,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ...utilities.assertions import (
     MCPAssertions,
     parse_mcp_result,
+    safe_call_tool,
     tool_error_to_result,
 )
 from ...utilities.cleanup import CleanupSteps
@@ -33,6 +34,9 @@ _NATIVE_CATEGORY = {"lovelace": "plugin"}
 
 # The seed's critical row, already acknowledged.
 _SEED_CRITICAL = "test/test"
+
+# A repository the catalog does not list, so it can be added as a custom one.
+_CUSTOM_REPOSITORY = "homeassistant-ai/ha-mcp-integration"
 
 
 def _session_has_github_token() -> bool:
@@ -348,6 +352,90 @@ class TestWrites:
                         "show_beta": False,
                     },
                 )
+
+    async def test_a_custom_repository_is_added_read_at_its_branch_and_forgotten(
+        self, mcp_client
+    ):
+        """The integration's own repository is not in the catalog: it is added
+        as a custom one, and selecting its default branch installs nothing."""
+        await accept_warning(mcp_client)
+        added = await store_call(
+            mcp_client,
+            "ha_manage_hacs",
+            {
+                "action": "add_repository",
+                "repository": _CUSTOM_REPOSITORY,
+                "category": "integration",
+            },
+        )
+        skip_on_github(added)
+        assert added.get("success"), added
+        repo_id = added["repository_id"]
+        assert repo_id, added
+        forgotten = False
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                info = await mcp.call_tool_success(
+                    "ha_get_hacs_info", {"action": "info", "repository_id": repo_id}
+                )
+            branch = info["data"]["default_branch"]
+            selected = await store_call(
+                mcp_client,
+                "ha_manage_hacs",
+                {"action": "set_version", "repository_id": repo_id, "version": branch},
+            )
+            skip_on_github(selected)
+            assert selected.get("success"), selected
+            # Core clears the selection for the default branch.
+            assert selected["selected_tag"] is None, selected
+            assert "warnings" not in selected, selected
+            async with MCPAssertions(mcp_client) as mcp:
+                info = await mcp.call_tool_success(
+                    "ha_get_hacs_info", {"action": "info", "repository_id": repo_id}
+                )
+                assert info["data"]["installed"] is False
+                await mcp.call_tool_success(
+                    "ha_manage_hacs",
+                    {"action": "remove_repository", "repository_id": repo_id},
+                )
+                forgotten = True
+                again = await mcp.call_tool_failure(
+                    "ha_manage_hacs",
+                    {"action": "remove_repository", "repository_id": repo_id},
+                )
+            assert again["error"]["code"] == "RESOURCE_NOT_FOUND", again
+        finally:
+            with CleanupSteps() as cleanup:
+                if not forgotten:
+                    with cleanup.step():
+                        await safe_call_tool(
+                            mcp_client,
+                            "ha_manage_hacs",
+                            {"action": "remove_repository", "repository_id": repo_id},
+                        )
+
+    async def test_saving_the_download_source_in_use_keeps_it(self, mcp_client):
+        """Only the source the read shows as current is saved: another one
+        would switch where the session's later installs come from."""
+
+        def profile(read: dict) -> dict:
+            fields = read["data"]["options_schema"]["fields"]
+            return next(f for f in fields if f["name"] == "profile")
+
+        async with MCPAssertions(mcp_client) as mcp:
+            before = await mcp.call_tool_success(
+                "ha_get_hacs_info", {"action": "download_source"}
+            )
+            current = profile(before)["current"]
+            await mcp.call_tool_success(
+                "ha_manage_hacs",
+                {"action": "set_download_source", "config": {"profile": current}},
+            )
+            after = await mcp.call_tool_success(
+                "ha_get_hacs_info", {"action": "download_source"}
+            )
+
+        assert profile(after)["current"] == current, after
 
     async def test_clear_new_clears_the_flag(self, mcp_client):
         found = await search(mcp_client, status=["new"], max_results=1)

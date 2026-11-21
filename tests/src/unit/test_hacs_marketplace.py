@@ -127,7 +127,7 @@ class TestWithoutTheMarketplace:
 
 
 class TestSearch:
-    async def test_rows_and_store_status_are_the_stores_own(
+    async def test_rows_their_order_and_store_status_are_the_stores_own(
         self,
         marketplace: MockConfigEntry,
         tools: HacsTools,
@@ -135,46 +135,9 @@ class TestSearch:
     ) -> None:
         result = await tools.ha_get_hacs_info(action="search", max_results=100)
 
-        rows = await _rows(socket)
-        assert sorted(result["data"]["results"], key=lambda r: r["id"]) == sorted(
-            rows, key=lambda r: r["id"]
-        )
+        assert result["data"]["results"] == await _rows(socket)
         info = await socket.send_command(INFO)
         assert result["data"]["store"] == info["result"]
-
-    async def test_rows_come_in_the_panels_order(
-        self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        aioclient_mock: AiohttpClientMocker,
-        hass_storage: dict[str, Any],
-        tools: HacsTools,
-    ) -> None:
-        """Installed first, then new, then the most starred, then by name."""
-        entry = await set_up_marketplace(
-            hass,
-            aioclient_mock,
-            hass_storage,
-            {
-                "1": stored("o/starred-b", "integration", stargazers_count=50),
-                "2": stored("o/starred-a", "integration", stargazers_count=50),
-                "3": stored("o/fresh", "integration", new=True),
-                "4": stored("o/kept", "plugin", installed="v1.0.0"),
-                "5": stored("o/plain", "integration", stargazers_count=3),
-            },
-        )
-        try:
-            result = await tools.ha_get_hacs_info(action="search")
-        finally:
-            await hass.config_entries.async_unload(entry.entry_id)
-
-        assert [r["full_name"] for r in result["data"]["results"]] == [
-            "o/kept",
-            "o/fresh",
-            "o/starred-a",
-            "o/starred-b",
-            "o/plain",
-        ]
 
     async def test_every_word_of_the_query_must_match_somewhere_in_the_row(
         self,
@@ -211,12 +174,12 @@ class TestSearch:
     @pytest.mark.parametrize(
         ("status", "expected"),
         [
-            # Installed takes in what waits for an update or a restart.
-            (["installed"], {CARD, "homeassistant-ai/ha-mcp-integration"}),
+            # The other installed rows wait for an update: not their status.
+            (["installed"], {"o/current"}),
             ("new", {"o/fresh"}),
         ],
     )
-    async def test_the_status_filter_follows_the_panel(
+    async def test_the_status_filter_takes_the_rows_with_that_status(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
@@ -231,7 +194,17 @@ class TestSearch:
             hass,
             aioclient_mock,
             hass_storage,
-            {**REPOSITORIES, "9": stored("o/fresh", "integration", new=True)},
+            {
+                **REPOSITORIES,
+                "8": stored(
+                    "o/current",
+                    "plugin",
+                    installed="v1.0.0",
+                    last_version="v1.0.0",
+                    releases=True,
+                ),
+                "9": stored("o/fresh", "integration", new=True),
+            },
         )
         try:
             statuses = {r["full_name"]: r["status"] for r in await _rows(socket)}
@@ -239,8 +212,7 @@ class TestSearch:
         finally:
             await hass.config_entries.async_unload(entry.entry_id)
 
-        # The mirror waits for an update: its own status is not "installed".
-        assert statuses["homeassistant-ai/ha-mcp-integration"] == "pending-upgrade"
+        assert statuses[CARD] == "pending-upgrade"
         assert {r["full_name"] for r in result["data"]["results"]} == expected
 
     async def test_installed_only_leaves_out_what_is_not_installed(
@@ -260,24 +232,42 @@ class TestSearch:
 
         assert {r["full_name"] for r in result["data"]["results"]} == installed
 
+    @pytest.mark.parametrize(
+        ("repositories", "status"),
+        [
+            # Seen live: an underscore for Core's hyphen matched nothing and
+            # the empty page said nothing about why.
+            (REPOSITORIES, "pending_upgrade"),
+            # Installed, and waiting for an update.
+            ({MIRROR_ID: REPOSITORIES[MIRROR_ID]}, "installed"),
+        ],
+        ids=["underscore", "installed-awaiting-update"],
+    )
     async def test_a_status_no_row_carries_is_named_with_the_lists_statuses(
         self,
-        marketplace: MockConfigEntry,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
         tools: HacsTools,
         socket: HomeAssistantWebSocketClient,
+        repositories: dict[str, dict[str, Any]],
+        status: str,
     ) -> None:
-        """Seen live: an underscore for Core's hyphen matched nothing and the
-        empty page said nothing about why."""
-        result = await tools.ha_get_hacs_info(
-            action="search", status=["pending_upgrade"]
+        entry = await set_up_marketplace(
+            hass, aioclient_mock, hass_storage, repositories
         )
+        try:
+            result = await tools.ha_get_hacs_info(action="search", status=[status])
+            statuses = {row["status"] for row in await _rows(socket)}
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
 
-        statuses = {row["status"] for row in await _rows(socket)}
-        assert "pending-upgrade" in statuses
+        assert status not in statuses
         assert result["data"]["total_matches"] == 0
         [warning] = result["warnings"]
-        assert "pending_upgrade" in warning
-        assert all(status in warning for status in statuses)
+        assert status in warning
+        assert all(listed in warning for listed in statuses)
 
     @pytest.mark.parametrize(
         ("source", "everything"), [("custom", True), ("catalog", False)]

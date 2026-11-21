@@ -1,8 +1,8 @@
 """The read actions of ``ha_get_hacs_info`` on Core's Marketplace.
 
-The Marketplace has no search command: ``search`` is HA-MCP's filter over the
-store's list. The status, type and source filters and the row order are the
-panel's; the word match is HA-MCP's own.
+The Marketplace has no search command: ``search`` is HA-MCP's own filter over
+the store's list. The rows keep the order Core lists them in, and the status,
+source and installed filters compare one field of Core's row each.
 """
 
 from typing import Any
@@ -66,16 +66,11 @@ def _passes_filters(
     source: str | None,
     installed_only: bool,
 ) -> bool:
-    """The panel's filter panes: ``installed`` also takes every installed row."""
-    if (
-        statuses
-        and row.get("status") not in statuses
-        and not ("installed" in statuses and row.get("installed"))
-    ):
+    if statuses and row.get("status") not in statuses:
         return False
-    if source and ("custom" if row.get("custom") else "catalog") != source:
+    if source and row.get("custom") != (source == "custom"):
         return False
-    return not installed_only or bool(row.get("installed"))
+    return not installed_only or row.get("installed") is True
 
 
 def _unmatched_status_warnings(
@@ -84,24 +79,12 @@ def _unmatched_status_warnings(
     """A warning for each requested status no listed row carries, naming the
     statuses the list does carry."""
     carried = {str(row.get("status")) for row in rows if row.get("status")}
-    if any(row.get("installed") for row in rows):
-        carried.add("installed")
     return [
         f"No listed repository has the status '{status}'; the list's statuses "
         "are: " + ", ".join(sorted(carried))
         for status in statuses or []
         if status not in carried
     ]
-
-
-def _panel_order(row: dict[str, Any]) -> tuple[bool, bool, int, str]:
-    """Installed first, then new, then the most starred, then by name."""
-    return (
-        not row.get("installed"),
-        not row.get("new"),
-        -(row.get("stars") or 0),
-        str(row.get("name") or "").casefold(),
-    )
 
 
 def _page(rows: list[dict[str, Any]], offset: int, limit: int) -> dict[str, Any]:
@@ -152,15 +135,12 @@ async def search(
     )
     warnings.extend(_unmatched_status_warnings(rows, statuses))
     terms = query.lower().split()
-    matches = sorted(
-        (
-            row
-            for row in rows
-            if _passes_filters(row, statuses, source, installed_only)
-            and _matches(row, terms, _SEARCHED)
-        ),
-        key=_panel_order,
-    )
+    matches = [
+        row
+        for row in rows
+        if _passes_filters(row, statuses, source, installed_only)
+        and _matches(row, terms, _SEARCHED)
+    ]
     await safe_progress(
         ctx, progress=3, total=3, message=f"matched {len(matches)} repositories"
     )

@@ -16,8 +16,6 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.components.marketplace.const import DOMAIN as MARKETPLACE
-from homeassistant.components.marketplace.exceptions import MarketplaceError
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
@@ -43,7 +41,6 @@ from ._hacs_actions_core import serve_card, serve_files, serve_repository
 from ._hacs_marketplace import (
     CARD_ID,
     add_marketplace,
-    core_install,
     install_progress_events,
     pooled_socket,
     stored,
@@ -60,6 +57,8 @@ OTHER_CARD_ID = "600700800"
 # with the frontend's theme service, which the unit tests' frontend lacks.
 UNLISTED_THEME = "someone/unlisted-theme"
 UNLISTED_THEME_ID = "600700900"
+BROKEN_CARD = "someone/broken-card"
+BROKEN_CARD_ID = "600701000"
 INSTALL = "marketplace/repository/install"
 LIST = "marketplace/repositories/list"
 PROGRESS_LOGGER = hacs_install_progress.__name__
@@ -106,9 +105,9 @@ async def installable(
     socket: HomeAssistantWebSocketClient,
     other_card_file: HeldFile,
 ) -> AsyncIterator[MockConfigEntry]:
-    """The Marketplace, its warning accepted, GitHub serving the card, a card
-    the list leaves out, and another card whose file it holds
-    (``other_card_file``)."""
+    """The Marketplace, its warning accepted, GitHub serving the card, a theme
+    the list leaves out, another card whose file it holds
+    (``other_card_file``), and a card whose file it fails."""
     serve_card(aioclient_mock, CARD, int(CARD_ID))
     serve_files(aioclient_mock, CARD)
     serve_card(aioclient_mock, OTHER_CARD, int(OTHER_CARD_ID))
@@ -120,6 +119,8 @@ async def installable(
         ("themes/unlisted.yaml",),
     )
     serve_files(aioclient_mock, UNLISTED_THEME)
+    serve_card(aioclient_mock, BROKEN_CARD, int(BROKEN_CARD_ID))
+    serve_files(aioclient_mock, BROKEN_CARD, status=502)
     entry = add_marketplace(
         hass,
         aioclient_mock,
@@ -128,6 +129,7 @@ async def installable(
             CARD_ID: stored(CARD, "plugin"),
             OTHER_CARD_ID: stored(OTHER_CARD, "plugin"),
             UNLISTED_THEME_ID: stored(UNLISTED_THEME, "theme"),
+            BROKEN_CARD_ID: stored(BROKEN_CARD, "plugin"),
         },
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -212,20 +214,18 @@ async def test_an_install_goes_ahead_when_its_progress_cannot_be_followed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     heartbeats = Heartbeats()
-    with (
-        core_install() as install,
-        patch.object(
-            socket,
-            "subscribe_command",
-            AsyncMock(side_effect=HomeAssistantConnectionError("lost")),
-        ) as unanswered,
-    ):
+    with patch.object(
+        socket,
+        "subscribe_command",
+        AsyncMock(side_effect=HomeAssistantConnectionError("lost")),
+    ) as unanswered:
         result = await tools.ha_manage_hacs(
             action="download", repository_id=CARD_ID, ctx=heartbeats.context
         )
 
+    listed = await socket.send_command(LIST)
     assert unanswered.await_count == 1
-    assert install.await_count == 1
+    assert next(r for r in listed["result"] if r["id"] == CARD_ID)["installed"]
     assert result["data"]["repository_id"] == CARD_ID
     assert heartbeats.reports == []
     # Logged where an operator sees it, not at debug.
@@ -312,14 +312,9 @@ async def test_a_failed_install_releases_its_progress_subscription(
     socket: HomeAssistantWebSocketClient,
 ) -> None:
     """The subscription is Core's dispatcher connection on the shared socket;
-    a refused install must not leave it open."""
-    failure = MarketplaceError(
-        translation_domain=MARKETPLACE,
-        translation_key="github_failed",
-        translation_placeholders={"error": "502 Bad Gateway"},
-    )
+    a refused install must not leave it open. GitHub answers the broken
+    card's file with a server error."""
     with (
-        core_install(side_effect=failure),
         patch.object(
             socket, "subscribe_command", wraps=socket.subscribe_command
         ) as subscribed,
@@ -327,11 +322,15 @@ async def test_a_failed_install_releases_its_progress_subscription(
             socket, "release_subscription", wraps=socket.release_subscription
         ) as released,
     ):
-        await rejected_call_body(
+        body = await rejected_call_body(
             tools.ha_manage_hacs(
-                action="download", repository_id=CARD_ID, ctx=Heartbeats().context
+                action="download",
+                repository_id=BROKEN_CARD_ID,
+                ctx=Heartbeats().context,
             )
         )
+
+    assert body["command"] == INSTALL
 
     [opened] = subscribed.await_args_list
     assert opened.args[0] == "marketplace/subscribe"
