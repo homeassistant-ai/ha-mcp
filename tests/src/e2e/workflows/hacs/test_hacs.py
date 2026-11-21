@@ -78,8 +78,9 @@ async def remove_once_settled(mcp_client, repo_id: str, timeout: float = 120) ->
         )
         if result.get("ha_error_code") != "repository_busy":
             break
-        if time.monotonic() >= deadline:
-            break
+        # Core reads as not installed while an install has not written its
+        # files yet, so the readback below cannot settle a busy repository.
+        assert time.monotonic() < deadline, f"{repo_id} still installing: {result}"
         await asyncio.sleep(2)
     await wait_for_tool_result(
         mcp_client,
