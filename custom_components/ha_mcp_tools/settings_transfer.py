@@ -25,7 +25,7 @@ from . import (
 from . import const as c
 from . import settings_transfer_schema as schema
 from .embedded_entry import _reload_relevant
-from .settings_transfer_schema import InvalidBackup
+from .settings_transfer_schema import RefusalCode, TransferRefused
 from .tools_settings_store import (
     ALLOWED_PATHS_KEY,
     EXTRA_YAML_KEYS_KEY,
@@ -49,7 +49,7 @@ def _entries(hass: HomeAssistant) -> dict[str, ConfigEntry]:
         for entry in hass.config_entries.async_entries(c.DOMAIN, include_ignore=False)
     }
     if c.ENTRY_TYPE_SERVER not in entries:
-        raise InvalidBackup("server_unavailable")
+        raise TransferRefused(RefusalCode.SERVER_UNAVAILABLE)
     return entries
 
 
@@ -60,7 +60,7 @@ def _load_wheel() -> ModuleType:
     except ImportError as err:
         if not (isinstance(err, ModuleNotFoundError) and err.name in _WHEEL_MODULES):
             _LOGGER.exception("The HA-MCP server package failed to import")
-        raise InvalidBackup("server_unavailable") from err
+        raise TransferRefused(RefusalCode.SERVER_UNAVAILABLE) from err
     return settings_transfer
 
 
@@ -104,7 +104,7 @@ async def _write_tools_setting(
         _, rejected = await apply(hass, values)
         # An undo restores raw stored values; apply() drops what startup would.
         if rejected and strict:
-            raise InvalidBackup("invalid_backup")
+            raise TransferRefused(RefusalCode.INVALID_BACKUP)
     else:
         # Unloaded entries have no live permissions cache. Setup loads the
         # saved values, including on the first setup of a newly created entry.
@@ -126,7 +126,7 @@ async def async_export(hass: HomeAssistant) -> dict[str, Any]:
             wheel.export_server_settings, directory
         )
     except wheel.LocalSettingsUnusable as err:
-        raise InvalidBackup("invalid_server_settings") from err
+        raise TransferRefused(RefusalCode.INVALID_SERVER_SETTINGS) from err
     bundle = {
         "format": schema.FORMAT,
         "version": schema.VERSION,
@@ -148,18 +148,20 @@ def _check_tools_entry(
     """Keep the destination's privileged services consistent with the backup."""
     if source is None:
         if target is not None:
-            raise InvalidBackup("extra_tools_entry")
+            raise TransferRefused(RefusalCode.EXTRA_TOOLS_ENTRY)
         return
     disabled = target is not None and target.disabled_by is not None
     if source.get("disabled", False) != disabled:
         # The enabled state must already match. HA's config flow sets up a new
         # entry immediately, so creating one for a disabled source would grant
         # file access before it could be disabled.
-        raise InvalidBackup(
-            "tools_must_be_enabled" if disabled else "tools_must_be_disabled"
+        raise TransferRefused(
+            RefusalCode.TOOLS_MUST_BE_ENABLED
+            if disabled
+            else RefusalCode.TOOLS_MUST_BE_DISABLED
         )
     if target is None and not allow_create:
-        raise InvalidBackup("restore_failed")
+        raise TransferRefused(RefusalCode.RESTORE_FAILED)
 
 
 def _tools_setup_lock(entry: ConfigEntry | None) -> asyncio.Lock | nullcontext[None]:
@@ -170,9 +172,9 @@ def _tools_setup_lock(entry: ConfigEntry | None) -> asyncio.Lock | nullcontext[N
         ConfigEntryState.SETUP_IN_PROGRESS,
         ConfigEntryState.UNLOAD_IN_PROGRESS,
     ):
-        raise InvalidBackup("tools_entry_busy")
+        raise TransferRefused(RefusalCode.TOOLS_ENTRY_BUSY)
     if entry.disabled_by is None and entry.state is not ConfigEntryState.LOADED:
-        raise InvalidBackup("tools_entry_unavailable")
+        raise TransferRefused(RefusalCode.TOOLS_ENTRY_UNAVAILABLE)
     return entry.setup_lock
 
 
@@ -224,7 +226,7 @@ async def _rollback_tools_setting(
         # A save can land even when its verification read fails, leaving the
         # live cache at the old value; rewriting before re-syncs both.
         await _write_tools_setting(hass, name, before, entry, strict=False)
-        writes.revision += 1
+        writes.bump()
 
 
 async def _restore_tools(
@@ -239,14 +241,13 @@ async def _restore_tools(
             previous = await _read_tools_setting(hass, name)
             if previous == tools[name]:
                 continue
-            writes.revision += 1
             _add_undo(
                 rollback,
                 name,
                 _rollback_tools_setting,
                 hass,
                 name,
-                writes.revision,
+                writes.bump(),
                 previous,
                 tools[name],
                 entry,
@@ -263,7 +264,7 @@ async def _restore_tools(
                 "Settings import could not add the File & YAML Tools entry (%s)",
                 flow.get("reason", flow["type"]),
             )
-            raise InvalidBackup("restore_failed")
+            raise TransferRefused(RefusalCode.RESTORE_FAILED)
         created = flow["result"]
         _add_undo(
             rollback,
@@ -272,7 +273,7 @@ async def _restore_tools(
             created.entry_id,
         )
         if created.state is not ConfigEntryState.LOADED:
-            raise InvalidBackup("restore_failed")
+            raise TransferRefused(RefusalCode.RESTORE_FAILED)
 
 
 def _restore_entry(
@@ -331,7 +332,7 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
     )
     current_hook = hass.data.get(c.DOMAIN, {}).get(c.DATA_WEBHOOK, {}).get("webhook_id")
     if hook != current_hook and hook in hass.data.get(webhook.DOMAIN, {}):
-        raise InvalidBackup("webhook_in_use")
+        raise TransferRefused(RefusalCode.WEBHOOK_IN_USE)
     directory = Path(hass.config.path(c.SERVER_CONFIG_SUBDIR))
     # Keep setup/unload from crossing the choice between live and stored
     # settings. A newly created entry loads the persisted values in its flow.
@@ -344,13 +345,13 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
                 wheel.restore_server_settings, directory, settings
             )
         except wheel.DecisionPinRequired as err:
-            raise InvalidBackup("decision_pin_required") from err
+            raise TransferRefused(RefusalCode.DECISION_PIN_REQUIRED) from err
         except wheel.LocalSettingsUnusable as err:
-            raise InvalidBackup("invalid_server_settings") from err
+            raise TransferRefused(RefusalCode.INVALID_SERVER_SETTINGS) from err
         except ValueError as err:
             if _INCOMPLETE_ROLLBACK in getattr(err, "__notes__", ()):
                 raise
-            raise InvalidBackup("invalid_backup") from err
+            raise TransferRefused(RefusalCode.INVALID_BACKUP) from err
         if server_changes is not None:
             _add_undo(
                 rollback,
@@ -406,17 +407,6 @@ def _same_origin(request: web.Request) -> bool:
     if site is not None:
         return site == "same-origin"
     return request.headers.get("Origin") == str(request.url.origin())
-
-
-_CONFLICTS = {
-    "server_unavailable",
-    "webhook_in_use",
-    "extra_tools_entry",
-    "tools_must_be_enabled",
-    "tools_must_be_disabled",
-    "tools_entry_busy",
-    "tools_entry_unavailable",
-}
 
 
 async def _export_response(hass: HomeAssistant, body: Any) -> web.Response:
@@ -478,9 +468,9 @@ def _expected_failure(operation: str, err: Exception) -> web.Response | None:
     if isinstance(err, ToolsStoreUnavailable):
         _LOGGER.warning("Settings %s failed (%s)", operation, err.code)
         return _error(err.code, 503)
-    if isinstance(err, InvalidBackup):
+    if isinstance(err, TransferRefused):
         _LOGGER.info("Settings %s refused (%s)", operation, err.code)
-        return _error(err.code, 409 if err.code in _CONFLICTS else 400)
+        return _error(err.code, err.code.http_status)
     return None
 
 

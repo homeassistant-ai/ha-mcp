@@ -37,13 +37,18 @@ class ToolsStoreWrites:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     revision: int = 0
 
+    def bump(self) -> int:
+        """Record a write under ``lock``; an import's undo checks the count."""
+        self.revision += 1
+        return self.revision
+
     @asynccontextmanager
     async def writing(self) -> AsyncIterator[None]:
         async with self.lock:
             yield
             # Count even an identical save: its author may intentionally have
             # chosen to retain the values a running import will need to undo.
-            self.revision += 1
+            self.bump()
 
 
 def store_writes(hass: HomeAssistant, key: str) -> ToolsStoreWrites:
