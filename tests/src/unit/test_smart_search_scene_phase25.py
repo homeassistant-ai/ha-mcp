@@ -150,6 +150,23 @@ async def test_renamed_scene_still_resolves_when_the_registry_list_fails(
     ]
 
 
+async def test_a_scene_keeps_its_own_config_when_the_registry_list_fails(
+    hass: HomeAssistant,
+    search: SmartSearchTools,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``scene.key_a`` is the scene stored as ``key_b``; another scene is stored
+    as ``key_a``. Resolved one by one, the entity's own config is scored."""
+    lamp = {**_scene("key_b", "Key A"), "entities": {"light.lamp": "on"}}
+    await setup_scenes(hass, [_scene("key_a", "First"), lamp])
+
+    async with unanswered(hass, REGISTRY_LIST, monkeypatch):
+        result = await search.deep_search("key a", ["scene"], include_config=True)
+
+    configs = {m["entity_id"]: m["config"]["entities"] for m in result["scenes"]}
+    assert configs["scene.key_a"] == {"light.lamp": "on"}
+
+
 async def test_scenes_are_not_looked_up_again_when_the_registry_list_worked(
     hass: HomeAssistant, search: SmartSearchTools
 ) -> None:

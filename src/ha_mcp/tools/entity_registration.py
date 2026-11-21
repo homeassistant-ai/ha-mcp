@@ -90,7 +90,8 @@ async def resolve_entity_id_after_write(
     ``fallback_entity_id`` overrides the constructed ID on failure; registry
     matching always uses the storage key.
 
-    Config reads and removals must use their existing resolution paths. Bulk
+    Config reads and removals must use their existing resolution paths; the
+    script tools, which have none, request one lookup (``timeout=0``). Bulk
     writes with neither a state wait nor a category update should skip this
     helper entirely. The optional budget and interval support deterministic
     tests without extending production waits.
@@ -118,7 +119,7 @@ async def resolve_entity_id_after_write(
         HomeAssistantConnectionError,
     ) as exc:
         logger.warning(
-            "Post-write registry resolve failed for %s.%s (%s: %s); using %s",
+            "Registry resolve failed for %s.%s (%s: %s); using %s",
             domain,
             storage_key,
             type(exc).__name__,

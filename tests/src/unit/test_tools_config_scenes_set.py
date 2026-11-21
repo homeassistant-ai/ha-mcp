@@ -9,17 +9,18 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.tools.scene_checks import category_problems
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
-from ._tool_errors import error_body
+from ._tool_errors import error_of
 from ._tools_config_scenes_core import (
     TV_ON,
     category,
@@ -28,6 +29,8 @@ from ._tools_config_scenes_core import (
     scene,
     scene_tools,
     sent_of_type,
+    set_refused,
+    stored_scene,
     stored_scenes,
     upserts,
 )
@@ -66,12 +69,6 @@ async def _transform(
         config_hash=hash_value,
         **{"wait": False, **kwargs},
     )
-
-
-async def _rejected(tools: ConfigSceneTools, **kwargs: Any) -> dict[str, Any]:
-    with pytest.raises(ToolError) as exc:
-        await tools.ha_config_set_scene(**{"scene_id": "test_scene", **kwargs})
-    return error_body(exc)
 
 
 class TestPostWriteEntity:
@@ -153,16 +150,6 @@ class TestConfigValidation:
     @pytest.mark.parametrize(
         ("kwargs", "message_part"),
         [
-            ({"config": {"name": "No entities"}}, "entities"),
-            (
-                {
-                    "config": {
-                        "name": "Wrong shape",
-                        "entities": [{"entity_id": "light.kitchen", "state": "on"}],
-                    }
-                },
-                "dict",
-            ),
             (
                 {"config": {"entities": TV_ON}, "python_transform": "config.clear()"},
                 "both",
@@ -171,15 +158,24 @@ class TestConfigValidation:
             ({"python_transform": "config['name'] = 'x'"}, "config_hash"),
             ({"config": "{not valid json"}, "config"),
             ({"config": "[1, 2, 3]"}, "object"),
+            ({"capture_entities": ["input_boolean.tv"]}, "requires config"),
+            (
+                {
+                    "capture_entities": ["input_boolean.tv"],
+                    "python_transform": "config['name'] = 'x'",
+                    "config_hash": "0" * 16,
+                },
+                "requires config",
+            ),
         ],
         ids=[
-            "missing-entities",
-            "entities-list",
             "config-and-transform",
             "neither",
             "transform-without-hash",
             "invalid-json",
             "json-array",
+            "capture-without-config",
+            "capture-with-transform",
         ],
     )
     async def test_malformed_request_is_refused_unwritten(
@@ -192,18 +188,48 @@ class TestConfigValidation:
     ) -> None:
         before = await stored_scenes(hass)
         with upserts(core_client) as upsert:
-            body = await _rejected(tools, **kwargs)
+            body = await set_refused(tools, **kwargs)
 
         assert body["success"] is False
         assert message_part in body["error"]["message"].lower()
         upsert.assert_not_awaited()
         assert await stored_scenes(hass) == before
 
+    @pytest.mark.parametrize(
+        ("config", "core_says"),
+        [
+            ({"name": "No entities"}, "required key not provided"),
+            (
+                {
+                    "name": "Wrong shape",
+                    "entities": [{"entity_id": "input_boolean.tv"}],
+                },
+                "expected dict",
+            ),
+        ],
+        ids=["missing-entities", "entities-list"],
+    )
+    async def test_cores_refusal_of_the_entities_leads_unwritten(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigSceneTools,
+        config: dict[str, Any],
+        core_says: str,
+    ) -> None:
+        """The entities shape is Core's to check; its own text reaches the
+        caller instead of a copy of the rule."""
+        before = await stored_scenes(hass)
+        body = await set_refused(tools, scene_id="bad_scene", config=config)
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert core_says in body["error"]["message"]
+        assert await stored_scenes(hass) == before
+
     async def test_cores_refusal_keeps_the_scene_id_and_shape_hint(
         self, tools: ConfigSceneTools
     ) -> None:
         """Core refuses an entity key that is no entity_id."""
-        body = await _rejected(
+        body = await set_refused(
             tools,
             scene_id="bad_scene",
             config={"name": "Bad Scene", "entities": {"kitchen": {"state": "on"}}},
@@ -212,6 +238,27 @@ class TestConfigValidation:
         assert body["error"]["code"] == "VALIDATION_FAILED"
         assert body["scene_id"] == "bad_scene"
         assert any("entities" in s.lower() for s in body["error"]["suggestions"])
+
+    @pytest.mark.parametrize("mode", ["config", "transform"])
+    async def test_a_platform_stanza_is_refused_unwritten(
+        self, hass: HomeAssistant, tools: ConfigSceneTools, mode: str
+    ) -> None:
+        """Core's config API stores a body with ``platform`` as a scene platform,
+        not as this scene: ``states: []`` passes and no entity appears."""
+        before = await stored_scenes(hass)
+        stanza = {"platform": "homeassistant", "states": []}
+        if mode == "config":
+            kwargs: dict[str, Any] = {"config": {"name": "Test Scene", **stanza}}
+        else:
+            kwargs = {
+                "python_transform": f"config.update({stanza!r})",
+                "config_hash": await config_hash(tools, "test_scene"),
+            }
+        body = await set_refused(tools, **kwargs)
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert "platform" in body["error"]["message"]
+        assert await stored_scenes(hass) == before
 
 
 class TestConfigWrite:
@@ -281,7 +328,7 @@ class TestConfigWrite:
         fresh = await config_hash(tools, "led_desk_strip")
 
         with upserts(core_client) as upsert:
-            body = await _rejected(
+            body = await set_refused(
                 tools,
                 scene_id="led_desk_strip",
                 config={"name": "New Name", "entities": TV_OFF},
@@ -292,6 +339,17 @@ class TestConfigWrite:
         assert "modified" in body["error"]["message"].lower()
         assert body["current_config_hash"] == fresh
         assert body["scene_id"] == "night_light_led_desk_strip"
+        upsert.assert_not_awaited()
+
+    async def test_an_empty_hash_is_checked_not_skipped(
+        self, core_client: HomeAssistantClient, tools: ConfigSceneTools
+    ) -> None:
+        with upserts(core_client) as upsert:
+            body = await set_refused(
+                tools, config={"name": "New", "entities": TV_OFF}, config_hash=""
+            )
+
+        assert "modified" in body["error"]["message"].lower()
         upsert.assert_not_awaited()
 
     async def test_matching_hash_replaces_the_scene(
@@ -331,6 +389,61 @@ class TestConfigWrite:
         assert await stored_scenes(hass) == [
             {"id": "storage_key", "name": "renamed_scene", "entities": TV_OFF}
         ]
+
+    async def test_another_id_in_the_config_is_refused_unwritten(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        tools: ConfigSceneTools,
+    ) -> None:
+        """Core stores the body under its ``id``: the scene would move to a new
+        key while the tool reports the one it was called with."""
+        before = await stored_scenes(hass)
+        with upserts(core_client) as upsert:
+            body = await set_refused(
+                tools,
+                config={"id": "other_key", "name": "Test Scene", "entities": TV_OFF},
+            )
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert body["attempted_id"] == "other_key"
+        upsert.assert_not_awaited()
+        assert await stored_scenes(hass) == before
+
+    async def test_a_none_id_in_the_config_is_dropped(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """Core refuses ``id: None``; it means the same as leaving ``id`` out."""
+        await tools.ha_config_set_scene(
+            scene_id="test_scene",
+            config={"id": None, "name": "Test Scene", "entities": TV_OFF},
+            wait=False,
+        )
+
+        assert await stored_scene(hass, "test_scene") == {
+            "id": "test_scene",
+            "name": "Test Scene",
+            "entities": TV_OFF,
+        }
+
+    async def test_a_renamed_scenes_own_id_in_the_config_is_written(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A config read back from ``ha_config_get_scene`` carries the storage
+        key, not the slug the caller names the scene by."""
+        tools = await scene_tools(
+            hass, core_client, monkeypatch, [scene("storage_key", "Renamed Scene")]
+        )
+        new = {"id": "storage_key", "name": "Renamed Scene", "entities": TV_OFF}
+
+        await tools.ha_config_set_scene(
+            scene_id="renamed_scene", config=dict(new), wait=False
+        )
+
+        assert await stored_scenes(hass) == [new]
 
 
 class TestResolvesOnce:
@@ -401,7 +514,7 @@ class TestPythonTransform:
     async def test_stale_hash_is_a_conflict(
         self, hass: HomeAssistant, tools: ConfigSceneTools
     ) -> None:
-        body = await _rejected(
+        body = await set_refused(
             tools,
             python_transform="config['entities']['input_boolean.tv']['state'] = 'off'",
             config_hash="stale-hash-that-doesnt-match",
@@ -413,15 +526,11 @@ class TestPythonTransform:
     @pytest.mark.parametrize(
         ("expression", "message_part"),
         [
-            ("del config['entities']", "entities"),
-            ("config['entities'] = []", "entities"),
             ("config = None", "none"),
             ("import os; os.system('echo pwned')", "import"),
             ("del config['entities']['light.nonexistent']", ""),
         ],
         ids=[
-            "entities-dropped",
-            "entities-list",
             "config-none",
             "import",
             "runtime-error",
@@ -437,7 +546,7 @@ class TestPythonTransform:
     ) -> None:
         hash_value = await config_hash(tools, "test_scene")
         with upserts(core_client) as upsert:
-            body = await _rejected(
+            body = await set_refused(
                 tools, python_transform=expression, config_hash=hash_value, wait=False
             )
 
@@ -450,7 +559,7 @@ class TestPythonTransform:
     ) -> None:
         """A JSON-style ``\\"`` outside a string literal is a syntax error with
         its own hint."""
-        body = await _rejected(
+        body = await set_refused(
             tools,
             python_transform='config["entities"]["input_boolean.tv"] = \\"v\\"',
             config_hash=await config_hash(tools, "test_scene"),
@@ -465,10 +574,10 @@ class TestPythonTransform:
         core_client: HomeAssistantClient,
         tools: ConfigSceneTools,
     ) -> None:
-        """A changed ``id`` would write a second scene and orphan the first."""
+        """A changed ``id`` would move the scene to another storage key."""
         hash_value = await config_hash(tools, "test_scene")
         with upserts(core_client) as upsert:
-            body = await _rejected(
+            body = await set_refused(
                 tools,
                 python_transform="config['id'] = 'completely_different_id'",
                 config_hash=hash_value,
@@ -526,6 +635,24 @@ class TestTransformMetadata:
             for r in caplog.records
         )
 
+    async def test_cores_refusal_of_dropped_entities_leads_unwritten(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """Pruning metadata against entities the transform dropped must not
+        turn Core's refusal into an internal error."""
+        before = await stored_scenes(hass)
+        hash_value = await config_hash(tools, "test_scene")
+        body = await set_refused(
+            tools,
+            python_transform="del config['entities']",
+            config_hash=hash_value,
+            wait=False,
+        )
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert "required key not provided" in body["error"]["message"]
+        assert await stored_scenes(hass) == before
+
     async def test_metadata_is_kept_when_entities_stay(
         self, hass: HomeAssistant, tools: ConfigSceneTools
     ) -> None:
@@ -552,7 +679,7 @@ class TestCategoryValidation:
         other_scope = category(hass, "Morning", scope="automation")
         with upserts(core_client) as upsert:
             error = (
-                await _rejected(
+                await set_refused(
                     tools,
                     config={"name": "X", "entities": TV_ON},
                     category=other_scope,
@@ -575,7 +702,7 @@ class TestCategoryValidation:
         hash_value = await config_hash(tools, "test_scene")
         with upserts(core_client) as upsert:
             error = (
-                await _rejected(
+                await set_refused(
                     tools,
                     python_transform="config['name'] = 'x'",
                     config_hash=hash_value,
@@ -597,7 +724,7 @@ class TestCategoryValidation:
         """A top-level ``category`` in the config is checked like the parameter."""
         with upserts(core_client) as upsert:
             error = (
-                await _rejected(
+                await set_refused(
                     tools,
                     config={
                         "name": "X",
@@ -611,6 +738,49 @@ class TestCategoryValidation:
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "phantom_via_config_dict" in error["message"]
         upsert.assert_not_awaited()
+
+    @pytest.mark.parametrize("transform", [False, True])
+    async def test_an_unknown_category_is_refused_with_the_rest(
+        self,
+        core_client: HomeAssistantClient,
+        tools: ConfigSceneTools,
+        transform: bool,
+    ) -> None:
+        change = (
+            {
+                "python_transform": "config['id'] = 'other'",
+                "config_hash": await config_hash(tools, "test_scene"),
+            }
+            if transform
+            else {"config": {"id": "other", "entities": TV_ON}}
+        )
+        with upserts(core_client) as upsert:
+            body = await set_refused(
+                tools, scene_id="test_scene", category="phantom_id", **change
+            )
+
+        assert [p["code"] for p in body["problems"]] == [
+            "VALIDATION_FAILED",
+            "VALIDATION_INVALID_PARAMETER",
+        ]
+        upsert.assert_not_awaited()
+
+    async def test_an_unreadable_category_registry_refuses_the_call_alone(
+        self, core_client: HomeAssistantClient
+    ) -> None:
+        """A transport failure is no input problem: it is not folded into the
+        collected refusals, so the caller can tell to retry."""
+        with (
+            patch.object(
+                core_client,
+                "send_websocket_message",
+                AsyncMock(side_effect=HomeAssistantConnectionError("down")),
+            ),
+            pytest.raises(ToolError) as exc,
+        ):
+            await category_problems(core_client, "lighting")
+
+        assert error_of(exc)["code"].startswith("CONNECTION")
 
     async def test_no_category_lookup_without_a_category(
         self, hass: HomeAssistant, tools: ConfigSceneTools, sent: AsyncMock

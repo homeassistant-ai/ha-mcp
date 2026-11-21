@@ -543,10 +543,10 @@ def _do_states(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
     Core's ``State.as_dict()``, the REST ``/api/states/<id>`` serialization, with
     the live ``last_reported`` (see ``_state_as_dict``). It is never
     ``_plainify``'d: ``_plainify``'s ``str()`` would render a datetime with a
-    space separator where both REST and WS use ``isoformat``'s ``T``. State bodies carry no ``!secret`` plaintext. The server
-    enforces its own ``MAX_ENTITIES`` cap before calling, so no per-frame guard is
-    needed here (100 full states is well within one frame — ``overview`` already
-    returns every state in one call).
+    space separator where both REST and WS use ``isoformat``'s ``T``. State bodies carry no ``!secret`` plaintext. No per-frame guard:
+    each id is one in-memory read and the reply grows only with the caller's own id
+    list; its bodies hold the states ``overview`` already returns for every entity
+    at once.
     """
     entity_ids = params.get("entity_ids") or []
     states: dict[str, Any] = {}

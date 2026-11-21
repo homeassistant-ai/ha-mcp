@@ -15,13 +15,19 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
-from ._tool_errors import error_body, error_of
+from ._command_faults import registry_lookup_failing
+from ._tool_errors import error_body, error_of, rejected_call_body
 from ._tools_config_scenes_core import (
     TV_ON,
     category,
@@ -32,6 +38,7 @@ from ._tools_config_scenes_core import (
     scene,
     scene_tools,
     sent_of_type,
+    set_refused,
     stored_scenes,
     upserts,
 )
@@ -195,7 +202,50 @@ class TestGet:
         assert error_body(exc)["entity_id"] == "scene.missing_scene"
 
 
+_TURN_ON_TEST_SCENE = {
+    "action": "scene.turn_on",
+    "target": {"entity_id": "scene.test_scene"},
+}
+
+
 class TestRemove:
+    @pytest.fixture(autouse=True)
+    async def _search(self, hass: HomeAssistant) -> None:
+        """Core's related search, as ``default_config`` loads it."""
+        assert await async_setup_component(hass, "search", {})
+
+    async def test_remove_names_the_automations_and_scripts_using_the_scene(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """They fail once the scene is gone; the removal still goes ahead."""
+        assert await async_setup_component(
+            hass,
+            "automation",
+            {
+                "automation": {
+                    "id": "movie_time",
+                    "alias": "Movie time",
+                    "triggers": [{"trigger": "event", "event_type": "movie"}],
+                    "actions": [_TURN_ON_TEST_SCENE],
+                }
+            },
+        )
+        assert await async_setup_component(
+            hass, "script", {"script": {"movie": {"sequence": [_TURN_ON_TEST_SCENE]}}}
+        )
+
+        result = await tools.ha_config_remove_scene(scene_id="test_scene")
+
+        assert result["referenced_by"] == {
+            "automation": ["automation.movie_time"],
+            "script": ["script.movie"],
+        }
+        assert any(
+            "automation.movie_time" in w and "script.movie" in w
+            for w in result["warnings"]
+        )
+        assert await stored_scenes(hass) == []
+
     async def test_remove_by_slug_deletes_the_storage_key(
         self,
         hass: HomeAssistant,
@@ -209,7 +259,7 @@ class TestRemove:
             [scene("night_light_led_desk_strip", "LED Desk Strip")],
         )
 
-        result = await tools.ha_config_remove_scene(scene_id="led_desk_strip")
+        result = await tools.ha_config_remove_scene(scene_id="scene.led_desk_strip")
 
         assert result["scene_id"] == "night_light_led_desk_strip"
         assert result["operation"] == "deleted"
@@ -272,6 +322,27 @@ class TestNotAStorageScene:
         error = error_of(exc)
         assert error["code"] == "CONFIG_NOT_FOUND"
         assert "hue" in error["message"]
+
+    async def test_remove_by_the_name_of_a_yaml_scene_with_an_id_is_not_storage(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """scene.key_a is a YAML scene with id key_b, which scenes.yaml lacks."""
+        tools = await scene_tools(
+            hass, core_client, monkeypatch, yaml_only=[scene("key_b", "Key A")]
+        )
+
+        with deletes(core_client) as delete:
+            body = await rejected_call_body(
+                tools.ha_config_remove_scene(scene_id="key_a", wait=False)
+            )
+
+        assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+        assert hass.states.get("scene.key_a") is not None
+        # A bare id never sends a delete to another key.
+        delete.assert_not_called()
 
     @pytest.mark.parametrize("transform", [False, True])
     async def test_hash_bearing_set_names_the_owning_integration(
@@ -428,6 +499,17 @@ class TestVerificationWithoutAnAnswer:
         )
         assert await stored_scenes(hass) == []
 
+    async def test_remove_without_core_search_still_deletes_with_a_warning(
+        self, hass: HomeAssistant, tools: ConfigSceneTools
+    ) -> None:
+        """Core without ``search`` cannot tell what uses the scene; that is no
+        reason to keep it."""
+        result = await tools.ha_config_remove_scene(scene_id="test_scene")
+
+        assert "referenced_by" not in result
+        assert any("could not check" in w.lower() for w in result["warnings"])
+        assert await stored_scenes(hass) == []
+
 
 class TestSearchSceneId:
     """``ha_search`` reports the storage key ``ha_config_get_scene`` takes."""
@@ -472,7 +554,7 @@ class TestSearchSceneId:
 
         assert match["scene_id"] == "hue-uuid-123"
 
-    async def test_unregistered_scene_falls_back_to_its_slug_with_a_warning(
+    async def test_unregistered_scene_falls_back_to_its_entity_id_with_a_warning(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
@@ -489,9 +571,259 @@ class TestSearchSceneId:
 
         (match,) = await self._search(core_client, "orphaned")
 
-        assert match["scene_id"] == "orphaned_scene"
+        assert match["scene_id"] == "scene.orphaned_scene"
         assert any(
-            "fell back to entity-id slug" in r.message
+            "fell back to its entity_id" in r.message
             for r in caplog.records
             if r.levelno == logging.WARNING
         )
+
+
+class TestStorageKeyPrecedence:
+    """A bare id that is a storage key opens that scene, even when it is also
+    another scene's entity slug."""
+
+    @pytest.fixture
+    async def collided(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> ConfigSceneTools:
+        """``key_a`` is "First" (``scene.first``); ``key_b`` is "Key A", whose
+        entity is ``scene.key_a``."""
+        return await scene_tools(
+            hass,
+            core_client,
+            monkeypatch,
+            [scene("key_a", "First"), scene("key_b", "Key A")],
+        )
+
+    @pytest.mark.parametrize(
+        ("scene_id", "key"),
+        [("key_a", "key_a"), ("scene.key_a", "key_b"), ("first", "key_a")],
+    )
+    async def test_get_opens_the_scene_the_id_names(
+        self, collided: ConfigSceneTools, scene_id: str, key: str
+    ) -> None:
+        result = await collided.ha_config_get_scene(scene_id=scene_id)
+
+        assert result["scene_id"] == key
+        assert result["config"]["id"] == key
+
+    async def test_the_key_search_returns_opens_its_scene(
+        self, core_client: HomeAssistantClient, collided: ConfigSceneTools
+    ) -> None:
+        result = await SmartSearchTools(client=core_client).deep_search(
+            query="first", search_types=["scene"], limit=10, include_config=True
+        )
+        (match,) = [m for m in result["scenes"] if m["entity_id"] == "scene.first"]
+
+        opened = await collided.ha_config_get_scene(scene_id=match["scene_id"])
+
+        assert opened["config"]["name"] == "First"
+
+    @pytest.mark.parametrize("hashed", [True, False])
+    async def test_a_write_by_key_edits_that_scene(
+        self, hass: HomeAssistant, collided: ConfigSceneTools, hashed: bool
+    ) -> None:
+        await collided.ha_config_set_scene(
+            scene_id="key_a",
+            config={"name": "First", "entities": TV_ON, "icon": "mdi:one"},
+            config_hash=await config_hash(collided, "key_a") if hashed else None,
+            wait=False,
+        )
+
+        icons = {s["id"]: s.get("icon") for s in await stored_scenes(hass)}
+        assert icons == {"key_a": "mdi:one", "key_b": None}
+
+    async def test_remove_by_key_removes_that_scene(
+        self, hass: HomeAssistant, collided: ConfigSceneTools
+    ) -> None:
+        result = await collided.ha_config_remove_scene(scene_id="key_a")
+
+        assert [s["id"] for s in await stored_scenes(hass)] == ["key_b"]
+        # The removal is checked on the removed scene's entity, not scene.key_a.
+        assert hass.states.get("scene.first") is None
+        assert hass.states.get("scene.key_a") is not None
+        assert not any("scene.key_a" in w for w in result.get("warnings", []))
+
+    @pytest.mark.parametrize("remove", [True, False])
+    async def test_an_entity_id_the_registry_cannot_look_up_writes_nothing(
+        self, hass: HomeAssistant, collided: ConfigSceneTools, remove: bool
+    ) -> None:
+        """A failed lookup is no answer: ``scene.key_a`` is not key ``key_a``."""
+
+        call = (
+            collided.ha_config_remove_scene(scene_id="scene.key_a", wait=False)
+            if remove
+            else collided.ha_config_set_scene(
+                scene_id="scene.key_a",
+                config={"name": "Edited", "entities": TV_ON},
+                wait=False,
+            )
+        )
+        with registry_lookup_failing(hass):
+            body = await rejected_call_body(call)
+
+        assert "registry unavailable" in body["error"]["message"]
+        names = {s["id"]: s["name"] for s in await stored_scenes(hass)}
+        assert names == {"key_a": "First", "key_b": "Key A"}
+
+    async def test_a_repeated_remove_by_key_leaves_the_other_scene(
+        self, hass: HomeAssistant, collided: ConfigSceneTools
+    ) -> None:
+        """A bare id is a storage key: once key_a is gone, a repeated remove
+        must not reach key_b, whose entity is scene.key_a."""
+        await collided.ha_config_remove_scene(scene_id="key_a", wait=False)
+
+        body = await rejected_call_body(
+            collided.ha_config_remove_scene(scene_id="key_a", wait=False)
+        )
+
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert any("'scene.key_a'" in s for s in body["error"]["suggestions"])
+        assert [s["id"] for s in await stored_scenes(hass)] == ["key_b"]
+
+
+class TestEntityIdForm:
+    """``scene.<id>`` names an entity: with no such entity it never opens the
+    scene stored under key ``<id>``, whose entity is another one."""
+
+    @pytest.fixture
+    async def orphaned_key(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> ConfigSceneTools:
+        """``key_a`` is "First" (``scene.first``); no registered ``scene.key_a``."""
+        return await scene_tools(
+            hass, core_client, monkeypatch, [scene("key_a", "First")]
+        )
+
+    @pytest.mark.parametrize("action", ["get", "set", "set_hashed", "remove"])
+    async def test_it_does_not_reach_another_scene_by_its_key(
+        self, hass: HomeAssistant, orphaned_key: ConfigSceneTools, action: str
+    ) -> None:
+        before = await stored_scenes(hass)
+        call = {
+            "get": lambda: orphaned_key.ha_config_get_scene(scene_id="scene.key_a"),
+            "set": lambda: orphaned_key.ha_config_set_scene(
+                scene_id="scene.key_a",
+                config={"name": "Brand New", "entities": TV_ON},
+                wait=False,
+            ),
+            "set_hashed": lambda: orphaned_key.ha_config_set_scene(
+                scene_id="scene.key_a",
+                config={"entities": TV_ON},
+                config_hash="any",
+                wait=False,
+            ),
+            "remove": lambda: orphaned_key.ha_config_remove_scene(
+                scene_id="scene.key_a", wait=False
+            ),
+        }[action]
+        with pytest.raises(ToolError) as exc:
+            await call()
+
+        error = error_of(exc)
+        assert error["code"] == "VALIDATION_FAILED"
+        assert any("'key_a'" in s for s in error["suggestions"])
+        assert any("entity_id" in s for s in error["suggestions"])
+        assert await stored_scenes(hass) == before
+
+    async def test_a_backup_snapshot_reads_it_as_absent(
+        self, core_client: HomeAssistantClient, orphaned_key: ConfigSceneTools
+    ) -> None:
+        """A backup snapshot reads a 404 from this read as no prior config."""
+        with pytest.raises(HomeAssistantAPIError) as exc:
+            await core_client.get_scene_config("scene.key_a")
+
+        assert exc.value.status_code == 404
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"name": "RV Movie Night", "entities": TV_ON},
+            {"entities": TV_ON},
+        ],
+    )
+    async def test_a_create_by_entity_id_takes_the_bare_key(
+        self, hass: HomeAssistant, orphaned_key: ConfigSceneTools, config: dict
+    ) -> None:
+        """Core names the new entity after the scene's name, so the entity_id
+        form of a scene that does not exist yet is never a create."""
+        before = await stored_scenes(hass)
+        body = await set_refused(orphaned_key, scene_id="scene.rv_movie", config=config)
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert any("'rv_movie'" in s for s in body["error"]["suggestions"])
+        assert await stored_scenes(hass) == before
+
+    async def test_an_entity_form_create_is_refused_with_the_rest(
+        self, hass: HomeAssistant, orphaned_key: ConfigSceneTools
+    ) -> None:
+        before = await stored_scenes(hass)
+        body = await set_refused(
+            orphaned_key,
+            scene_id="scene.rv_movie",
+            config={"name": "RV Movie Night", "platform": "homeassistant"},
+        )
+
+        assert [p["code"] for p in body["problems"]] == ["VALIDATION_FAILED"] * 2
+        assert await stored_scenes(hass) == before
+
+    async def test_a_scene_created_by_key_refuses_the_entity_form_of_the_key(
+        self, hass: HomeAssistant, orphaned_key: ConfigSceneTools
+    ) -> None:
+        await orphaned_key.ha_config_set_scene(
+            scene_id="rv_movie",
+            config={"name": "RV Movie Night", "entities": TV_ON},
+            wait=True,
+        )
+
+        with pytest.raises(ToolError) as exc:
+            await orphaned_key.ha_config_get_scene(scene_id="scene.rv_movie")
+
+        assert error_of(exc)["code"] == "VALIDATION_FAILED"
+        found = await orphaned_key.ha_config_get_scene(scene_id="rv_movie")
+        assert found["config"]["name"] == "RV Movie Night"
+
+    async def test_search_gives_an_unregistered_scene_neither_key_nor_config(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        orphaned_key: ConfigSceneTools,
+    ) -> None:
+        """A scene from ``scene.create`` has no registry entry and no stored
+        config; its slug ``key_a`` is "First"'s storage key."""
+        await hass.services.async_call(
+            "scene", "create", {"scene_id": "key_a", "entities": TV_ON}, blocking=True
+        )
+        result = await SmartSearchTools(client=core_client).deep_search(
+            query="key_a", search_types=["scene"], limit=10, include_config=True
+        )
+        (match,) = [m for m in result["scenes"] if m["entity_id"] == "scene.key_a"]
+
+        assert match["scene_id"] == "scene.key_a"
+        assert match["config"] is None
+        with pytest.raises(ToolError):
+            await orphaned_key.ha_config_get_scene(scene_id=match["scene_id"])
+
+    @pytest.mark.parametrize("search_in_config", [False, True])
+    async def test_discovery_gives_an_unregistered_scene_neither_key_nor_config(
+        self,
+        hass: HomeAssistant,
+        orphaned_key: ConfigSceneTools,
+        search_in_config: bool,
+    ) -> None:
+        await hass.services.async_call(
+            "scene", "create", {"scene_id": "key_a", "entities": TV_ON}, blocking=True
+        )
+        result = await orphaned_key.ha_config_get_scene(
+            query="key_a", search_in_config=search_in_config
+        )
+        (row,) = [r for r in result["scenes"] if r["entity_id"] == "scene.key_a"]
+
+        assert (row["scene_id"], row["config_status"]) == (None, "not_in_storage")

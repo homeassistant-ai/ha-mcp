@@ -2,7 +2,8 @@
 
 Core's config API keeps the scripts in scripts.yaml under their storage key. A
 script renamed in the UI keeps its key under a new entity_id, so the client
-resolves an id through Core's entity registry first (#463).
+resolves an id through Core's entity registry (#463), a bare id only when no
+script is stored under it; a delete takes a bare id as the storage key.
 """
 
 from __future__ import annotations
@@ -17,10 +18,11 @@ from homeassistant.helpers import entity_registry as er
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
 )
 
-from ._command_faults import dropped_on, pooled_socket
+from ._command_faults import dropped_on, pooled_socket, registry_lookup_failing
 from ._gateway import Gateway
 from ._gateway import gateway as gateway
 from ._gateway import gateway_client as gateway_client
@@ -164,10 +166,12 @@ async def test_a_script_with_neither_sequence_nor_blueprint_is_refused(
     assert await error_status(config_client.get_script_config("test_script")) == 404
 
 
+@pytest.mark.parametrize("identifier", ["test_script", "script.test_script"])
 async def test_a_script_without_an_alias_is_named_after_its_id(
-    config_client: HomeAssistantClient,
+    config_client: HomeAssistantClient, identifier: str
 ) -> None:
-    await config_client.upsert_script_config({"sequence": SEQUENCE}, "test_script")
+    """``script.test_script``, which no entity has, is stored as ``test_script``."""
+    await config_client.upsert_script_config({"sequence": SEQUENCE}, identifier)
 
     assert (await _stored(config_client, "test_script"))["alias"] == "test_script"
 
@@ -197,7 +201,7 @@ async def test_a_renamed_script_is_removed_under_its_storage_key(
 ) -> None:
     await _renamed(hass, entity_registry, "old_name", "new_name")
 
-    result = await config_client.delete_script_config("new_name")
+    result = await config_client.delete_script_config("script.new_name")
 
     assert result["script_id"] == "old_name"
     assert await error_status(config_client.get_script_config("old_name")) == 404
@@ -260,6 +264,58 @@ async def test_no_answer_to_the_registry_lookup_is_not_guessed_past(
         pytest.raises(HomeAssistantConnectionError),
     ):
         await config_client.upsert_script_config(dict(SCRIPT), "new_name")
+
+
+async def _collided(hass: HomeAssistant, entity_registry: er.EntityRegistry) -> None:
+    """``key_a`` is renamed to ``script.first``; ``key_b`` to ``script.key_a``."""
+    await load(
+        hass,
+        "script",
+        {"key_a": {**SCRIPT, "alias": "A"}, "key_b": {**SCRIPT, "alias": "B"}},
+    )
+    entity_registry.async_update_entity("script.key_a", new_entity_id="script.first")
+    entity_registry.async_update_entity("script.key_b", new_entity_id="script.key_a")
+    await hass.async_block_till_done()
+
+
+@pytest.mark.parametrize(
+    ("identifier", "key"),
+    [
+        ("key_a", "key_a"),
+        ("script.key_a", "key_b"),
+        ("script.key_b", "key_b"),
+    ],
+)
+async def test_a_bare_storage_key_names_its_own_script(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    identifier: str,
+    key: str,
+) -> None:
+    """Another script's entity being ``script.key_a`` does not take key ``key_a``;
+    ``script.key_b``, which no entity has, still names key ``key_b``."""
+    await _collided(hass, entity_registry)
+
+    assert (await config_client.get_script_config(identifier))["script_id"] == key
+
+
+async def test_an_entity_id_the_registry_cannot_look_up_is_refused(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """A failed lookup is no answer: ``script.key_a`` is not guessed to be key
+    ``key_a``, which holds another script, while a bare id stays its key."""
+    await _collided(hass, entity_registry)
+
+    with registry_lookup_failing(hass):
+        with pytest.raises(
+            HomeAssistantCommandError, match="registry unavailable"
+        ) as refused:
+            await config_client.get_script_config("script.key_a")
+        assert refused.value.code == "home_assistant_error"
+        assert (await config_client.get_script_config("key_a"))["script_id"] == "key_a"
 
 
 # --- a caller that resolved the storage key already (#1813, #1935) ------------------

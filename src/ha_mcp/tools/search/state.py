@@ -48,6 +48,61 @@ def _missing_entity_exc(entity_id: str) -> HomeAssistantAPIError:
     )
 
 
+async def fetch_states_via_component(
+    client: Any, entity_ids: list[str]
+) -> dict[str, Any] | None:
+    """One ``ha_mcp_tools/states`` bulk read; ``None`` ⇒ the caller reads over REST.
+
+    Returns ``{states, missing}``: ``states`` maps each id as requested (Core
+    also finds a differently cased one) to ``State.as_dict()`` with the live
+    ``last_reported``. ``None`` when the component lacks the ``states``
+    capability, was downgraded (``unknown_command`` → invalidate the cached
+    caps), or errored or returned a malformed payload (both logged at warning
+    level, as the caller's REST read hides them). A WS transport failure
+    (``HomeAssistantConnectionError``: a pooled-WS drop or a failed connect)
+    returns ``None`` too: REST rides a separate transport, so an install whose
+    REST API still works keeps answering, and if REST is down too the caller's
+    REST read raises the same connection error itself.
+    """
+    caps = await get_component_caps(client)
+    if not component_supports(caps, "states"):
+        return None
+    try:
+        raw = await _send_component_states(client, entity_ids)
+    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        if is_unknown_command(exc):
+            invalidate_caps(client)
+        else:
+            logger.warning("ha_mcp_tools/states failed; fell back to legacy: %r", exc)
+        return None
+    except Exception as exc:  # noqa: BLE001
+        # Mostly HomeAssistantConnectionError (a pooled-WS drop or a failed
+        # (re)connect); a WS auth failure or a raw socket error lands here
+        # too. Legacy REST rides a separate transport, so an install whose
+        # REST API still works keeps answering.
+        logger.warning(
+            "ha_mcp_tools/states connection error; fell back to legacy: %r", exc
+        )
+        return None
+    result = raw.get("result")
+    if not isinstance(result, dict) or not isinstance(result.get("states"), dict):
+        logger.warning(
+            "ha_mcp_tools/states returned a malformed payload; fell back to legacy"
+        )
+        return None
+    return result
+
+
+async def _send_component_states(client: Any, entity_ids: list[str]) -> dict[str, Any]:
+    """Send one ``ha_mcp_tools/states`` command over the per-client WebSocket."""
+    ws = await get_websocket_client(
+        url=client.base_url,
+        token=client.token,
+        verify_ssl=getattr(client, "verify_ssl", None),
+    )
+    return await ws.send_command("ha_mcp_tools/states", entity_ids=entity_ids)
+
+
 def _accumulate_state_results(
     unique_ids: list[str],
     results: list[dict[str, Any]],
@@ -246,7 +301,7 @@ class StateMixin(SearchToolsBase):
         would, so the caller's exception handler produces the identical
         single-entity ENTITY_NOT_FOUND (with its ``ha_search()`` suggestion).
         """
-        component = await self._fetch_states_via_component([entity_id])
+        component = await fetch_states_via_component(self._client, [entity_id])
         if component is None:
             legacy_state: dict[str, Any] = await self._client.get_entity_state(
                 entity_id
@@ -270,7 +325,7 @@ class StateMixin(SearchToolsBase):
         so ``_accumulate_state_results`` and the response-level ``ha_search()``
         suggestion behave identically on both backends.
         """
-        component = await self._fetch_states_via_component(unique_ids)
+        component = await fetch_states_via_component(self._client, unique_ids)
         if component is None:
             legacy = await asyncio.gather(
                 *(self._fetch_single_state(eid) for eid in unique_ids)
@@ -291,63 +346,3 @@ class StateMixin(SearchToolsBase):
             context={"entity_id": entity_id},
             raise_error=False,
         )
-
-    async def _fetch_states_via_component(
-        self, entity_ids: list[str]
-    ) -> dict[str, Any] | None:
-        """One ``ha_mcp_tools/states`` bulk read; ``None`` ⇒ use the legacy REST path.
-
-        Returns the component's ``{states, missing}`` payload (found ids mapped to
-        their state body, ``State.as_dict()`` with the live ``last_reported``) or ``None`` when the component lacks the
-        ``states`` capability, was downgraded (``unknown_command`` → invalidate the
-        cached caps), errored, or returned a malformed payload (both logged).
-        The fallback itself adds no warning; the caller warns only when the REST
-        record it returns carries ``last_reported``, the one field REST can serve
-        stale. The ``log.warning`` preserves operator visibility.
-        ``ha_get_state``'s legacy path is a REST ``get_entity_state`` read on a
-        SEPARATE transport, so a WS transport/connect failure
-        (``HomeAssistantConnectionError``, covering both a pooled-WS drop and a
-        failed connect) is caught here and falls back to REST — an install whose REST API
-        still works keeps getting its state instead of a spurious connection error.
-        If REST is also down, the legacy path raises the same connection error
-        itself. (``ha_search`` / ``ha_get_overview`` likewise fall back on a
-        transport failure — no component fetch helper propagates one.)
-        """
-        caps = await get_component_caps(self._client)
-        if not component_supports(caps, "states"):
-            return None
-        try:
-            raw = await self._send_component_states(entity_ids)
-        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-            if is_unknown_command(exc):
-                invalidate_caps(self._client)
-            else:
-                logger.warning(
-                    "ha_mcp_tools/states failed; fell back to legacy: %r", exc
-                )
-            return None
-        except Exception as exc:  # noqa: BLE001
-            # Mostly HomeAssistantConnectionError (a pooled-WS drop or a failed
-            # (re)connect); a WS auth failure or a raw socket error lands here
-            # too. Legacy REST rides a separate transport, so an install whose
-            # REST API still works keeps answering.
-            logger.warning(
-                "ha_mcp_tools/states connection error; fell back to legacy: %r", exc
-            )
-            return None
-        result = raw.get("result")
-        if not isinstance(result, dict) or not isinstance(result.get("states"), dict):
-            logger.warning(
-                "ha_mcp_tools/states returned a malformed payload; fell back to legacy"
-            )
-            return None
-        return result
-
-    async def _send_component_states(self, entity_ids: list[str]) -> dict[str, Any]:
-        """Send one ``ha_mcp_tools/states`` command over the per-client WebSocket."""
-        ws = await get_websocket_client(
-            url=self._client.base_url,
-            token=self._client.token,
-            verify_ssl=getattr(self._client, "verify_ssl", None),
-        )
-        return await ws.send_command("ha_mcp_tools/states", entity_ids=entity_ids)

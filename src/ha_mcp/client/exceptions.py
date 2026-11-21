@@ -97,6 +97,21 @@ class HomeAssistantAPIError(HomeAssistantError):
         )
 
 
+class SceneIdNotAnEntityError(HomeAssistantAPIError):
+    """``scene.<id>`` is no registered entity, while storage key ``<id>`` holds a
+    scene. A 404, so a backup snapshot reads the call's target as absent; the
+    scene tools report it as a refusal."""
+
+    def __init__(self, identifier: str, storage_key: str):
+        super().__init__(
+            f"{identifier} is no registered entity, but storage key "
+            f"'{storage_key}' holds a scene; pass '{storage_key}' for it",
+            status_code=404,
+        )
+        self.identifier = identifier
+        self.storage_key = storage_key
+
+
 def http_failure_status(error: BaseException) -> int | None:
     """HTTP status of a refused request or WebSocket upgrade, including its cause."""
     if isinstance(error, HomeAssistantAPIError):

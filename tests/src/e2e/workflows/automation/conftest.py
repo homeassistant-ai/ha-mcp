@@ -43,11 +43,12 @@ async def trace_entity_cleanup(mcp_client):
             if not looks_like_success(result):
                 failed.append((domain, entity_id))
         elif domain == "script":
-            script_id = entity_id.split(".", 1)[-1]
+            # A bare id deletes only under that storage key; the entity_id
+            # also reaches a renamed script.
             result = await safe_call_tool(
                 mcp_client,
                 "ha_config_remove_script",
-                {"script_id": script_id},
+                {"script_id": entity_id},
             )
             if not looks_like_success(result):
                 failed.append((domain, entity_id))

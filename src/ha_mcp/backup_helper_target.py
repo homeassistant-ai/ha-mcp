@@ -19,6 +19,7 @@ from ._vendor.fastmcp.exceptions import ToolError
 from .backup_entities import current_entity_id
 from .backup_entity_ids import _manager
 from .backup_registry_items import REGISTRY_ITEM_DOMAINS
+from .backup_scenes import current_scene_key
 from .backup_todo import safety_target as todo_safety_target
 
 
@@ -77,7 +78,7 @@ async def fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
 async def safety_target(
     client: Any, domain: str, entity_id: str, config: Any
 ) -> str | None:
-    """The entity a restore's safety backup is taken under, None when the item
+    """The id a restore's safety backup is taken under, None when the item
     the restore writes no longer exists.
 
     The restore writes a stored item by its id; the backup is keyed by the
@@ -86,13 +87,22 @@ async def safety_target(
     stored id follows it. An item can outlive its registry entry, so only its
     absence from the stored items means it is gone: the restore recreates it or
     fails, and overwrites nothing that needs a backup. A todo item is followed
-    by its uid (``backup_todo.safety_target``).
+    by its uid (``backup_todo.safety_target``), a scene by the storage key its
+    snapshot holds, gone once no scene is stored under it.
     """
     if domain == "todo_item":
         return await todo_safety_target(client, entity_id, config)
     bm = _manager()
     if domain == "entity":
         return await current_entity_id(client, entity_id, config)
+    if domain == "scene":
+        try:
+            return await current_scene_key(client, entity_id, config)
+        except bm._CAPTURE_TRANSIENT_ERRORS as err:
+            raise bm.MandatoryBackupError(
+                f"the stored scenes could not be read: {type(err).__name__}",
+                safe_detail="the stored scenes could not be read",
+            ) from err
     platform = domain.removeprefix("helper_")
     stored = config.get("id") if isinstance(config, dict) else None
     if not stored or platform not in bm._HELPER_LIST_TYPES:

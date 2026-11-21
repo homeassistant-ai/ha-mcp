@@ -144,7 +144,8 @@ SEARCH_KEYWORDS: dict[str, str] = {
         "run start stop execute"
     ),
     "ha_config_set_scene": (
-        "create update modify edit scene entities snapshot activate apply turn on"
+        "create update modify edit scene entities snapshot capture current "
+        "state activate apply turn on"
     ),
     "ha_manage_updates": (
         "update updates install skip firmware core os repair repairs issue "
@@ -272,7 +273,9 @@ LITE_DOCSTRINGS: dict[str, str] = {
         "Supports two modes: full `config` replacement, or surgical "
         "`python_transform` on an existing scene (requires "
         "`config_hash`). `scene_id` names the scene in both modes. "
-        "`activate` activates the scene, with a write or alone.\n\n"
+        "`activate` activates the scene, with a write or alone. "
+        "`capture_entities` adds entities' current states to `config`, "
+        "`capture_devices` those of devices' entities.\n\n"
         "For schema details and examples, see "
         "ha_get_skill_guide or your locally installed skills."
     ),

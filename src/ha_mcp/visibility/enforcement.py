@@ -937,16 +937,6 @@ async def _active_matcher(client: Any) -> _HiddenMatcher | None:
         return None
 
 
-async def active_hidden_entity_ids(client: Any) -> frozenset[str]:
-    """The enforced hidden entity_ids, empty while enforce mode is inactive.
-
-    Tools that list entity IDs in a genuine error (``available_script_ids``)
-    drop these so the list neither leaks a hidden ID nor trips the outbound scan.
-    """
-    matcher = await _active_matcher(client)
-    return matcher.hidden if matcher is not None else frozenset()
-
-
 async def active_identifier_aliases(client: Any) -> IdentifierAliases | None:
     """The hidden items' identifier aliases while enforce mode is active."""
     matcher = await _active_matcher(client)
@@ -962,7 +952,7 @@ async def active_hidden_regex(client: Any) -> re.Pattern[str] | None:
     """Return the hidden-set regex while enforce mode is active, else ``None``.
 
     Collection-read surfaces (the ha_search config-body branches, legacy and
-    component) call this to OMIT records referencing a hidden entity before the
+    component) and the ``available_*_ids`` hint of a not-found error call this to OMIT records referencing a hidden entity before the
     response reaches the middleware's outbound scan — which would otherwise
     refuse the whole call on contact, turning the issue-#2015 "collection reads
     omit" contract into a wholesale refusal. ``client`` is the CALLER's live

@@ -27,6 +27,7 @@ from .evaluator import (
     evaluate,
     find_matching_rule,
     has_dynamic_selector_targets,
+    has_unresolved_scene_members,
     normalize_stringified_containers,
 )
 from .events import emit_approval_requested
@@ -93,8 +94,8 @@ class PolicyMiddleware(Middleware):
         approval itself is consumed exactly once
         (``PendingApproval.claim``): a second waiter woken by the same
         decision gets its own pending row instead of riding the first
-        call's click. A dynamic selector call
-        (``has_dynamic_selector_targets``) never shares or reuses another
+        call's click. A dynamic call (``has_dynamic_selector_targets`` or
+        ``has_unresolved_scene_members``) never shares or reuses another
         call's pending entry, and is never reissued on TTL eviction: see
         the inline comments above the ``existing =``, ``pending =``, and
         eviction-reissue assignments below for why binding it to this one
@@ -193,7 +194,13 @@ class PolicyMiddleware(Middleware):
     ) -> Any:
         """Wait on one approval, returning a continuation only while it is pending."""
         rule = find_matching_rule(name, args, policy)
-        dynamic_targets = has_dynamic_selector_targets(name, args)
+        # A capture_devices scene call is single-use like a selector call: its
+        # device entities are read inside the tool, after this gate. A
+        # capture_entities call names its entities, and the states it captures
+        # are as unseen by the first approval as by a remembered one.
+        dynamic_targets = has_dynamic_selector_targets(
+            name, args
+        ) or has_unresolved_scene_members(name, args)
         remember_minutes = (
             0 if dynamic_targets else rule.remember_minutes if rule else 0
         )
@@ -214,7 +221,7 @@ class PolicyMiddleware(Middleware):
         ):
             return await call_next(context)
 
-        # A dynamic selector call must never consume an entry it did not
+        # A dynamic call must never consume an entry it did not
         # itself create and is not itself still waiting on. Two reachable
         # ways an unguarded lookup here breaks the "approve once, dispatch
         # once, against fresh topology" invariant: (1) a race -- decide()
@@ -297,17 +304,15 @@ class PolicyMiddleware(Middleware):
                 remember_minutes=remember_minutes,
             ):
                 return await call_next(context)
-            # Another waiter on this shared entry consumed the approval
-            # first. This call has none of its own, so it must not ride
-            # that click: mint a fresh row and tell the caller to get it
-            # approved. Its wait budget is already spent, so it does not
-            # wait again here -- re-waiting would also let a steady
-            # stream of identical calls starve one another.
-            pending = await self._new_pending(
-                name, args_hash, args, policy=policy, dynamic_targets=dynamic_targets
+            await self._end_lost_claim(
+                pending,
+                rule,
+                name=name,
+                args_hash=args_hash,
+                args=args,
+                policy=policy,
+                dynamic_targets=dynamic_targets,
             )
-            await self._announce(pending, rule, dynamic_targets=dynamic_targets)
-            self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         if pending.decision == "denied":
             self._queue.remove(pending.token)
             self._raise_denied_error()
@@ -508,7 +513,7 @@ class PolicyMiddleware(Middleware):
     ) -> bool:
         """Act on an entry this call did not create. True means dispatch now.
 
-        A dynamic selector call must never consume an entry it did not
+        A dynamic call must never consume an entry it did not
         itself create and is not itself still waiting on, so it skips this
         lookup entirely -- see the creator-only binding rationale above the
         call site in ``on_call_tool``.
@@ -559,13 +564,13 @@ class PolicyMiddleware(Middleware):
         is why it has to be re-checked here rather than relied upon.
 
         A call that skips that gate (``reads_remembered`` is false for a
-        dynamic selector call and for every call under an allow list) must
-        not consult the cache here either. Under an allow list an entry left
-        over from a require-approval list can be live. For a dynamic
-        selector call no reachable case arms one today
-        (``has_dynamic_selector_targets`` is a pure function of the name and
-        args that also produce ``args_hash``, so static and dynamic calls
-        cannot collide on one key), but the guard keeps this branch
+        dynamic call and for every call under an allow list) must not
+        consult the cache here either. Under an allow list an entry left
+        over from a require-approval list can be live. For a dynamic call
+        no reachable case arms one today (``has_dynamic_selector_targets``
+        and ``has_unresolved_scene_members`` are pure functions of the name
+        and args that also produce ``args_hash``, so static and dynamic
+        calls cannot collide on one key), but the guard keeps this branch
         degrading the same direction as the defensive claim check in
         ``_resolve_already_decided``: toward an extra prompt, never toward a
         dispatch the caller was not entitled to.
@@ -577,6 +582,37 @@ class PolicyMiddleware(Middleware):
         if not reads_remembered:
             return False
         return self._queue.is_remembered(name, args_hash)
+
+    async def _end_lost_claim(
+        self,
+        pending: PendingApproval,
+        rule: Rule | None,
+        *,
+        name: str,
+        args_hash: str,
+        args: dict[str, Any],
+        policy: Policy,
+        dynamic_targets: bool,
+    ) -> NoReturn:
+        """End a call whose shared entry's approval another waiter consumed.
+
+        This call has none of its own, so it must not ride that click: mint a
+        fresh row and tell the caller to get it approved. Its wait budget is
+        already spent, so it does not wait again here -- re-waiting would also
+        let a steady stream of identical calls starve one another. Only a
+        resume of the same single-use request shares a dynamic entry, and no
+        call could ever claim a new one, so that call ends with no new row,
+        told that the other resume used the approval.
+        """
+        if dynamic_targets:
+            self._raise_pending_error(
+                pending, rule, dynamic_targets=True, used_elsewhere=True
+            )
+        pending = await self._new_pending(
+            name, args_hash, args, policy=policy, dynamic_targets=False
+        )
+        await self._announce(pending, rule)
+        self._raise_pending_error(pending, rule)
 
     async def _new_pending(
         self,
@@ -594,11 +630,11 @@ class PolicyMiddleware(Middleware):
         sees one approval row. Sharing the row is safe; sharing the
         *decision* is not, which is what ``_claim_approval`` enforces.
 
-        Dynamic selector calls must NOT share a pending entry at all: two
-        concurrent identical calls can still resolve to different (or
-        overlapping) target sets by the time each one dispatches, so
-        folding them onto one approval would let a single click authorize
-        a broader effect than the user saw. Skip the sharing and always
+        Dynamic calls (selector, scene device capture) must NOT share a
+        pending entry at all: two concurrent identical calls can still
+        resolve to different (or overlapping) target sets by the time each
+        one dispatches, so folding them onto one approval would let a single
+        click authorize a broader effect than the user saw. Skip the sharing and always
         mint a fresh entry.
         """
         if dynamic_targets:
@@ -725,20 +761,24 @@ class PolicyMiddleware(Middleware):
         *,
         dynamic_targets: bool = False,
         dismissed: bool = False,
+        used_elsewhere: bool = False,
     ) -> NoReturn:
         """Raise the structured USER_APPROVAL_REQUIRED error for one pending entry.
 
         ``dynamic_targets`` switches both the message and suggestions: a
-        dynamic selector entry is bound to the single invocation that
+        dynamic entry is bound to the single invocation that
         created it (see the creator-only binding in ``on_call_tool``), was
         already removed from the queue by the caller just before this
         raises (nothing else could ever consume it), and can never be
         picked up by a later re-call -- so its wording must not promise the
         normal "re-call after the user approves" recovery path the
         non-dynamic case uses, and must not describe a still-open approval
-        window. It ends either after ``_wait_for_decision`` returned with no
-        decision (the window closed) or, with ``dismissed``, when the user
-        dismissed the approval form, and the message says which.
+        window. It ends after ``_wait_for_decision`` returned with no
+        decision (the window closed), with ``dismissed`` when the user
+        dismissed the approval form, or with ``used_elsewhere`` when another
+        resume of the same request used its approval, and the message says
+        which. Only that last one warns against re-calling: the approved action
+        runs through the other call.
         """
         context: dict[str, Any] = {"token": pending.token}
         # Surface the matched rule so users (and the LLM) can tell at a
@@ -755,26 +795,42 @@ class PolicyMiddleware(Middleware):
             # countdown left to report -- a number here would read as
             # "there's still time", exactly the false impression this
             # message must not give.
-            ended = (
-                "the approval form for this call was dismissed"
-                if dismissed
-                else "this call's wait window has now closed"
-            )
+            if used_elsewhere:
+                ended = (
+                    "another resume of this request used its approval: that "
+                    "call runs the tool and returns its result, this one does not"
+                )
+                next_step = recall = (
+                    "Do not re-call this tool for the same effect: the other "
+                    "resume runs it, and a re-call asks the user to approve "
+                    "the same action a second time."
+                )
+            else:
+                ended = (
+                    "the approval form for this call was dismissed"
+                    if dismissed
+                    else "this call's wait window has now closed"
+                )
+                next_step = (
+                    "Re-call this tool to create a brand-new, independent request."
+                )
+                recall = (
+                    "Re-call this tool with the same arguments to create a new "
+                    "pending request, then have the user approve THAT one "
+                    "while the new call is still waiting on it."
+                )
             message = (
                 "User approval required, and this specific request has "
                 "already ended: it was single-use, bound to this one "
                 f"call only, and {ended}. "
                 "The token above has already been removed and no longer "
                 "exists -- there is nothing left to approve for this call. "
-                "Re-call this tool to create a brand-new, independent "
-                "request."
+                f"{next_step}"
             )
             suggestions = [
                 "Do not tell the user to approve the token above -- it no "
                 + "longer exists and there is nothing left to approve.",
-                "Re-call this tool with the same arguments to create a new "
-                + "pending request, then have the user approve THAT one "
-                + "while the new call is still waiting on it.",
+                recall,
             ]
         else:
             message = (
