@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-86-blue" alt="86 Tools">
+    <img src="https://img.shields.io/badge/tools-87-blue" alt="87 Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -226,7 +226,7 @@ If the original entry has been deleted, restore recreates the helper and reports
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (86 tools)</b></summary>
+<summary><b>Complete Tool List (87 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -247,7 +247,7 @@ If the original entry has been deleted, restore recreates the helper and reports
 | **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
 | **HACS** | `ha_get_hacs_info`, `ha_manage_hacs` |
 | **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_remove_helpers_integrations` |
-| **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs` |
+| **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs`, `ha_manage_logs` |
 | **Integrations** | `ha_get_integration`, `ha_get_system_health`, `ha_set_integration` |
 | **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
 | **Matter** | `ha_manage_radio` |

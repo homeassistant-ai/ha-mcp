@@ -2485,7 +2485,7 @@
   {
     "name": "ha_get_history",
     "title": "Get Entity History or Statistics",
-    "description": "Get historical data from Home Assistant's recorder.\n\nWHEN NOT TO USE:\nFor current values, use ha_get_state. To inspect Energy Dashboard\npreferences and configured statistics, use\nha_manage_energy_prefs(mode=\"get\", include_statistics=True).\n\nWHEN TO USE:\nUse source=\"history\" (default) to troubleshoot why a value changed, check\nevent sequences, or analyze recent patterns. Use summary=True when the\nquestion needs a count or a duration (\"was it ever unavailable?\") rather\nthan the rows. Use source=\"statistics\" for long-term trends and period\naverages.\n\nCAVEATS:\nHistory rows rename Core's compact keys once: s -> state, a -> attributes,\nlu -> last_updated, lc -> last_changed. History event times are ISO strings\nin HA's timezone (UTC if unavailable). When Core omits lc, last_changed\nfalls back to last_updated; this may not be the actual state-change time\nwith significant_changes_only (default) or a window-start snapshot.\nAttributes and unknown fields pass through unchanged.\nStatistics timestamps use Unix milliseconds. Minimal history may omit attributes.\nNo duplicate compact aliases are added. include_schema=True\nretains core_contract even when fields selects other data keys.\n\nOutput units come from\nCore recorder metadata and reflect its display-unit conversion; unresolved\nunits include a reason. statistics_metadata preserves Core's native fields.\n\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for\noffset > 0. Use has_more and next_offset from the response to paginate.\nWith source=\"history\", summary=True does not combine with offset > 0.\nAdministrators can optionally enable recorder workload guardrails in\nAdvanced settings. When enabled, oversized entity/time workloads are\nrejected before the recorder query is issued; narrow the time range or\nentity list to stay within the budget. Calendar statistics may first\nread HA's configured timezone so the estimate follows local calendar\nboundaries.\n\nEXAMPLES:\n- ha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\n- Paginate oldest-first: ha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100, order=\"asc\")\n- Time per state: ha_get_history(entity_ids=\"binary_sensor.door\", start_time=\"7d\", summary=True)\n- ha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\", start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])",
+    "description": "Get historical data from Home Assistant's recorder.\n\nWHEN NOT TO USE:\nFor current values, use ha_get_state. To inspect Energy Dashboard\npreferences and configured statistics, use\nha_manage_energy_prefs(mode=\"get\", include_statistics=True). To list the\nrecorder's statistics, see Core's issues with them, or change recorded\ndata, use ha_manage_logs.\n\nWHEN TO USE:\nUse source=\"history\" (default) to troubleshoot why a value changed, check\nevent sequences, or analyze recent patterns. Use summary=True when the\nquestion needs a count or a duration (\"was it ever unavailable?\") rather\nthan the rows. Use source=\"statistics\" for long-term trends and period\naverages.\n\nCAVEATS:\nWhen the recorder holds less than the requested window, the rows it has\ncome back with the reason in warnings.\nHistory rows rename Core's compact keys once: s -> state, a -> attributes,\nlu -> last_updated, lc -> last_changed. History event times are ISO strings\nin HA's timezone (UTC if unavailable). When Core omits lc, last_changed\nfalls back to last_updated; this may not be the actual state-change time\nwith significant_changes_only (default) or a window-start snapshot.\nAttributes and unknown fields pass through unchanged.\nStatistics timestamps use Unix milliseconds. Minimal history may omit attributes.\nNo duplicate compact aliases are added. include_schema=True\nretains core_contract even when fields selects other data keys.\n\nOutput units come from\nCore recorder metadata and reflect its display-unit conversion; unresolved\nunits include a reason. statistics_metadata preserves Core's native fields.\n\nAll data is fetched from HA before slicing; limit/offset are client-side.\nWith multiple entity_ids, offset must be 0 — use a single entity_id for\noffset > 0. Use has_more and next_offset from the response to paginate.\nsummary=True does not combine with offset > 0.\nAdministrators can optionally enable recorder workload guardrails in\nAdvanced settings. When enabled, oversized entity/time workloads are\nrejected before the recorder query is issued; narrow the time range or\nentity list to stay within the budget. Calendar statistics may first\nread HA's configured timezone so the estimate follows local calendar\nboundaries.\n\nEXAMPLES:\n- ha_get_history(entity_ids=\"sensor.bedroom_temperature\", start_time=\"24h\")\n- Paginate oldest-first: ha_get_history(entity_ids=\"sensor.temperature\", start_time=\"7d\", limit=100, offset=100, order=\"asc\")\n- Time per state: ha_get_history(entity_ids=\"binary_sensor.door\", start_time=\"7d\", summary=True)\n- ha_get_history(source=\"statistics\", entity_ids=\"sensor.living_room_temperature\", start_time=\"6m\", period=\"month\", statistic_types=[\"mean\", \"min\", \"max\"])",
     "inputSchema": {
       "properties": {
         "entity_ids": {
@@ -2494,7 +2494,7 @@
         },
         "source": {
           "type": "Literal['history', 'statistics']",
-          "description": "Data source: \"history\" for raw state changes at full resolution (~10 day retention), or \"statistics\" for pre-aggregated long-term data (permanent, requires state_class).",
+          "description": "Data source: \"history\" for recorded state changes at full resolution, or \"statistics\" for the recorder's aggregated statistics, where entity_ids are statistic IDs (an entity's ID, or an external statistic's \"domain:name\").",
           "default": "history"
         },
         "start_time": {
@@ -2541,7 +2541,7 @@
         },
         "statistic_types": {
           "type": "str | list[str] | None",
-          "description": "Native Core statistics types (for example \"sum\", \"change\", \"last_reset\"). Default: Core chooses all. Use include_schema=True to discover the installed contract. Ignored when source=\"history\"",
+          "description": "Native Core statistics types (for example \"sum\", \"change\", \"last_reset\"). Default: Core chooses all. Core accepts a different set with summary=True; include_schema=True shows the one for the call made. Ignored when source=\"history\"",
           "default": null
         },
         "order": {
@@ -2552,12 +2552,12 @@
         "summary": {
           "type": "bool",
           "default": false,
-          "description": "Return per-entity totals instead of state rows: changes (switches to a different state; the state at the window start is not one, but without that state, e.g. with core_options {'include_start_time_state': false} or purged history, the first recorded state counts as one), first_change and last_change (null without changes), and per state its periods (separate spells) and duration_s (seconds, up to end_time or now, whichever is earlier). distinct_states counts every state, listed or not. Ignored when source=\"statistics\"."
+          "description": "Return per-entity totals instead of state rows: changes (switches to a different state; the state at the window start is not one, but without that state, e.g. with core_options {'include_start_time_state': false} or purged history, the first recorded state counts as one), first_change and last_change (null without changes), and per state its periods (separate spells) and duration_s (seconds, up to end_time or now, whichever is earlier). distinct_states counts every state, listed or not. With source=\"statistics\": one max, mean, min and change per statistic over the whole window, computed by Core; statistic_types selects among them, and period and limit are ignored."
         },
         "fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Return only the specified keys within data to reduce response size. None = full response. History keys: success, source, entities, period, query_params. Statistics keys: success, source, entities, period_type, time_range, statistic_types, query_params. Warnings and timezone metadata remain outside data and are always retained."
+          "description": "Return only the specified keys within data to reduce response size. None = full response. History keys: success, source, entities, period, query_params. Statistics keys: success, source, entities, period_type, time_range, statistic_types, query_params (a statistics summary has no period_type or statistic_types). Warnings and timezone metadata remain outside data and are always retained."
         },
         "include_schema": {
           "type": "bool",
@@ -2684,6 +2684,59 @@
       "History & Statistics"
     ],
     "source_file": "tools_logs.py"
+  },
+  {
+    "name": "ha_manage_logs",
+    "title": "Manage Recorder, Statistics and Logs",
+    "description": "Manage Home Assistant's recorder, its long-term statistics and its logs.\n\nWHEN NOT TO USE:\nFor reading recorded states or statistics values use ha_get_history,\nfor reading log entries ha_get_logs, and for one integration's debug\nlogging ha_set_integration with log_level.\n\nWHEN TO USE:\nTo purge or pause the recorder, to list the recorder's statistics and\nCore's issues with them, to fix a statistic (clear it, adjust a sum,\nchange its unit, import rows), and to write to or clear the system\nlog, set log levels or add a logbook entry.\n\nCAVEATS:\nEach call runs one Core operation; Core validates its fields and its\nrefusal comes back with its own error code. Call with describe=True\nfirst when the fields are not known. With the HA-MCP component a\nrecorder write returns once the recorder has finished it, and a\nrecorder service returns the recorder's purge settings and oldest\nstate as `recorder`; without it the tool watches the recorder's queue\nand says what that cannot show. A statistics command that names\nstatistics (Core's `statistic_id` / `statistic_ids` fields) also\nreturns Core's metadata for them as `statistics_metadata`, read\nafter the write. Core also lists a statistic a sensor still\nprovides, so after a clear read its statistics to see the rows went.\nPurges and statistics clears cannot be undone.\n\nEXAMPLES:\n- ha_manage_logs(action=\"recorder/adjust_sum_statistics\", describe=True)\n- ha_manage_logs(action=\"recorder/clear_statistics\", data={\"statistic_ids\": [\"sensor.old_meter\"]})\n- ha_manage_logs(action=\"system_log.write\", data={\"message\": \"checkpoint\"})",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "type": "LogsAction",
+          "description": "The Home Assistant operation, named as Core names it: a dot is a service, a slash a WebSocket command (Developer Tools > Statistics)."
+        },
+        "data": {
+          "type": "dict[str, Any] | None",
+          "description": "The operation's fields, sent to Core unchanged: a service's service data, or the fields of the WebSocket command, where 'id', 'type' and '_wait_timeout' are refused.",
+          "default": null
+        },
+        "describe": {
+          "type": "bool",
+          "description": "Send nothing and return Core's own description of the action's fields instead.",
+          "default": false
+        },
+        "limit": {
+          "type": "int",
+          "constraints": {
+            "ge": 1,
+            "le": 1000
+          },
+          "description": "Page size for 'recorder/list_statistic_ids' only.",
+          "default": 100
+        },
+        "offset": {
+          "type": "int",
+          "constraints": {
+            "ge": 0
+          },
+          "description": "Page start for 'recorder/list_statistic_ids' only.",
+          "default": 0
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "tags": [
+      "History & Statistics"
+    ],
+    "source_file": "tools_logs_manage.py"
   },
   {
     "name": "ha_get_integration",
