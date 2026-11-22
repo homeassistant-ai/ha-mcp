@@ -267,9 +267,10 @@ class ConfigSceneTools:
             Field(
                 description="Scene storage ID from listing (e.g. 'movie_night') "
                 "or the scene's entity_id (e.g. 'scene.movie_night'). A bare id "
-                "names the scene stored under that key or, when none is, the "
-                "scene whose entity is 'scene.<id>'; 'scene.<x>' is an entity_id, "
-                "resolved to its storage key."
+                "names the scene stored under that key, else the YAML scene "
+                "with that id (not editable here), else the scene whose entity "
+                "is 'scene.<id>'; 'scene.<x>' is an entity_id, resolved to its "
+                "storage key."
             ),
         ] = None,
         query: Annotated[
@@ -551,10 +552,10 @@ class ConfigSceneTools:
             Field(
                 description="Scene storage key (e.g. 'movie_night') or entity_id "
                 "(e.g. 'scene.movie_night'). A bare id writes the scene stored "
-                "under that key; when none is but another scene's entity is "
-                "scene.<id>, the write is refused (pass scene.<id> for that "
-                "scene). A new scene takes the bare key; Core names its entity "
-                "after 'name'."
+                "under that key. With none, it is refused for a YAML scene with "
+                "that id (not editable) or when another scene's entity is "
+                "scene.<id> (pass scene.<id> for that scene). A new scene takes "
+                "the bare key; Core names its entity after 'name'."
             ),
         ],
         config: Annotated[
