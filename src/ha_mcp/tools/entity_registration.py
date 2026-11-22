@@ -14,6 +14,7 @@ from ..client.rest_client import (
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
 from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import raise_tool_error
+from .ws_waiters import REGISTER_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -253,10 +254,14 @@ async def post_write_entity(
     fallback = f"{domain}.{bare_id}" if bare_id != storage_key else None
     cause = f"the entity registry showed no entity for {domain} '{storage_key}' in time"
     try:
-        # With a wait the lookup also gets the 10 s the state wait used to spend
-        # on a constructed id; after a hit the state wait still runs its own.
+        # A wait also lends the lookup the state wait's budget: a scene's
+        # registration can take that long, and after a hit the state wait
+        # still runs its own.
         entity_id = await resolve_entity_id_after_write(
-            client, storage_key, domain, timeout=3 * RESOLVE_TIMEOUT if wait else None
+            client,
+            storage_key,
+            domain,
+            timeout=RESOLVE_TIMEOUT + REGISTER_TIMEOUT if wait else None,
         )
     except LOOKUP_ERRORS as exc:
         logger.warning(

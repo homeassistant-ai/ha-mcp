@@ -7,8 +7,11 @@ empty answer right after a write can be Core's registration lag (#1168), so it
 is rechecked once; an empty recheck falls back to ``scene.<key>``, and a
 recheck that gets no answer falls to the legacy resolve instead of guessing.
 Every miss of the component (no capability, a command it no longer knows, a
-timeout, a socket that cannot be opened) runs the legacy resolve. Reading a
-scene never asks the component (the config-get invariant).
+timeout, a socket that cannot be opened) runs the legacy resolve. The removal
+first asks ``entity_lookup`` which scene has the key; a hit there names the
+entity, so the resolver's own frames follow only when it misses. Reading a
+scene asks the component only for registry rows, never for its config (the
+config-get invariant).
 
 The server's own client runs on a real ``hass``: the scene lives in Core's
 ``scenes.yaml`` and Core removes it. The tool waits for the entity it resolved
@@ -162,13 +165,13 @@ async def test_an_empty_lookup_is_rechecked_once_and_finds_a_late_registration(
     _move_unique_id(hass, "registering")
 
     def land(n: int) -> None:
-        if n == 1:
+        if n == 2:  # the resolver's recheck, after the key's and its first lookup
             _move_unique_id(hass, SCENE_ID)
 
     with _before_each_lookup(hass, land):
         removed = await _remove(hass, client)
 
-    assert len(removed.lookups) == 2
+    assert len(removed.lookups) == 3
     assert removed.dumps == 0
     assert ENTITY_ID in removed.polled
     assert NAIVE_ID not in removed.polled
@@ -183,7 +186,7 @@ async def test_an_empty_recheck_falls_back_to_the_storage_key_guess(
 
     removed = await _remove(hass, client)
 
-    assert len(removed.lookups) == 2
+    assert len(removed.lookups) == 3
     assert removed.dumps == 0
     assert NAIVE_ID in removed.polled
 
@@ -197,7 +200,7 @@ async def test_an_unanswered_recheck_falls_back_to_the_registry_not_a_guess(
     lookups = count()
 
     def hold_the_recheck(msg: dict[str, Any]) -> bool:
-        if next(lookups) == 0:
+        if next(lookups) < 2:  # the key's lookup and the resolver's first
             return False
         _move_unique_id(hass, SCENE_ID)
         return True
@@ -205,24 +208,25 @@ async def test_an_unanswered_recheck_falls_back_to_the_registry_not_a_guess(
     async with held_command(hass, client, LOOKUP, when=hold_the_recheck):
         removed = await _remove(hass, client)
 
-    assert len(removed.lookups) == 2
+    assert len(removed.lookups) == 3
     assert removed.dumps == 1
     assert ENTITY_ID in removed.polled
     assert NAIVE_ID not in removed.polled
 
 
-async def test_reading_a_scene_never_asks_the_component(
+async def test_reading_a_scene_asks_the_component_only_which_scene_has_the_key(
     client: HomeAssistantClient,
 ) -> None:
+    """The key's own scene answers in one lookup frame; the body comes from
+    Core's config API."""
     socket = await pooled_socket(client)
 
     with sent_commands(socket) as sent:
         resp = await ConfigSceneTools(client).ha_config_get_scene(scene_id=SCENE_ID)
 
-    assert resp["success"] is True
-    types = sent_types(sent)
-    assert LOOKUP not in types
-    assert types.count(ENTITY_DUMP) == 1
+    assert resp["config"]["id"] == SCENE_ID
+    assert sent_frames(sent, LOOKUP) == [{"unique_id": SCENE_ID, "domain": "scene"}]
+    assert sent_types(sent).count(ENTITY_DUMP) == 1
 
 
 async def test_a_component_without_the_capability_leaves_it_to_the_registry(
@@ -252,7 +256,7 @@ async def test_a_component_without_the_command_is_invalidated_and_core_resolves(
 
     assert removed.dumps == 1
     assert ENTITY_ID in removed.polled
-    invalidate.assert_called_once_with(client)
+    invalidate.assert_called_with(client)
 
 
 async def test_a_timed_out_lookup_falls_back_and_keeps_the_capability(

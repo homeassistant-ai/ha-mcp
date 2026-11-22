@@ -2117,7 +2117,9 @@ class HomeAssistantClient:
                     disabled=bool(row.get("disabled_by")),
                 )
         entry = await self._registry_entry("scene", identifier)
-        if entry and any(row["entity_id"] == entry.get("entity_id") for row in rows or []):
+        if entry and any(
+            row["entity_id"] == entry.get("entity_id") for row in rows or []
+        ):
             entry = None
         fallback = SceneResolution(
             bare_id,
@@ -2148,7 +2150,9 @@ class HomeAssistantClient:
         # Local import: component_config_reads imports this module.
         from ..tools.component_config_reads import fetch_entity_lookup_via_component
 
-        matches = await fetch_entity_lookup_via_component(self, scene_id, domain="scene")
+        matches = await fetch_entity_lookup_via_component(
+            self, scene_id, domain="scene"
+        )
         if matches is None or any("loaded" not in match for match in matches):
             return None
         return [m for m in matches if m.get("platform") == "homeassistant"]

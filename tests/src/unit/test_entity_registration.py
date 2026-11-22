@@ -367,18 +367,17 @@ async def test_caller_fallback_waits_for_registration_budget(
     assert result == {}
 
 
-@pytest.mark.parametrize("caller_id", [None, KEY, f"scene.{KEY}"])
 @pytest.mark.parametrize("wait", [False, True])
 async def test_post_write_without_a_registry_entry_skips_the_steps(
     component_core_client: HomeAssistantClient,
     clock: PollClock,
     monkeypatch: pytest.MonkeyPatch,
-    caller_id: str | None,
     wait: bool,
 ) -> None:
-    """A caller id naming the written key is no fallback: ``scene.<key>`` can
-    be another scene's entity. A wait adds the state-wait budget."""
+    """Nothing stands in for the missing entry: ``scene.<key>`` can be another
+    scene's entity. A wait lends the lookup the state wait's budget."""
     monkeypatch.setattr(registration, "RESOLVE_TIMEOUT", 0.4)
+    monkeypatch.setattr(registration, "REGISTER_TIMEOUT", 0.7)
     result: dict[str, Any] = {}
 
     entity_id = await registration.post_write_entity(
@@ -389,11 +388,10 @@ async def test_post_write_without_a_registry_entry_skips_the_steps(
         wait=wait,
         category=None,
         activate=True,
-        caller_id=caller_id,
     )
 
     assert entity_id is None
-    assert clock.now == pytest.approx(1.2 if wait else 0.4)
+    assert clock.now == pytest.approx(0.4 + 0.7 if wait else 0.4)
     assert result["activated"] is False
     (warning,) = result["warnings"]
     assert "showed no entity" in warning

@@ -145,18 +145,33 @@ class TestEntityResolution:
         caplog: pytest.LogCaptureFixture,
         registered: bool,
     ) -> None:
-        """The debug line a get's guessed entity traces back to; another
-        domain's entry with the key is no match."""
+        """The debug line a get's guessed entity traces back to."""
         if not registered:
             entity_registry.async_update_entity("scene.test_scene", new_unique_id="x")
-            entity_registry.async_get_or_create(
-                "automation", "automation", "test_scene"
-            )
         caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.tools_config_scenes")
 
         await tools.ha_config_get_scene(scene_id="test_scene")
 
         assert bool(_exhausted_logs(caplog)) is not registered
+
+    async def test_activation_ignores_another_domains_entry_with_that_unique_id(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        tools = await scene_tools(
+            hass, core_client, monkeypatch, yaml_only=[_UNREGISTERED]
+        )
+        entity_registry.async_get_or_create(
+            "automation", "automation", "test_scene", suggested_object_id="collision"
+        )
+
+        result = await _activate(tools, "test_scene")
+
+        assert result["entity_id"] == "scene.test_scene"
+        assert result["activated"] is True
 
     async def test_activation_without_a_registry_answer_activates_nothing(
         self, core_client: HomeAssistantClient, tools: ConfigSceneTools

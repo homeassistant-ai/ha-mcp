@@ -8,8 +8,12 @@ component:
   writes, and before a standalone activation of a stored scene key, against one
   deadline and constructs no id when it finds none. ``_resolve_scene_entity_id``
   uses a single retry for scene config reads and before scene removal.
-  ``entity_registration.lookup_entity_id`` is one strict lookup for the script
-  get, run and remove, which raises on a failed read. The component's
+  ``entity_registration.lookup_entity_id`` is one strict lookup, which raises
+  on a failed read, for the script get, run and remove and for a standalone
+  scene activation by a bare id. ``_resolve_scene`` in the REST client asks
+  ``entity_lookup`` which ``homeassistant`` scene Core registered under a bare
+  id and whether Core loaded it (``loaded``); without the component it reads
+  only the registry entry of ``scene.<id>``. The component's
   ``entity_lookup`` returns only matching rows instead of a full
   registry/state listing. A hit is authoritative at once,
   but an empty read can precede HA's asynchronous entity registration even when
@@ -34,17 +38,19 @@ WebSocket registry bridge or REST state reads, which an escaping error would
 skip. The post-write resolver returns None when its budget ends and raises on
 a failed registry read; ``entity_registration.post_write_entity`` turns either
 into a warning and skips the wait, category and activation steps, unless a
-script write by ``script.<x>`` falls back to that entity. Removal resolvers
-retain their own error policies.
+script write by ``script.<x>`` whose key differs from ``<x>`` falls back to
+that entity. Removal resolvers retain their own error policies.
 
 **GET-path invariant:** the automation/script/scene *config-get* tools never
 read the config body through the component — its in-process ``raw_config``
 freshness lags the config file between a write and the next completed reload,
-so the body always comes from Core's REST config endpoint. The scene resolver
-gates the whole component branch (caps probe included) behind
-``allow_component`` for removals, and the dedicated post-write resolver is never
-called from a config-get; the script config-get looks up the entity of its
-category with ``entity_registration.lookup_entity_id``.
+so the body always comes from Core's REST config endpoint. Registry rows may
+come from the component: the scene get resolves a bare id through
+``entity_lookup``, while the scene entity resolver gates its component branch
+(caps probe included) behind ``allow_component`` for removals, and the
+dedicated post-write resolver is never called from a config-get; the script
+config-get looks up the entity of its category with
+``entity_registration.lookup_entity_id``.
 The automation tools resolve through ``component_automation.automation_lookup``
 instead, which reads the registry, never the body.
 """
@@ -83,7 +89,8 @@ async def fetch_entity_lookup_via_component(
 
     Returns the component's ``matches`` list — every entity-registry entry whose
     ``unique_id`` equals ``unique_id`` (each ``{entity_id, unique_id, platform,
-    domain, config_entry_id, categories, disabled_by, hidden_by}``), optionally
+    domain, config_entry_id, categories, disabled_by, hidden_by, loaded}``;
+    a component older than ``loaded`` omits it), optionally
     narrowed by the entity's own ``domain``. Multiple matches (one ``unique_id``
     across platforms) are all returned — the caller picks. An AUTHORITATIVE empty
     list (no registry entry with that unique_id) is kept distinct from the

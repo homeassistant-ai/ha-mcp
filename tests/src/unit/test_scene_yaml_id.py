@@ -12,8 +12,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
+import httpx
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -246,21 +246,19 @@ async def _config_reads_by_own_key(
         kwargs["config_hash"] = (await tools.ha_config_get_scene(scene_id="mykey"))[
             "config_hash"
         ]
-    request = client._request
     reads: list[str] = []
 
-    async def counting(method: str, endpoint: str, *args: Any, **kw: Any) -> Any:
-        if method == "GET" and endpoint.startswith("config/scene/config/"):
-            reads.append(endpoint)
-        return await request(method, endpoint, *args, **kw)
+    async def count(request: httpx.Request) -> None:
+        if request.method == "GET" and "/config/scene/config/" in request.url.path:
+            reads.append(request.url.path)
 
-    with patch.object(client, "_request", counting):
-        if call == "get":
-            await tools.ha_config_get_scene(scene_id="mykey")
-        else:
-            await tools.ha_config_set_scene(
-                scene_id="mykey", wait=False, MandatoryBPS=False, **kwargs
-            )
+    client.httpx_client.event_hooks["request"].append(count)
+    if call == "get":
+        await tools.ha_config_get_scene(scene_id="mykey")
+    else:
+        await tools.ha_config_set_scene(
+            scene_id="mykey", wait=False, MandatoryBPS=False, **kwargs
+        )
     return len(reads)
 
 

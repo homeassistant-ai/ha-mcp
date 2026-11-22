@@ -144,10 +144,11 @@ class ConfigSceneTools:
         the registry unique_id. Match that key instead of assuming the slug.
         Accept either a bare key or a key prefixed with ``scene.``.
 
-        Only removals enable ``allow_component``. Config reads use the legacy
-        registry path to preserve the GET-path invariant documented in
-        ``component_config_reads``. An empty component result is rechecked
-        once; component unavailability falls through to the legacy path.
+        Only removals enable ``allow_component``; config reads list the
+        registry here. Neither reads the config body through the component
+        (the GET-path invariant in ``component_config_reads``). An empty
+        component result is rechecked once; component unavailability falls
+        through to the registry list.
 
         Post-write waits, categories and activation use
         ``entity_registration.post_write_entity``, and a standalone activation
@@ -267,10 +268,11 @@ class ConfigSceneTools:
             Field(
                 description="Scene storage ID from listing (e.g. 'movie_night') "
                 "or the scene's entity_id (e.g. 'scene.movie_night'). A bare id "
-                "names the scene stored under that key, else the YAML scene "
-                "with that id (not editable here), else the scene whose entity "
-                "is 'scene.<id>'; 'scene.<x>' is an entity_id, resolved to its "
-                "storage key."
+                "names the scene stored under that key, else, with the "
+                "ha_mcp_tools component, the YAML scene with that id (answered "
+                "as CONFIG_NOT_FOUND, with no config), else the scene whose "
+                "entity is 'scene.<id>'; 'scene.<x>' is an entity_id, resolved "
+                "to its storage key."
             ),
         ] = None,
         query: Annotated[
@@ -552,9 +554,10 @@ class ConfigSceneTools:
             Field(
                 description="Scene storage key (e.g. 'movie_night') or entity_id "
                 "(e.g. 'scene.movie_night'). A bare id writes the scene stored "
-                "under that key. With none, it is refused for a YAML scene with "
-                "that id (not editable) or when another scene's entity is "
-                "scene.<id> (pass scene.<id> for that scene). A new scene takes "
+                "under that key. With none, it is refused when another scene's "
+                "entity is scene.<id> (pass scene.<id> for that scene) or, with "
+                "the ha_mcp_tools component, for a YAML scene with that id (not "
+                "editable). A new scene takes "
                 "the bare key; Core names its entity after 'name'."
             ),
         ],
@@ -841,7 +844,7 @@ class ConfigSceneTools:
             exception_to_structured_error(
                 exc,
                 context={"action": "activate", "scene_id": scene_id},
-                suggestions=["Nothing was activated: resolving the scene failed"],
+                suggestions=["Retry the activation once Home Assistant answers"],
             )
             raise  # unreachable: exception_to_structured_error always raises
         response: dict[str, Any] = {
@@ -898,7 +901,7 @@ class ConfigSceneTools:
     ) -> None:
         """Wait for, categorise and activate the written scene's entity.
 
-        ``category`` was validated before the upsert (R6 blocker 15).
+        ``category`` was validated before the upsert (#1168).
         """
         entity_id = await post_write_entity(
             self._client,
@@ -1015,7 +1018,6 @@ class ConfigSceneTools:
             resolved_id, _resolved=True
         )
 
-        # Same post-upsert steps as the full-config branch.
         await self._finish_scene_write(
             result, resolved_id, wait, category, activate, verb="updated"
         )
@@ -1129,9 +1131,7 @@ class ConfigSceneTools:
             # shadow-creates just the same. Only a scene missing from both (a
             # state Core restored counts as none) is a real create, at the price
             # of one extra ``/states/`` GET there.
-            if resolution.registry_hit or await self._client._scene_live(
-                resolved_id
-            ):
+            if resolution.registry_hit or await self._client._scene_live(resolved_id):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
                 # A bare id that resolved to another key is no edit of it.
                 refuse_write_by_bare_id_of_another_key("scene", scene_id, resolved_id)
@@ -1273,14 +1273,14 @@ class ConfigSceneTools:
             # entry is gone, the unique_id lookup can no longer find it.
             # Falls back to scene.<storage key> when the registry has no
             # matching unique_id; a scene left to Core's scene.delete is
-            # looked up by the caller's entity_id.
-            entity_id = (
-                await self._resolve_scene_entity_id(
+            # looked up by the caller's entity_id. A resolution through the
+            # component already names the entity.
+            if not isinstance(target, SceneResolution):
+                entity_id = scene_id
+            else:
+                entity_id = target.entity_id or await self._resolve_scene_entity_id(
                     target.storage_key, allow_component=True
                 )
-                if isinstance(target, SceneResolution)
-                else scene_id
-            )
             # A failed lookup only warns: it must not keep the scene alive.
             lookup: list[str] = []
             related = (

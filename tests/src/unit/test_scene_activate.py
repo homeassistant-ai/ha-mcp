@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from homeassistant import config as conf_util
 from homeassistant.core import Event, HomeAssistant, callback
@@ -22,7 +23,6 @@ from homeassistant.setup import async_setup_component
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import get_backup_manager
 from ha_mcp.client.rest_client import (
-    HomeAssistantAPIError,
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
@@ -239,21 +239,21 @@ async def test_activate_by_key_whose_config_read_fails_activates_nothing(
         ],
     )
     er.async_get(hass).async_update_entity("scene.first", new_unique_id="pending")
-    request = core_client._request
+    # Core keeps the loaded scenes but can no longer read their config.
+    await write_config_files(hass, {"scenes.yaml": "- id: [unclosed\n"})
+    statuses: list[int] = []
 
-    async def failing(method: str, endpoint: str, *args: Any, **kw: Any) -> Any:
-        if endpoint == "config/scene/config/key_a":
-            raise HomeAssistantAPIError("server error", status_code=500)
-        return await request(method, endpoint, *args, **kw)
+    async def record(response: httpx.Response) -> None:
+        if response.url.path.endswith("/config/scene/config/key_a"):
+            statuses.append(response.status_code)
 
-    with (
-        patch.object(core_client, "_request", failing),
-        pytest.raises(ToolError),
-    ):
+    core_client.httpx_client.event_hooks["response"].append(record)
+    with pytest.raises(ToolError):
         await ConfigSceneTools(core_client).ha_config_set_scene(
             scene_id="key_a", activate=True
         )
 
+    assert statuses and all(status >= 500 for status in statuses)
     assert _tv(hass) == "off"
 
 
