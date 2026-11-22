@@ -12,8 +12,11 @@ import logging
 
 import pytest
 
+from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
+
 # Import test utilities
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.topology import component_surface_available
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -71,7 +74,11 @@ class TestUpdateManagement:
                     "title",
                     "installed_version",
                     "latest_version",
+                    "update_available",
+                    "platform",
                     "category",
+                    "features",
+                    "can_install",
                 ]
                 for field in expected_fields:
                     assert field in first_update, (
@@ -504,6 +511,31 @@ class TestIncludeReleaseNotes:
         logger.info("include_release_notes test passed")
 
 
+@pytest.mark.updates
+@pytest.mark.component_topology
+async def test_update_features_come_from_the_component(mcp_client):
+    """Which updates can be installed is read from Home Assistant's feature
+    flags through the component; without it the rows say it is unknown
+    and warnings names the component."""
+    async with MCPAssertions(mcp_client) as mcp:
+        result = await mcp.call_tool_success(
+            "ha_manage_updates", {"include_skipped": True}
+        )
+
+    updates = result.get("updates", [])
+    warnings = result.get("warnings", [])
+    if component_surface_available():
+        assert not any(COMPONENT_INSTALL_HINT in w for w in warnings), warnings
+        for update in updates:
+            assert isinstance(update["features"], list), update
+            assert isinstance(update["can_install"], bool), update
+    else:
+        assert any(COMPONENT_INSTALL_HINT in w for w in warnings), result
+        for update in updates:
+            assert update["features"] is None, update
+            assert update["can_install"] is None, update
+
+
 async def test_update_tools_discovery(mcp_client):
     """
     Test: Verify update tools are discoverable and registered.
@@ -555,22 +587,15 @@ class TestUpdatesGetNegativeInputs:
     update entities, but do not call ha_manage_updates with an entity_id that
     has no matching update.
 
-    Methodology: source-verified against tools_updates.py. _get_update_details
-    fetches the entity state via REST; a 404 from /api/states/<entity_id>
-    raises HomeAssistantAPIError("API error: 404 - Entity not found.").
-    The except-Exception branch in ha_manage_updates matches "404" / "not found"
-    in the error message and raises ErrorCode.ENTITY_NOT_FOUND. Live-probed
-    against a real HA instance: GET /api/states/update.<nonexistent> returns
-    HTTP 404 with body {"message": "Entity not found."}.
+    The update reader (update_entities.py) raises ENTITY_NOT_FOUND when the
+    component lists no such update, or without the component on Core's 404
+    for the entity's state.
     """
 
     async def test_get_updates_nonexistent_entity_id(self, mcp_client):
         """
         Test: ha_manage_updates(entity_id="update.<nonexistent>") returns a
         structured error with code ENTITY_NOT_FOUND, not success=True.
-
-        Source path: REST 404 → HomeAssistantAPIError → except-Exception
-        in ha_manage_updates → ENTITY_NOT_FOUND.
         """
         async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_failure(

@@ -5,32 +5,28 @@ This module provides tools for listing available updates, getting release notes,
 and retrieving system version information.
 """
 
-import asyncio
 import logging
-import re
 from typing import Annotated, Any, NoReturn
 
-import httpx
 from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
-from ..client.exceptions import http_failure_status
-from ..client.rest_client import (
-    HomeAssistantAuthError,
-    HomeAssistantConnectionError,
-)
 from ..errors import ErrorCode, create_error_response
 from .coercion import JSON_STRING_COERCION
+from .core_release_analysis import core_release_analysis
 from .helpers import (
+    core_error_message,
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    ws_failure_code,
 )
 from .tool_hints import write_hints
-from .update_categories import categorize_update, update_platforms
+from .update_entities import read_update_rows
+from .update_release_notes import release_notes_fields
 
 logger = logging.getLogger(__name__)
 
@@ -39,393 +35,16 @@ logger = logging.getLogger(__name__)
 # individually, on purpose.
 _INSTALL_ALL_CATEGORIES = ("addons", "hacs", "devices", "other")
 _PROTECTED_UPDATE_CATEGORIES = ("core", "os", "supervisor")
-
-_GITHUB_CORE_RELEASE_URL = (
-    "https://api.github.com/repos/home-assistant/core/releases/tags/{version}"
-)
-_MAX_MONTHLY_VERSIONS = 12
+_CATEGORY_ORDER = (*_PROTECTED_UPDATE_CATEGORIES, *_INSTALL_ALL_CATEGORIES)
 
 
-def _parse_version(version_str: str) -> tuple[int, ...] | None:
-    """Parse '2025.11.3' into a comparable tuple, or None on failure."""
-    if not version_str:
-        return None
-    try:
-        return tuple(int(x) for x in version_str.split("."))
-    except ValueError, AttributeError:
-        return None
+# Core's refusals of an update service, answered per item.
+_CORE_REFUSALS = frozenset({"home_assistant_error", "service_validation_error"})
 
 
-def _get_monthly_versions_between(current: str, target: str) -> list[str]:
-    """Return .0 monthly versions between current (exclusive) and target (inclusive)."""
-    current_parts = _parse_version(current)
-    target_parts = _parse_version(target)
-    if (
-        not current_parts
-        or not target_parts
-        or len(current_parts) < 2
-        or len(target_parts) < 2
-    ):
-        if target_parts and len(target_parts) >= 2:
-            return [f"{target_parts[0]}.{target_parts[1]}.0"]
-        return []
-
-    versions: list[str] = []
-    year, month = current_parts[0], current_parts[1] + 1
-    while (year, month) <= (target_parts[0], target_parts[1]):
-        versions.append(f"{year}.{month}.0")
-        month += 1
-        if month > 12:
-            month, year = 1, year + 1
-        if len(versions) >= _MAX_MONTHLY_VERSIONS:
-            break
-    return versions
-
-
-def _strip_html(html: str) -> str:
-    """Strip HTML tags and normalise whitespace for readable plain text."""
-    text = re.sub(r"<br\s*/?>", "\n", html)
-    text = re.sub(r"<p[^>]*>", "\n", text)
-    text = re.sub(r"</p>", "\n", text)
-    text = re.sub(r"<li[^>]*>", "\n- ", text)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def _extract_blog_content(html: str) -> str:
-    """Extract article body from an HA blog post as plain text."""
-    article = re.search(r"<article[^>]*>(.*?)</article>", html, re.DOTALL)
-    if article:
-        return _strip_html(article.group(1))
-    content = re.search(
-        r"(<h[12][^>]*>.*?)(?=<div[^>]*id=\"discourse|<footer[^>]*>|</body>)",
-        html,
-        re.DOTALL | re.IGNORECASE,
-    )
-    if content:
-        return _strip_html(content.group(1))
-    return _strip_html(html)
-
-
-def _parse_breaking_changes_html(html: str, source_url: str) -> dict[str, Any] | None:
-    """Extract 'Backward-incompatible changes' section entries from blog HTML."""
-    section_match = re.search(
-        r'id="backward-incompatible-changes"[^>]*>.*?</h2>(.*?)(?=<h2[ >]|</article>|</main>)',
-        html,
-        re.DOTALL | re.IGNORECASE,
-    )
-    if not section_match:
-        return None
-
-    entries: list[dict[str, str]] = []
-    for match in re.finditer(
-        r"<h3[^>]*>(.*?)</h3>(.*?)(?=<h3[^>]*>|$)", section_match.group(1), re.DOTALL
-    ):
-        name = _strip_html(match.group(1)).strip()
-        desc = _strip_html(match.group(2)).strip()
-        if name:
-            entries.append({"integration": name, "description": desc})
-
-    if not entries:
-        return None
-    return {"entries": entries, "count": len(entries), "source_url": source_url}
-
-
-def _parse_patch_breaking_changes(body: str, version: str) -> dict[str, Any] | None:
-    """Parse (breaking-change) tagged items from a GitHub patch-release body."""
-    entries: list[dict[str, str]] = []
-    for line in body.split("\n"):
-        if "(breaking-change)" not in line.lower():
-            continue
-        clean = (
-            re.sub(r"\(breaking-change\)", "", line, flags=re.IGNORECASE)
-            .lstrip("-*")
-            .strip()
-        )
-        if not clean:
-            continue
-        doc_match = re.search(
-            r"\[([^\]]+?)\s+(?:docs|documentation)\]", clean, re.IGNORECASE
-        )
-        integration = doc_match.group(1).strip() if doc_match else "unknown"
-        entries.append({"integration": integration, "description": clean})
-
-    if not entries:
-        return None
-    return {
-        "entries": entries,
-        "count": len(entries),
-        "source_url": f"https://github.com/home-assistant/core/releases/tag/{version}",
-    }
-
-
-async def _fetch_release_data_for_version(
-    http_client: httpx.AsyncClient, version: str
-) -> dict[str, Any] | None:
-    """Fetch release notes and breaking changes for a single HA Core version."""
-    try:
-        resp = await http_client.get(_GITHUB_CORE_RELEASE_URL.format(version=version))
-        if resp.status_code != 200:
-            return None
-        body = resp.json().get("body", "").strip()
-
-        if body.startswith("https://www.home-assistant.io/blog/"):
-            blog_resp = await http_client.get(body)
-            if blog_resp.status_code == 200:
-                bc = _parse_breaking_changes_html(blog_resp.text, body)
-                return {
-                    "entries": bc["entries"] if bc else [],
-                    "count": bc["count"] if bc else 0,
-                    "source_url": body,
-                    "release_notes": _extract_blog_content(blog_resp.text),
-                }
-
-        if "(breaking-change)" in body.lower():
-            return _parse_patch_breaking_changes(body, version)
-        return None
-    except (httpx.RequestError, ValueError, KeyError) as e:
-        logger.debug(f"Failed to fetch release data for {version}: {e}")
-        return None
-
-
-async def _fetch_release_data(
-    current_version: str, target_version: str
-) -> dict[str, Any]:
-    """Fetch release notes and breaking changes for all monthly versions in range."""
-    monthly = _get_monthly_versions_between(current_version, target_version)
-    if not monthly:
-        return {"entries": [], "count": 0, "versions_checked": [], "release_notes": []}
-
-    async with httpx.AsyncClient(
-        timeout=20.0,
-        follow_redirects=True,
-        headers={
-            "User-Agent": "HomeAssistant-MCP-Server",
-            "Accept": "application/vnd.github+json",
-        },
-    ) as http_client:
-        results = await asyncio.gather(
-            *[_fetch_release_data_for_version(http_client, v) for v in monthly],
-            return_exceptions=True,
-        )
-
-    all_entries: list[dict[str, Any]] = []
-    versions_checked: list[str] = []
-    release_notes: list[dict[str, str]] = []
-
-    for version, result in zip(monthly, results, strict=True):
-        if not isinstance(result, dict):
-            continue
-        versions_checked.append(version)
-        src = result.get("source_url", "")
-        all_entries.extend(
-            {**entry, "version": version} for entry in result.get("entries", [])
-        )
-        notes = result.get("release_notes", "")
-        if notes:
-            release_notes.append(
-                {"version": version, "content": notes, "source_url": src}
-            )
-
-    return {
-        "entries": all_entries,
-        "count": len(all_entries),
-        "versions_checked": versions_checked,
-        "release_notes": release_notes,
-    }
-
-
-async def _get_installed_integration_domains(client: Any) -> set[str]:
-    """Get installed integration domains from config entries."""
-    try:
-        entries = await client._request("GET", "/config/config_entries/entry")
-        if isinstance(entries, list):
-            return {e.get("domain", "") for e in entries} - {""}
-        return set()
-    except httpx.RequestError, ValueError, KeyError:
-        return set()
-
-
-def _supports_release_notes(entity_id: str, attributes: dict[str, Any]) -> bool:
-    """
-    Determine if an update entity supports fetching release notes.
-
-    Returns True if the entity supports release notes through any method:
-    - WebSocket update/release_notes command (native HA support)
-    - GitHub API/raw CDN fallback (when release_url is available)
-
-    Most entities will return True as they have either native support or a release_url.
-    """
-    # Check for supported_features that indicate release notes support
-    # Feature flag 1 = install, 2 = specific_version, 4 = progress, 8 = backup
-    # 16 = release_notes (0x10)
-    supported_features = attributes.get("supported_features", 0)
-    has_release_notes_feature = (supported_features & 16) != 0
-
-    # Entity supports release notes if it has either:
-    # 1. Native WebSocket support (feature flag)
-    # 2. A release_url (can fetch from GitHub)
-    return has_release_notes_feature or attributes.get("release_url") is not None
-
-
-async def _try_raw_cdn(
-    http_client: httpx.AsyncClient, owner: str, repo: str, tag: str
-) -> dict[str, str] | None:
-    raw_base = f"https://raw.githubusercontent.com/{owner}/{repo}/{tag}"
-    changelog_paths = [
-        "CHANGELOG.md",
-        "RELEASES.md",
-        "RELEASE_NOTES.md",
-        f"docs/releases/{tag}.md",
-        "docs/CHANGELOG.md",
-    ]
-    for path in changelog_paths:
-        raw_url = f"{raw_base}/{path}"
-        try:
-            response = await http_client.get(
-                raw_url,
-                headers={"User-Agent": "HomeAssistant-MCP-Server"},
-            )
-            if response.status_code == 200:
-                content = response.text
-                if content and len(content) > 50:
-                    logger.debug(
-                        f"Successfully fetched release notes from raw CDN: {raw_url}"
-                    )
-                    return {"notes": content, "source": "github_raw"}
-        except httpx.RequestError as raw_error:
-            logger.debug(f"Failed to fetch from {raw_url}: {raw_error}")
-    return None
-
-
-async def _fetch_github_release_notes(release_url: str) -> dict[str, str] | None:
-    """
-    Fetch release notes from GitHub releases API with fallback to raw CDN.
-
-    Tries multiple sources in order:
-    1. GitHub API (best formatting, but rate limited)
-    2. GitHub raw content CDN (no rate limits, but may not have release notes)
-
-    Parses GitHub release URLs and fetches the release body from the API.
-
-    Args:
-        release_url: URL to a GitHub release page
-
-    Returns:
-        Dictionary with 'notes' and 'source' keys, or None if fetch fails
-    """
-    try:
-        # Parse GitHub URL patterns:
-        # https://github.com/owner/repo/releases/tag/v1.2.3
-        # https://github.com/owner/repo/releases/v1.2.3
-
-        github_pattern = (
-            r"https://github\.com/([^/]+)/([^/]+)/releases(?:/tag)?/([^/?#]+)"
-        )
-        match = re.match(github_pattern, release_url)
-
-        if not match:
-            logger.debug(f"Could not parse GitHub URL: {release_url}")
-            return None
-
-        owner, repo, tag = match.groups()
-
-        async with httpx.AsyncClient(timeout=15.0) as http_client:
-            # Try 1: GitHub API (has release notes in structured format)
-            api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
-
-            response = await http_client.get(
-                api_url,
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "HomeAssistant-MCP-Server",
-                },
-            )
-
-            if response.status_code == 200:
-                release_data = response.json()
-                body = release_data.get("body", "")
-                if body:
-                    return {"notes": str(body), "source": "github_api"}
-            elif response.status_code == 403:
-                # Check if rate limited
-                remaining = response.headers.get("X-RateLimit-Remaining", "0")
-                if remaining == "0":
-                    logger.warning(
-                        f"GitHub API rate limit exceeded for {api_url}, trying raw CDN fallback"
-                    )
-            else:
-                logger.debug(
-                    f"GitHub API returned status {response.status_code} for {api_url}"
-                )
-
-            # Try 2: GitHub raw content CDN (for markdown files)
-            cdn_result = await _try_raw_cdn(http_client, owner, repo, tag)
-            if cdn_result:
-                return cdn_result
-
-            logger.debug(
-                f"Could not fetch release notes from API or raw CDN for {release_url}"
-            )
-            return None
-
-    except Exception as e:  # noqa: BLE001
-        logger.debug(f"Failed to fetch GitHub release notes: {e}")
-        return None
-
-
-async def _fetch_core_release_notes(version: str) -> dict[str, str] | None:
-    """
-    Fetch release notes for Home Assistant Core from GitHub releases API.
-
-    Home Assistant Core uses blog URLs for release_url which don't contain
-    the actual release notes. This function fetches directly from GitHub
-    releases using the version tag.
-
-    Args:
-        version: The version string (e.g., "2025.11.3")
-
-    Returns:
-        Dictionary with 'notes' and 'source' keys, or None if fetch fails
-    """
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as http_client:
-            # GitHub API URL for Home Assistant Core releases
-            api_url = f"https://api.github.com/repos/home-assistant/core/releases/tags/{version}"
-
-            response = await http_client.get(
-                api_url,
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "HomeAssistant-MCP-Server",
-                },
-            )
-
-            if response.status_code == 200:
-                release_data = response.json()
-                body = release_data.get("body", "")
-                if body:
-                    logger.debug(
-                        f"Successfully fetched Core release notes from GitHub for version {version}"
-                    )
-                    return {"notes": str(body), "source": "github_api"}
-            elif response.status_code == 403:
-                # Check if rate limited
-                remaining = response.headers.get("X-RateLimit-Remaining", "0")
-                if remaining == "0":
-                    logger.warning(f"GitHub API rate limit exceeded for {api_url}")
-            else:
-                logger.debug(
-                    f"GitHub API returned status {response.status_code} for Core release {version}"
-                )
-
-            return None
-
-    except Exception as e:  # noqa: BLE001
-        logger.debug(f"Failed to fetch Core release notes from GitHub: {e}")
-        return None
+def _pending(row: dict[str, Any]) -> bool:
+    """An offered update that was not skipped."""
+    return row["update_available"] and row.get("skipped_version") is None
 
 
 class UpdateTools:
@@ -436,71 +55,19 @@ class UpdateTools:
 
     async def _list_updates(self, include_skipped: bool) -> dict[str, Any]:
         """Internal helper to list all update entities."""
-        states = await self._client.get_states()
-        platforms = await update_platforms(self._client)
-
-        update_entities = [
-            s for s in states if s.get("entity_id", "").startswith("update.")
-        ]
-
-        available_updates = []
-        skipped_updates = []
-
-        for entity in update_entities:
-            entity_id = entity.get("entity_id", "")
-            state = entity.get("state", "")
-            attributes = entity.get("attributes", {})
-
-            is_available = state == "on"
-            is_skipped = attributes.get("skipped_version") is not None
-
-            update_info = {
-                "entity_id": entity_id,
-                "title": attributes.get("title", entity_id),
-                "installed_version": attributes.get("installed_version"),
-                "latest_version": attributes.get("latest_version"),
-                "release_summary": attributes.get("release_summary"),
-                "release_url": attributes.get("release_url"),
-                "can_install": not attributes.get("in_progress", False),
-                "in_progress": attributes.get("in_progress", False),
-                "supports_release_notes": _supports_release_notes(
-                    entity_id, attributes
-                ),
-                "skipped_version": attributes.get("skipped_version"),
-                "auto_update": attributes.get("auto_update", False),
-                "category": categorize_update(
-                    entity_id, attributes, platforms.get(entity_id, "")
-                ),
-            }
-
-            if is_skipped:
-                skipped_updates.append(update_info)
-            elif is_available:
-                available_updates.append(update_info)
+        rows, warnings = await read_update_rows(self._client)
+        skipped_updates = [r for r in rows if r.get("skipped_version") is not None]
+        available_updates = [r for r in rows if _pending(r)]
 
         all_updates = available_updates.copy()
         if include_skipped:
             all_updates.extend(skipped_updates)
 
-        # Group by category
-        categories: dict[str, list[dict[str, Any]]] = {
-            "core": [],
-            "os": [],
-            "supervisor": [],
-            "addons": [],
-            "hacs": [],
-            "devices": [],
-            "other": [],
+        categories = {
+            category: matching
+            for category in _CATEGORY_ORDER
+            if (matching := [u for u in all_updates if u["category"] == category])
         }
-
-        for update in all_updates:
-            category = update.get("category", "other")
-            if category in categories:
-                categories[category].append(update)
-            else:
-                categories["other"].append(update)
-
-        categories = {k: v for k, v in categories.items() if v}
 
         result: dict[str, Any] = {
             "success": True,
@@ -510,6 +77,8 @@ class UpdateTools:
             "categories": categories,
             "include_skipped": include_skipped,
         }
+        if warnings:
+            result["warnings"] = warnings
 
         # Surface the MCP server's OWN update status alongside HA's updates so the
         # model is more likely to mention "you're on X, but Y is out" — this tool
@@ -537,112 +106,35 @@ class UpdateTools:
                 )
             )
 
-        entity_state = await self._client.get_entity_state(entity_id)
-        attributes = entity_state.get("attributes", {})
-        latest_version = attributes.get("latest_version", "unknown")
-        state = entity_state.get("state", "")
+        [row], warnings = await read_update_rows(self._client, entity_id)
+        result: dict[str, Any] = {"success": True, **row}
+        if warnings:
+            result["warnings"] = warnings
 
-        result: dict[str, Any] = {
-            "success": True,
-            "entity_id": entity_id,
-            "title": attributes.get("title", entity_id),
-            "state": state,
-            "update_available": state == "on",
-            "installed_version": attributes.get("installed_version"),
-            "latest_version": latest_version,
-            "release_summary": attributes.get("release_summary"),
-            "release_url": attributes.get("release_url"),
-            "can_install": not attributes.get("in_progress", False),
-            "in_progress": attributes.get("in_progress", False),
-            "skipped_version": attributes.get("skipped_version"),
-            "auto_update": attributes.get("auto_update", False),
-            "category": categorize_update(
-                entity_id,
-                attributes,
-                (await update_platforms(self._client)).get(entity_id, ""),
-            ),
-        }
-
-        # Try to fetch release notes
-        release_notes, release_notes_source = await self._fetch_release_notes(
-            entity_id, attributes, latest_version
+        # The row carries every attribute Core wrote, under Core's own keys.
+        is_core = row["category"] == "core"
+        result.update(
+            await release_notes_fields(self._client, entity_id, row, is_core=is_core)
         )
-
-        if release_notes:
-            result["release_notes"] = release_notes
-            result["release_notes_source"] = release_notes_source
-        else:
-            release_url = attributes.get("release_url")
-            if release_url:
-                result["release_notes_hint"] = (
-                    f"Release notes could not be fetched automatically. "
-                    f"View them at: {release_url}"
-                )
-
-        # Include multi-version breaking change analysis for Core updates
-        if include_release_notes and result.get("category") == "core":
-            installed = result.get("installed_version")
-            target = result.get("latest_version")
-            if installed and target:
-                rd_result, domains_result = await asyncio.gather(
-                    _fetch_release_data(installed, target),
-                    _get_installed_integration_domains(self._client),
-                    return_exceptions=True,
-                )
-                rd = rd_result if isinstance(rd_result, dict) else {}
-                domains = domains_result if isinstance(domains_result, set) else set()
-                result["installed_integrations"] = sorted(domains)
-                result["multi_version_release_notes"] = rd.get("release_notes", [])
-                result["breaking_changes"] = {
-                    "entries": rd.get("entries", []),
-                    "count": rd.get("count", 0),
-                    "versions_checked": rd.get("versions_checked", []),
-                }
+        installed = row.get("installed_version")
+        target = row.get("latest_version")
+        if include_release_notes and is_core and installed and target:
+            analysis = await core_release_analysis(self._client, installed, target)
+            warnings = [*result.get("warnings", []), *analysis.pop("warnings")]
+            result.update(analysis)
+            if warnings:
+                result["warnings"] = warnings
 
         return result
 
-    async def _fetch_release_notes(
-        self,
-        entity_id: str,
-        attributes: dict[str, Any],
-        latest_version: str,
-    ) -> tuple[Any, str | None]:
-        """Fetch release notes from WebSocket, GitHub, or Core API. Returns (notes, source)."""
-        # Try WebSocket update/release_notes first
-        try:
-            ws_result = await self._client.send_websocket_message(
-                {
-                    "type": "update/release_notes",
-                    "entity_id": entity_id,
-                }
-            )
-            if ws_result.get("success") and ws_result.get("result"):
-                return ws_result.get("result"), "websocket"
-        except Exception as ws_error:  # noqa: BLE001
-            logger.debug(f"WebSocket release_notes failed for {entity_id}: {ws_error}")
-
-        # Fallback: Try to fetch from GitHub if release_url is available
-        release_url = attributes.get("release_url")
-        if release_url:
-            github_result = await _fetch_github_release_notes(release_url)
-            if github_result:
-                return github_result["notes"], github_result["source"]
-
-        # Special handling for Home Assistant Core updates
-        if "core" in entity_id.lower():
-            core_result = await _fetch_core_release_notes(latest_version)
-            if core_result:
-                return core_result["notes"], core_result["source"]
-
-        return None, None
-
-    async def _resolve_update_targets(
+    def _validate_batch(
         self,
         action: str,
         entity_ids: list[str] | str | None,
         categories: list[str] | str | None,
-    ) -> list[str]:
-        """Validate parameters and resolve the update entity_ids to act on."""
+        version: str | None,
+    ) -> tuple[list[str], list[str]]:
+        """Validate the batch parameters; returns the (entity_ids, categories)."""
         ids = [entity_ids] if isinstance(entity_ids, str) else list(entity_ids or [])
         cats = [categories] if isinstance(categories, str) else list(categories or [])
 
@@ -660,6 +152,14 @@ class UpdateTools:
                     "'install' requires exactly one of entity_ids or categories.",
                 )
             )
+        if version is not None and (action != "install" or cats):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "version is install-only and needs entity_ids, not categories.",
+                    context={"version": version},
+                )
+            )
 
         invalid = [e for e in ids if not e.startswith("update.")]
         if invalid:
@@ -672,7 +172,7 @@ class UpdateTools:
             )
 
         if not cats:
-            return list(dict.fromkeys(ids))
+            return list(dict.fromkeys(ids)), []
 
         protected = sorted(set(cats) & set(_PROTECTED_UPDATE_CATEGORIES))
         unknown = sorted(
@@ -696,15 +196,7 @@ class UpdateTools:
                     context={"allowed_categories": list(_INSTALL_ALL_CATEGORIES)},
                 )
             )
-
-        listing = await self._list_updates(include_skipped=False)
-        listed_categories = listing.get("categories", {})
-        return [
-            update["entity_id"]
-            for cat in dict.fromkeys(cats)
-            for update in listed_categories.get(cat, [])
-            if update.get("can_install")
-        ]
+        return [], list(dict.fromkeys(cats))
 
     async def _handle_get_action(
         self,
@@ -723,58 +215,50 @@ class UpdateTools:
             )
         return await self._get_update_details(ids[0], bool(include_release_notes))
 
-    async def _verify_targets_exist(
-        self, targets: list[str]
-    ) -> tuple[list[str], list[dict[str, Any]]]:
-        """Split targets into (known, not-found errors) against current entity states.
-
-        Explicit-id mode: verify the entities exist up front. HA service
-        calls targeting nonexistent entities no-op silently, which would
-        otherwise read as success.
-        """
-        states = await self._client.get_states()
-        known = {s.get("entity_id") for s in states if isinstance(s, dict)}
-        not_found = [
-            create_error_response(
-                ErrorCode.ENTITY_NOT_FOUND,
-                f"Update entity not found: {eid}",
-                context={"entity_id": eid},
-                suggestions=["Use ha_manage_updates() to list update entities"],
-            )
-            for eid in targets
-            if eid not in known
-        ]
-        return [e for e in targets if e in known], not_found
-
     async def _call_update_service(
-        self, action: str, targets: list[str], backup: bool
+        self,
+        action: str,
+        targets: list[dict[str, Any]],
+        backup: bool,
+        version: str | None,
     ) -> tuple[list[dict[str, Any]], int]:
-        """Call the update service per target, collecting per-item results."""
+        """One ``update.<action>`` over WebSocket per target; Core's refusal is
+        that item's error. A transport failure propagates and ends the batch."""
         results: list[dict[str, Any]] = []
-        succeeded = 0
-        for eid in targets:
-            data: dict[str, Any] = {"entity_id": eid}
-            if action == "install" and backup:
-                data["backup"] = True
-            try:
-                await self._client.call_service("update", action, data)
-                results.append({"success": True, "entity_id": eid})
-                succeeded += 1
-            except HomeAssistantConnectionError, HomeAssistantAuthError:
-                # Fatal transport/auth failure — the connection is gone,
-                # so remaining items would fail identically. Propagate to
-                # surface the root cause instead of N per-item errors.
-                raise
-            except Exception as e:  # noqa: BLE001
-                # Batch item failure — collect, don't raise.
-                results.append(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        str(e),
-                        context={"entity_id": eid},
-                    )
+        for row in targets:
+            item: dict[str, Any] = {"entity_id": row["entity_id"]}
+            data: dict[str, Any] = {}
+            if action == "install":
+                features = row["features"]
+                item["backup"] = backup and (features is None or "backup" in features)
+                if item["backup"]:
+                    data["backup"] = True
+                if version is not None:
+                    data["version"] = version
+            reply = await self._client.send_websocket_message(
+                {
+                    "type": "call_service",
+                    "domain": "update",
+                    "service": action,
+                    "target": {"entity_id": row["entity_id"]},
+                    "service_data": data,
+                    # Core answers an install once it has finished, so it gets
+                    # the client's request timeout rather than a fast command's.
+                    "_wait_timeout": self._client.timeout,
+                },
+                expected_error_codes=_CORE_REFUSALS,
+            )
+            if reply.get("success"):
+                results.append({"success": True, **item})
+                continue
+            results.append(
+                create_error_response(
+                    ws_failure_code(reply),
+                    core_error_message(reply.get("error", "")),
+                    context={**item, "ha_error_code": reply.get("error_code")},
                 )
-        return results, succeeded
+            )
+        return results, sum(1 for r in results if r["success"])
 
     async def _execute_batch_action(
         self,
@@ -782,18 +266,41 @@ class UpdateTools:
         entity_ids: list[str] | str | None,
         categories: list[str] | str | None,
         backup: bool,
+        version: str | None,
     ) -> dict[str, Any]:
         """Resolve targets, apply the update service, and build the batch response."""
-        targets = await self._resolve_update_targets(action, entity_ids, categories)
-        requested = len(targets)
+        ids, cats = self._validate_batch(action, entity_ids, categories, version)
+        rows, warnings = await read_update_rows(self._client)
+        by_id = {row["entity_id"]: row for row in rows}
 
         results: list[dict[str, Any]] = []
-        if entity_ids:
-            targets, not_found = await self._verify_targets_exist(targets)
-            results.extend(not_found)
+        if cats:
+            targets = [
+                row
+                for cat in cats
+                for row in rows
+                if row["category"] == cat
+                and _pending(row)
+                and row["can_install"] is not False
+            ]
+        else:
+            targets = [by_id[eid] for eid in ids if eid in by_id]
+            # Core's service call no-ops silently on an entity it does not
+            # have, which would read as success.
+            results = [
+                create_error_response(
+                    ErrorCode.ENTITY_NOT_FOUND,
+                    f"Update entity not found: {eid}",
+                    context={"entity_id": eid},
+                    suggestions=["Use ha_manage_updates() to list update entities"],
+                )
+                for eid in ids
+                if eid not in by_id
+            ]
+        requested = len(targets) + len(results)
 
         call_results, succeeded = await self._call_update_service(
-            action, targets, backup
+            action, targets, backup, version
         )
         results.extend(call_results)
 
@@ -813,8 +320,10 @@ class UpdateTools:
         elif action == "install" and succeeded:
             response["note"] = (
                 "Confirm per entity with ha_manage_updates(action='get') that "
-                "installed_version reached latest_version."
+                f"installed_version reached {version or 'latest_version'}."
             )
+        if warnings:
+            response["warnings"] = warnings
         return response
 
     async def _known_repair_keys(self) -> set[tuple[str, str]] | None:
@@ -909,26 +418,8 @@ class UpdateTools:
             "results": results,
         }
 
-    def _handle_update_error(
-        self,
-        e: Exception,
-        action: str,
-        entity_ids: list[str] | str | None,
-    ) -> NoReturn:
+    def _handle_update_error(self, e: Exception) -> NoReturn:
         """Map a failure to a structured tool error; always raises."""
-        if action == "get" and entity_ids and http_failure_status(e) == 404:
-            eid = entity_ids if isinstance(entity_ids, str) else entity_ids[0]
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Update entity not found: {eid}",
-                    context={"entity_id": eid},
-                    suggestions=[
-                        "Use ha_manage_updates() without entity_ids to see "
-                        "all available updates"
-                    ],
-                )
-            )
         logger.error(f"Failed to manage updates: {e}")
         exception_to_structured_error(
             e,
@@ -977,7 +468,8 @@ class UpdateTools:
                 description="For install: apply every pending update in these categories ('addons',"
                 " 'hacs' (Marketplace repositories), 'devices', 'other'). As with the HA 'Update all' button, "
                 "core/os/supervisor are excluded (target those individually via "
-                "entity_ids) and skipped updates are never included.",
+                "entity_ids) and skipped updates are never included, nor are "
+                "updates whose can_install is false.",
                 default=None,
             ),
         ] = None,
@@ -991,21 +483,36 @@ class UpdateTools:
         include_release_notes: Annotated[
             bool,
             Field(
-                description="For get on a Core update entity: fetch multi-version release notes and"
-                " breaking changes for all versions between installed and latest. Adds "
-                "breaking_changes, multi_version_release_notes, and "
-                "installed_integrations to the response.",
+                description="For get on the Core update: read the breaking changes of "
+                "every stable release after installed_version up to latest_version "
+                "(monthly release posts and patch releases). Adds breaking_changes "
+                "(entries with their integration domains and whether one is "
+                "installed; versions_checked; versions_unverified, the releases "
+                "that could not be read, for which no entries does not mean none; "
+                "repairs, the Repairs issues Home Assistant gives a breaking "
+                "version), multi_version_release_notes and installed_integrations.",
                 default=False,
             ),
         ] = False,
         backup: Annotated[
             bool,
             Field(
-                description="For install: create a backup before installing where the update entity"
-                " supports it (apps (add-ons)).",
+                description="For install: back up first. Sent only to updates whose "
+                "features include 'backup' (apps (add-ons)); each result item says "
+                "whether it was sent. Without the component it is sent as asked "
+                "and Home Assistant refuses it where unsupported.",
                 default=False,
             ),
         ] = False,
+        version: Annotated[
+            str | None,
+            Field(
+                description="For install with entity_ids: the version to install "
+                "instead of latest_version. Home Assistant refuses it for an "
+                "update without the 'specific_version' feature.",
+                default=None,
+            ),
+        ] = None,
         repairs: Annotated[
             list[dict[str, Any]] | None,
             JSON_STRING_COERCION,
@@ -1024,6 +531,13 @@ class UpdateTools:
         Repairs are listed by ha_get_overview (not here); pass their domain and
         issue_id to 'ignore_repair' / 'unignore_repair'. In Read Only Mode the
         read actions ('list', 'get') stay available; write actions are blocked.
+
+        An update carries Home Assistant's attributes (update_percentage shows
+        an install's progress) plus platform, category, features (Home
+        Assistant's feature names, such as 'install', 'backup',
+        'specific_version', 'release_notes') and can_install. Without the
+        ha_mcp_tools component, features and can_install are None and warnings
+        says so; Home Assistant then refuses what an update does not support.
 
         'install' blocks until each update finishes (minutes). One that outlasts
         the request timeout ends the call with a connection timeout while it
@@ -1062,13 +576,13 @@ class UpdateTools:
                 )
 
             return await self._execute_batch_action(
-                action, entity_ids, categories, bool(backup)
+                action, entity_ids, categories, bool(backup), version
             )
 
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
-            self._handle_update_error(e, action, entity_ids)
+            self._handle_update_error(e)
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL
             )

@@ -846,11 +846,11 @@ _EXEMPT_GATED_OR_READ_ARGS = {
     },
     "ha_manage_updates": {
         # Targets/scope for the write actions (install/skip/clear_skipped,
-        # ignore_repair/unignore_repair), all blocked by the inspected
-        # ``action`` dispatch before use.
+        # ignore/unignore_repair): the inspected ``action`` blocks them first.
         "entity_ids",
         "categories",
         "backup",
+        "version",
         "repairs",
         # Read-path modifiers of the allowed list/get actions.
         "include_skipped",

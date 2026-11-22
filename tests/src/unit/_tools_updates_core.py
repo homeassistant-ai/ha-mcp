@@ -14,7 +14,11 @@ from typing import Any
 import httpx
 import pytest
 import respx
-from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
+from homeassistant.components.update import (
+    UpdateDeviceClass,
+    UpdateEntity,
+    UpdateEntityFeature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -41,8 +45,9 @@ class SoftwareUpdate(UpdateEntity):
         latest: str = "1.1.0",
         features: UpdateEntityFeature = UpdateEntityFeature(0),
         release_url: str | None = None,
-        in_progress: bool = False,
+        in_progress: bool | None = False,
         auto_update: bool = False,
+        device_class: UpdateDeviceClass | None = None,
         notes: str | None = None,
     ) -> None:
         self.entity_id = entity_id
@@ -52,10 +57,15 @@ class SoftwareUpdate(UpdateEntity):
         self._attr_latest_version = latest
         self._attr_supported_features = features
         self._attr_release_url = release_url
-        self._attr_in_progress = in_progress
+        self._progress = in_progress
         self._attr_auto_update = auto_update
+        self._attr_device_class = device_class
         self.notes = notes
         self.installs: list[tuple[str | None, bool]] = []
+
+    @property
+    def in_progress(self) -> bool | None:
+        return self._progress
 
     async def async_install(
         self, version: str | None, backup: bool, **kwargs: Any
@@ -110,9 +120,9 @@ class Web:
         self.unreachable: set[str] = set()
         self.requested: list[str] = []
 
-    def serve(self, url: str, **response: Any) -> None:
-        """Answer ``url`` with ``httpx.Response(200, **response)``."""
-        self.pages[url] = response
+    def serve(self, url: str, status: int = 200, **response: Any) -> None:
+        """Answer ``url`` with ``httpx.Response(status, **response)``."""
+        self.pages[url] = {"status_code": status, **response}
 
     def answer(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -122,7 +132,7 @@ class Web:
         page = self.pages.get(url, self.hosts.get(request.url.host))
         if page is None:
             return httpx.Response(404)
-        return httpx.Response(200, **page)
+        return httpx.Response(**{"status_code": 200, **page})
 
 
 @pytest.fixture

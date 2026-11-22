@@ -29,6 +29,7 @@ from custom_components.ha_mcp_tools import (
     recorder_status,
     scene_editor,
     todo_items,
+    update_entities,
 )
 from custom_components.ha_mcp_tools.const import (
     COMPONENT_VERSION,
@@ -132,6 +133,7 @@ async def test_every_command_is_registered_and_config_get_is_not(
         "ha_mcp_tools/statistics_units",
         card_definitions.WS_DASHBOARD_CARDS,
         todo_items.WS_TODO_ITEM,
+        update_entities.WS_UPDATE_ENTITIES,
         automation_config.WS_AUTOMATION_CONFIG,
         config_references.WS_CONFIG_REFERENCES,
         flow_record.WS_FLOW_RECORD,

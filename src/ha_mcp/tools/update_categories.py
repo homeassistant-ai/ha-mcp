@@ -1,60 +1,25 @@
 """The category ``ha_manage_updates`` files an update entity under."""
 
-import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
-# The integration whose update entities are store repositories. Its entities
-# are named after the repository alone, so only the platform tells them apart.
+# The integration whose update entities are store repositories.
 _STORE_PLATFORM = "marketplace"
+# The hassio platform names its system update entities with these fixed titles
+# and every other entity it adds is an app; the frontend's getUpdateType tells
+# them apart by the same test.
+_HASSIO_TITLES = {
+    "Home Assistant Core": "core",
+    "Home Assistant Operating System": "os",
+    "Home Assistant Supervisor": "supervisor",
+}
 
 
-async def update_platforms(client: Any) -> dict[str, str]:
-    """Map each registered update entity to the integration that owns it."""
-    reply = await client.send_websocket_message(
-        {"type": "config/entity_registry/list_for_display"}
-    )
-    if not reply.get("success"):
-        logger.debug("Entity registry unavailable for update categories: %s", reply)
-        return {}
-    return {
-        row["ei"]: row.get("pl", "")
-        for row in (reply.get("result") or {}).get("entities", [])
-        if row.get("ei", "").startswith("update.")
-    }
-
-
-def categorize_update(
-    entity_id: str, attributes: dict[str, Any], platform: str = ""
-) -> str:
-    """Categorize an update entity by its integration, entity_id and attributes."""
+def categorize_update(platform: str | None, attributes: dict[str, Any]) -> str:
+    """Categorize an update entity by its integration and Core's attributes."""
+    if platform == "hassio":
+        return _HASSIO_TITLES.get(attributes.get("title") or "", "addons")
     if platform == _STORE_PLATFORM:
         return "hacs"
-
-    entity_lower = entity_id.lower()
-    # Use 'or ""' to handle both missing keys AND explicit None values
-    title_lower = (attributes.get("title") or "").lower()
-
-    if "home_assistant_core" in entity_lower or (
-        "core" in entity_lower and "home_assistant" in title_lower
-    ):
-        return "core"
-
-    if "operating_system" in entity_lower or "haos" in entity_lower:
-        return "os"
-
-    if "supervisor" in entity_lower:
-        return "supervisor"
-
-    # Add-ons (typically named update.xxx_update where xxx is addon name)
-    if "add-on" in title_lower or "addon" in title_lower:
-        return "addons"
-
-    device_patterns = ["esphome", "zwave", "zigbee", "zha", "matter", "firmware"]
-    if any(
-        pattern in entity_lower or pattern in title_lower for pattern in device_patterns
-    ):
+    if attributes.get("device_class") == "firmware":
         return "devices"
-
     return "other"

@@ -138,6 +138,10 @@ the info handshake carries no capability entry:
   the flow manager that holds it. Core's flow endpoints do not report it, and
   the server binds a ``flow_id`` it did not open itself (it restarted) to a
   call's target with it. See ``flow_record.py``.
+* ``ha_mcp_tools/update_entities`` — the loaded entities of Core's update
+  component, each state with its integration and the names of its
+  ``UpdateEntityFeature`` flags, which no state or REST answer carries. See
+  ``update_entities.py``.
 * ``ha_mcp_tools/recorder_status`` — the recorder's purge settings and oldest
   state, and whether it records an entity, which Core's API does not serve;
   with ``wait``, held until the recorder has finished its work. See
@@ -375,6 +379,7 @@ from .. import (
     recorder_status,
     scene_editor,
     todo_items,
+    update_entities,
 )
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
 from .call_event import _do_call_event
@@ -559,6 +564,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *entity_restore.command_specs(vol, er),
         *core_contract.command_specs(vol),
         *todo_items.command_specs(vol),
+        *update_entities.command_specs(vol),
         *flow_record.command_specs(vol),
         *flow_outline.command_specs(vol),
         *scene_editor.command_specs(vol),
