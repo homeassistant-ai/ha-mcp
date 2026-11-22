@@ -256,12 +256,15 @@ def _build_hidden_regex(hidden: set[str]) -> re.Pattern[str] | None:
 
     The ``(?<![a-z0-9_]) ... (?![a-z0-9_])`` guards (case-insensitive) make
     ``sensor.foo`` match ``states.sensor.foo`` and a bare ``sensor.foo`` in a
-    template, but NOT ``sensor.foo2`` or ``my_sensor.foo``.
+    template, but NOT ``sensor.foo2`` or ``my_sensor.foo``. The scanned text is
+    serialized, so an id may also follow an escape (a newline's, a non-ASCII
+    character's), whose last character is a letter or digit (#3156).
     """
     if not hidden:
         return None
     alternation = "|".join(re.escape(eid) for eid in sorted(hidden))
-    return re.compile(rf"(?<![a-z0-9_])(?:{alternation})(?![a-z0-9_])", re.IGNORECASE)
+    before = r"(?:(?<![a-z0-9_])|(?<=\\[bfnrt])|(?<=\\u[0-9a-f]{4}))"
+    return re.compile(rf"{before}(?:{alternation})(?![a-z0-9_])", re.IGNORECASE)
 
 
 @dataclass(frozen=True)

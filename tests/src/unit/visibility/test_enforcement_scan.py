@@ -267,6 +267,23 @@ class TestOutboundScan:
 
         assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
 
+    async def test_hidden_id_on_a_later_line_of_a_list_refused(
+        self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
+    ) -> None:
+        """A template listing one entity per line returned every hidden entity
+        but the first: serialized, the newline before the id ends in a letter
+        (#3156)."""
+        enforce_hiding(set_config, "sensor.foo")
+        payload = {"result": "sensor.visible | 12\nsensor.foo | 99"}
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_eval_template", {}),
+                _returns(text_result(json.dumps(payload), structured=payload)),
+            )
+
+        assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
     async def test_clean_output_passes_through(
         self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
     ) -> None:
@@ -295,15 +312,24 @@ class TestOutboundScan:
 
         assert exc.value.args[0] == original
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            pytest.param("reading sensor.foo failed", id="plain"),
+            # An error's JSON escapes the quote, and the escape ends in a letter.
+            pytest.param("invalid input “sensor.foo”", id="typographic-quotes"),
+        ],
+    )
     async def test_tool_error_naming_hidden_id_replaced(
-        self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
+        self,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+        message: str,
     ) -> None:
         enforce_hiding(set_config, "sensor.foo")
 
         async def _raise_leaky(_context: Any) -> Any:
-            raise ToolError(
-                json.dumps({"error": {"message": "reading sensor.foo failed"}})
-            )
+            raise ToolError(json.dumps({"error": {"message": message}}))
 
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(make_context("ha_get_logs", {}), _raise_leaky)
