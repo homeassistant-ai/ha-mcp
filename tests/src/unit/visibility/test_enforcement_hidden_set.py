@@ -500,7 +500,8 @@ class TestScrubSeam:
 
 
 class TestComponentSearchScrub:
-    """The component search hides entities itself, not the configs naming them."""
+    """The component search hides entities and, in enforce mode, the configs
+    naming them itself; the server's scrub adjusts the totals for what it drops."""
 
     @pytest.fixture
     async def search(

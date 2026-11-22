@@ -50,6 +50,7 @@ from ._routing_core import invalidations, pooled_socket, sent_frames
 
 SEARCH = "ha_mcp_tools/search"
 ALLOWLIST_AUTH = "search_visibility_allowlist_authorization"
+ENFORCE = "search_visibility_enforce"
 # The nine hide dimensions ``VisibilityConfig.to_wire`` emits.
 _WIRE_KEYS = {
     "exclude_categories",
@@ -175,6 +176,55 @@ async def test_an_active_filter_without_the_capability_uses_the_legacy_path(
     assert searched.frames == []
     assert searched.legacy_reads == 1
     assert _entity_ids(searched.response) == {"sensor.kitchen_temp"}
+
+
+def _enforce_denying_kitchen_light(tmp_path: Path) -> None:
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            enforce=True,
+            exclude_categories=[],
+            deny_entity_ids=["light.kitchen"],
+        ),
+    )
+
+
+async def test_enforce_mode_rides_the_component_request_with_its_flag(
+    tmp_path: Path, client: HomeAssistantClient
+) -> None:
+    """On the flag the component omits the configs naming a hidden entity."""
+    _enforce_denying_kitchen_light(tmp_path)
+
+    searched = await _search(client)
+
+    (frame,) = searched.frames
+    assert frame["visibility"]["enforce"] is True
+    assert not _legacy_warning(searched.response)
+
+
+async def test_enforce_mode_needs_the_enforce_capability(
+    tmp_path: Path, client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An older component would list the configs naming a hidden entity."""
+    _without(monkeypatch, ENFORCE)
+    _enforce_denying_kitchen_light(tmp_path)
+
+    searched = await _search(client)
+
+    assert searched.frames == []
+    assert _entity_ids(searched.response) == {"sensor.kitchen_temp"}
+
+
+async def test_a_filter_that_does_not_enforce_sends_no_enforce_flag(
+    tmp_path: Path, client: HomeAssistantClient
+) -> None:
+    _deny_kitchen_light(tmp_path)
+
+    searched = await _search(client)
+
+    (frame,) = searched.frames
+    assert "enforce" not in frame["visibility"]
 
 
 async def test_an_allowlist_needs_the_allowlist_authorization_capability(

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple
 
 from .registry import (
@@ -117,6 +118,30 @@ def _unknown_categories_warning(unknown_categories: set[str]) -> str:
         "Entity visibility: ignoring unknown exclude_categories "
         f"{sorted(unknown_categories)} (valid: config, diagnostic)."
     )
+
+
+def _hidden_reference_test(hidden: set[str]) -> Callable[[Any], bool]:
+    """A test for whether a config record names one of ``hidden`` as a whole word.
+
+    For an enforcing search (the wire's ``enforce``), which omits the config
+    records that reference a hidden entity. Keys count as much as values: a
+    scene keys its states by entity_id.
+    """
+    alternation = "|".join(re.escape(entity_id) for entity_id in sorted(hidden))
+    pattern = re.compile(
+        rf"(?<![a-z0-9_])(?:{alternation})(?![a-z0-9_])", re.IGNORECASE
+    )
+
+    def names_hidden(value: Any) -> bool:
+        if isinstance(value, str):
+            return pattern.search(value) is not None
+        if isinstance(value, Mapping):
+            return any(names_hidden(k) or names_hidden(v) for k, v in value.items())
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return any(names_hidden(item) for item in value)
+        return False
+
+    return names_hidden
 
 
 def _visibility_hidden_set(

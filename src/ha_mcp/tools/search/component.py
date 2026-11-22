@@ -464,10 +464,11 @@ async def _scrub_component_config_buckets(
 ) -> None:
     """Omit component config-body records referencing a hidden entity (enforce mode).
 
-    The component's ``search_visibility`` wire applies the hide dimensions to
-    ENTITY results only; its config-body records (automations/scripts/scenes/
-    helpers/dashboards) can still reference a hidden entity, and the enforcement
-    middleware's outbound scan would then refuse the whole search on contact
+    With the wire's ``enforce`` the component omits the automation, script,
+    scene and helper records that reference a hidden entity itself, before it
+    counts and pages them. This scrub covers what reaches the response another
+    way (the dashboards leg, a body under ``include_config``): the enforcement
+    middleware's outbound scan would otherwise refuse the whole search on contact
     instead of the issue-#2015 "collection reads omit" contract. Mirror of the
     legacy path's scrub (``_deep._scrub_results_for_enforce``), applied after
     ``_shape_component_search_response``. Totals are decremented by the dropped
@@ -694,6 +695,9 @@ class ComponentSearchMixin(LegacySearchMixin):
           - no allowlist dimensions → ``(True, <wire dict>)``: the nine-key wire;
             with no allow dimensions the two precedences agree.
           - allowlist active without the capability → ``(False, None)``.
+          - enforce mode → the wire also carries ``enforce: True``, on which the
+            component omits the config records that reference a hidden entity;
+            a component without ``search_visibility_enforce`` → ``(False, None)``.
         - config could not be loaded → ``(False, None)``: the legacy path applies
           the filter server-side before the counts/pagination (fail-closed to
           legacy, matching ``visibility_state_and_wire``'s fail-closed pairing).
@@ -702,11 +706,16 @@ class ComponentSearchMixin(LegacySearchMixin):
         gate and its wire form, instead of the active check and the wire fetch
         each hitting the (memoized) config read separately.
         """
-        active, visibility = await visibility_state_and_wire()
+        active, visibility, enforce = await visibility_state_and_wire()
         if not active:
             return True, None
         if not component_supports(caps, "search_visibility") or visibility is None:
             return False, None
+        if enforce:
+            if not component_supports(caps, "search_visibility_enforce"):
+                return False, None
+            enforcing: VisibilityWire = {**visibility, "enforce": True}
+            visibility = enforcing
         if component_supports(caps, "search_visibility_allowlist_authorization"):
             authorized: VisibilityWire = {**visibility, "allowlist_authorization": True}
             return True, authorized

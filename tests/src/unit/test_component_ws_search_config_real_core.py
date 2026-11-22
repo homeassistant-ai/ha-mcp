@@ -164,6 +164,61 @@ async def test_a_scenes_runtime_states_are_neither_matched_nor_sent(
     assert "scenegarbagevalue" not in json.dumps(by_name)
 
 
+_HIDING = {"deny_entity_ids": ["sensor.hidden"]}
+
+
+@pytest.fixture
+async def configs_naming_a_hidden_sensor(hass: HomeAssistant) -> None:
+    """A "Probe" record of each config surface names ``sensor.hidden``; the
+    "Probe plain" automation does not."""
+    await _set_up(
+        hass,
+        "automation",
+        [
+            _automation("Probe watcher", message="{{ states('sensor.hidden') }}"),
+            _automation("Probe plain", message="hello"),
+        ],
+    )
+    await _set_up(
+        hass,
+        "scene",
+        [{"id": "scn-p", "name": "Probe scene", "entities": {"sensor.hidden": "on"}}],
+    )
+    await _set_up(
+        hass,
+        "input_select",
+        {"probe_select": {"name": "Probe select", "options": ["sensor.hidden", "x"]}},
+    )
+    MockConfigEntry(
+        domain="template",
+        title="Probe template",
+        options={"state": "{{ states('sensor.hidden') }}"},
+        entry_id="e-probe",
+    ).add_to_hass(hass)
+
+
+async def test_an_enforcing_search_omits_the_configs_naming_a_hidden_entity(
+    component_ws: MockHAClientWebSocket, configs_naming_a_hidden_sensor: None
+) -> None:
+    """Enforce mode promises they are left out; they are neither counted nor paged."""
+    result = await _search(
+        component_ws, query="probe", visibility={**_HIDING, "enforce": True}
+    )
+
+    assert [hit["alias"] for hit in result["automations"]] == ["Probe plain"]
+    assert (result["scenes"], result["helpers"]) == ([], [])
+    assert result["config_total_matches"] == 1
+
+
+async def test_a_search_that_does_not_enforce_keeps_the_configs_naming_one(
+    component_ws: MockHAClientWebSocket, configs_naming_a_hidden_sensor: None
+) -> None:
+    """Without enforce mode the filter only declutters the entity results."""
+    result = await _search(component_ws, query="probe", visibility=_HIDING)
+
+    assert result["config_total_matches"] == 5
+
+
 async def test_config_hits_share_one_pagination_window(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
