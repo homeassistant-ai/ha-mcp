@@ -262,19 +262,14 @@ async def _config_reads_by_own_key(
     return len(reads)
 
 
+@pytest.mark.parametrize(
+    "routed_client", ["component_core_client", "core_client"], indirect=True
+)
 @pytest.mark.parametrize("call", list(_OWN_KEY_CALLS))
 async def test_a_stored_scenes_own_key_costs_no_extra_config_read(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient, call: str
+    hass: HomeAssistant, routed_client: HomeAssistantClient, call: str
 ) -> None:
-    """The component names ``mykey``'s own scene: resolving it reads no config."""
-    reads = await _config_reads_by_own_key(hass, component_core_client, call)
-    assert reads == _OWN_READS[call]
-
-
-@pytest.mark.parametrize("call", list(_OWN_KEY_CALLS))
-async def test_without_the_component_a_stored_scenes_own_key_costs_no_extra_read(
-    hass: HomeAssistant, core_client: HomeAssistantClient, call: str
-) -> None:
-    """The registry entry of ``scene.mykey`` names it: no config read either."""
-    reads = await _config_reads_by_own_key(hass, core_client, call)
+    """The component, or without it the registry entry of ``scene.mykey``,
+    names ``mykey``'s own scene: resolving it reads no config."""
+    reads = await _config_reads_by_own_key(hass, routed_client, call)
     assert reads == _OWN_READS[call]
