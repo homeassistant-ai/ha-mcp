@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -40,8 +40,13 @@ def search_config_surface(
     partial_reasons: list[str],
     diagnostics: dict[str, int],
     secret_values: frozenset[str] = frozenset(),
+    omit: Callable[[Any], bool] | None = None,
 ) -> list[dict[str, Any]]:
-    """Score one config domain's loaded entities (raw_config indexed, not emitted for YAML)."""
+    """Score one config domain's loaded entities (raw_config indexed, not emitted for YAML).
+
+    ``omit`` is the enforcing search's test for a record that names a hidden
+    entity (``hidden_reference._hidden_reference_test``); such a record is left out.
+    """
     component = hass.data.get(domain) if getattr(hass, "data", None) else None
     entities = getattr(component, "entities", None)
     if entities is None:
@@ -74,6 +79,8 @@ def search_config_surface(
             if scored is None:
                 continue
             score, match_in_name, match_in_config = scored
+        if omit is not None and omit((entity_id, name, config_dict)):
+            continue
 
         # Scenes never emit a component-served body: a HomeAssistantScene holds no
         # raw storage dict (its states are runtime State objects), so config stays
@@ -287,12 +294,14 @@ def _search_helpers(
     secret_values: frozenset[str] = frozenset(),
     flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
     custom_domains: frozenset[str] = frozenset(),
+    omit: Callable[[Any], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Index collection helpers (states) + flow helpers (config-entry options).
 
     An entry of a custom-only domain is matched on its title only and emitted with
     ``options: None`` and ``options_withheld`` (see
-    ``flow_domains._flow_helper_domains``).
+    ``flow_domains._flow_helper_domains``). ``omit`` leaves out a helper that
+    names a hidden entity (see :func:`search_config_surface`).
     """
     results: list[dict[str, Any]] = []
 
@@ -332,6 +341,8 @@ def _search_helpers(
             if scored is None:
                 continue
             score, match_in_name, match_in_config = scored
+        if omit is not None and omit((entity_id, name, body)):
+            continue
         results.append(
             {
                 "entity_id": entity_id,
@@ -356,6 +367,7 @@ def _search_helpers(
             secret_values=secret_values,
             flow_domains=flow_domains,
             custom_domains=custom_domains,
+            omit=omit,
         )
     )
     return results
@@ -371,6 +383,7 @@ def _search_flow_helpers(
     secret_values: frozenset[str],
     flow_domains: frozenset[str],
     custom_domains: frozenset[str],
+    omit: Callable[[Any], bool] | None,
 ) -> list[dict[str, Any]]:
     """Index flow helpers: config entries, options + title ONLY, never data."""
     results: list[dict[str, Any]] = []
@@ -409,6 +422,8 @@ def _search_flow_helpers(
             if scored is None:
                 continue
             score, match_in_name, match_in_config = scored
+        if omit is not None and omit((title, options)):
+            continue
         record: dict[str, Any] = {
             "entity_id": None,
             "helper_type": domain,

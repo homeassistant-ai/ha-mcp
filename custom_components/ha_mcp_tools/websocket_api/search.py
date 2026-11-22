@@ -26,6 +26,7 @@ from .constants import (
     SEARCH_TYPE_SCRIPT,
 )
 from .flow_domains import HELPER_FLOWS_DEGRADED_WARNING, _flow_helper_domains
+from .hidden_reference import _hidden_reference_test
 from .registry import (
     _area_name,
     _composed_entity_name,
@@ -107,6 +108,20 @@ def do_search(  # noqa: PLR0915
     # load_hidden_set warnings).
     visibility_warnings: list[str] = []
     hidden: set[str] = set()
+    # The wire's ``enforce`` (search_visibility_enforce): also omit the config
+    # records that reference a hidden entity, before counts/pagination.
+    enforce = isinstance(visibility, Mapping) and bool(visibility.get("enforce"))
+    if (
+        isinstance(visibility, Mapping)
+        and visibility
+        and (enforce or SEARCH_TYPE_ENTITY in search_types)
+    ):
+        hidden, known, visibility_warnings = _search_hidden(hass, view, visibility)
+    omit = (
+        _hidden_reference_test(view, _iter_states(hass), hidden, known)
+        if enforce and hidden
+        else None
+    )
     location = (
         resolve_search_location(view, area_filter)
         if area_filter and SEARCH_TYPE_ENTITY in search_types
@@ -142,37 +157,10 @@ def do_search(  # noqa: PLR0915
         # top of ``_match_exact_search_entity`` (independent of ``include_hidden``,
         # which the ``search_entities`` join already applied). See
         # :func:`_visibility_hidden_set`.
-        if isinstance(visibility, Mapping) and visibility:
-            states_list = _iter_states(hass)
-            inventory = _visibility_inventory(view, states_list, visibility)
-            assist_applies = (
-                bool(visibility.get("respect_assist_exposure"))
-                and not inventory.allowlist.authorized
-            )
-            # Short-circuit the probe unless Assist applies. True on the skipped
-            # path means there is no Assist degradation to report; the hidden-set
-            # helper does not consult Assist while an authorizing allowlist is
-            # active (a legacy wire keeps Assist in play, so the probe still runs).
-            assist_available = not assist_applies or _assist_exposure_available(hass)
-            hidden = _visibility_hidden_set(
-                view,
-                states_list,
-                visibility,
-                lambda eid: _assist_should_expose(hass, eid),
-                assist_available=assist_available,
-                inventory=inventory,
-            )
-            visibility_warnings = _visibility_warnings(
-                view,
-                states_list,
-                visibility,
-                assist_available=assist_available,
-                inventory=inventory,
-            )
-            if hidden:
-                scored_entities = [
-                    r for r in scored_entities if r["entity_id"] not in hidden
-                ]
+        if hidden:
+            scored_entities = [
+                r for r in scored_entities if r["entity_id"] not in hidden
+            ]
         scored_entities.sort(key=lambda r: (-r["score"], r["entity_id"]))
         entity_total = len(scored_entities)
         page = scored_entities[offset : offset + limit]
@@ -206,6 +194,7 @@ def do_search(  # noqa: PLR0915
                     partial_reasons=partial_reasons,
                     diagnostics=diagnostics,
                     secret_values=secret_values,
+                    omit=omit,
                 )
             )
     if SEARCH_TYPE_HELPER in search_types:
@@ -221,6 +210,7 @@ def do_search(  # noqa: PLR0915
                 secret_values=secret_values,
                 flow_domains=flow_domains,
                 custom_domains=custom_domains,
+                omit=omit,
             )
         )
     # After every phase: the helper phase reads the entity registry too.
@@ -270,6 +260,40 @@ def do_search(  # noqa: PLR0915
         ),
     )
     return add_location_metadata(result, location)
+
+
+def _search_hidden(
+    hass: HomeAssistant, view: _RegistryView, visibility: Mapping[str, Any]
+) -> tuple[set[str], set[str], list[str]]:
+    """The entity_ids the ``visibility`` wire hides, every entity_id Home
+    Assistant knows, and the wire's degradation warnings."""
+    states_list = _iter_states(hass)
+    inventory = _visibility_inventory(view, states_list, visibility)
+    assist_applies = (
+        bool(visibility.get("respect_assist_exposure"))
+        and not inventory.allowlist.authorized
+    )
+    # Short-circuit the probe unless Assist applies. True on the skipped path
+    # means there is no Assist degradation to report; the hidden-set helper does
+    # not consult Assist while an authorizing allowlist is active (a legacy wire
+    # keeps Assist in play, so the probe still runs).
+    assist_available = not assist_applies or _assist_exposure_available(hass)
+    hidden = _visibility_hidden_set(
+        view,
+        states_list,
+        visibility,
+        lambda eid: _assist_should_expose(hass, eid),
+        assist_available=assist_available,
+        inventory=inventory,
+    )
+    warnings = _visibility_warnings(
+        view,
+        states_list,
+        visibility,
+        assist_available=assist_available,
+        inventory=inventory,
+    )
+    return hidden, inventory.state_ids | set(inventory.registry_by_id), warnings
 
 
 def _degradation_warnings(

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
@@ -162,6 +163,174 @@ async def test_a_scenes_runtime_states_are_neither_matched_nor_sent(
     assert by_value["scenes"] == []
     assert by_name["scenes"]
     assert "scenegarbagevalue" not in json.dumps(by_name)
+
+
+_HIDING = {"deny_entity_ids": ["sensor.hidden"]}
+
+
+@pytest.fixture
+async def configs_naming_a_hidden_sensor(hass: HomeAssistant) -> None:
+    """A "Probe" record of each config surface names ``sensor.hidden``; the
+    "Probe plain" automation does not."""
+    await _set_up(
+        hass,
+        "automation",
+        [
+            _automation("Probe watcher", message="{{ states('sensor.hidden') }}"),
+            _automation("Probe plain", message="hello"),
+        ],
+    )
+    await _set_up(
+        hass,
+        "scene",
+        [{"id": "scn-p", "name": "Probe scene", "entities": {"sensor.hidden": "on"}}],
+    )
+    await _set_up(
+        hass,
+        "input_select",
+        {"probe_select": {"name": "Probe select", "options": ["sensor.hidden", "x"]}},
+    )
+    entry = MockConfigEntry(
+        domain="template",
+        title="Probe template",
+        options={
+            "template_type": "sensor",
+            "name": "Probe template",
+            "state": "{{ states('sensor.hidden') }}",
+        },
+        entry_id="e-probe",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_an_enforcing_search_omits_the_configs_naming_a_hidden_entity(
+    component_ws: MockHAClientWebSocket, configs_naming_a_hidden_sensor: None
+) -> None:
+    """Enforce mode promises they are left out; they are neither counted nor paged."""
+    result = await _search(
+        component_ws, query="probe", visibility={**_HIDING, "enforce": True}
+    )
+
+    assert [hit["alias"] for hit in result["automations"]] == ["Probe plain"]
+    assert (result["scenes"], result["helpers"]) == ([], [])
+    assert result["config_total_matches"] == 1
+
+
+@pytest.mark.parametrize(
+    ("message", "listed"),
+    [
+        pytest.param("level 99sensor.hidden", False, id="run-together"),
+        pytest.param("one" + chr(92) + "nsensor.hidden", False, id="after-backslash-n"),
+        pytest.param(
+            "one" + chr(92) + "nsensor.hidden_2", True, id="another-entity-after-one"
+        ),
+    ],
+)
+async def test_an_enforcing_search_finds_a_hidden_id_as_the_output_scan_does(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    message: str,
+    listed: bool,
+) -> None:
+    """The search omits the same records with and without the component: a
+    hidden id counts wherever it stands, another entity's own id aside."""
+    hass.states.async_set("sensor.hidden_2", "1")
+    await _set_up(hass, "automation", [_automation("Probe", message=message)])
+
+    result = await _search(
+        component_ws, query="probe", visibility={**_HIDING, "enforce": True}
+    )
+
+    assert [hit["alias"] for hit in result["automations"]] == ["Probe"] * listed
+
+
+@pytest.mark.parametrize(
+    ("name", "message", "listed"),
+    [
+        pytest.param(
+            "Front Door Lock Battery",
+            "warn when front door lock battery is low",
+            False,
+            id="as-a-phrase",
+        ),
+        pytest.param(
+            "Front Door Lock Battery",
+            "the Front Door Lock Batteryless one",
+            True,
+            id="runs-on",
+        ),
+        pytest.param(
+            "Front Door Lock Battery",
+            "warn when Front Door Lock Battery avg is low",
+            True,
+            id="part-of-a-visible-name",
+        ),
+        pytest.param("Home", "Home Assistant started", True, id="single-word"),
+    ],
+)
+async def test_an_enforcing_search_finds_a_hidden_name_as_the_output_scan_does(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    name: str,
+    message: str,
+    listed: bool,
+) -> None:
+    """A config naming the hidden entity by its friendly name is omitted too,
+    by the rule that keeps the name out of a tool's output."""
+    hass.states.async_set("sensor.hidden", "87", {"friendly_name": name})
+    hass.states.async_set(
+        "sensor.avg", "80", {"friendly_name": "Front Door Lock Battery avg"}
+    )
+    await _set_up(hass, "automation", [_automation("Probe", message=message)])
+
+    result = await _search(
+        component_ws, query="probe", visibility={**_HIDING, "enforce": True}
+    )
+
+    assert [hit["alias"] for hit in result["automations"]] == ["Probe"] * listed
+
+
+async def test_an_enforcing_search_keeps_a_config_ending_in_a_device_name(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """A hidden entity named after its device does not count, also where the
+    name ends a text and a longer hidden name exists."""
+    entry = MockConfigEntry(domain="test")
+    entry.add_to_hass(hass)
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("test", "door")},
+        name="Front Door",
+    )
+    hass.states.async_set("sensor.hidden", "1", {"friendly_name": "Front Door"})
+    hass.states.async_set(
+        "sensor.level", "80", {"friendly_name": "Kitchen Battery Level"}
+    )
+    await _set_up(
+        hass, "automation", [_automation("Probe", message="locked the Front Door")]
+    )
+
+    result = await _search(
+        component_ws,
+        query="probe",
+        visibility={
+            "deny_entity_ids": ["sensor.hidden", "sensor.level"],
+            "enforce": True,
+        },
+    )
+
+    assert [hit["alias"] for hit in result["automations"]] == ["Probe"]
+
+
+async def test_a_search_that_does_not_enforce_keeps_the_configs_naming_one(
+    component_ws: MockHAClientWebSocket, configs_naming_a_hidden_sensor: None
+) -> None:
+    """Without enforce mode the filter only declutters the entity results."""
+    result = await _search(component_ws, query="probe", visibility=_HIDING)
+
+    assert result["config_total_matches"] == 5
 
 
 async def test_config_hits_share_one_pagination_window(

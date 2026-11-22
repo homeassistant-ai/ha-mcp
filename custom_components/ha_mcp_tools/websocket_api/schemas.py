@@ -98,16 +98,19 @@ _VISIBILITY_BOOL_KEYS = (
     "exclude_hidden",
     "respect_assist_exposure",
     "allowlist_authorization",
+    "enforce",
 )
 
 
 def _visibility_param_schema() -> Any:
-    """Voluptuous schema for the ``search`` ``visibility`` dict — exactly the ten keys.
+    """Voluptuous schema for the ``search`` ``visibility`` dict — exactly these keys.
 
     The nine hide dimensions plus the ``allowlist_authorization`` precedence flag
     (sent only when this component advertises
     ``search_visibility_allowlist_authorization``; absent means legacy
-    precedence). Enumerating the known keys (PREVENT_EXTRA is voluptuous' default
+    precedence) and the ``enforce`` flag (sent only when it advertises
+    ``search_visibility_enforce``; with it the config records referencing a
+    hidden entity are omitted). Enumerating the known keys (PREVENT_EXTRA is voluptuous' default
     for a nested ``Schema``) makes an unknown key a loud ``invalid_format`` command
     error rather than a silent drop. If a newer server emits an eleventh key to
     this component, the server's error taxonomy converts that into a legacy

@@ -953,7 +953,20 @@ dimension. What it covers:
 - **Other content reads are refused on contact.** An ordinary dashboard config,
   template result, automation/script body, trace, log, or file read whose output
   would surface a hidden entity_id is refused with a generic
-  `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id.
+  `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id. The id
+  counts wherever it stands in the output, also run together with other
+  characters (`12sensor.foo`). A longer word is exempt when it is another
+  entity's own id (`binary_sensor.foo`), or text from the call's own arguments
+  that the result or an error repeats. A leftover reference in a dashboard or
+  an automation, such as `sensor.foo_old` to an entity that no longer exists,
+  is therefore refused while `sensor.foo` is hidden. A hidden entity's friendly
+  name counts too, as a phrase of its own, so a list of names and states is
+  refused like a list of ids. A name does not count where it is, or is part
+  of, a visible entity's, a device's or an area's name (a lock named after its
+  device would otherwise close every listing of that device, so that lock's
+  name and state are returned), nor where the output repeats an argument of the
+  call that held it. A name of a single word is not
+  scanned for: it cannot be told from ordinary text.
 - **Writes naming a hidden entity are concealed too.** The inbound argument scan
   applies to *every* tool, including service calls: a `ha_call_service` targeting
   a hidden entity_id is concealed as not-found, so an agent cannot confirm the
@@ -994,7 +1007,9 @@ camera or image entity too (by denylist or area) when its output is sensitive.
 
 `ha_get_skill_guide` and `ha_search_tools` are always **exempt**: they return
 bundled docs and tool schemas, never Home Assistant data, and their examples can
-name an entity_id you have hidden. The developer-mode `ha_dev_*` tools are
+name an entity_id you have hidden. The same bundled text on a write tool's
+result (the best-practices guide and the checker's warnings) is exempt for
+the same reason. The developer-mode `ha_dev_*` tools are
 exempt too: developer mode is a development and testing override that can
 change settings and replace the running server, and it may bypass entity
 visibility, so a stored security-policy rule naming a hidden entity_id is
@@ -1034,9 +1049,9 @@ concealed — rather than broad decluttering dimensions.
 
 **Honest residual limits.** This is a strong barrier against *incidental*
 exposure, not a cryptographic guarantee. A Jinja template (or code) that *derives*
-a hidden entity's state without ever naming its entity_id — e.g.
-`{{ states | selectattr('state','eq','on') | list | count }}` — cannot be caught
-by a text scan. Treat enforce mode as robust protection against an agent stumbling
+a hidden entity's state without ever naming its entity_id or its friendly name — e.g.
+`{{ states | selectattr('state','eq','on') | list | count }}`, or a list of bare
+states — cannot be caught by a text scan. Treat enforce mode as robust protection against an agent stumbling
 onto hidden entities, not as a boundary against an adversarial prompt author who
 is deliberately trying to exfiltrate a hidden entity's state.
 
