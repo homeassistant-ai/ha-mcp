@@ -122,10 +122,9 @@ def _name_test(names: Mapping[str, tuple[str, ...]]) -> Callable[[str], bool]:
     )
     sizes = sorted({len(name) for name in names})
 
-    def stands_alone(text: str, first: int) -> bool:
+    def stands_alone(text: str, folded: str, first: int) -> bool:
         """Whether a name stands at ``first`` as a phrase of its own, outside
-        every visible name that contains it."""
-        folded = _fold(text)
+        every visible name that contains it. ``folded`` is ``text`` folded."""
         for last in (first + size for size in sizes):
             name = folded[first:last]
             if name not in names or text[last : last + 1].isalnum():
@@ -139,12 +138,15 @@ def _name_test(names: Mapping[str, tuple[str, ...]]) -> Callable[[str], bool]:
         return False
 
     def carries(text: str) -> bool:
+        folded = ""
         for match in pattern.finditer(text):
             first = match.start()
             before = text[max(0, first - 6) : first]
             if before[-1:].isalnum() and not _ESCAPE_BEFORE.search(before):
                 continue
-            if stands_alone(text, first):
+            # Folded once for the text, however many names stand in it.
+            folded = folded or _fold(text)
+            if stands_alone(text, folded, first):
                 return True
         return False
 
