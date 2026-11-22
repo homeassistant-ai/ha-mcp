@@ -1,8 +1,5 @@
 """A Repairs issue's fix flow over Core's REST views, as the Repairs dialog
 drives it.
-
-``HomeAssistantClient`` is at the module-size ratchet line, so these calls live
-here as free functions taking the client rather than growing that module.
 """
 
 from typing import Any, Protocol

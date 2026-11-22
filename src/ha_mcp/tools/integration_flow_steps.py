@@ -29,7 +29,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import Any, NoReturn, cast
+from typing import Any, Literal, NoReturn, cast
 
 from ..client.repair_flows import abort_repair_flow, submit_repair_flow_step
 from ..client.rest_client import HomeAssistantAPIError
@@ -82,6 +82,8 @@ def reset_opened_flows() -> None:
     opened_flows.clear()
 
 
+FlowKind = Literal["setup", "options", "reconfigure", "reauth", "subentry", "repair"]
+
 # FlowTarget.kind -> the flow manager holding its flows.
 _FLOW_MANAGERS = {
     "setup": "config",
@@ -95,15 +97,13 @@ _FLOW_MANAGERS = {
 
 @dataclass(frozen=True)
 class FlowTarget:
-    """The flow a call drives: ``kind`` is ``setup``, ``options``,
-    ``reconfigure``, ``reauth``, ``subentry`` or ``repair``; ``domain`` names the
-    integration whose texts apply. A subentry flow reconfigures when it names
-    a ``subentry_id`` and creates one otherwise. A repair flow fixes
-    ``issue_id``; its texts live under ``strings_key`` (the issue's
-    translation_key, else its issue_id) and are filled with the issue's
-    ``placeholders``."""
+    """The flow a call drives; ``domain`` names the integration whose texts
+    apply. A subentry flow reconfigures when it names a ``subentry_id`` and
+    creates one otherwise. A repair flow fixes ``issue_id``; its texts live
+    under ``strings_key`` (the issue's translation_key, else its issue_id)
+    and are filled with the issue's ``placeholders``."""
 
-    kind: str
+    kind: FlowKind
     domain: str | None
     entry_id: str | None = None
     subentry_type: str | None = None
@@ -139,8 +139,8 @@ class FlowTarget:
 
     @property
     def edits_existing(self) -> bool:
-        """Options, reconfigure, subentry-reconfigure and repair steps are
-        posted with the values they show, as the HA dialog posts them."""
+        """Options, reconfigure, reauth, subentry-reconfigure and repair steps
+        are posted with the values they show, as the HA dialog posts them."""
         return self.kind != "setup" and (
             self.kind != "subentry" or self.subentry_id is not None
         )
@@ -174,12 +174,22 @@ class FlowTarget:
 
 
 def _raise_flow_not_open(target: FlowTarget, flow_id: str) -> NoReturn:
+    # An entry_id with a flow_id names the entry's options flow or the reauth
+    # flow Home Assistant opened for it; once the flow is gone Core's record no
+    # longer says which, and without flow_id the call opens the options flow.
+    of_entry = target.kind == "options"
+    kind = "options or reauth" if of_entry else target.kind
     raise_tool_error(
         create_error_response(
             ErrorCode.RESOURCE_NOT_FOUND,
-            f"No open {target.kind} flow {flow_id!r}: Home Assistant finished "
+            f"No open {kind} flow {flow_id!r}: Home Assistant finished "
             "or aborted it, or restarted",
-            suggestions=["Start the flow again without flow_id."],
+            suggestions=[
+                "A finished flow needs nothing more. Without flow_id this call "
+                "opens the entry's options flow."
+                if of_entry
+                else "Start the flow again without flow_id."
+            ],
             context={"flow_id": flow_id, "flow_kind": target.kind},
         )
     )
@@ -209,7 +219,8 @@ def _record_anchor(kind: str, record: dict[str, Any]) -> tuple[str, str | None] 
 async def _require_opened(client: Any, target: FlowTarget, flow_id: str) -> None:
     """Refuse a flow that was not opened for the call's kind and anchor, so a
     flow_id cannot carry one call's checks over to another flow. A flow this
-    server does not hold (it restarted) is the one Core's record says it is."""
+    server does not hold (it restarted, or Home Assistant opened the flow
+    itself, as it opens a reauth flow) is the one Core's record says it is."""
     if opened_flows.get(flow_id) == target.anchor:
         return
     record = None
@@ -326,7 +337,8 @@ def _form_payload(
     defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The submit for one form: the caller's values, over the values an
-    options or reconfigure form shows, as the HA dialog posts it (#2254).
+    options, reconfigure, reauth or repair form shows, as the HA dialog posts
+    it (#2254).
     Core's schema checks the rest. ``defaults`` answers only the fields the
     form declares and ``config`` leaves out."""
     if step.get("type") != "form":
@@ -467,7 +479,8 @@ async def settle(
                 },
             )
         )
-    if step_type == "abort" and not entry_updated and not step.get("next_flow"):
+    handed_over = target.kind == "repair" and bool(step.get("next_flow"))
+    if step_type == "abort" and not entry_updated and not handed_over:
         await raise_flow_abort(
             client, target.ref, flow_id, step, is_reconfigure=is_reconfigure
         )
@@ -578,10 +591,22 @@ async def _repair_finished(
                 else "The fix flow ended and"
             )
             + " handed over to another flow, next_flow ([flow type, flow_id]); "
-            "result is the config entry that flow belongs to. Continue it with "
-            "ha_set_integration and that flow_id, or in Home Assistant's UI."
+            "result is the config entry that flow belongs to (none for a new "
+            "entry's setup flow). " + _CONTINUE_NEXT_FLOW
         )
     return response
+
+
+# How a caller continues the flow Core names in a result's next_flow.
+_CONTINUE_NEXT_FLOW = (
+    "Continue it with that flow_id, by flow type: config_flow with "
+    "ha_set_integration and the integration's domain (a new entry), or that "
+    "entry's entry_id (its reauth flow; reconfigure=True and an expected_* "
+    "anchor for its reconfigure flow); options_flow with ha_set_integration "
+    "and that entry_id; config_subentries_flow with ha_config_set_helper("
+    "helper_type='config_subentry'), that entry_id and the subentry type. Or "
+    "continue it in Home Assistant's UI."
+)
 
 
 async def _finished_response(
@@ -611,13 +636,22 @@ async def _finished_response(
             "message": f"{target.domain} integration updated successfully",
             "updated": True,
         }
-    return {
+    created: dict[str, Any] = {
         "success": True,
         "entry_id": result.get("entry_id"),
         "title": result.get("title", step.get("title")),
         "domain": target.domain,
         "message": f"{target.domain} integration created successfully",
     }
+    if next_flow := step.get("next_flow"):
+        # Core opened a flow the setup dialog goes on to (scrape, ntfy and smtp
+        # open the new entry's subentry flow, satel_integra its options flow).
+        created["next_flow"] = next_flow
+        created["message"] += (
+            ". Home Assistant opened another flow for the new entry, next_flow "
+            "([flow type, flow_id]). " + _CONTINUE_NEXT_FLOW
+        )
+    return created
 
 
 async def abort_open_flow(
@@ -717,7 +751,8 @@ async def drive_flow(
     abort: bool,
     start: Any,
 ) -> dict[str, Any]:
-    """One call on a setup, options, reconfigure or repair flow."""
+    """One call on a setup, options, reconfigure, reauth, subentry or repair
+    flow."""
     if abort:
         return await abort_open_flow(client, target, flow_id)
     flow_id, step, unsent = await advance_flow(

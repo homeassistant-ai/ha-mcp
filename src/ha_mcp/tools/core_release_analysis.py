@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 
 from ..client.exceptions import HomeAssistantConnectionError, HomeAssistantError
-from .update_release_notes import GITHUB_API_HEADERS
+from .update_release_notes import GITHUB_API_HEADERS, http_problem
 
 logger = logging.getLogger(__name__)
 
@@ -206,13 +206,6 @@ def _tagged_lines(body: str) -> list[dict[str, Any]]:
     return entries
 
 
-def _http_problem(what: str, response: httpx.Response) -> str:
-    problem = f"{what} answered HTTP {response.status_code}"
-    if response.headers.get("X-RateLimit-Remaining") == "0":
-        problem += " (GitHub's API rate limit is used up)"
-    return problem
-
-
 @dataclass
 class _Outcome:
     """What reading one release found."""
@@ -266,7 +259,7 @@ async def _releases_page(
     except ValueError:
         return [], "GitHub's release listing was not JSON"
     if rows is None:
-        return [], _http_problem("GitHub's release listing", response)
+        return [], http_problem("GitHub's release listing", response)
     if not isinstance(rows, list):
         return [], "GitHub's release listing was not a list"
     return [row for row in rows if isinstance(row, dict)], None
@@ -325,7 +318,7 @@ async def _read_monthly(
     except httpx.HTTPError as e:
         return _Outcome(tag, None, url, f"its blog post could not be reached ({e})")
     if response.status_code != 200:
-        return _Outcome(tag, None, url, _http_problem("its blog post", response))
+        return _Outcome(tag, None, url, http_problem("its blog post", response))
     text, entries = _read_blog(response.text)
     notes = {"version": tag, "content": text, "source_url": url} if text else None
     if entries is None:

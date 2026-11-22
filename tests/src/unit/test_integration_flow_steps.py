@@ -28,6 +28,9 @@ from ._backup_core import backup_settings as backup_settings
 from ._integration_flow_steps_core import (
     ERROR_TEXTS,
     EXTERNAL,
+    FOLLOWUP,
+    HANDOVER,
+    HANDOVER_REASON,
     INSTANT,
     MAC,
     MENU,
@@ -635,6 +638,19 @@ async def test_a_setup_flow_that_updates_an_existing_entry_is_reported_as_applie
     assert dict(existing.data) == {"host": "new"}
 
 
+async def test_a_setup_flow_handing_over_to_another_flow_is_its_abort_not_an_entry(
+    hass: HomeAssistant, flow_tools: IntegrationTools
+) -> None:
+    """Core lets a config flow abort with next_flow (improv_ble hands a
+    provisioned device to its own integration's flow this way): no entry was
+    created, so the call fails with Core's reason instead of reporting one."""
+    body = await rejected_call_body(flow_tools.ha_set_integration(domain=HANDOVER))
+
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert body["details"]["reason"] == HANDOVER_REASON
+    assert hass.config_entries.async_entries(HANDOVER) == []
+
+
 async def test_an_entry_without_options_is_refused(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
@@ -681,6 +697,47 @@ async def test_the_reauth_flow_a_repairs_issue_names_is_answered_to_its_success(
         is None
     )
     assert open_flow_ids(hass) == []
+
+
+async def test_a_finished_reauth_flows_id_is_not_reported_as_an_options_flow(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    flow_tools: IntegrationTools,
+    hub: MockConfigEntry,
+) -> None:
+    """Answering again with the flow_id of a reauth flow that already
+    succeeded must not say an options flow is missing, nor point the caller at
+    the call that opens one."""
+    flow_id = await start_reauth(hass, hub)
+    await flow_tools.ha_set_integration(
+        entry_id=hub.entry_id, flow_id=flow_id, config={"host": "new"}
+    )
+
+    body = await rejected_call_body(
+        flow_tools.ha_set_integration(
+            entry_id=hub.entry_id, flow_id=flow_id, config={"host": "new"}
+        )
+    )
+
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert "options or reauth flow" in body["error"]["message"]
+    assert "Start the flow again" not in body["error"]["suggestion"]
+    assert open_flow_ids(hass) == []
+
+
+async def test_a_setup_that_opens_a_follow_up_flow_returns_its_next_flow(
+    hass: HomeAssistant, flow_tools: IntegrationTools
+) -> None:
+    """Core lets a finished setup open the flow its dialog goes on to (scrape
+    opens the new entry's subentry flow, satel_integra its options flow) and
+    names it in next_flow: the answer carries it, so the flow is not left open
+    where the caller cannot see it."""
+    created = await flow_tools.ha_set_integration(domain=FOLLOWUP)
+
+    (entry,) = hass.config_entries.async_entries(FOLLOWUP)
+    (options_flow,) = hass.config_entries.options.async_progress()
+    assert created["entry_id"] == entry.entry_id
+    assert created["next_flow"] == ["options_flow", options_flow["flow_id"]]
 
 
 async def test_a_refused_reauth_answer_shows_cores_field_error_and_keeps_the_flow(

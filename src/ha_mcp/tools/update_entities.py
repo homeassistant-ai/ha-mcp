@@ -56,6 +56,7 @@ def _row(
     features: list[str] | None,
     *,
     platform_known: bool = True,
+    hassio_kind: str | None = None,
 ) -> dict[str, Any]:
     attributes: dict[str, Any] = state.get("attributes") or {}
     return {
@@ -64,7 +65,9 @@ def _row(
         "state": state["state"],
         "update_available": state["state"] == "on",
         "platform": platform,
-        "category": categorize_update(platform, attributes) if platform_known else None,
+        "category": categorize_update(platform, attributes, hassio_kind)
+        if platform_known
+        else None,
         "features": features,
         "can_install": None
         if features is None
@@ -79,9 +82,12 @@ def _bridge_row(row: Any) -> dict[str, Any] | None:
         and isinstance(row.get("state"), str)
         and isinstance(row.get("attributes"), dict)
         and isinstance(row.get("features"), list)
+        and isinstance(row.get("hassio_kind"), str | None)
     ):
         return None
-    return _row(row, row.get("platform"), row["features"])
+    return _row(
+        row, row.get("platform"), row["features"], hassio_kind=row.get("hassio_kind")
+    )
 
 
 async def _bridge_rows(

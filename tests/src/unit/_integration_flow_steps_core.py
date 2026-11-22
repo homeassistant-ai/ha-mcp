@@ -17,9 +17,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import voluptuous as vol
 from homeassistant.config_entries import (
+    SOURCE_USER,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    FlowType,
     OptionsFlow,
 )
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN
@@ -50,6 +52,13 @@ EXTERNAL = "flow_steps_external"
 REJOIN = "flow_steps_rejoin"
 # Its form fails when Core runs the step again.
 REREAD = "flow_steps_reread"
+# Aborts with HANDOVER_REASON, handing over to a setup flow of SINGLE it opens
+# (next_flow), as improv_ble hands a provisioned device to its integration.
+HANDOVER = "flow_steps_handover"
+HANDOVER_REASON = "provision_successful"
+# Creates its entry at once and opens that entry's options flow (next_flow),
+# as satel_integra does; scrape, ntfy and smtp open a subentry flow the same way.
+FOLLOWUP = "flow_steps_followup"
 
 MENU_OPTIONS = ["routing", "tunneling"]
 # STEPS' strings for its pick menu.
@@ -245,6 +254,34 @@ class _RereadFlow(ConfigFlow):
         return self.async_show_form(step_id="user", data_schema=_HOST)
 
 
+class _HandoverFlow(ConfigFlow):
+    VERSION = 1
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        setup = await self.hass.config_entries.flow.async_init(
+            SINGLE, context={"source": SOURCE_USER}
+        )
+        return self.async_abort(
+            reason=HANDOVER_REASON, next_flow=(FlowType.CONFIG_FLOW, setup["flow_id"])
+        )
+
+
+class _FollowUpFlow(_StepsFlow):
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_create_entry(title="Follow-up", data={})
+
+    async def async_on_create_entry(self, result: ConfigFlowResult) -> ConfigFlowResult:
+        options = await self.hass.config_entries.options.async_init(
+            result["result"].entry_id
+        )
+        result["next_flow"] = (FlowType.OPTIONS_FLOW, options["flow_id"])
+        return result
+
+
 _FLOWS: dict[str, type[ConfigFlow]] = {
     STEPS: _StepsFlow,
     MENU: _MenuFlow,
@@ -253,6 +290,8 @@ _FLOWS: dict[str, type[ConfigFlow]] = {
     EXTERNAL: _ExternalFlow,
     REJOIN: _RejoinFlow,
     REREAD: _RereadFlow,
+    HANDOVER: _HandoverFlow,
+    FOLLOWUP: _FollowUpFlow,
 }
 
 

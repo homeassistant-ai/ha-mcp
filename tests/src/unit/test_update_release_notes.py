@@ -1,8 +1,8 @@
 """Release notes and the Core breaking-change analysis of ``ha_manage_updates``.
 
 Updates are entities of Core's ``update`` integration (``_tools_updates_core``);
-GitHub and the Home Assistant blog are served by respx from the real pages cut
-into ``_core_release_pages``.
+GitHub and the Home Assistant blog are served by respx, in the markup of the
+real pages (``_core_release_pages``).
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import pytest
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
@@ -26,8 +27,14 @@ from ._core_release_pages import (
     RELEASES,
     blog_page,
     listing,
+    patch_release,
     release,
 )
+from ._hassio_updates_core import core_versions as core_versions
+from ._hassio_updates_core import hassio_updates as hassio_updates
+from ._tools_addons_core import Supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
 from ._tools_updates_core import (
     CORE_UPDATE,
     SoftwareUpdate,
@@ -40,7 +47,6 @@ from ._tools_updates_core import web as web
 
 RELEASE_URL = "https://github.com/owner/repo/releases/tag/v1.0.0"
 RAW = "https://raw.githubusercontent.com/owner/repo/v1.0.0/"
-CORE_TITLE = "Home Assistant Core"
 
 
 class UnreachableUpdate(SoftwareUpdate):
@@ -72,18 +78,9 @@ async def get_update(
     return await manage_updates(client, action="get", entity_ids=[update.entity_id])
 
 
-async def core_analysis(
-    hass: HomeAssistant, client: HomeAssistantClient, installed: str, latest: str
-) -> dict[str, Any]:
-    """``get`` with release analysis on a Core update from ``installed`` to ``latest``."""
-    assert await async_setup_component(hass, "repairs", {})
-    await set_up_updates(
-        hass,
-        SoftwareUpdate(
-            CORE_UPDATE, title=CORE_TITLE, installed=installed, latest=latest
-        ),
-        integration="hassio",
-    )
+async def core_analysis(client: HomeAssistantClient) -> dict[str, Any]:
+    """``get`` with release analysis on Core's own Core update, which offers
+    the update a test sets with ``core_versions``."""
     return await manage_updates(
         client, action="get", entity_ids=[CORE_UPDATE], include_release_notes=True
     )
@@ -139,6 +136,23 @@ class TestReleaseNotes:
 
         assert "release_notes" not in result
         assert RELEASE_URL in result["release_notes_hint"]
+
+    async def test_github_rate_limit_is_named_in_the_hint(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    ) -> None:
+        """Otherwise the caller cannot tell a used-up limit from missing notes."""
+        web.serve(
+            "https://api.github.com/repos/owner/repo/releases/tags/v1.0.0",
+            status=403,
+            headers={"X-RateLimit-Remaining": "0"},
+            json={"message": "API rate limit exceeded"},
+        )
+
+        result = await get_update(
+            hass, core_client, SoftwareUpdate("update.thing", release_url=RELEASE_URL)
+        )
+
+        assert "HTTP 403" in result["release_notes_hint"]
 
     async def test_an_update_without_a_release_link_still_says_notes_are_missing(
         self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
@@ -223,23 +237,22 @@ class TestReleaseNotes:
             RAW + "RELEASES.md",
         ]
 
+    @pytest.mark.parametrize("core_versions", [("2026.11.1", "2026.11.2")])
     async def test_core_update_gets_the_github_release_of_the_offered_version(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
+        entity_registry: er.EntityRegistry,
     ) -> None:
         """The Core update is known by what it is, whatever its entity_id."""
         web.serve(core_release("2026.11.2"), json=release("2026.11.2"))
+        renamed = "update.renamed_by_the_user"
+        entity_registry.async_update_entity(CORE_UPDATE, new_entity_id=renamed)
+        await hass.async_block_till_done()
 
-        result = await get_update(
-            hass,
-            core_client,
-            SoftwareUpdate(
-                "update.renamed_by_the_user",
-                title=CORE_TITLE,
-                installed="2026.11.1",
-                latest="2026.11.2",
-            ),
-            integration="hassio",
-        )
+        result = await manage_updates(core_client, action="get", entity_ids=[renamed])
 
         assert result["release_notes"] == release("2026.11.2")["body"]
 
@@ -266,81 +279,95 @@ class TestCoreReleaseAnalysis:
     """``get`` with ``include_release_notes`` reads every stable Core release
     after the installed version up to the offered one."""
 
+    @pytest.mark.parametrize("core_versions", [("2026.10.4", "2026.11.2")])
     async def test_breaking_changes_of_a_monthly_release_are_read_from_its_blog(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
         """#3170: every Core update read as no breaking changes, nothing checked."""
-        web.serve(
-            RELEASES,
-            json=listing(
-                "2026.11.2", "2026.11.1", "2026.11.0", "2026.11.0b6", "2026.10.4"
-            ),
+        web.listings[RELEASES] = listing(
+            "2026.11.2", "2026.11.1", "2026.11.0", "2026.11.0b6", "2026.10.4"
         )
         web.serve(BLOG_202611, text=blog_page())
 
-        result = await core_analysis(hass, core_client, "2026.10.4", "2026.11.2")
+        result = await core_analysis(core_client)
 
         changes = result["breaking_changes"]
         assert [
             (entry["version"], entry["integration"], entry["domains"])
             for entry in changes["entries"]
         ] == [
-            ("2026.11.0", "AdGuard Home", ["adguard"]),
-            ("2026.11.0", "Alert card", []),
-            ("2026.11.0", "Calendar and Sun", ["calendar", "sun"]),
+            ("2026.11.0", "Example Hub", ["example_hub"]),
+            ("2026.11.0", "Status card", []),
+            ("2026.11.0", "Calendar and Tide", ["calendar", "tide"]),
         ]
         assert changes["versions_checked"] == ["2026.11.0", "2026.11.1", "2026.11.2"]
         assert changes["versions_unverified"] == []
 
+    @pytest.mark.parametrize("core_versions", [("2026.10.4", "2026.11.0")])
     async def test_glossary_tooltips_stay_out_of_a_breaking_change_description(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
-        web.serve(RELEASES, json=listing("2026.11.0", "2026.10.4"))
+        web.listings[RELEASES] = listing("2026.11.0", "2026.10.4")
         web.serve(BLOG_202611, text=blog_page())
 
-        result = await core_analysis(hass, core_client, "2026.10.4", "2026.11.0")
+        result = await core_analysis(core_client)
 
-        [alert_card] = [
+        [status_card] = [
             e
             for e in result["breaking_changes"]["entries"]
-            if e["integration"] == "Alert card"
+            if e["integration"] == "Status card"
         ]
-        assert alert_card["description"].startswith(
-            "The Alert card now shows its color and its pulse only while the entity "
-            "is in an alert state"
+        assert status_card["description"].startswith(
+            "The Status card now changes color only while the entity is in a "
+            "placeholder state."
         )
-        assert "An entity represents" not in alert_card["description"]
+        assert "glossary definition" not in status_card["description"]
 
+    @pytest.mark.parametrize("core_versions", [("2026.10.4", "2026.11.0")])
     async def test_the_release_post_text_comes_with_the_analysis(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
-        web.serve(RELEASES, json=listing("2026.11.0", "2026.10.4"))
+        web.listings[RELEASES] = listing("2026.11.0", "2026.10.4")
         web.serve(BLOG_202611, text=blog_page())
 
-        result = await core_analysis(hass, core_client, "2026.10.4", "2026.11.0")
+        result = await core_analysis(core_client)
 
         [notes] = result["multi_version_release_notes"]
         assert (notes["version"], notes["source_url"]) == ("2026.11.0", BLOG_202611)
-        assert notes["content"].startswith("2026.11: A lot in store!")
-        assert "AdGuard Home" in notes["content"]
+        assert notes["content"].startswith("2026.11: Placeholder title")
+        assert "Example Hub" in notes["content"]
 
+    @pytest.mark.parametrize("core_versions", [("2026.10.0", "2026.10.2")])
     async def test_only_stable_releases_inside_the_range_are_checked(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
-        web.serve(
-            RELEASES,
-            json=listing(
-                "2026.11.0",
-                "2026.11.0b6",
-                "2026.10.4",
-                "2026.10.3",
-                "2026.10.2",
-                "2026.10.1",
-                "2026.10.0",
-            ),
+        web.listings[RELEASES] = listing(
+            "2026.11.0",
+            "2026.11.0b6",
+            "2026.10.4",
+            "2026.10.3",
+            "2026.10.2",
+            "2026.10.1",
+            "2026.10.0",
         )
 
-        result = await core_analysis(hass, core_client, "2026.10.0", "2026.10.2")
+        result = await core_analysis(core_client)
 
         assert result["breaking_changes"]["versions_checked"] == [
             "2026.10.1",
@@ -348,21 +375,26 @@ class TestCoreReleaseAnalysis:
         ]
         assert BLOG_202611 not in web.requested
 
+    @pytest.mark.parametrize("core_versions", [("2026.10.0", "2026.10.2")])
     async def test_a_tagged_patch_release_line_is_a_breaking_change(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
-        web.serve(RELEASES, json=listing("2026.10.2", "2026.10.1", "2026.10.0"))
+        web.listings[RELEASES] = listing("2026.10.2", "2026.10.1", "2026.10.0")
 
-        result = await core_analysis(hass, core_client, "2026.10.0", "2026.10.2")
+        result = await core_analysis(core_client)
 
         assert result["breaking_changes"]["entries"] == [
             {
                 "version": "2026.10.1",
-                "integration": "omnilogic",
-                "description": "Remove user-configurable polling interval from "
-                "`omnilogic` ([@tr4nt0r] - [#184380]) ([omnilogic docs]) "
-                "(breaking-change)",
-                "domains": ["omnilogic"],
+                "integration": "example_pool",
+                "description": "Remove the placeholder interval from "
+                "`example_pool` ([@contributor-three] - [#100020]) "
+                "([example_pool docs]) (breaking-change)",
+                "domains": ["example_pool"],
                 "installed": False,
             }
         ]
@@ -374,7 +406,7 @@ class TestCoreReleaseAnalysis:
             pytest.param(
                 {
                     "json": [
-                        release("2026.11.0", "Home Assistant 2026.11 is here!\n"),
+                        release("2026.11.0", "Placeholder announcement.\n"),
                         release("2026.10.4"),
                     ]
                 },
@@ -390,9 +422,23 @@ class TestCoreReleaseAnalysis:
             ),
             pytest.param(
                 {"json": listing("2026.11.0", "2026.10.4")},
-                {"text": blog_page("<h2>All changes</h2>\n<p>Full changelog</p>\n")},
+                {"text": blog_page("<h2>All changes</h2>\n<p>Placeholder</p>\n")},
                 "2026.11.0",
                 id="no-breaking-changes-section",
+            ),
+            pytest.param(
+                {"json": listing("2026.11.0", "2026.10.4")},
+                {
+                    "text": blog_page(
+                        '<h2>Backward-incompatible changes <a class="title-link"'
+                        ' name="backward-incompatible-changes"'
+                        ' href="#backward-incompatible-changes"></a>\n</h2>\n'
+                        "<p>Placeholder introduction.</p>\n"
+                        "<h2>All changes</h2>\n"
+                    )
+                },
+                "2026.11.0",
+                id="empty-breaking-changes-section",
             ),
             pytest.param(
                 {
@@ -406,9 +452,11 @@ class TestCoreReleaseAnalysis:
             ),
         ],
     )
+    @pytest.mark.parametrize("core_versions", [("2026.10.4", "2026.11.0")])
     async def test_a_release_that_could_not_be_read_is_never_reported_as_checked(
         self,
         hass: HomeAssistant,
+        hassio_updates: Supervisor,
         core_client: HomeAssistantClient,
         web: Web,
         github: dict[str, Any],
@@ -418,7 +466,7 @@ class TestCoreReleaseAnalysis:
         web.serve(RELEASES, **github)
         web.serve(BLOG_202611, **blog)
 
-        result = await core_analysis(hass, core_client, "2026.10.4", "2026.11.0")
+        result = await core_analysis(core_client)
 
         changes = result["breaking_changes"]
         assert [u["version"] for u in changes["versions_unverified"]] == [unverified]
@@ -426,23 +474,33 @@ class TestCoreReleaseAnalysis:
         assert changes["count"] == 0
         assert any(unverified in warning for warning in result["warnings"])
 
+    @pytest.mark.parametrize("core_versions", [("2026.11.2", "2026.12.0b1")])
     async def test_a_beta_target_is_reported_not_guessed(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
-        result = await core_analysis(hass, core_client, "2026.11.2", "2026.12.0b1")
+        result = await core_analysis(core_client)
 
         assert [
             u["version"] for u in result["breaking_changes"]["versions_unverified"]
         ] == [">2026.11.2,<=2026.12.0b1"]
-        assert RELEASES not in web.requested
+        assert web.listing_pages(RELEASES) == []
 
+    @pytest.mark.parametrize("core_versions", [("2026.9.4", "2026.11.0")])
     async def test_releases_older_than_the_listing_are_reported_unverified(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
-        web.serve(RELEASES, json=listing("2026.11.0", "2026.10.4"))
+        web.listings[RELEASES] = listing("2026.11.0", "2026.10.4")
         web.serve(BLOG_202611, text=blog_page())
 
-        result = await core_analysis(hass, core_client, "2026.9.4", "2026.11.0")
+        result = await core_analysis(core_client)
 
         changes = result["breaking_changes"]
         assert changes["versions_checked"] == ["2026.10.4", "2026.11.0"]
@@ -450,43 +508,97 @@ class TestCoreReleaseAnalysis:
             ">2026.9.4,<2026.10.4"
         ]
 
+    @pytest.mark.parametrize("core_versions", [("2025.1.0", "2025.1.150")])
+    async def test_a_range_longer_than_a_listing_page_is_checked_in_full(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
+    ) -> None:
+        newer = [f"2025.1.{n}" for n in range(150, 0, -1)]
+        web.listings[RELEASES] = [*map(patch_release, newer), release("2025.1.0", "")]
+
+        result = await core_analysis(core_client)
+
+        changes = result["breaking_changes"]
+        assert changes["versions_checked"] == newer[::-1]
+        assert changes["versions_unverified"] == []
+
+    @pytest.mark.parametrize("core_versions", [("2025.1.0", "2025.2.2000")])
+    async def test_the_listing_stops_at_its_page_limit_and_says_what_it_missed(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
+    ) -> None:
+        """A listing that never reaches the installed version is not paged
+        through to its end."""
+        tags = [f"2025.2.{n}" for n in range(2000, 0, -1)]
+        web.listings[RELEASES] = list(map(patch_release, tags))
+
+        result = await core_analysis(core_client)
+
+        changes = result["breaking_changes"]
+        oldest = changes["versions_checked"][0]
+        assert len(changes["versions_checked"]) < len(tags)
+        assert [u["version"] for u in changes["versions_unverified"]] == [
+            f">2025.1.0,<{oldest}"
+        ]
+
+    @pytest.mark.parametrize("core_versions", [("2026.10.4", "2026.11.0")])
     async def test_an_entry_says_whether_a_loaded_integration_is_concerned(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
         assert await async_setup_component(hass, "calendar", {})
-        web.serve(RELEASES, json=listing("2026.11.0", "2026.10.4"))
+        web.listings[RELEASES] = listing("2026.11.0", "2026.10.4")
         web.serve(BLOG_202611, text=blog_page())
 
-        result = await core_analysis(hass, core_client, "2026.10.4", "2026.11.0")
+        result = await core_analysis(core_client)
 
         changes = result["breaking_changes"]
         assert [(e["integration"], e["installed"]) for e in changes["entries"]] == [
-            ("AdGuard Home", False),
-            ("Alert card", None),
-            ("Calendar and Sun", True),
+            ("Example Hub", False),
+            ("Status card", None),
+            ("Calendar and Tide", True),
         ]
         assert changes["affecting_installed"] == 1
 
+    @pytest.mark.parametrize("core_versions", [("2026.10.4", "2026.11.0")])
     async def test_an_integration_with_a_config_entry_counts_as_installed(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
         """Its entry may not be loaded (failed or disabled); it is still installed."""
-        MockConfigEntry(domain="adguard").add_to_hass(hass)
-        web.serve(RELEASES, json=listing("2026.11.0", "2026.10.4"))
+        MockConfigEntry(domain="example_hub").add_to_hass(hass)
+        web.listings[RELEASES] = listing("2026.11.0", "2026.10.4")
         web.serve(BLOG_202611, text=blog_page())
 
-        result = await core_analysis(hass, core_client, "2026.10.4", "2026.11.0")
+        result = await core_analysis(core_client)
 
-        assert "adguard" in result["installed_integrations"]
-        [adguard] = [
+        assert "example_hub" in result["installed_integrations"]
+        [hub] = [
             e
             for e in result["breaking_changes"]["entries"]
-            if e["integration"] == "AdGuard Home"
+            if e["integration"] == "Example Hub"
         ]
-        assert adguard["installed"] is True
+        assert hub["installed"] is True
 
+    @pytest.mark.parametrize("core_versions", [("2026.10.4", "2026.11.0")])
     async def test_repairs_issues_core_says_will_break_are_listed(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
     ) -> None:
         assert await async_setup_component(hass, "repairs", {})
         for issue_id, breaks in (("deprecated_yaml", "2026.12.0"), ("other", None)):
@@ -499,9 +611,9 @@ class TestCoreReleaseAnalysis:
                 severity=ir.IssueSeverity.WARNING,
                 translation_key=issue_id,
             )
-        web.serve(RELEASES, json=listing("2026.11.0", "2026.10.4"))
+        web.listings[RELEASES] = listing("2026.11.0", "2026.10.4")
 
-        result = await core_analysis(hass, core_client, "2026.10.4", "2026.11.0")
+        result = await core_analysis(core_client)
 
         assert [
             (issue["domain"], issue["issue_id"], issue["breaks_in_ha_version"])

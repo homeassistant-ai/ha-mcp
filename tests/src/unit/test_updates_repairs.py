@@ -102,6 +102,7 @@ async def test_an_issue_home_assistant_does_not_hold_is_not_found_per_item(
             ],
         )
 
+    assert result["success"] is False
     assert result["succeeded"] == 1
     assert result["failed"] == 1
     error = result["results"][0]

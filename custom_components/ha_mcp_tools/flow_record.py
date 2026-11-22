@@ -4,7 +4,8 @@ Core's REST and WebSocket APIs answer a flow's step but not what the flow was
 started for: its source, the entry a reconfigure flow edits, or the issue a
 Repairs fix flow fixes. The flow manager holding the flow knows them, so a
 server that is handed a ``flow_id`` it did not open itself (it restarted
-since) reads the target here.
+since, or Core opened the flow, as it opens a reauth flow) reads the target
+here.
 """
 
 from __future__ import annotations

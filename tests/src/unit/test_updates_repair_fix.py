@@ -28,6 +28,8 @@ from ._repair_flows_core import (
     HANDOFF_ABORT,
     MENU,
     PROGRESS,
+    STEP_DEVICE,
+    STEP_PLACEHOLDER,
     SUCCESS_REASON_ABORT,
     UNFIXABLE,
     issue_exists,
@@ -67,6 +69,16 @@ async def test_the_first_call_shows_cores_step_and_answering_it_fixes_the_issue(
     assert fixed["create_entry_text"] == "The kettle works again."
     assert not issue_exists(hass, CONFIRM)
     assert open_fix_flows(hass) == {}
+
+
+async def test_a_steps_own_placeholder_fills_its_text_over_the_issues(
+    fix_tools: UpdateTools,
+) -> None:
+    """Where the step and the issue both fill a placeholder, the text shows
+    the step's value, as the Repairs dialog does."""
+    step = await _fix(fix_tools, STEP_PLACEHOLDER)
+
+    assert step["title"] == f"Replace {STEP_DEVICE}"
 
 
 async def test_a_refused_answer_keeps_the_flow_open_and_a_corrected_one_fixes(

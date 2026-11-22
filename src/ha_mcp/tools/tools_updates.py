@@ -1,9 +1,6 @@
-"""
-Update management tools for Home Assistant MCP server.
-
-This module provides tools for listing available updates, getting release notes,
-and retrieving system version information.
-"""
+"""``ha_manage_updates``: Home Assistant's update entities as the Updates page
+and the update dialog act on them, Supervisor's release channel, and Repairs
+issues (ignore, un-ignore, fix)."""
 
 import logging
 from typing import Annotated, Any, NoReturn
@@ -68,12 +65,6 @@ _BACKUP_OPTIONS = {
     "os": "core_backup_before_update",
     "addons": "add_on_backup_before_update",
 }
-_READBACK_FIELDS = (
-    "installed_version",
-    "latest_version",
-    "skipped_version",
-    "in_progress",
-)
 
 
 def _pending(row: dict[str, Any]) -> bool:
@@ -111,13 +102,41 @@ def _backup_for(
     return option is not None and settings.get(option) is True
 
 
+def _offers_install(row: dict[str, Any]) -> bool:
+    """The dialog's install button is enabled (the frontend's
+    ``updateButtonIsDisabled``): an update is pending, or the offered version
+    is the skipped one."""
+    latest = row.get("latest_version")
+    return bool(row["update_available"]) or (
+        latest is not None and row.get("skipped_version") == latest
+    )
+
+
 def _version_for(row: dict[str, Any], version: str | None) -> str | None:
     """The version the install asks for: the caller's, else the one the row
-    offered when the update installs a chosen version, as the dialog does."""
+    offered when the update installs a chosen version and the dialog offers the
+    install, as the dialog does; otherwise none, and Core decides."""
     if version is not None or "specific_version" not in _features(row):
         return version
     latest: str | None = row.get("latest_version")
-    return latest
+    return latest if _offers_install(row) else None
+
+
+def _install_request(
+    row: dict[str, Any],
+    backup: bool | None,
+    version: str | None,
+    settings: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The result item and the service data of the install of ``row``."""
+    item: dict[str, Any] = {"entity_id": row["entity_id"]}
+    data: dict[str, Any] = {}
+    item["backup"] = _backup_for(row, backup, settings)
+    if item["backup"]:
+        data["backup"] = True
+    if (sent := _version_for(row, version)) is not None:
+        data["version"] = item["version"] = sent
+    return item, data
 
 
 def _resolve_targets(
@@ -153,22 +172,25 @@ def _resolve_targets(
 def _unanswered_install(
     item: dict[str, Any], error: HomeAssistantConnectionError
 ) -> dict[str, Any]:
-    """The item of an install Home Assistant was sent and did not answer: it
-    runs on, so it is neither a failure nor something to send again."""
-    why = (
-        "had not finished it within the request timeout"
-        if error.timed_out
-        else "the connection dropped before it answered"
-    )
-    return {
-        "success": True,
-        "partial": True,
-        **item,
-        "message": f"Home Assistant was sent this install and {why}; the "
-        "install keeps running, and a Core or OS update restarts Home "
-        "Assistant. Read the update again with action='get'; do not "
-        "send the install again.",
-    }
+    """The item of an install Home Assistant was sent and did not answer: not
+    a failure. After a timeout it runs on; after a dropped connection (a Core
+    or OS update restarts Home Assistant) its outcome is unknown."""
+    if error.timed_out:
+        message = (
+            "Home Assistant was sent this install and had not finished it "
+            "within the request timeout; the install keeps running, and a Core "
+            "or OS update restarts Home Assistant. Read the update again with "
+            "action='get'; do not send the install again."
+        )
+    else:
+        message = (
+            "Home Assistant was sent this install and the connection dropped "
+            "before it answered, so its outcome is unknown. Read the update "
+            "with action='get': it is running if in_progress is true, done if "
+            "installed_version changed, and otherwise it did not run and can "
+            "be sent again."
+        )
+    return {"success": True, "partial": True, **item, "message": message}
 
 
 def _unconfirmed_installs(
@@ -400,6 +422,24 @@ class UpdateTools:
             "asked for."
         ]
 
+    async def _send_update_call(
+        self, action: str, row: dict[str, Any], data: dict[str, Any]
+    ) -> dict[str, Any]:
+        reply: dict[str, Any] = await self._client.send_websocket_message(
+            {
+                "type": "call_service",
+                "domain": "update",
+                "service": action,
+                "target": {"entity_id": row["entity_id"]},
+                "service_data": data,
+                # Core answers an install once it has finished, so it gets
+                # the client's request timeout rather than a fast command's.
+                "_wait_timeout": self._client.timeout,
+            },
+            expected_error_codes=_CORE_REFUSALS,
+        )
+        return reply
+
     async def _call_update_service(
         self,
         action: str,
@@ -409,33 +449,32 @@ class UpdateTools:
         settings: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """One ``update.<action>`` over WebSocket per target; Core's refusal is
-        that item's error. An install that was sent and got no answer ends the
-        batch as a partial item; any other transport failure propagates."""
+        that item's error, and a restored target is refused unsent. An install
+        that was sent and got no answer ends the batch as a partial item; any
+        other transport failure propagates."""
         results: list[dict[str, Any]] = []
         for row in targets:
             item: dict[str, Any] = {"entity_id": row["entity_id"]}
+            if row.get("restored"):
+                # Core's service skips an entity whose integration is not
+                # loaded and answers success.
+                results.append(
+                    create_error_response(
+                        ErrorCode.ENTITY_UNAVAILABLE,
+                        f"{row['entity_id']} is restored: its integration is not "
+                        "loaded, so Home Assistant would skip it without acting.",
+                        context=item,
+                        suggestions=[
+                            "Check its integration under Settings > Devices & services"
+                        ],
+                    )
+                )
+                continue
             data: dict[str, Any] = {}
             if action == "install":
-                item["backup"] = _backup_for(row, backup, settings)
-                if item["backup"]:
-                    data["backup"] = True
-                if (sent := _version_for(row, version)) is not None:
-                    data["version"] = item["version"] = sent
+                item, data = _install_request(row, backup, version, settings)
             try:
-                reply = await self._client.send_websocket_message(
-                    {
-                        "type": "call_service",
-                        "domain": "update",
-                        "service": action,
-                        "target": {"entity_id": row["entity_id"]},
-                        "service_data": data,
-                        # Core answers an install once it has finished, so it
-                        # gets the client's request timeout rather than a fast
-                        # command's.
-                        "_wait_timeout": self._client.timeout,
-                    },
-                    expected_error_codes=_CORE_REFUSALS,
-                )
+                reply = await self._send_update_call(action, row, data)
             except HomeAssistantCommandNotSent:
                 raise
             except HomeAssistantConnectionError as e:
@@ -513,8 +552,8 @@ class UpdateTools:
         return response
 
     async def _read_back(self, action: str, results: list[dict[str, Any]]) -> list[str]:
-        """Add the fresh row's versions and progress to each successful item;
-        the warning when the rows could not be read again."""
+        """Add the fresh row to each successful item; the warning when the rows
+        could not be read again."""
         try:
             rows, _ = await read_update_rows(self._client)
         except HomeAssistantError as e:
@@ -525,7 +564,7 @@ class UpdateTools:
         fresh = {row["entity_id"]: row for row in rows}
         for item in results:
             if item["success"] and (row := fresh.get(item["entity_id"])):
-                item.update({field: row.get(field) for field in _READBACK_FIELDS})
+                item.update({**row, **item})
         return []
 
     async def _refresh_updates(self, include_skipped: bool) -> dict[str, Any]:
@@ -655,7 +694,8 @@ class UpdateTools:
                 description="For install with entity_ids: the version to install "
                 "instead of latest_version. Home Assistant refuses it for an "
                 "update without the 'specific_version' feature. Omitted, such an "
-                "update is asked for the latest_version this call read, as the "
+                "update that is pending, or whose latest_version is the skipped "
+                "one, is asked for the latest_version this call read, as the "
                 "update dialog does.",
                 default=None,
             ),
@@ -719,38 +759,34 @@ class UpdateTools:
             ),
         ] = False,
     ) -> dict[str, Any]:
-        """Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore, fix).
+        """Manage Home Assistant updates (list, get, refresh, install, skip, clear_skipped, set_channel) and Repairs issues (ignore, unignore, fix).
 
-        Covers Core, OS, supervisor, apps (add-ons), device firmware, and
-        Marketplace update entities, plus the Repairs issues in Settings > System > Repairs.
-        Repairs are listed by ha_get_overview (not here); pass their domain and
-        issue_id to 'ignore_repair' / 'unignore_repair' / 'fix_repair'. In Read
-        Only Mode the read actions ('list', 'get') stay available; write
-        actions are blocked.
+        Covers Core, OS, Supervisor, apps (add-ons), device firmware and
+        Marketplace update entities, plus the issues under Settings > System >
+        Repairs. Do not use it to find Repairs issues (ha_get_overview lists
+        them) or to manage an app beyond its update (ha_manage_app).
 
-        'fix_repair' runs the fix flow of an issue whose is_fixable is true, as
-        the Repairs dialog does: the first call returns Home Assistant's step (a
-        form's fields and texts, or a menu's options) and its flow_id; answer
-        it with config or menu_choice and that flow_id until the result says
+        An update row is Home Assistant's state with all its attributes
+        (update_percentage shows an install's progress) plus platform,
+        category, features (Home Assistant's feature names) and can_install.
+        Without the ha_mcp_tools component, features and can_install are None
+        and warnings says so; Home Assistant then refuses what an update does
+        not support. In Read Only Mode only 'list' and 'get' run.
+
+        'install' blocks until each update finishes, which takes minutes, and
+        a Core or OS update restarts Home Assistant. An install that comes
+        back without Home Assistant's answer is a partial item whose message
+        says whether it keeps running or must be read again before a resend,
+        and not_started lists the batch targets that were not sent. An update
+        whose integration is not loaded (restored: true) is listed but not
+        written to. When this server runs as an app, its own
+        app's update (runs_this_server true) is sent last: installing it
+        restarts this server, so that call ends without an answer; reconnect
+        and read it with action='get'. Finished updates drop out of 'list',
+        which also returns ha_mcp_update, this MCP server's own update status.
+
+        A fix flow runs as the Repairs dialog runs it, until the result says
         the issue is fixed or the flow aborted.
-
-        An update carries Home Assistant's attributes (update_percentage shows
-        an install's progress) plus platform, category, features (Home
-        Assistant's feature names, such as 'install', 'backup',
-        'specific_version', 'release_notes') and can_install. Without the
-        ha_mcp_tools component, features and can_install are None and warnings
-        says so; Home Assistant then refuses what an update does not support.
-
-        'install' blocks until each update finishes (minutes). One that outlasts
-        the request timeout, or a Core update restarting Home Assistant, comes
-        back as a partial item: the install keeps running and must not be sent
-        again, and not_started lists the batch targets that were not sent.
-        When this server runs as an app, its own app's update (runs_this_server
-        true) is sent last: installing it restarts this server, so that call
-        ends without an answer; reconnect and read it with action='get'.
-        Confirm with action='get'; finished updates drop out of 'list', which also
-        returns ha_mcp_update — this MCP server's own update status {current,
-        latest, update_available; python_required + upgrade_command if it needs another Python}.
 
         EXAMPLES:
         - Pre-update analysis: ha_manage_updates(action="get", entity_ids=["update.home_assistant_core_update"], include_release_notes=True)

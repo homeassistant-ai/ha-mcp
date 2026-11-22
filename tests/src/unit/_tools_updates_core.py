@@ -23,6 +23,8 @@ from homeassistant.components.update import (
     UpdateEntityFeature,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.setup import async_setup_component
@@ -130,6 +132,41 @@ async def set_up_platforms(
     await hass.async_block_till_done()
 
 
+def restore_update(hass: HomeAssistant, entity_registry: er.EntityRegistry) -> str:
+    """An update entity Core restored from its registry: its integration did
+    not set it up again, so Core holds only its placeholder state."""
+    entry = entity_registry.async_get_or_create(
+        "update",
+        "test",
+        "gone",
+        suggested_object_id="gone",
+        supported_features=UpdateEntityFeature.INSTALL,
+    )
+    entry.write_unavailable_state(hass)
+    return entry.entity_id
+
+
+@pytest.fixture(params=[False, True], ids=["without-component", "with-component"])
+async def either_client(
+    request: pytest.FixtureRequest,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+) -> HomeAssistantClient:
+    """``core_client``, and the same with the component's commands registered."""
+    if request.param:
+        from custom_components.ha_mcp_tools import websocket_api
+
+        websocket_api.async_register_commands(hass)
+    return core_client
+
+
+async def core_refusal(hass: HomeAssistant, service: str, **data: Any) -> str:
+    """The text Core refuses ``update.<service>`` with, called in process."""
+    with pytest.raises(HomeAssistantError) as refusal:
+        await hass.services.async_call("update", service, data, blocking=True)
+    return str(refusal.value)
+
+
 def supervisor_info(channel: UpdateChannel) -> dict[str, Any]:
     """``GET /supervisor/info`` as Supervisor answers it on ``channel``, built
     from aiohasupervisor's model."""
@@ -170,11 +207,14 @@ class Web:
     def __init__(self) -> None:
         self.pages: dict[str, dict[str, Any]] = {}
         self.hosts: dict[str, dict[str, Any]] = {}
+        # Listings GitHub pages through, by URL without the query.
+        self.listings: dict[str, list[dict[str, Any]]] = {}
         self.unreachable: set[str] = set()
         self.requested: list[str] = []
 
     def serve(self, url: str, status: int = 200, **response: Any) -> None:
-        """Answer ``url`` with ``httpx.Response(status, **response)``."""
+        """Answer ``url``, with or without a query, with
+        ``httpx.Response(status, **response)``."""
         self.pages[url] = {"status_code": status, **response}
 
     def answer(self, request: httpx.Request) -> httpx.Response:
@@ -182,10 +222,31 @@ class Web:
         self.requested.append(url)
         if url in self.unreachable:
             raise httpx.ConnectError("upstream unreachable", request=request)
-        page = self.pages.get(url, self.hosts.get(request.url.host))
+        path = url.partition("?")[0]
+        if path in self.listings:
+            return httpx.Response(200, json=_page(self.listings[path], request))
+        page = self.pages.get(
+            url, self.pages.get(path, self.hosts.get(request.url.host))
+        )
         if page is None:
             return httpx.Response(404)
         return httpx.Response(**{"status_code": 200, **page})
+
+    def listing_pages(self, url: str) -> list[int]:
+        """The pages of the listing at ``url`` that were asked for, in order."""
+        return [
+            int(httpx.URL(u).params.get("page", "1"))
+            for u in self.requested
+            if u.partition("?")[0] == url
+        ]
+
+
+def _page(rows: list[dict[str, Any]], request: httpx.Request) -> list[dict[str, Any]]:
+    """The page of ``rows`` a request asks for, as GitHub pages a listing
+    (30 rows unless ``per_page`` says otherwise)."""
+    per_page = int(request.url.params.get("per_page", "30"))
+    page = int(request.url.params.get("page", "1"))
+    return rows[(page - 1) * per_page : page * per_page]
 
 
 @pytest.fixture

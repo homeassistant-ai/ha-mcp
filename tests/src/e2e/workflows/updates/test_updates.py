@@ -632,6 +632,40 @@ class TestManageUpdates:
                 expected_error="Invalid action",
             )
 
+    async def test_install_of_an_up_to_date_update_needs_a_version(self, mcp_client):
+        """Demo's update with nothing pending (installed equals latest) offers
+        install at a chosen version: without one Home Assistant refuses the
+        item; with its installed version it reinstalls it."""
+        entity_id = "update.demo_no_update"
+        async with MCPAssertions(mcp_client) as mcp:
+            current = await mcp.call_tool_success(
+                "ha_manage_updates", {"action": "get", "entity_ids": [entity_id]}
+            )
+            assert current["installed_version"] == current["latest_version"], current
+
+            refused = await safe_call_tool(
+                mcp_client,
+                "ha_manage_updates",
+                {"action": "install", "entity_ids": [entity_id]},
+            )
+            [item] = refused["results"]
+            assert (item["success"], item["entity_id"]) == (False, entity_id), refused
+            assert item["ha_error_code"] == "home_assistant_error", refused
+
+            installed = await mcp.call_tool_success(
+                "ha_manage_updates",
+                {
+                    "action": "install",
+                    "entity_ids": [entity_id],
+                    "version": current["installed_version"],
+                },
+            )
+            [item] = installed["results"]
+            assert (item["success"], item["version"]) == (
+                True,
+                current["installed_version"],
+            ), installed
+
     async def test_install_requires_exactly_one_scope(self, mcp_client):
         """install must reject entity_ids+categories together, and neither."""
         async with MCPAssertions(mcp_client) as mcp:

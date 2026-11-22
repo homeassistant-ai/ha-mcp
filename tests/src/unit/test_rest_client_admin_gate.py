@@ -135,6 +135,7 @@ async def _demote(hass: HomeAssistant, user: MockUser) -> None:
         ("POST", "/config/config_entries/options/flow"),
         ("POST", "/config/config_entries/options/flow/f1"),
         ("POST", "/repairs/issues/fix"),
+        ("GET", "/repairs/issues/fix/f1"),
         ("POST", "/repairs/issues/fix/f1"),
         ("POST", "/config/config_entries/subentries/flow"),
         ("GET", "/config/config_entries/subentries/flow/f1"),

@@ -52,11 +52,14 @@ HANDOFF = "handoff_issue"
 HANDOFF_ABORT = "handoff_abort_issue"
 # A progress step, then CONFIRM's form.
 PROGRESS = "progress_issue"
+# A confirm form whose step fills {device} itself, with STEP_DEVICE.
+STEP_PLACEHOLDER = "step_placeholder_issue"
 # Raised with is_fixable=False.
 UNFIXABLE = "unfixable_issue"
 
 CODE = "1234"
 PLACEHOLDERS = {"device": "the kettle"}
+STEP_DEVICE = "the spare kettle"
 STRINGS = {
     "issues": {
         "kettle": {
@@ -186,6 +189,24 @@ class _ProgressFlow(ConfirmRepairFlow):
         return self.async_show_progress_done(next_step_id="confirm")
 
 
+class _StepPlaceholderFlow(RepairsFlow):
+    async def async_step_init(
+        self, user_input: dict[str, str] | None = None
+    ) -> RepairsFlowResult:
+        return await self.async_step_confirm()
+
+    async def async_step_confirm(
+        self, user_input: dict[str, str] | None = None
+    ) -> RepairsFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data={})
+        return self.async_show_form(
+            step_id="confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders={"device": STEP_DEVICE},
+        )
+
+
 class _SetupFlow(ConfigFlow):
     VERSION = 1
 
@@ -204,6 +225,7 @@ _FLOWS: dict[str, type[RepairsFlow]] = {
     HANDOFF: _HandoffFlow,
     HANDOFF_ABORT: _HandoffAbortFlow,
     PROGRESS: _ProgressFlow,
+    STEP_PLACEHOLDER: _StepPlaceholderFlow,
 }
 
 

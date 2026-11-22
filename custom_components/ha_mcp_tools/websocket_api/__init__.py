@@ -135,13 +135,14 @@ the info handshake carries no capability entry:
   earlier answers is marked, not evaluated. See ``flow_outline.py``.
 * ``ha_mcp_tools/flow_record`` — what a config, options, subentry or Repairs
   fix flow in progress was started for (its handler, source, entry and issue
-  anchors), read from the flow manager that holds it. Core's flow endpoints do not report it, and
-  the server binds a ``flow_id`` it did not open itself (it restarted) to a
+  anchors), read from the flow manager that holds it. Core's flow endpoints
+  do not report it, and the server binds a ``flow_id`` it did not open itself
+  (it restarted, or Core opened the flow, as it opens a reauth flow) to a
   call's target with it. See ``flow_record.py``.
-* ``ha_mcp_tools/update_entities`` — the loaded entities of Core's update
-  component, each state with its integration and the names of its
-  ``UpdateEntityFeature`` flags, which no state or REST answer carries. See
-  ``update_entities.py``.
+* ``ha_mcp_tools/update_entities`` — every update state, restored ones
+  included, with its integration, the names of its ``UpdateEntityFeature``
+  flags and, for a loaded hassio entity, the kind its Core class gives it,
+  which no state or REST answer carries. See ``update_entities.py``.
 * ``ha_mcp_tools/recorder_status`` — the recorder's purge settings and oldest
   state, and whether it records an entity, which Core's API does not serve;
   with ``wait``, held until the recorder has finished its work. See
