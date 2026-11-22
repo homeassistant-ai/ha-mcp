@@ -2086,9 +2086,9 @@ class HomeAssistantClient:
         A bare id names, in order: the scene whose entity ``scene.<id>`` has that id,
         the key stored under it, the YAML scene with that ``id``, the scene whose entity
         is ``scene.<id>``, else the bare id (``registry_hit=False``, also for a stored
-        key). A removed YAML scene (nothing stored, state restored) names nothing.
-        ``scene.<id>`` raises SceneIdNotAnEntityError when key ``<id>`` holds a scene
-        but the registry has no such entity. A failed read raises.
+        key). A removed YAML scene (nothing stored, state restored) is not named by its
+        id. ``scene.<id>`` raises SceneIdNotAnEntityError when key ``<id>`` holds a
+        scene but the registry has no such entity. A failed read raises.
         """
         bare_id = identifier.removeprefix("scene.")
         entry = await self._registry_entry("scene", identifier)
