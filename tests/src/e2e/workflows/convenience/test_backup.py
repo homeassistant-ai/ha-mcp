@@ -271,6 +271,13 @@ class TestBackupTools:
         for entry in data["backups"]:
             assert "backup_id" in entry
             assert "date" in entry
+        # Only a Supervisor install has Home Assistant's backup-before-update
+        # settings, and a Core install's list must not warn about them.
+        if is_haos_backend_selected():
+            assert isinstance(data["update_backup_settings"], dict), data
+        else:
+            assert "update_backup_settings" not in data, data
+        assert not [w for w in data.get("warnings", []) if "before-update" in w], data
 
         logger.info(f"✅ Snapshot list returned {data['count']} backup(s)")
 

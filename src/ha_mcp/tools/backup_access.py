@@ -15,6 +15,7 @@ _VALID_COMBOS: set[tuple[str, str]] = {
     ("snapshot", "list"),
     ("snapshot", "restore"),
     ("snapshot", "delete"),
+    ("snapshot", "configure"),
     ("edits", "create"),
     ("edits", "list"),
     ("edits", "view"),
@@ -105,7 +106,8 @@ def _enforce_backup_controls(
             create_error_response(
                 ErrorCode.READ_ONLY_MODE,
                 "Backup Read Only is enabled (backup_read_only=true). Explicit "
-                "backup creation, restore, and deletion are blocked in both scopes. "
+                "backup creation, restore, and deletion are blocked in both scopes, "
+                "and so is changing the backup-before-update settings. "
                 "Automatic pre-edit capture still follows enable_auto_backup.",
                 context={"scope": scope, "action": action, "backup_read_only": True},
                 suggestions=[
@@ -124,7 +126,7 @@ def _enforce_backup_controls(
 
 
 # Generic routes (ha_call_service and the Code Mode bridges) that perform the
-# same full-snapshot operations as ha_manage_backup(scope="snapshot"), mapped to
+# same operations as ha_manage_backup(scope="snapshot"), mapped to
 # the equivalent action so the backup controls cannot be bypassed through them.
 _SNAPSHOT_SERVICE_ACTIONS: dict[tuple[str, str], str] = {
     ("backup", "create"): "create",
@@ -141,6 +143,7 @@ _SNAPSHOT_WS_ACTIONS: dict[str, str] = {
     "backup/generate_with_automatic_settings": "create",
     "backup/restore": "restore",
     "backup/delete": "delete",
+    "hassio/update/config/update": "configure",
 }
 
 
