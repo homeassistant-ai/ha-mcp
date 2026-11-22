@@ -129,6 +129,30 @@ class TestRealStateRead:
         # One omitted path per representation, both representations changed.
         assert [r.args for r in scrub_logs] == [(2, 2)]
 
+    async def test_attributes_naming_an_entity_created_since_the_cached_read_are_kept(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """The new entity's id is a longer word around a hidden id that the
+        cached read does not know, so the entities are read again before the
+        scrub (#3156)."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
+        await mw.on_call_tool(
+            make_context("ha_get_overview", {}), _returns(_tool_result({}))
+        )
+        hass.states.async_set("sensor.foo_average", "1")
+        hass.states.async_set("sensor.visible", "ok", {"source": "sensor.foo_average"})
+
+        result = await _get_state(
+            mw, _ha_get_state(core_client), entity_id="sensor.visible"
+        )
+
+        for rendered in _both_representations(result):
+            assert rendered["data"]["attributes"]["source"] == "sensor.foo_average"
+
     async def test_bulk_read_omits_hidden_content(
         self,
         hass: HomeAssistant,
