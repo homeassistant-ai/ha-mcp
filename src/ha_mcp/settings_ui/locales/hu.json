@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "Párhuzamos konfiguráció-lekérések azonosítónként. Lassabb HA-szervereken csökkentse 1 felé.",
     "advanced.enable_history_query_guardrails.label": "Előzmény-lekérdezési védőkorlátok",
     "advanced.enable_history_query_guardrails.help": "Elutasítja azokat az adatrögzítő (recorder) lekérdezéseket, amelyek túllépik a konzervatív entitás- és időtartam-kereteket. Alapértelmezés szerint ki van kapcsolva.",
-    "advanced.hacs_refresh_after_update.label": "A komponens frissítése a HACS-ban frissítés után",
-    "advanced.hacs_refresh_after_update.help": "A szerver frissítése utáni indításkor kérje meg a HACS-ot (a Home Assistant 2026.11+-ös verziójának Piacterét), hogy ellenőrizze újra a HA-MCP adattárat, így a hozzá tartozó frissítés azonnal megjelenik a következő háttér-ellenőrzésre való várakozás helyett. Alapértelmezés szerint ki van kapcsolva; azok a telepítések, amelyek ezt már megteték, bekapcsolva tartják.",
+    "advanced.hacs_refresh_after_update.label": "A komponens frissítése a Piactéren egy frissítés után",
+    "advanced.hacs_refresh_after_update.help": "Indításkor egy szerverfrissítés után kérje meg a Piacteret, hogy ellenőrizze újra a HA-MCP tárolót, így a hozzá tartozó frissítés azonnal megjelenik a következő háttérellenőrzésre való várakozás helyett. Alapértelmezés szerint ki van kapcsolva; a korábban ezt használó telepítések bekapcsolva hagyják.",
     "advanced.ha_tool_concurrency.label": "Home Assistant eszközök egyidejűsége",
     "advanced.ha_tool_concurrency.help": "Opcionális korlátozás a külső Home Assistant eszközhívásokra az összes munkamenetben. A belső REST, WebSocket és eszközönkénti elosztott egyidejűség változatlan marad. A 0 korlátlan viselkedést biztosít. A kapacitásra várakozó hívás 60 másodperc után meghiúsul.",
     "advanced.dashboard_screenshot_engine_url.label": "Vezérlőpult képernyőkép-készítő motornak URL-je",
@@ -715,7 +715,7 @@
     },
     "ha_get_camera_image": {
       "title": "Kamerakép lekérése",
-      "description": "Pillanatkép lekérése egy Home Assistant kameraentitástól."
+      "description": "Pillanatkép készítése egy Home Assistant kameráról vagy képegységről."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Képernyőkép lekérése a vezérlőpultról",
@@ -730,8 +730,8 @@
       "description": "Entitás-regisztrációs bejegyzések lekérése, vagy entitás nélkül a regisztrációs beállítások és az elérhetővé tett entitások lekérése."
     },
     "ha_get_hacs_info": {
-      "title": "HACS-információk lekérése",
-      "description": "HACS-adatok (Home Assistant Community Store) lekérése – áruházban való keresés vagy tároló részleteinek lekérése."
+      "title": "Piactér információinak lekérése",
+      "description": "Adatok lekérése a Home Assistant Piacteréről (amivé a HACS vált 2026.11-ben)."
     },
     "ha_get_history": {
       "title": "Entitáselőzmények vagy statisztikák lekérése",
@@ -802,8 +802,12 @@
       "description": "A Home Assistant energiavezérlőpult beállításainak kezelése: hálózat / napelem /"
     },
     "ha_manage_hacs": {
-      "title": "HACS kezelése",
-      "description": "HACS (Home Assistant Community Store) kezelése – telepítés/frissítés, eltávolítás, egyéni tárolók hozzáadása vagy tároló frissítése"
+      "title": "Piactér kezelése",
+      "description": "A Home Assistant Piacterének (amivé a HACS vált 2026.11-ben) kezelése: tárolók telepítése, frissítése, eltávolítása és hozzáadása."
+    },
+    "ha_manage_logs": {
+      "title": "Rendszernapló, statisztikák és naplók kezelése",
+      "description": "A Home Assistant rendszernaplójának, hosszú távú statisztikáinak és naplóinak kezelése."
     },
     "ha_manage_pipeline": {
       "title": "Assist folyamat kezelése",

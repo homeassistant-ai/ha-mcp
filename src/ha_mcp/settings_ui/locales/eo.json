@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "Samtempaj agordakiroj po ID. Malaltigu al 1 ĉe seriilaj HA-serviloj.",
     "advanced.enable_history_query_guardrails.label": "Protektaj gvidlinioj por historikurioj",
     "advanced.enable_history_query_guardrails.help": "Malakcepti registrilajn kuriojn, kiuj superas konservativajn entajn kaj tempintervalajn buĝetojn. Malŝaltite defaŭlte.",
-    "advanced.hacs_refresh_after_update.label": "Refreŝigi la komponanton en HACS post ĝisdatigo",
-    "advanced.hacs_refresh_after_update.help": "Ĉe pravalorizo post servila ĝisdatigo, petu al HACS (la Marketplace ĉe Home Assistant 2026.11+) re-kontroli la HA-MCP-deponejon, por ke ĝia kongrua ĝisdatigo montriĝu tuj anstataŭ atendi la sekvan fonan kontrolon. Malŝaltita defaŭlte; instaloj kiuj jam faris tion tenas ĝin ŝaltita.",
+    "advanced.hacs_refresh_after_update.label": "Ĝisdatigi la komponanton en la Marketplace post ĝisdatigo",
+    "advanced.hacs_refresh_after_update.help": "Dum pravalorizado post servila ĝisdatigo, peti al Marketplace re-kontroli la HA-MCP-deponejon, por ke ĝia kongrua ĝisdatigo aperu tuj anstataŭ atendi la sekvan fonan kontrolon. Malŝaltita defaŭlte; instalaĵoj kiuj jam faris tion tenas ĝin ŝaltita.",
     "advanced.ha_tool_concurrency.label": "Konkureco de hejmaŭtomatigaj iloj de Home Assistant",
     "advanced.ha_tool_concurrency.help": "Laŭvola limo pri eksteraj Home Assistant ilvokoj tra ĉiuj seancoj. Interna REST, WebSocket, kaj samtempeco de disbranĉigo po ilo estas senŝanĝaj. 0 konservas senliman konduton. Voko atendanta kapaciton malsukcesas post 60 sekundoj.",
     "advanced.dashboard_screenshot_engine_url.label": "URL de panelo-ekrankopiga motoro",
@@ -715,7 +715,7 @@
     },
     "ha_get_camera_image": {
       "title": "Akiri Kameran Bildon",
-      "description": "Akiri momentfotan bildon de kameraa ento en Home Assistant."
+      "description": "Preni momentfotan bildon de Home Assistant-kamerao aŭ bilda ento."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Akiri Panelan Ekrankopion",
@@ -730,8 +730,8 @@
       "description": "Akiri entajn registro-enirojn, aŭ sen ento la registragordojn kaj elmetitajn entojn."
     },
     "ha_get_hacs_info": {
-      "title": "Akiri HACS-Informon",
-      "description": "Akiru HACS (Home Assistant Community Store) datumojn — serĉu en la vendejo aŭ prenu deponejajn detalojn."
+      "title": "Akiri Marketplace-Informojn",
+      "description": "Akiri datumojn el la Marketplace de Home Assistant, kio HACS iĝis en 2026.11."
     },
     "ha_get_history": {
       "title": "Akiri Entan Historion aŭ Statistikojn",
@@ -802,8 +802,12 @@
       "description": "Administri la preferojn de la Energio-Panelo de Home Assistant: reto / sunenergio /"
     },
     "ha_manage_hacs": {
-      "title": "Administri HACS",
-      "description": "Administri HACS (Home Assistant Komunuma Butiko) — instali/ĝisdatigi, forigi, aldoni proprajn deponejojn, aŭ aktualigi deponejon en"
+      "title": "Administri Marketplace",
+      "description": "Administri la Marketplace de Home Assistant (kio HACS iĝis en 2026.11): instali, ĝisdatigi, forigi kaj aldoni deponejojn."
+    },
+    "ha_manage_logs": {
+      "title": "Administri Registrilon, Statistikon kaj Logojn",
+      "description": "Administri la registrilon de Home Assistant, ĝiajn longperspektivajn statistikojn kaj ĝiajn logojn."
     },
     "ha_manage_pipeline": {
       "title": "Administri Asistan Dukton",

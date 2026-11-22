@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "Eyni vaxtda ID üzrə konfiqurasiya əldə etmələri. Ardıcıl HA serverlərində 1-ə doğru aşağı salın.",
     "advanced.enable_history_query_guardrails.label": "Tarixçə sorğuları üçün qoruyucu məhdudiyyətlər",
     "advanced.enable_history_query_guardrails.help": "Obyekt sayı və vaxt aralığı üzrə ehtiyatlı limitləri aşan qeydiyyatçı sorğularını rədd edir. Standart olaraq deaktivdir.",
-    "advanced.hacs_refresh_after_update.label": "Yeniləmədən sonra HACS-də komponenti yeniləyin",
-    "advanced.hacs_refresh_after_update.help": "Server yenilənməsindən sonra işə düşərkən HACS-dən (Home Assistant 2026.11+-də Marketplace) HA-MCP repentoriyasını yenidən yoxlamasını xahiş edin ki, növbəti fond yoxlamasını gözləmək əvəzinə uyğun gələn yeniləmə dərhal görsənsin. Varsayılan olaraq söndürülür; bunu əvvəldən edən qurğular onu açıq saxlayır.",
+    "advanced.hacs_refresh_after_update.label": "Yeniləmədən sonra Marketplace-də komponenti yeniləyin",
+    "advanced.hacs_refresh_after_update.help": "Server yeniləməsindən sonra işə salınarkən Marketplace-dən HA-MCP repentoriyasını yenidən yoxlamağı xahiş edin ki, növbəti fond yoxlamasını gözləmədən uyğun yeniləmə dərhal göstərilsin. Varsayılan olaraq söndürüb; bunu artıq etmiş qurulumlar onu açıq saxlayır.",
     "advanced.ha_tool_concurrency.label": "Home Assistant alətlərinin paralel icrası",
     "advanced.ha_tool_concurrency.help": "Bütün sessiyalar üzrə xarici Home Assistant alət çağırışlarında əlavə məhdudiyyət. Daxili REST, WebSocket və hər alət üzrə paylanma eynizmətliliyi (concurrency) dəyişməz qalır. 0 məhdudiyyətsiz davranışı qoruyur. Tutum üçün gözləyən çağırış 60 saniyədən sonra uğursuz olur.",
     "advanced.dashboard_screenshot_engine_url.label": "İdarə panelinin ekran görüntüsü mühərrikinin URL-i",
@@ -746,7 +746,7 @@
     },
     "ha_get_camera_image": {
       "title": "Kamera görüntüsünü al",
-      "description": "Home Assistant kamera obyektindən skrinşot şəkli əldə edin."
+      "description": "Home Assistant kamera və ya şəkil obyektindən anlıq şəkil əldə edin."
     },
     "ha_get_dashboard_screenshot": {
       "title": "İdarə panelinin ekran şəklini al",
@@ -761,8 +761,8 @@
       "description": "Obyekt reyestri qeydlərini və ya obyekt olmadıqda reyestr ayarlarını və istifadəyə verilmiş obyektləri əldə edin."
     },
     "ha_get_hacs_info": {
-      "title": "HACS məlumatlarını al",
-      "description": "HACS (Home Assistant Community Store) məlumatlarını alın — mağazada axtarış edin və ya repozitoriya haqqında ətraflı məlumat alın."
+      "title": "Marketplace Məlumatını Alın",
+      "description": "Home Assistant-ın Marketplace-dən (2026.11-ci ildə HACS-in çevrildiyi yer) məlumat əldə edin."
     },
     "ha_get_history": {
       "title": "Obyektin tarixçəsini və ya statistikasını al",
@@ -833,8 +833,12 @@
       "description": "Home Assistant Enerji Paneli seçimlərini idarə edin: şəbəkə / günəş /"
     },
     "ha_manage_hacs": {
-      "title": "HACS-ı idarə et",
-      "description": "HACS (Home Assistant Community Store) xidmətini idarə edin — quraşdırın/yeniləyin, çıxarın, fərdi repozitoriyalar əlavə edin və ya repozitoriya məlumatlarını yeniləyin."
+      "title": "Marketplace-i İdarə Edin",
+      "description": "Home Assistant-ın Marketplace-ini (2026.11-ci ildə HACS-in çevrildiyi yeri) idarə edin: repentoriyaları quraşdırın, yeniləyin, silin və əlavə edin."
+    },
+    "ha_manage_logs": {
+      "title": "Recorder, Statistika və Jurnalları İdarə Edin",
+      "description": "Home Assistant-ın recorder-ini, onun uzunmüddətli statistikasını və jurnallarını idarə edin."
     },
     "ha_manage_pipeline": {
       "title": "Assist emal ardıcıllığını idarə et",

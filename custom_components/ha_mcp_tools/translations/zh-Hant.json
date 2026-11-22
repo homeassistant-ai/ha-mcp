@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "更新 HA-MCP 整合",
-      "description": "已安裝的 ha-mcp 伺服器需要 HA-MCP 整合 {required} 或更新版本，但您目前安裝的是 {installed}。請從「設定」>「系統」>「更新」（如果在 HACS 中，或在 Home Assistant 2026.11+ 的市集中，若尚未顯示更新，請開啟 HA-MCP 整合並使用「更新資訊」（HACS）或「重新整理資訊」（市集））更新整合並重新啟動 Home Assistant。伺服器在此期間將繼續執行，但在更新整合之前，某些較新功能可能無法運作。"
+      "description": "已安裝的 ha-mcp 伺服器需要 HA-MCP integration {required} 或更新版本，但您目前安裝的是 {installed}。請從「設定」>「系統」>「更新」更新整合（若尚未顯示更新，請在市集中開啟 HA-MCP integration 並使用「重新整理資訊」），然後重新啟動 Home Assistant。在此期間伺服器會繼續執行，但在更新整合之前，某些較新的功能可能無法使用。"
     },
     "legacy_oauth_restart": {
       "title": "重新啟動 Home Assistant 以套用舊版 OAuth 設定",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "是否將 HA-MCP 保留線上單一商店清單？",
-            "description": "HA-MCP 同時被標記為安裝自 {records}。這兩者包含相同的整合（第二個是早期安裝所使用的散布鏡像）。Home Assistant 2026.11 中的 Marketplace 只允許一個列表擁有該整合，因此兩者皆無法在其中更新 HA-MCP；HACS 仍可更新，但升級至 2026.11 將會使 HA-MCP 卡住。\n\n提交將保留預設目錄中不需要自訂儲存庫的列表 **{keep}**，並將另一個列表標記為未安裝。不會刪除任何內容：您的 HA-MCP 項目、設定和檔案將完全保持原狀，從此更新將如往常一樣顯示在 {keep} 下方。"
+            "description": "HA-MCP 被標記為同時安裝自 {records}。它們帶有相同的整合（第二個是早期安裝所使用的散發鏡像源）。市集允許每個整合僅由一個清單擁有，因此兩者都無法更新 HA-MCP。\n\n點擊送出將保留 **{keep}**（不需要自訂儲存庫的預設目錄清單），並將另一個清單標記為未安裝。不會刪除任何內容：您的 HA-MCP 項目、設定和檔案將完全保持原樣，從現在起更新將如往常般顯示在 {keep} 下方。"
           }
         },
         "abort": {
           "already_resolved": "HA-MCP 現在已從單一商店清單安裝；無需修復。",
-          "store_unavailable": "商店（HACS 或 Marketplace）尚未載入，因此無法檢查清單。請在幾分鐘後再試一次。"
+          "store_unavailable": "市集尚未載入，因此無法檢查清單。請在幾分鐘後再試一次。"
         }
       }
     }

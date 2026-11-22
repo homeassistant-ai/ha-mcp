@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "每個 ID 的並行設定擷取數。在序列式 HA 伺服器上請調低至接近 1。",
     "advanced.enable_history_query_guardrails.label": "歷史記錄查詢安全護欄",
     "advanced.enable_history_query_guardrails.help": "拒絕超出保守實體與時間範圍預算的記錄器查詢。預設為停用。",
-    "advanced.hacs_refresh_after_update.label": "更新後在 HACS 中重新整理元件",
-    "advanced.hacs_refresh_after_update.help": "在伺服器更新後的啟動時，要求 HACS（Home Assistant 2026.11+ 上的 Marketplace）重新檢查 HA-MCP 套件庫，以便立即顯示其符合的更新，而不需要等待下一次背景檢查。預設為關閉；已經這樣做的安裝會保持開啟。",
+    "advanced.hacs_refresh_after_update.label": "更新後在市集中重新整理元件",
+    "advanced.hacs_refresh_after_update.help": "在伺服器更新後的啟動時，要求市集重新檢查 HA-MCP 套件庫，以便立即顯示對應的更新，而無需等待下一次背景檢查。預設為關閉；先前已啟用此功能的安裝將保持開啟狀態。",
     "advanced.ha_tool_concurrency.label": "Home Assistant 工具並行數",
     "advanced.ha_tool_concurrency.help": "跨所有會話的外層 Home Assistant 工具呼叫的選用限制。內部 REST、WebSocket 及每個工具的分支（fan-out）並行性保持不變。0 表示維持無限制行為。等待容量的呼叫將在 60 秒後失敗。",
     "advanced.dashboard_screenshot_engine_url.label": "儀表板截圖引擎 URL",
@@ -715,7 +715,7 @@
     },
     "ha_get_camera_image": {
       "title": "取得相機影像",
-      "description": "從 Home Assistant 相機實體取得快照影像。"
+      "description": "從 Home Assistant 相機或圖片實體取得快照圖片。"
     },
     "ha_get_dashboard_screenshot": {
       "title": "取得儀表板螢幕截圖",
@@ -730,8 +730,8 @@
       "description": "取得實體註冊表項目，若未指定實體則取得註冊表設定與公開的實體。"
     },
     "ha_get_hacs_info": {
-      "title": "取得 HACS 資訊",
-      "description": "取得 HACS (Home Assistant Community Store) 資料 — 搜尋商店或擷取儲存庫詳細資訊。"
+      "title": "取得市集資訊",
+      "description": "從 Home Assistant 的市集（即 HACS 在 2026.11 演變而成的名稱）取得資料。"
     },
     "ha_get_history": {
       "title": "取得實體歷史記錄或統計資料",
@@ -802,8 +802,12 @@
       "description": "管理 Home Assistant 能源儀表板偏好設定：電網 / 太陽能 /"
     },
     "ha_manage_hacs": {
-      "title": "管理 HACS",
-      "description": "管理 HACS (Home Assistant Community Store) — 安裝/更新、移除、新增自訂儲存庫，或重新整理儲存庫中的"
+      "title": "管理市集",
+      "description": "管理 Home Assistant 的市集（即 HACS 在 2026.11 演變而成的名稱）：安裝、更新、移除與新增套件庫。"
+    },
+    "ha_manage_logs": {
+      "title": "管理記錄器、統計資料與日誌",
+      "description": "管理 Home Assistant 的記錄器、長期統計資料與其日誌。"
     },
     "ha_manage_pipeline": {
       "title": "管理語音助理管線",

@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "Actualiza la integración HA-MCP",
-      "description": "El servidor ha-mcp instalado requiere la integración HA-MCP {required} o posterior, pero tienes la {installed}. Actualiza la integración desde Ajustes > Sistema > Actualizaciones (en HACS, o en el Marketplace en Home Assistant 2026.11+, abre la integración HA-MCP y usa 'Actualizar información' (HACS) o 'Actualizar información' (Marketplace) si aún no se muestra ninguna actualización) y reinicia Home Assistant. El servidor seguirá funcionando mientras tanto, pero es posible que algunas funciones nuevas no funcionen hasta que se actualice la integración."
+      "description": "El servidor ha-mcp instalado requiere la integración HA-MCP {required} o posterior, pero tienes {installed}. Actualiza la integración desde Ajustes > Sistema > Actualizaciones (si aún no aparece ninguna actualización, abre la integración HA-MCP en el Marketplace y usa 'Actualizar información') y reinicia Home Assistant. El servidor sigue funcionando mientras tanto, pero es posible que algunas funciones nuevas no funcionen hasta que se actualice la integración."
     },
     "legacy_oauth_restart": {
       "title": "Reinicia Home Assistant para aplicar los ajustes de OAuth heredado",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "¿Mantener HA-MCP en un solo listado de la tienda?",
-            "description": "HA-MCP aparece como instalado desde ambos {records}. Contienen la misma integración (el segundo es el espejo de distribución del que procedían las instalaciones anteriores). El Marketplace en Home Assistant 2026.11 permite que un solo listado posea una integración, por lo que allí ninguno de los dos puede actualizar HA-MCP; HACS sigue actualizándose, pero la actualización a 2026.11 dejaría HA-MCP bloqueado.\n\nEnviar mantiene **{keep}**, el listado en el catálogo predeterminado que no necesita un repositorio personalizado, y marca el otro listado como no instalado. No se borra nada: tus entradas, configuraciones y archivos de HA-MCP se quedan exactamente como están, y a partir de ahora las actualizaciones aparecerán en {keep} como de costumbre."
+            "description": "HA-MCP está marcado como instalado desde ambos {records}. Contienen la misma integración (el segundo es el espejo de distribución de instalaciones anteriores). El Marketplace permite que solo un listado sea propietario de una integración, por lo que ninguno de los dos puede actualizar HA-MCP.\n\nEnviar mantiene **{keep}**, el listado en el catálogo predeterminado que no necesita un repositorio personalizado, y marca el otro listado como no instalado. No se borra nada: tus entradas, ajustes y archivos de HA-MCP se quedan exactamente como están, y a partir de ahora las actualizaciones aparecerán en {keep} como de costumbre."
           }
         },
         "abort": {
           "already_resolved": "HA-MCP ya está instalado desde un solo listado de la tienda; no hay nada que arreglar.",
-          "store_unavailable": "La tienda (HACS o el Marketplace) aún no se ha cargado, por lo que no se pueden comprobar los listados. Inténtalo de nuevo en unos minutos."
+          "store_unavailable": "El Marketplace aún no se ha cargado, por lo que no se pueden comprobar los listados. Inténtalo de nuevo en unos minutos."
         }
       }
     }

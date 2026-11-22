@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "Frissítse a HA-MCP integrációt",
-      "description": "A telepített ha-mcp szerver a(z) {required} vagy újabb HA-MCP integrációt igényli, de önnek a(z) {installed} verzió van telepítve. Frissítse az integrációt a Beállítások > Rendszer > Frissítések menüpontban (a HACS-ban, vagy a Marketplace-en a Home Assistant 2026.11+ verziójában, nyissa meg a HA-MCP integrációt, és használja az 'Update information' (HACS) vagy 'Refresh information' (Marketplace) lehetőséget, ha még nem jelenik meg frissítés), majd indítsa újra a Home Assistantot. A szerver addig is fut tovább, de néhány újabb funkció nem feltétlenül fog működni az integráció frissítéséig."
+      "description": "A telepített ha-mcp szerver a(z) {required} vagy újabb HA-MCP integrációt igényli, de Önnek a(z) {installed} verzió van meg. Frissítse az integrációt a Beállítások > Rendszer > Frissítések menüpontban (ha még nem jelenik meg frissítés, nyissa meg a HA-MCP integrációt a Piactéren, és használja az „Információk frissítése” lehetőséget), majd indítsa újra a Home Assistantot. A szerver ezalatt is futva marad, de egyes újabb funkciók az integráció frissítéséig nem fognak működni."
     },
     "legacy_oauth_restart": {
       "title": "Indítsa újra a Home Assistantot a régi OAuth-beállítások alkalmazásához",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "Megtartja a HA-MCP-t az egyik áruházbeli bejegyzésben?",
-            "description": "A HA-MCP mindkettőből ({records}) telepítettként van megjelölve. Ugyanazt az integrációt tartalmazzák (a második az a terjesztési tükör, amelyből a korábbi telepítések származnak). A Home Assistant 2026.11-es verziójában található Marketplace engedi, hogy egy integrációhoz csak egy bejegyzés tartozzon, így ott egyik sem tudja frissíteni a HA-MCP-t; a HACS továbbra is frissít, de a 2026.11-es verzióra való frissítés elakadást okozna a HA-MCP-ben.\n\nA Küldés gomb megnyomása megőrzi ezt: **{keep}** (az alapértelmezett katalógusban lévő bejegyzést, amely nem igényel egyéni tárolót), a másik bejegyzést pedig nem telepítettként jelöli meg. Semmi sem törlődik: a HA-MCP bejegyzések, beállítások és fájlok pontosan úgy maradnak, ahogy vannak, és ettől kezdve a frissítések a szokásos módon jelennek meg a(z) {keep} alatt."
+            "description": "A HA-MCP a következő helyekről van telepítve: {records}. Ugyanazt az integrációt tartalmazzák (a második a terjesztési tükör, amelyből a korábbi telepítések származtak). A Piactér nem engedi, hogy egy integrációhoz egynél több bejegyzés tartozzon, így egyik sem tudja frissíteni a HA-MCP-t.\n\nA Küldés gomb megnyomásával megmarad a(z) **{keep}**, az alapértelmezett katalógusban szereplő bejegyzés, amelyhez nincs szükség egyéni tárolóra, a másik bejegyzést pedig nem telepítettként jelöli meg. Semmi sem törlődik: a HA-MCP bejegyzések, beállítások és fájlok pontosan úgy maradnak, ahogy vannak, és ettől kezdve a frissítések a szokásos módon a(z) {keep} alatt fognak megjelenni."
           }
         },
         "abort": {
           "already_resolved": "A HA-MCP már csak egy áruházbeli bejegyzésből van telepítve; nincs mit javítani.",
-          "store_unavailable": "Az áruház (a HACS vagy a Marketplace) még nem töltődött be, így a bejegyzések nem ellenőrizhetők. Próbálja meg újra néhány perc múlva."
+          "store_unavailable": "A Piactér még nem töltődött be, ezért a bejegyzések nem ellenőrizhetők. Próbálja meg újra néhány perc múlva."
         }
       }
     }

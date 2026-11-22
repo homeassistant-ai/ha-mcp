@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "Zaktualizuj integrację HA-MCP",
-      "description": "Zainstalowany serwer ha-mcp wymaga integracji HA-MCP w wersji {required} lub nowszej, ale masz zainstalowaną wersję {installed}. Zaktualizuj integrację w sekcji Ustawienia > System > Aktualizacje (w HACS lub Sklepie na Home Assistant 2026.11+, otwórz integrację HA-MCP i użyj opcji „Aktualizuj informacje” (HACS) lub „Odśwież informacje” (Sklep), jeśli aktualizacja nie jest jeszcze widoczna) i uruchom ponownie Home Assistanta. Serwer działa w międzyczasie, ale niektóre nowsze funkcje mogą nie działać do momentu aktualizacji integracji."
+      "description": "Zainstalowany serwer ha-mcp wymaga integracji HA-MCP w wersji {required} lub nowszej, ale masz zainstalowaną wersję {installed}. Zaktualizuj integrację w sekcji Ustawienia > System > Aktualizacje (jeśli aktualizacja jeszcze się nie wyświetla, otwórz integrację HA-MCP w Sklepie i użyj opcji „Odśwież informacje”) i uruchom ponownie Home Assistanta. Serwer nadal działa, ale niektóre nowsze funkcje mogą nie działać do momentu aktualizacji integracji."
     },
     "legacy_oauth_restart": {
       "title": "Uruchom ponownie Home Assistanta, aby zastosować ustawienia Legacy OAuth",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "Pozostawić HA-MCP na jednym wpisie w sklepie?",
-            "description": "HA-MCP jest zaznaczony jako zainstalowany z obu źródeł: {records}. Dotyczą one tej samej integracji (drugie to lustro dystrybucyjne, z którego pochodziły wcześniejsze instalacje). Sklep w Home Assistant 2026.11 pozwala tylko jednemu wpisowi posiadać integrację, więc tam żaden z nich nie może zaktualizować HA-MCP; HACS nadal aktualizuje, ale uaktualnienie do wersji 2026.11 pozostawiłoby HA-MCP w stanie zawieszenia.\n\nPrzycisk Wyślij zachowuje **{keep}**, wpis w domyślnym katalogu, który nie wymaga niestandardowego repozytorium, i oznacza drugi wpis jako niezainstalowany. Nic nie zostaje usunięte: Twoje wpisy, ustawienia i pliki HA-MCP pozostają dokładnie takie, jakie są, a od teraz aktualizacje będą pojawiać się pod {keep} w zwykły sposób."
+            "description": "HA-MCP jest oznaczony jako zainstalowany z obu źródeł: {records}. Zawierają one tę samą integrację (druga tomirror dystrybucyjny, z którego pochodziły wcześniejsze instalacje). Sklep pozwala, aby tylko jeden wpis był właścicielem integracji, więc żaden z nich nie może zaktualizować HA-MCP.\n\nKliknięcie „Wyślij” zachowuje **{keep}**, czyli wpis w domyślnym katalogu, który nie wymaga niestandardowego repozytorium, i oznacza drugi wpis jako niezainstalowany. Nic nie jest usuwane: Twoje wpisy, ustawienia i pliki HA-MCP pozostają bez zmian, a od teraz aktualizacje będą pojawiać się w {keep} tak jak zwykle."
           }
         },
         "abort": {
           "already_resolved": "HA-MCP jest teraz zainstalowany z jednego wpisu w sklepie; nie ma nic do naprawienia.",
-          "store_unavailable": "Sklep (HACS lub Marketplace) nie został jeszcze załadowany, więc nie można sprawdzić wpisów. Spróbuj ponownie za kilka minut."
+          "store_unavailable": "Sklep nie został jeszcze załadowany, więc nie można sprawdzić wpisów. Spróbuj ponownie za kilka minut."
         }
       }
     }

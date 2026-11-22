@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "Samtidiga konfigurationshämtningar per ID. Sänk mot 1 på seriella HA-servrar.",
     "advanced.enable_history_query_guardrails.label": "Skyddsregler för historikfrågor",
     "advanced.enable_history_query_guardrails.help": "Avvisa recorder-frågor som överskrider konservativa budgetar för entiteter och tidsintervall. Inaktiverat som standard.",
-    "advanced.hacs_refresh_after_update.label": "Uppdatera komponenten i HACS efter en uppdatering",
-    "advanced.hacs_refresh_after_update.help": "Vid start efter en serveruppdatering, be HACS (Marknadsplatsen i Home Assistant 2026.11+) att kontrollera HA-MCP-förvaret igen, så att dess matchande uppdatering visas direkt i stället för att vänta på nästa bakgrundskontroll. Av som standard; installationer som redan har gjort detta behåller det på.",
+    "advanced.hacs_refresh_after_update.label": "Uppdatera komponenten i Marketplace efter en uppdatering",
+    "advanced.hacs_refresh_after_update.help": "Vid start efter en serveruppdatering, be Marketplace att kontrollera HA-MCP-repot igen så att dess matchande uppdatering visas direkt istället för att vänta på nästa bakgrundskontroll. Av som standard; installationer som redan har gjort detta behåller den på.",
     "advanced.ha_tool_concurrency.label": "Samtidighet för Home Assistant-verktyg",
     "advanced.ha_tool_concurrency.help": "Valfri gräns för yttre Home Assistant-verktygsanrop över alla sessioner. Intern REST-, WebSocket- och per-verktyg-samtidighet förblir oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet misslyckas efter 60 sekunder.",
     "advanced.dashboard_screenshot_engine_url.label": "URL för skärmbildsmotor för instrumentpanel",
@@ -715,7 +715,7 @@
     },
     "ha_get_camera_image": {
       "title": "Hämta Kamerabild",
-      "description": "Hämta en ögonblicksbild från en Home Assistant-kameraentitet."
+      "description": "Hämta en stillbild från en Home Assistant-kamera eller bildentitet."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Hämta Skärmdump av Dashboard",
@@ -730,8 +730,8 @@
       "description": "Hämta poster i enhetsregistret, eller utan en entitet, registerinställningar och exponerade entiteter."
     },
     "ha_get_hacs_info": {
-      "title": "Hämta HACS-info",
-      "description": "Hämta HACS (Home Assistant Community Store)-data — sök i butiken eller hämta förvaringsdetaljer."
+      "title": "Hämta Marketplace-information",
+      "description": "Hämta data från Home Assistants Marketplace, det som HACS blev i 2026.11."
     },
     "ha_get_history": {
       "title": "Hämta Entitetshistorik eller Statistik",
@@ -802,8 +802,12 @@
       "description": "Hantera inställningar för Home Assistant Energy Dashboard: elnät / solenergi /"
     },
     "ha_manage_hacs": {
-      "title": "Hantera HACS",
-      "description": "Hantera HACS (Home Assistant Community Store) — installera/uppdatera, ta bort, lägga till anpassade förråd, eller uppdatera förråd i"
+      "title": "Hantera Marketplace",
+      "description": "Hantera Home Assistants Marketplace (det som HACS blev i 2026.11): installera, uppdatera, ta bort och lägg till repor."
+    },
+    "ha_manage_logs": {
+      "title": "Hantera Recorder, statistik och loggar",
+      "description": "Hantera Home Assistants recorder, dess långtidsstatistik och dess loggar."
     },
     "ha_manage_pipeline": {
       "title": "Hantera Assist-pipeline",

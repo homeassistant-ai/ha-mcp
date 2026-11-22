@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "Uppdatera HA-MCP-integrationen",
-      "description": "Den installerade ha-mcp-servern kräver HA-MCP-integrationen {required} eller nyare, men du har {installed}. Uppdatera integrationen från Inställningar > System > Uppdateringar (i HACS, eller Marketplace i Home Assistant 2026.11+, öppna HA-MCP-integrationen och använd 'Update information' (HACS) eller 'Refresh information' (Marketplace) om ingen uppdatering visas än) och starta om Home Assistant. Servern fortsätter att köra under tiden, men vissa nyare funktioner kanske inte fungerar förrän integrationen har uppdaterats."
+      "description": "Den installerade ha-mcp-servern kräver HA-MCP-integrationen {required} eller nyare, men du har {installed}. Uppdatera integrationen från Inställningar > System > Uppdateringar (om ingen uppdatering visas än, öppna HA-MCP-integrationen i Marketplace och använd 'Uppdatera information') och starta om Home Assistant. Servern fortsätter att köra under tiden, men vissa nyare funktioner kanske inte fungerar förrän integrationen har uppdaterats."
     },
     "legacy_oauth_restart": {
       "title": "Starta om Home Assistant för att tillämpa de äldre OAuth-inställningarna",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "Behåll HA-MCP på en butikspost?",
-            "description": "HA-MCP är markerad som installerad från båda {records}. De innehåller samma integration (den andra är distributionsspegeln som tidigare installationer kom från). Marketplace i Home Assistant 2026.11 låter endast en post äga en integration, så där kan ingen av dem uppdatera HA-MCP; HACS uppdaterar fortfarande, men uppgraderingen till 2026.11 skulle lämna HA-MCP fast.\n\nGenom att skicka in behålls **{keep}**, posten i standardkatalogen som inte behöver ett eget förråd, och den andra posten markeras som ej installerad. Ingenting raderas: dina HA-MCP-poster, inställningar och filer förblir exakt som de är, och från och med nu visas uppdateringar under {keep} som vanligt."
+            "description": "HA-MCP är markerad som installerad från båda {records}. De innehåller samma integration (den andra är distributionsspegeln som tidigare installationer kom från). Marketplace tillåter att endast en post äger en integration, så ingen av dem kan uppdatera HA-MCP.\n\nSkicka behåller **{keep}**, posten i standardkatalogen som inte behöver ett anpassat förråd, och markerar den andra posten som oinstallerad. Ingenting raderas: dina HA-MCP-poster, inställningar och filer förblir exakt som de är, och från och med nu visas uppdateringar under {keep} som vanligt."
           }
         },
         "abort": {
           "already_resolved": "HA-MCP är installerat från en butikspost nu; inget att åtgärda.",
-          "store_unavailable": "Butiken (HACS eller Marketplace) har inte lästs in än, så posterna kan inte kontrolleras. Försök igen om några minuter."
+          "store_unavailable": "Marketplace har inte laddats ännu, så posterna kan inte kontrolleras. Försök igen om några minuter."
         }
       }
     }
