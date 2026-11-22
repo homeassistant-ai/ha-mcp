@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import re
-import string
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any, NamedTuple
 
 from .registry import (
@@ -119,61 +117,6 @@ def _unknown_categories_warning(unknown_categories: set[str]) -> str:
         "Entity visibility: ignoring unknown exclude_categories "
         f"{sorted(unknown_categories)} (valid: config, diagnostic)."
     )
-
-
-_WORD = frozenset(string.ascii_letters + string.digits + "_")
-_ESCAPE_TAIL = re.compile(r"[bfnrt]|u[0-9a-f]{4}")
-
-
-def _words_around(text: str, first: int, last: int, reach: int) -> set[str]:
-    """The word around ``text[first:last]``, followed at most ``reach`` either
-    way; after a backslash, also that word without an escape's tail."""
-    start, end = first, last
-    while start > max(0, first - reach) and text[start - 1] in _WORD:
-        start -= 1
-    while end < min(len(text), last + reach) and text[end] in _WORD:
-        end += 1
-    word = text[start:end].lower()
-    tail = _ESCAPE_TAIL.match(word) if text[start - 1 : start] == "\\" else None
-    return {word, word[tail.end() :]} if tail else {word}
-
-
-def _hidden_reference_test(hidden: set[str], known: set[str]) -> Callable[[Any], bool]:
-    """A test for whether a config record references one of ``hidden``.
-
-    For an enforcing search (the wire's ``enforce``), which omits the config
-    records that reference a hidden entity. The rule is the server's for a
-    tool's output (``HiddenMatcher.embeds``), so the search omits the same
-    records with and without the component: a hidden id counts wherever it
-    stands, unless the longer word around it is one of the ``known`` entity
-    ids. After a backslash the word is also judged without an escape's tail.
-    Keys count as much as values: a scene keys its states by entity_id.
-    """
-    terms = {entity_id.lower() for entity_id in hidden}
-    others = {entity_id.lower() for entity_id in known} - terms
-    pattern = re.compile(
-        "(?=({}))".format("|".join(re.escape(term) for term in sorted(terms))),
-        re.IGNORECASE,
-    )
-    reach = max(map(len, terms | others)) + len("u0000") + 1
-
-    def in_text(text: str) -> bool:
-        for match in pattern.finditer(text):
-            words = _words_around(text, *match.span(1), reach)
-            if words & terms or not words & others:
-                return True
-        return False
-
-    def names_hidden(value: Any) -> bool:
-        if isinstance(value, str):
-            return in_text(value)
-        if isinstance(value, Mapping):
-            return any(names_hidden(k) or names_hidden(v) for k, v in value.items())
-        if isinstance(value, (list, tuple, set, frozenset)):
-            return any(names_hidden(item) for item in value)
-        return False
-
-    return names_hidden
 
 
 def _visibility_hidden_set(

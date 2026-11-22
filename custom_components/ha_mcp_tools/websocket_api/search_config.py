@@ -45,7 +45,7 @@ def search_config_surface(
     """Score one config domain's loaded entities (raw_config indexed, not emitted for YAML).
 
     ``omit`` is the enforcing search's test for a record that names a hidden
-    entity (``visibility._hidden_reference_test``); such a record is left out.
+    entity (``hidden_reference._hidden_reference_test``); such a record is left out.
     """
     component = hass.data.get(domain) if getattr(hass, "data", None) else None
     entities = getattr(component, "entities", None)

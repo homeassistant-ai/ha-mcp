@@ -26,6 +26,7 @@ from .constants import (
     SEARCH_TYPE_SCRIPT,
 )
 from .flow_domains import HELPER_FLOWS_DEGRADED_WARNING, _flow_helper_domains
+from .hidden_reference import _hidden_reference_test
 from .registry import (
     _area_name,
     _composed_entity_name,
@@ -48,7 +49,6 @@ from .secrets import (
     _load_secret_values,
 )
 from .visibility import (
-    _hidden_reference_test,
     _visibility_hidden_set,
     _visibility_inventory,
     _visibility_warnings,
@@ -117,7 +117,11 @@ def do_search(  # noqa: PLR0915
         and (enforce or SEARCH_TYPE_ENTITY in search_types)
     ):
         hidden, known, visibility_warnings = _search_hidden(hass, view, visibility)
-    omit = _hidden_reference_test(hidden, known) if enforce and hidden else None
+    omit = (
+        _hidden_reference_test(view, _iter_states(hass), hidden, known)
+        if enforce and hidden
+        else None
+    )
     location = (
         resolve_search_location(view, area_filter)
         if area_filter and SEARCH_TYPE_ENTITY in search_types

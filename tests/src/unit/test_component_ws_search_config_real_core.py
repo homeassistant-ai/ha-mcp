@@ -245,6 +245,52 @@ async def test_an_enforcing_search_finds_a_hidden_id_as_the_output_scan_does(
     assert [hit["alias"] for hit in result["automations"]] == ["Probe"] * listed
 
 
+@pytest.mark.parametrize(
+    ("name", "message", "listed"),
+    [
+        pytest.param(
+            "Front Door Lock Battery",
+            "warn when front door lock battery is low",
+            False,
+            id="as-a-phrase",
+        ),
+        pytest.param(
+            "Front Door Lock Battery",
+            "the Front Door Lock Batteryless one",
+            True,
+            id="runs-on",
+        ),
+        pytest.param(
+            "Front Door Lock Battery",
+            "warn when Front Door Lock Battery avg is low",
+            True,
+            id="part-of-a-visible-name",
+        ),
+        pytest.param("Home", "Home Assistant started", True, id="single-word"),
+    ],
+)
+async def test_an_enforcing_search_finds_a_hidden_name_as_the_output_scan_does(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    name: str,
+    message: str,
+    listed: bool,
+) -> None:
+    """A config naming the hidden entity by its friendly name is omitted too,
+    by the rule that keeps the name out of a tool's output."""
+    hass.states.async_set("sensor.hidden", "87", {"friendly_name": name})
+    hass.states.async_set(
+        "sensor.avg", "80", {"friendly_name": "Front Door Lock Battery avg"}
+    )
+    await _set_up(hass, "automation", [_automation("Probe", message=message)])
+
+    result = await _search(
+        component_ws, query="probe", visibility={**_HIDING, "enforce": True}
+    )
+
+    assert [hit["alias"] for hit in result["automations"]] == ["Probe"] * listed
+
+
 async def test_a_search_that_does_not_enforce_keeps_the_configs_naming_one(
     component_ws: MockHAClientWebSocket, configs_naming_a_hidden_sensor: None
 ) -> None:
