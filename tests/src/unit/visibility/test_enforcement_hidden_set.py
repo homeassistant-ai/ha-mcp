@@ -27,7 +27,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnecti
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import SearchTools
 from ha_mcp.visibility import enforcement, resolver
-from ha_mcp.visibility.enforcement import active_hidden_matcher, scrub_records
+from ha_mcp.visibility.enforcement import active_hidden_matcher
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import VISIBILITY_FILENAME
 from ha_mcp.visibility.resolver import (
@@ -589,26 +589,42 @@ class TestHiddenNames:
 class TestScrubSeam:
     """Collection reads omit the records naming a hidden entity."""
 
-    async def test_scrub_records_drops_embedded_hidden_id(
+    @staticmethod
+    async def _search(client: HomeAssistantClient, query: str) -> dict[str, Any]:
+        """``ha_search`` on the path without the component."""
+        response: dict[str, Any] = await SearchTools(
+            client, SmartSearchTools(client=client)
+        ).ha_search(query=query)
+        return response
+
+    async def test_search_omits_a_config_naming_a_hidden_entity(
         self,
+        hass: HomeAssistant,
         core_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
     ) -> None:
+        assert await async_setup_component(
+            hass, "input_boolean", {"input_boolean": {"hidden_probe": {}}}
+        )
+        toggle = {
+            "action": "input_boolean.toggle",
+            "target": {"entity_id": "input_boolean.hidden_probe"},
+        }
+        await load_automations(
+            hass,
+            [
+                automation("am", "Probe morning"),
+                automation("pm", "Probe night", actions=[toggle]),
+            ],
+        )
         enforce_hiding(set_config, "input_boolean.hidden_probe")
-        matcher = await active_hidden_matcher(core_client)
-        assert matcher is not None
-        records: list[dict[str, Any]] = [
-            {"entity_id": "automation.morning", "config": {"trigger": "sun"}},
-            {
-                "entity_id": "automation.night",
-                "config": {"action": {"entity_id": "input_boolean.hidden_probe"}},
-            },
-            {"friendly_name": "Hidden Probe", "id": "input_boolean.hidden_probe"},
+
+        response = await self._search(core_client, "probe")
+
+        assert [hit["entity_id"] for hit in response["automations"]] == [
+            "automation.probe_morning"
         ]
-
-        kept = scrub_records(records, matcher)
-
-        assert [r.get("entity_id", r.get("id")) for r in kept] == ["automation.morning"]
+        assert "hidden_probe" not in json.dumps(response)
 
     async def test_search_lists_a_config_naming_an_entity_created_since_the_cached_read(
         self,
@@ -626,31 +642,31 @@ class TestScrubSeam:
             hass, [automation("avg", "Average watch", triggers=[{**above, "above": 5}])]
         )
 
-        response = await SearchTools(
-            core_client, SmartSearchTools(client=core_client)
-        ).ha_search(query="average watch", search_types=["automation"])
+        response = await self._search(core_client, "average watch")
 
         assert [hit["entity_id"] for hit in response["automations"]] == [
             "automation.average_watch"
         ]
 
-    async def test_scrub_records_keeps_another_entitys_record(
+    async def test_search_keeps_a_config_naming_entities_whose_ids_extend_a_hidden_id(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
     ) -> None:
-        hass.states.async_set("sensor.foo2", "1")
-        hass.states.async_set("binary_sensor.foo", "on")
+        for entity_id in ("sensor.foo", "sensor.foo2", "binary_sensor.foo"):
+            hass.states.async_set(entity_id, "1")
+        state = {"trigger": "state", "entity_id": ["sensor.foo2", "binary_sensor.foo"]}
+        await load_automations(
+            hass, [automation("ext", "Extended watch", triggers=[state])]
+        )
         enforce_hiding(set_config, "sensor.foo")
-        matcher = await active_hidden_matcher(core_client)
-        assert matcher is not None
-        records: list[dict[str, Any]] = [
-            {"entity_id": "sensor.foo2"},
-            {"entity_id": "binary_sensor.foo"},
-        ]
 
-        assert scrub_records(records, matcher) == records
+        response = await self._search(core_client, "extended watch")
+
+        assert [hit["entity_id"] for hit in response["automations"]] == [
+            "automation.extended_watch"
+        ]
 
     async def test_active_hidden_matcher_none_when_enforce_off(
         self,
