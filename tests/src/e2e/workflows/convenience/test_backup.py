@@ -20,7 +20,11 @@ import os
 import time
 
 import pytest
-from haos_runtime import HA_MCP_DEV_ADDON_SLUG, is_haos_backend_selected
+from haos_runtime import (
+    HA_MCP_DEV_ADDON_SLUG,
+    is_haos_backend_selected,
+    is_haos_inaddon_mode,
+)
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 
@@ -272,12 +276,19 @@ class TestBackupTools:
             assert "backup_id" in entry
             assert "date" in entry
         # Only a Supervisor install has Home Assistant's backup-before-update
-        # settings, and a Core install's list must not warn about them.
-        if is_haos_backend_selected():
+        # settings, and Supervisor refuses them to the app, which says so.
+        settings_warnings = [
+            w for w in data.get("warnings", []) if "before-update" in w
+        ]
+        if is_haos_inaddon_mode():
+            assert "update_backup_settings" not in data, data
+            assert settings_warnings, data
+        elif is_haos_backend_selected():
             assert isinstance(data["update_backup_settings"], dict), data
+            assert not settings_warnings, data
         else:
             assert "update_backup_settings" not in data, data
-        assert not [w for w in data.get("warnings", []) if "before-update" in w], data
+            assert not settings_warnings, data
 
         logger.info(f"✅ Snapshot list returned {data['count']} backup(s)")
 
