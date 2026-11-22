@@ -22,6 +22,7 @@ from homeassistant.setup import async_setup_component
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import get_backup_manager
 from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
@@ -29,7 +30,7 @@ from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
-from ._config_dir_yaml import setup_scenes
+from ._config_dir_yaml import setup_scenes, write_config_files
 from ._tool_errors import error_body, error_of
 
 _WRITE_MODES = ("config", "python_transform")
@@ -176,6 +177,84 @@ async def test_activate_by_the_id_of_a_yaml_scene_outside_scenes_yaml(
     await hass.async_block_till_done()
     lamp = hass.states.get("input_boolean.lamp")
     assert (_tv(hass), lamp and lamp.state) == ("on", "off")
+
+
+@pytest.mark.parametrize("scene_id", ["gone", "scene.gone"])
+async def test_activate_a_removed_yaml_scene_is_entity_unavailable(
+    hass: HomeAssistant, core_client: HomeAssistantClient, scene_id: str
+) -> None:
+    """``gone`` was a YAML scene; after its removal Core keeps ``scene.gone``
+    as an unavailable restored state, and its ``scene.turn_on`` would skip it
+    without an error, so the tool refuses before calling the service."""
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"tv": {}}}
+    )
+    await setup_scenes(
+        hass,
+        [],
+        yaml_only=[
+            {"id": "gone", "name": "Gone", "entities": {"input_boolean.tv": "on"}}
+        ],
+    )
+    await write_config_files(
+        hass, {"configuration.yaml": "scene: !include scenes.yaml\n"}
+    )
+    await hass.services.async_call("scene", "reload", blocking=True)
+    state = hass.states.get("scene.gone")
+    assert state is not None and state.attributes.get("restored") is True
+
+    with (
+        patch.object(
+            core_client, "call_service", wraps=core_client.call_service
+        ) as call_service,
+        pytest.raises(ToolError) as exc,
+    ):
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id=scene_id, activate=True
+        )
+
+    assert error_of(exc)["code"] == "ENTITY_UNAVAILABLE"
+    call_service.assert_not_awaited()
+    assert _tv(hass) == "off"
+
+
+async def test_activate_by_key_whose_config_read_fails_activates_nothing(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``key_a`` has no registered entity and ``key_b`` holds ``scene.key_a``:
+    when the config read of ``key_a`` fails with anything but Core's admin
+    refusal, the error surfaces and ``scene.key_a`` stays off."""
+    monkeypatch.setattr("ha_mcp.tools.entity_registration.RESOLVE_TIMEOUT", 0.05)
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"tv": {}}}
+    )
+    on = {"input_boolean.tv": {"state": "on"}}
+    await setup_scenes(
+        hass,
+        [
+            {"id": "key_a", "name": "First", "entities": on},
+            {"id": "key_b", "name": "Key A", "entities": on},
+        ],
+    )
+    er.async_get(hass).async_update_entity("scene.first", new_unique_id="pending")
+    request = core_client._request
+
+    async def failing(method: str, endpoint: str, *args: Any, **kw: Any) -> Any:
+        if endpoint == "config/scene/config/key_a":
+            raise HomeAssistantAPIError("server error", status_code=500)
+        return await request(method, endpoint, *args, **kw)
+
+    with (
+        patch.object(core_client, "_request", failing),
+        pytest.raises(ToolError),
+    ):
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="key_a", activate=True
+        )
+
+    assert _tv(hass) == "off"
 
 
 @pytest.mark.parametrize(

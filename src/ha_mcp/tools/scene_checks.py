@@ -178,7 +178,12 @@ def _lead(core: str) -> str:
 
 
 def raise_scene_not_storage_error(
-    scene_id: str, platform: str | None, *, remove: bool = False, core: str = ""
+    scene_id: str,
+    platform: str | None,
+    *,
+    remove: bool = False,
+    core: str = "",
+    disabled: bool = False,
 ) -> NoReturn:
     """Raise ``CONFIG_NOT_FOUND`` for a scene that exists but has no editable config.
 
@@ -192,12 +197,22 @@ def raise_scene_not_storage_error(
     generic otherwise. With ``remove`` and a bare ``scene_id`` on that generic
     branch, the first suggestion names the entity_id form, by which a
     ``scene.create`` scene is deleted. ``core`` is Core's refusal, which then
-    leads the message.
+    leads the message. A ``disabled`` entry has no state, so it gets no
+    activation hint: its YAML may be gone too.
     """
     entity_id = f"scene.{scene_id.removeprefix('scene.')}"
-    suggestions = [
-        f"Activate it with ha_config_set_scene(scene_id='{entity_id}', activate=True).",
-    ]
+    if disabled:
+        status = "is disabled in the entity registry and"
+        suggestions = [
+            f"Enable it with ha_set_entity(entity_id='{entity_id}', enabled=True), "
+            "or, if its YAML definition is gone, remove the leftover entry with "
+            f"ha_remove_entity(entity_id='{entity_id}').",
+        ]
+    else:
+        status = "exists but"
+        suggestions = [
+            f"Activate it with ha_config_set_scene(scene_id='{entity_id}', activate=True).",
+        ]
     if platform and platform != "homeassistant":
         platform_note = (
             f" It is provided by the '{platform}' integration, which manages its "
@@ -225,7 +240,7 @@ def raise_scene_not_storage_error(
     raise_tool_error(
         create_error_response(
             ErrorCode.CONFIG_NOT_FOUND,
-            f"{_lead(core)}Scene '{entity_id}' exists but has no editable Home Assistant "
+            f"{_lead(core)}Scene '{entity_id}' {status} has no editable Home Assistant "
             f"storage configuration.{platform_note}",
             suggestions=suggestions,
             context={"scene_id": scene_id, "platform": platform},

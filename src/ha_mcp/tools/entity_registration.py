@@ -171,7 +171,9 @@ async def scene_entity_to_activate(client: Any, scene_id: str) -> str:
     becomes ``scene.<id>`` (an integration scene, or a YAML scene without an
     ``id``), and so does every bare id without an entry for a non-admin token,
     which Core does not let read ``scenes.yaml``. A failed registry, config or
-    state read raises, and an entity without a state is ENTITY_NOT_FOUND.
+    state read raises, an entity without a state is ENTITY_NOT_FOUND and an
+    unavailable one (also the restored placeholder of a removed YAML scene)
+    ENTITY_UNAVAILABLE.
     """
     if scene_id.startswith("scene."):
         entity_id: str | None = scene_id
@@ -198,13 +200,26 @@ async def scene_entity_to_activate(client: Any, scene_id: str) -> str:
                 context={"scene_id": scene_id},
             )
         )
-    # HA's scene.turn_on is a silent no-op on an unknown entity.
+    # HA's scene.turn_on is a silent no-op on an unknown or unavailable entity.
     try:
-        await client.get_entity_state(entity_id)
+        state = await client.get_entity_state(entity_id)
     except HomeAssistantAPIError as e:
         if e.status_code == 404:
             raise_tool_error(create_entity_not_found_error(entity_id))
         raise
+    if state.get("state") == "unavailable":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.ENTITY_UNAVAILABLE,
+                f"Scene {entity_id} is unavailable; Home Assistant skips an "
+                "unavailable scene, so nothing would be activated",
+                context={"entity_id": entity_id},
+                suggestions=[
+                    "Check that the scene is still defined; the leftover entry of "
+                    f"a removed scene goes with ha_remove_entity(entity_id='{entity_id}')"
+                ],
+            )
+        )
     return entity_id
 
 
