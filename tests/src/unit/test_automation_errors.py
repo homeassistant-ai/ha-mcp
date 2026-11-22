@@ -34,6 +34,8 @@ from ha_mcp.tools.automation_errors import (
     section_from_status,
     text_suggestions,
 )
+from ha_mcp.tools.best_practice_checker import check_automation_config
+from ha_mcp.visibility.result_payloads import serialize_error
 
 # --- the failed section ---------------------------------------------------------
 
@@ -330,3 +332,41 @@ async def test_rejection_hint_names_what_core_objected_to(
 
     assert len(suggestions) == 1
     assert names in suggestions[0]
+
+
+async def test_rejection_relays_the_checker_warnings_where_the_scan_leaves_them_out(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+) -> None:
+    """The checker's examples name entities that are not this install's; the
+    enforce scan of a gated write's error leaves out the suggestion that relays
+    them and keeps Core's rejection."""
+    config = {
+        "alias": "porch",
+        "triggers": [{"trigger": "zz_bogus"}],
+        "conditions": [
+            {
+                "condition": "template",
+                "value_template": "{{ states('sensor.zz_other') | float > 25 }}",
+            }
+        ],
+        "actions": [],
+    }
+    bp_warnings = check_automation_config(config)
+    assert any("sensor.temp" in warning for warning in bp_warnings)
+    core_text = await _core_rejection(hass, core_client, config)
+
+    with pytest.raises(ToolError) as exc:
+        await raise_core_rejection(
+            core_client,
+            core_text,
+            config,
+            failed_section="triggers",
+            context={},
+            bp_warnings=bp_warnings,
+        )
+
+    scanned = serialize_error(exc.value, {"skill_content"})
+    assert "sensor.temp" in str(exc.value)
+    assert "sensor.temp" not in scanned
+    assert core_text in json.loads(scanned)["error"]["message"]

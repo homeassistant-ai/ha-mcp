@@ -283,6 +283,16 @@ def validate_identifier_not_empty(
     )
 
 
+# Opens the error suggestion that carries the best-practice checker's warnings;
+# on gated write tools the visibility scan leaves that suggestion out, as it does
+# the result's warnings.
+BP_WARNINGS_SUGGESTION_PREFIX = "Config had best-practice issues that may be related: "
+
+
+def bp_warnings_suggestion(bp_warnings: list[str]) -> str:
+    return BP_WARNINGS_SUGGESTION_PREFIX + "; ".join(bp_warnings)
+
+
 WHITESPACE_CLEARS_NOTE = (
     "A whitespace-only value acts like '', for clients that cannot send an "
     "empty string."
