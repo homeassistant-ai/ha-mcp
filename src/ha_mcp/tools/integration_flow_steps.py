@@ -17,7 +17,9 @@ with ``reconfigure=True`` the entry's reconfigure flow (a config flow with the
 reconfigure source), whose identity anchors are checked by
 ``check_reconfigure_identity`` before every call that may submit,
 ``entry_id`` with a subentry type the subentry flow, and a Repairs issue's
-domain and issue_id its fix flow.
+domain and issue_id its fix flow. ``entry_id`` with the ``flow_id`` of the
+reauth flow Core opened for that entry (named by its Repairs issue) is that
+reauth flow.
 """
 
 from __future__ import annotations
@@ -84,6 +86,7 @@ def reset_opened_flows() -> None:
 _FLOW_MANAGERS = {
     "setup": "config",
     "reconfigure": "config",
+    "reauth": "config",
     "options": "options",
     "subentry": "subentries",
     "repair": "repairs",
@@ -93,7 +96,7 @@ _FLOW_MANAGERS = {
 @dataclass(frozen=True)
 class FlowTarget:
     """The flow a call drives: ``kind`` is ``setup``, ``options``,
-    ``reconfigure``, ``subentry`` or ``repair``; ``domain`` names the
+    ``reconfigure``, ``reauth``, ``subentry`` or ``repair``; ``domain`` names the
     integration whose texts apply. A subentry flow reconfigures when it names
     a ``subentry_id`` and creates one otherwise. A repair flow fixes
     ``issue_id``; its texts live under ``strings_key`` (the issue's
@@ -144,8 +147,9 @@ class FlowTarget:
 
     @property
     def reconfigures(self) -> bool:
-        """Whether the flow commits through Core's reconfigure success abort."""
-        return self.kind == "reconfigure" or self.subentry_id is not None
+        """Whether the flow commits through Core's reconfigure success abort
+        (``reauth_successful`` for a reauth flow)."""
+        return self.kind in ("reconfigure", "reauth") or self.subentry_id is not None
 
     def submit_fn(self, client: Any) -> Any:
         if self.kind == "options":
@@ -194,7 +198,8 @@ def _record_anchor(kind: str, record: dict[str, Any]) -> tuple[str, str | None] 
         return (kind, f"{handler[0]}/{handler[1]}/{record.get('subentry_id') or ''}")
     if kind == "options":
         return (kind, handler)
-    if kind == "reconfigure" and source == "reconfigure":
+    # Core's SOURCE_RECONFIGURE and SOURCE_REAUTH are the kinds' names.
+    if kind in ("reconfigure", "reauth") and source == kind:
         return (kind, record.get("entry_id"))
     if kind == "setup" and source == "user":
         return (kind, handler)
@@ -216,7 +221,14 @@ async def _require_opened(client: Any, target: FlowTarget, flow_id: str) -> None
             if _record_anchor(target.kind, record) == target.anchor:
                 opened_flows[flow_id] = target.anchor
                 return
-    unreadable = record is None and flow_id not in opened_flows
+    _raise_not_opened(
+        target, flow_id, unreadable=record is None and flow_id not in opened_flows
+    )
+
+
+def _raise_not_opened(
+    target: FlowTarget, flow_id: str, *, unreadable: bool
+) -> NoReturn:
     named_by = (
         "the repairs item"
         if target.kind == "repair"
@@ -233,7 +245,8 @@ async def _require_opened(client: Any, target: FlowTarget, flow_id: str) -> None
             suggestions=[
                 "Start the flow again without flow_id."
                 + (
-                    " ha-mcp restarted since the flow was opened, and "
+                    " ha-mcp did not open the flow (Home Assistant opens a "
+                    "reauth flow itself) or restarted since, and "
                     "without a current ha_mcp_tools component it cannot read "
                     f"the flow's target from Home Assistant. {COMPONENT_INSTALL_HINT}"
                     if unreadable
@@ -397,7 +410,7 @@ async def settle(
     A progress step is waited out (up to 120 s; past that the error carries
     ``flow_id`` to poll). An external (browser) step is refused and its flow
     aborted. An abort raises with Core's reason text, except a reconfigure
-    flow's success abort and a repair flow's abort that hands over to
+    or reauth flow's success abort and a repair flow's abort that hands over to
     ``next_flow``. What is returned is a form, a menu, ``create_entry`` or
     one of those aborts.
     """
@@ -472,11 +485,9 @@ async def settle(
 async def open_step_answer(
     client: Any, target: FlowTarget, flow_id: str, step: dict[str, Any]
 ) -> dict[str, Any]:
-    """A form or menu step as the call's response; the flow stays open. A
-    repair step comes with Core's texts for it, as a fixable issue has no
-    other description."""
-    is_repair = target.kind == "repair"
-    texts = await step_texts(client, target.ref, step) if is_repair else {}
+    """A form or menu step as the call's response, with Core's texts for it
+    as the frontend shows them; the flow stays open."""
+    texts = await step_texts(client, target.ref, step)
     warnings: list[str] = texts.pop("warnings", [])
     body: dict[str, Any] = {
         "flow_type": step.get("type"),
@@ -489,11 +500,7 @@ async def open_step_answer(
     else:
         body.update(
             await describe_form(
-                client,
-                target.domain,
-                target.ref.path,
-                step,
-                (target.placeholders or {}) if is_repair else None,
+                client, target.domain, target.ref.path, step, target.placeholders
             )
         )
         warnings += body.pop("warnings", [])
@@ -580,19 +587,20 @@ async def _repair_finished(
 async def _finished_response(
     client: Any, target: FlowTarget, step: dict[str, Any]
 ) -> dict[str, Any]:
-    """``create_entry`` of a setup, options or repair flow, a reconfigure
-    flow's success abort, or a repair flow's hand-over to another flow."""
+    """``create_entry`` of a setup, options or repair flow, a reconfigure or
+    reauth flow's success abort, or a repair flow's hand-over to another flow."""
     if target.kind == "repair":
         return await _repair_finished(client, target, step)
     result = step.get("result")
     result = result if isinstance(result, dict) else {}
-    if target.kind == "reconfigure":
+    if target.kind in ("reconfigure", "reauth"):
+        done = "reconfigured" if target.kind == "reconfigure" else "re-authenticated"
         return {
             "success": True,
             "entry_id": target.entry_id,
             "domain": target.domain,
             "reason": step.get("reason"),
-            "message": f"{target.domain} integration reconfigured",
+            "message": f"{target.domain} integration {done}",
         }
     if target.kind == "options":
         return {
@@ -788,6 +796,50 @@ async def options_target(
     )
 
 
+async def _reauth_target(client: Any, entry_id: str, flow_id: str) -> FlowTarget | None:
+    """The reauth flow ``flow_id`` of entry ``entry_id``; ``None`` when
+    ``flow_id`` is no reauth flow. Core opens a reauth flow itself and names
+    it in the entry's Repairs issue, so only Core's record says what it is."""
+    held = opened_flows.get(flow_id)
+    if held is not None and held[0] != "reauth":
+        return None
+    record = await flow_record(client, "config", flow_id)
+    if record is None and held is None:
+        # Refused as the options flow would be, but before the entry checks
+        # that flow makes, which a reauth flow's entry need not pass.
+        options = FlowTarget("options", None, entry_id)
+        _raise_not_opened(options, flow_id, unreadable=True)
+    if not record or not record.get("found") or record.get("source") != "reauth":
+        return None
+    if record.get("entry_id") != entry_id:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Flow {flow_id!r} is the reauth flow of config entry "
+                f"{record.get('entry_id')!r}, not of {entry_id!r}. Nothing was "
+                "sent to the flow",
+                suggestions=["Continue it with that entry's entry_id."],
+                context={"flow_id": flow_id, "flow_kind": "reauth"},
+            )
+        )
+    handler = record.get("handler")
+    refuse_component_entry(handler, action="re-authenticate", entry_id=entry_id)
+    target = FlowTarget(
+        "reauth", handler if isinstance(handler, str) else None, entry_id
+    )
+    opened_flows[flow_id] = target.anchor
+    return target
+
+
+async def _entry_target(client: Any, entry_id: str, flow_id: str | None) -> FlowTarget:
+    """The entry's options flow, or the reauth flow ``flow_id`` names."""
+    if flow_id is not None and (
+        reauth := await _reauth_target(client, entry_id, flow_id)
+    ):
+        return reauth
+    return await options_target(client, entry_id)
+
+
 async def run_integration_step(
     client: Any,
     *,
@@ -799,8 +851,9 @@ async def run_integration_step(
     abort: bool,
     expected_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """``ha_set_integration`` on a setup (``domain``), options (``entry_id``)
-    or reconfigure (``entry_id`` with ``expected_identity``) flow.
+    """``ha_set_integration`` on a setup (``domain``), options (``entry_id``),
+    reauth (``entry_id`` with the reauth flow's ``flow_id``) or reconfigure
+    (``entry_id`` with ``expected_identity``) flow.
     A new flow without ``config`` or ``menu_choice`` returns its first step,
     and every reconfigure call except an abort checks the identity anchors
     first."""
@@ -814,12 +867,6 @@ async def run_integration_step(
                 client, entry_id, expected_identity
             )
         target = FlowTarget("reconfigure", entry.get("domain"), entry_id)
-        if not abort and (
-            flow_id is not None or config is not None or menu_choice is not None
-        ):
-            # Subscribed before the submit: Core queues the reload and
-            # returns, so only a stream opened first sees it settle.
-            watch = watch_entry_reload(client, entry_id)
 
         async def start() -> dict[str, Any]:
             return cast(
@@ -836,11 +883,19 @@ async def run_integration_step(
 
     else:
         entry_id = validate_identifier_not_empty(entry_id, "entry_id")
-        target = await options_target(client, entry_id)
+        target = await _entry_target(client, entry_id, flow_id)
 
         async def start() -> dict[str, Any]:
             return cast(dict[str, Any], await client.start_options_flow(entry_id))
 
+    if (
+        target.kind in ("reconfigure", "reauth")
+        and not abort
+        and (flow_id is not None or config is not None or menu_choice is not None)
+    ):
+        # Subscribed before the submit: Core queues the reload and returns,
+        # so only a stream opened first sees it settle.
+        watch = watch_entry_reload(client, str(target.entry_id))
     async with watch as settled:
         response = await drive_flow(
             client,

@@ -12,13 +12,16 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.config_entries import SOURCE_USER
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp import config
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.redaction import REDACTED_SET
+from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._backup_core import backup_settings as backup_settings
@@ -28,15 +31,21 @@ from ._integration_flow_steps_core import (
     INSTANT,
     MAC,
     MENU,
+    MENU_LABELS,
     MENU_OPTIONS,
     REFUSED_ADDRESS,
+    REFUSED_HOST,
     REJOIN,
     REREAD,
+    ROUTER,
     SINGLE,
+    STEP_STRINGS,
     STEPS,
     config_flow_ids,
     flow_calls,
+    reauth_issue,
     snapshot_count,
+    start_reauth,
 )
 from ._integration_flow_steps_core import annex as annex
 from ._integration_flow_steps_core import flow_tools as flow_tools
@@ -188,13 +197,51 @@ async def test_a_form_shown_first_with_advisory_errors_is_a_step(
 async def test_a_menu_answer_lists_its_options(
     flow_tools: IntegrationTools,
 ) -> None:
+    """Each option comes with the label Core ships for it, as the UI shows it."""
     result = await flow_tools.ha_set_integration(
         domain=STEPS, config={"connection_type": "menu"}
     )
 
     assert result["flow_type"] == "menu"
     assert result["menu_options"] == MENU_OPTIONS
+    assert result["menu_option_labels"] == MENU_LABELS
+    assert result["title"] == STEP_STRINGS["pick"]["title"]
     assert "menu_choice" in result["message"]
+
+
+async def test_a_form_step_carries_cores_title_and_description(
+    flow_tools: IntegrationTools,
+) -> None:
+    """The texts the HA dialog shows above a setup form, filled with the
+    step's placeholders; the submit label Core ships no string for is left out."""
+    result = await flow_tools.ha_set_integration(domain=STEPS)
+
+    texts = {k: result[k] for k in ("title", "description", "submit") if k in result}
+    assert texts == {
+        "title": STEP_STRINGS["user"]["title"],
+        "description": f"Reach the {ROUTER} bus.",
+    }
+
+
+async def test_a_form_fields_help_is_filled_with_the_steps_placeholders(
+    flow_tools: IntegrationTools,
+) -> None:
+    result = await flow_tools.ha_set_integration(domain=STEPS)
+
+    (field,) = result["fields"]
+    assert field["description"] == f"How {ROUTER} is reached."
+
+
+async def test_a_step_core_ships_no_strings_for_carries_no_texts(
+    flow_tools: IntegrationTools,
+) -> None:
+    result = await flow_tools.ha_set_integration(
+        domain=STEPS, config={"connection_type": "routing"}
+    )
+
+    assert result["step_id"] == "routing"
+    assert not {"title", "description", "submit"} & result.keys()
+    assert "warnings" not in result
 
 
 async def test_an_undeclared_key_is_left_to_home_assistant_to_refuse(
@@ -604,6 +651,116 @@ async def test_an_entry_without_options_is_refused(
     assert "supports_options" in body["error"]["message"]
     calls["start_options_flow"].assert_not_called()
     assert hass.config_entries.options.async_progress() == []
+
+
+# --- the reauth flow a Repairs issue names --------------------------------------
+
+
+async def test_the_reauth_flow_a_repairs_issue_names_is_answered_to_its_success(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    flow_tools: IntegrationTools,
+    hub: MockConfigEntry,
+) -> None:
+    """Core opens the reauth flow itself when an entry's credentials fail; the
+    flow_id its Repairs issue carries continues it with the entry's entry_id,
+    and Core's reauth_successful is the success, not an abort."""
+    flow_id = await start_reauth(hass, hub)
+
+    form = await flow_tools.ha_set_integration(entry_id=hub.entry_id, flow_id=flow_id)
+    done = await flow_tools.ha_set_integration(
+        entry_id=hub.entry_id, flow_id=flow_id, config={"host": "new"}
+    )
+
+    assert (form["flow_type"], form["step_id"]) == ("form", "reauth_confirm")
+    assert done["success"] is True
+    assert done["reason"] == "reauth_successful"
+    assert dict(hub.data) == {"host": "new"}
+    assert (
+        ir.async_get(hass).async_get_issue(HOMEASSISTANT_DOMAIN, reauth_issue(hub))
+        is None
+    )
+    assert open_flow_ids(hass) == []
+
+
+async def test_a_refused_reauth_answer_shows_cores_field_error_and_keeps_the_flow(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    flow_tools: IntegrationTools,
+    hub: MockConfigEntry,
+) -> None:
+    flow_id = await start_reauth(hass, hub)
+
+    body = await rejected_call_body(
+        flow_tools.ha_set_integration(
+            entry_id=hub.entry_id, flow_id=flow_id, config={"host": REFUSED_HOST}
+        )
+    )
+
+    assert body["errors"] == {"host": "invalid_auth"}
+    assert body["error_text"] == {"host": ERROR_TEXTS["invalid_auth"]}
+    assert config_flow_ids(hass) == [flow_id]
+
+
+async def test_a_reauth_flow_is_refused_for_another_entry(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    flow_tools: IntegrationTools,
+    hub: MockConfigEntry,
+    annex: MockConfigEntry,
+) -> None:
+    flow_id = await start_reauth(hass, hub)
+
+    with flow_calls(component_core_client) as calls:
+        body = await rejected_call_body(
+            flow_tools.ha_set_integration(
+                entry_id=annex.entry_id, flow_id=flow_id, config={"host": "new"}
+            )
+        )
+
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert hub.entry_id in body["error"]["message"]
+    for spy in calls.values():
+        spy.assert_not_called()
+    assert config_flow_ids(hass) == [flow_id]
+
+
+async def test_abort_ends_a_reauth_flow(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    flow_tools: IntegrationTools,
+    hub: MockConfigEntry,
+) -> None:
+    flow_id = await start_reauth(hass, hub)
+
+    result = await flow_tools.ha_set_integration(
+        entry_id=hub.entry_id, flow_id=flow_id, abort=True
+    )
+
+    assert result["aborted"] is True
+    assert config_flow_ids(hass) == []
+
+
+async def test_a_reauth_flow_without_the_component_is_refused_with_the_install_hint(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    flow_tools: IntegrationTools,
+    hub: MockConfigEntry,
+) -> None:
+    """Only the component reads which entry a flow Core opened belongs to."""
+    flow_id = await start_reauth(hass, hub)
+
+    with flow_calls(core_client) as calls:
+        body = await rejected_call_body(
+            flow_tools.ha_set_integration(
+                entry_id=hub.entry_id, flow_id=flow_id, config={"host": "new"}
+            )
+        )
+
+    assert COMPONENT_INSTALL_HINT in body["error"]["suggestion"]
+    for spy in calls.values():
+        spy.assert_not_called()
+    assert config_flow_ids(hass) == [flow_id]
 
 
 # --- auto-backup wiring of ha_set_integration ---------------------------------

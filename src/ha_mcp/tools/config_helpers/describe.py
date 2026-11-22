@@ -225,9 +225,9 @@ async def describe_form(
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``,
     ``config_subentries.<type>`` or ``issues.<key>.fix_flow``. Without a
-    ``domain`` there is no help text to read. Given ``placeholders`` (a fix
-    flow's issue placeholders), the help text is filled with the step's
-    ``description_placeholders`` over them, as the frontend fills it.
+    ``domain`` there is no help text to read. The help text is filled with
+    the step's ``description_placeholders``, over ``placeholders`` (a fix
+    flow's issue placeholders), as the frontend fills it.
     """
     fields = compact_schema(step.get("data_schema") or [])
     described: dict[str, Any] = {"fields": fields}
@@ -238,11 +238,10 @@ async def describe_form(
         if strings is None:
             described["warnings"] = [strings_unread_warning(domain)]
         else:
-            filled = (
-                None
-                if placeholders is None
-                else {**placeholders, **(step.get("description_placeholders") or {})}
-            )
+            filled = {
+                **(placeholders or {}),
+                **(step.get("description_placeholders") or {}),
+            }
             _with_help(fields, field_help(strings, domain, path, step_id, filled))
         unread = await _with_option_labels(
             client, domain, fields, step.get("data_schema")
