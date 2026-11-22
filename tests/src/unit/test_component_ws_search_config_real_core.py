@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
@@ -289,6 +290,38 @@ async def test_an_enforcing_search_finds_a_hidden_name_as_the_output_scan_does(
     )
 
     assert [hit["alias"] for hit in result["automations"]] == ["Probe"] * listed
+
+
+async def test_an_enforcing_search_keeps_a_config_ending_in_a_device_name(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    """A hidden entity named after its device does not count, also where the
+    name ends a text and a longer hidden name exists."""
+    entry = MockConfigEntry(domain="test")
+    entry.add_to_hass(hass)
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("test", "door")},
+        name="Front Door",
+    )
+    hass.states.async_set("sensor.hidden", "1", {"friendly_name": "Front Door"})
+    hass.states.async_set(
+        "sensor.level", "80", {"friendly_name": "Kitchen Battery Level"}
+    )
+    await _set_up(
+        hass, "automation", [_automation("Probe", message="locked the Front Door")]
+    )
+
+    result = await _search(
+        component_ws,
+        query="probe",
+        visibility={
+            "deny_entity_ids": ["sensor.hidden", "sensor.level"],
+            "enforce": True,
+        },
+    )
+
+    assert [hit["alias"] for hit in result["automations"]] == ["Probe"]
 
 
 async def test_a_search_that_does_not_enforce_keeps_the_configs_naming_one(

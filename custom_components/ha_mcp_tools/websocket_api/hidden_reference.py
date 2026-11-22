@@ -135,6 +135,30 @@ def _scanned_names(
     }
 
 
+def _stands_alone(
+    text: str,
+    folded: str,
+    first: int,
+    names: Mapping[str, tuple[str, ...]],
+    sizes: list[int],
+) -> bool:
+    """Whether one of ``names`` stands at ``first`` as a phrase of its own,
+    outside every visible name that contains it. ``folded`` is ``text`` folded
+    and ``sizes`` the names' lengths, shortest first."""
+    for last in (first + size for size in sizes):
+        if last > len(text):
+            break  # the text ends first; a clipped slice is no name
+        name = folded[first:last]
+        if name not in names or text[last : last + 1].isalnum():
+            continue
+        if not any(
+            folded.find(longer, max(0, last - len(longer)), first + len(longer)) >= 0
+            for longer in names[name]
+        ):
+            return True
+    return False
+
+
 def _name_test(names: Mapping[str, tuple[str, ...]]) -> Callable[[str], bool]:
     """A test for whether a text carries one of the scanned ``names``."""
     if not names:
@@ -145,21 +169,6 @@ def _name_test(names: Mapping[str, tuple[str, ...]]) -> Callable[[str], bool]:
     )
     sizes = sorted({len(name) for name in names})
 
-    def stands_alone(text: str, folded: str, first: int) -> bool:
-        """Whether a name stands at ``first`` as a phrase of its own, outside
-        every visible name that contains it. ``folded`` is ``text`` folded."""
-        for last in (first + size for size in sizes):
-            name = folded[first:last]
-            if name not in names or text[last : last + 1].isalnum():
-                continue
-            if not any(
-                folded.find(longer, max(0, last - len(longer)), first + len(longer))
-                >= 0
-                for longer in names[name]
-            ):
-                return True
-        return False
-
     def carries(text: str) -> bool:
         folded = ""
         for match in pattern.finditer(text):
@@ -169,7 +178,7 @@ def _name_test(names: Mapping[str, tuple[str, ...]]) -> Callable[[str], bool]:
                 continue
             # Folded once for the text, however many names stand in it.
             folded = folded or _fold(text)
-            if stands_alone(text, folded, first):
+            if _stands_alone(text, folded, first, names, sizes):
                 return True
         return False
 

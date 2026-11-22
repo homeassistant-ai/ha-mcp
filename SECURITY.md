@@ -171,7 +171,9 @@ values.
 
 `ha_get_skill_guide` and `ha_search_tools` are never scanned: they return
 bundled docs and tool schemas, whose examples can name an entity_id that is also
-hidden. The developer-mode `ha_dev_*` tools are not scanned either: developer
+hidden. The same bundled text attached to a write tool's result (the
+best-practices guide and the checker's warnings) is not scanned either; the
+rest of that result is. The developer-mode `ha_dev_*` tools are not scanned either: developer
 mode is a development and testing override that can change settings and replace
 the running server, and its reads (a stored security-policy rule, for example)
 can return a hidden entity_id.

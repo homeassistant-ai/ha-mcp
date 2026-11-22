@@ -1007,7 +1007,9 @@ camera or image entity too (by denylist or area) when its output is sensitive.
 
 `ha_get_skill_guide` and `ha_search_tools` are always **exempt**: they return
 bundled docs and tool schemas, never Home Assistant data, and their examples can
-name an entity_id you have hidden. The developer-mode `ha_dev_*` tools are
+name an entity_id you have hidden. The same bundled text on a write tool's
+result (the best-practices guide and the checker's warnings) is exempt for
+the same reason. The developer-mode `ha_dev_*` tools are
 exempt too: developer mode is a development and testing override that can
 change settings and replace the running server, and it may bypass entity
 visibility, so a stored security-policy rule naming a hidden entity_id is

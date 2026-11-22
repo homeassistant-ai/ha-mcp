@@ -431,6 +431,7 @@ class TestHiddenNames:
         [
             pytest.param("Front Door Lock Battery | 87", id="as-named"),
             pytest.param("front door lock battery: 87", id="other-case"),
+            pytest.param("battery of Front Door Lock Battery", id="at-the-end"),
             # A list of names and states, one entity per line, serialized.
             pytest.param(
                 json.dumps("Hall | on\nFront Door Lock Battery | 87"),
@@ -525,6 +526,30 @@ class TestHiddenNames:
         assert matcher is not None
 
         assert matcher.embeds("Garage Side Doorbell | Garage Side | locked")
+
+    async def test_name_of_a_device_at_the_end_of_a_text_stays_exempt(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """A longer hidden name must not be read into the text's last words."""
+        entry = MockConfigEntry(domain="test")
+        entry.add_to_hass(hass)
+        dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={("test", "lock")},
+            name="Front Door",
+        )
+        hass.states.async_set("lock.front", "locked", {"friendly_name": "Front Door"})
+        hass.states.async_set(
+            "sensor.level", "80", {"friendly_name": "Kitchen Battery Level"}
+        )
+        enforce_hiding(set_config, "lock.front", "sensor.level")
+        matcher = await active_hidden_matcher(core_client)
+        assert matcher is not None
+
+        assert not matcher.embeds("locked the Front Door")
 
     async def test_name_with_a_letter_whose_lowercase_is_longer_is_found(
         self,

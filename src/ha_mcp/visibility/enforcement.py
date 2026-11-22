@@ -66,6 +66,7 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
 from ..renamed_tools import current_tool_name
+from ..strict_bps import STRICT_BPS_GATED_TOOLS
 from ..tool_dispatch import CALL_PROXY_META_TOOLS, coerce_proxy_arguments
 from ..tools.helpers import raise_tool_error
 from . import resolver
@@ -118,6 +119,7 @@ _REPORT_ISSUE_TOOL = "ha_report_issue"
 # Always outside the barrier: bundled docs and tool schemas whose examples can
 # name a hidden id (#2949), and the ha_dev_* developer override by design.
 _UNGATED_TOOLS = frozenset({"ha_get_skill_guide", "ha_search_tools"})
+_GUIDE_KEYS = frozenset({"skill_content", "best_practice_warnings"})
 _UNGATED_PREFIX = "ha_dev_"
 # State reads have a shape-bounded scrub exception before the outbound scan.
 _STATE_TOOL = "ha_get_state"
@@ -713,7 +715,12 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
                 logger.info("visibility enforce: refused tool error from %s", name)
                 _raise_enforced(name, _outbound_reason(name))
             raise
-        text = serialize_result(result)
+        # A gated write tool attaches the server's own best-practices text: the
+        # bundled guide, which ``ha_get_skill_guide`` serves ungated, and the
+        # checker's warnings. Their examples name entities (``light.bedroom``)
+        # that are not this install's, and the write has already happened.
+        guide = _GUIDE_KEYS if name in STRICT_BPS_GATED_TOOLS else ()
+        text = serialize_result(result, guide)
         matcher = await self._settled(config, matcher, args, text)
         scrub_tally = _ScrubTally(0, 0, 0)
         if name == _STATE_TOOL:

@@ -235,6 +235,8 @@ class HiddenMatcher:
             sizes = sizes or sorted({len(name) for name in self.names})
             here = _fold(text[first : first + sizes[-1]])
             for last in (first + size for size in sizes):
+                if last > len(text):
+                    break  # the text ends first; a clipped slice is no name
                 name = here[: last - first]
                 if name not in self.names or text[last : last + 1].isalnum():
                     continue

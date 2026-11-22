@@ -10,23 +10,45 @@ JSON-parsed when it parses, for the shape-aware checks.
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp.tools import ToolResult
 
 
-def serialize_result(result: ToolResult) -> str:
-    """Flatten a tool result's text content and structured content for scanning."""
+def _without(payload: Any, keys: Collection[str]) -> Any:
+    """``payload`` without its top-level ``keys``, when it is a mapping."""
+    if not isinstance(payload, dict) or payload.keys().isdisjoint(keys):
+        return payload
+    return {name: value for name, value in payload.items() if name not in keys}
+
+
+def _text_without(text: str, keys: Collection[str]) -> str:
+    """A JSON text block without its top-level ``keys``; any other text as it is."""
+    if not any(f'"{key}"' in text for key in keys):
+        return text
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    return json.dumps(_without(payload, keys), default=str)
+
+
+def serialize_result(result: ToolResult, without: Collection[str] = ()) -> str:
+    """Flatten a tool result's text content and structured content for scanning.
+
+    ``without`` names top-level keys of the result to leave out.
+    """
     parts: list[str] = []
     for block in getattr(result, "content", None) or []:
         text = getattr(block, "text", None)
         if isinstance(text, str):
-            parts.append(text)
+            parts.append(_text_without(text, without))
     structured = getattr(result, "structured_content", None)
     if structured is not None:
         try:
-            parts.append(json.dumps(structured, default=str))
+            parts.append(json.dumps(_without(structured, without), default=str))
         except TypeError, ValueError:
             parts.append(str(structured))
     return "\n".join(parts)

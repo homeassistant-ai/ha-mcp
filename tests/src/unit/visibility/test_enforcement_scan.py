@@ -291,6 +291,69 @@ class TestOutboundScan:
 
         assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
 
+    @pytest.mark.parametrize(
+        "guidance",
+        [
+            pytest.param(
+                {"skill_content": {"references/x.md": "entity_id: cover.garage_door"}},
+                id="bundled-guide",
+            ),
+            pytest.param(
+                {"best_practice_warnings": ["e.g. entity_id: cover.garage_door"]},
+                id="checker-warnings",
+            ),
+        ],
+    )
+    async def test_best_practice_text_on_a_gated_write_result_is_not_scanned(
+        self,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+        guidance: dict[str, Any],
+    ) -> None:
+        """Its examples name entities that are not this install's, and the
+        write has already happened when its result is scanned."""
+        enforce_hiding(set_config, "cover.garage_door")
+        payload = {"success": True, "entity_id": "script.night", **guidance}
+
+        result = await mw.on_call_tool(
+            make_context("ha_config_set_script", {"script_id": "night"}),
+            _returns(text_result(json.dumps(payload), structured=payload)),
+        )
+
+        assert result.structured_content == payload
+
+    @pytest.mark.parametrize(
+        ("tool", "payload"),
+        [
+            pytest.param(
+                "ha_eval_template",
+                {"skill_content": {"x": "cover.garage_door"}},
+                id="a-tool-that-attaches-no-guide",
+            ),
+            pytest.param(
+                "ha_config_set_script",
+                {"entity_id": "cover.garage_door", "skill_content": {"x": "text"}},
+                id="beside-the-guide",
+            ),
+        ],
+    )
+    async def test_hidden_id_outside_a_write_tools_guide_is_still_refused(
+        self,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+        tool: str,
+        payload: dict[str, Any],
+    ) -> None:
+        enforce_hiding(set_config, "cover.garage_door")
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(tool, {}),
+                _returns(text_result(json.dumps(payload), structured=payload)),
+            )
+
+        assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
     async def test_hidden_id_on_a_later_line_of_a_list_refused(
         self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
     ) -> None:
