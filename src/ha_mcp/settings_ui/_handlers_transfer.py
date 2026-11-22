@@ -92,19 +92,46 @@ async def _tools_service(
     return reply
 
 
+class _PermissionsUnreadable(Exception):
+    """Home Assistant did not answer the File & YAML Tools permission read."""
+
+
+async def _tool_services(
+    server: HomeAssistantSmartMCPServer | None,
+) -> dict[str, Any]:
+    """The ``ha_mcp_tools`` services Home Assistant has registered."""
+    from ..tools.tools_filesystem import _registered_tool_services
+
+    if server is not None:
+        return await _registered_tool_services(server.client) or {}
+    from ..client.rest_client import HomeAssistantClient
+
+    client = HomeAssistantClient()
+    try:
+        return await _registered_tool_services(client) or {}
+    finally:
+        await client.close()
+
+
 async def _read_tools(
     server: HomeAssistantSmartMCPServer | None,
 ) -> dict[str, list[str]] | None:
-    """The component's permission lists, or None without File & YAML Tools."""
-    values = {}
+    """The component's permission lists, or None without File & YAML Tools.
+
+    Raises :class:`_PermissionsUnreadable` when Home Assistant does not answer,
+    so a transfer never reads an unanswered read as "no permissions".
+    """
     try:
-        for name, (read, _, key) in _TOOLS_SERVICES.items():
-            values[name] = list((await _tools_service(server, read, {}))[key])
-    except Exception:
-        # No File & YAML Tools entry (or no component) leaves nothing to move.
-        logger.debug("File & YAML Tools permissions unavailable", exc_info=True)
-        return None
-    return values
+        services = await _tool_services(server)
+        if any(read not in services for read, _, _ in _TOOLS_SERVICES.values()):
+            return None
+        return {
+            name: list((await _tools_service(server, read, {}))[key])
+            for name, (read, _, key) in _TOOLS_SERVICES.items()
+        }
+    except Exception as err:
+        logger.warning("File & YAML Tools permissions could not be read: %s", err)
+        raise _PermissionsUnreadable from err
 
 
 async def _app_options(
@@ -142,7 +169,10 @@ async def _export_bundle(server: HomeAssistantSmartMCPServer | None) -> dict[str
             app = {k: live[k] for k in transfer.app_option_fields(section) if k in live}
             settings[section] = {**(settings[section] or {}), **app} or None
         settings = transfer.validate_server_settings(settings, strict=False)
-    tools = await _read_tools(server)
+    try:
+        tools = await _read_tools(server)
+    except _PermissionsUnreadable as err:
+        raise TransferFailed("export_failed", 503) from err
     return {
         "format": transfer.FORMAT,
         "version": transfer.VERSION,
@@ -253,20 +283,9 @@ async def _conditional_writes_supported(
     The undo depends on it, and a component released before it refuses the
     argument; its service descriptions say which it is.
     """
-    from ..tools.tools_filesystem import _registered_tool_services
-
-    if server is not None:
-        services = await _registered_tool_services(server.client)
-    else:
-        from ..client.rest_client import HomeAssistantClient
-
-        client = HomeAssistantClient()
-        try:
-            services = await _registered_tool_services(client)
-        finally:
-            await client.close()
+    services = await _tool_services(server)
     return all(
-        "only_if" in (((services or {}).get(write) or {}).get("fields") or {})
+        "only_if" in ((services.get(write) or {}).get("fields") or {})
         for _, write, _ in _TOOLS_SERVICES.values()
     )
 
@@ -416,7 +435,10 @@ async def _import_transaction(
             changes = await _restore_files(backup.server_settings, limits)
             if backup.tools is not None:
                 # Recorded before the first write so any failure can undo it.
-                tools = await _read_tools(server)
+                try:
+                    tools = await _read_tools(server)
+                except _PermissionsUnreadable as err:
+                    raise TransferFailed("restore_failed", 503) from err
                 if tools is None:
                     skipped.append("file_permissions")
                 else:

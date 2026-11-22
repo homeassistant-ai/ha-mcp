@@ -22,6 +22,7 @@ from homeassistant.helpers.service import async_set_service_schema
 from homeassistant.helpers.storage import Store
 
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.config import reset_global_settings
 
 from ._file_services import make_file_service
 from ._settings_ui_app import (
@@ -260,7 +261,14 @@ async def test_an_oversized_upload_is_refused_while_it_is_read(
 
 async def test_the_sidecar_moves_settings_without_a_live_server(
     settings_world: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    hass_access_token: str,
 ) -> None:
+    # The sidecar reaches Home Assistant with the URL and token it inherits.
+    monkeypatch.setenv("HOMEASSISTANT_URL", core_client.base_url)
+    monkeypatch.setenv("HOMEASSISTANT_TOKEN", hass_access_token)
+    reset_global_settings()
     _write(settings_world, "feature_flags.json", {"redact_secrets": True})
     async with settings_http(None, is_sidecar=True) as http:
         exported = (await http.post(EXPORT, json={})).json()
@@ -602,4 +610,25 @@ async def test_a_restore_the_component_rejects_is_an_incomplete_rollback(
     assert (response.status_code, response.json()["error"]) == (
         400,
         "rollback_incomplete",
+    )
+
+
+async def test_an_export_that_cannot_read_the_permissions_fails(
+    settings_world: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    hass_access_token: str,
+    socket_enabled: None,
+) -> None:
+    # Home Assistant is restarting: nothing answers at its address.
+    unreachable = HomeAssistantClient(
+        base_url="http://127.0.0.1:9", token=hass_access_token, verify_ssl=False
+    )
+    try:
+        response = await post_settings(monkeypatch, unreachable, EXPORT, {})
+    finally:
+        await unreachable.close()
+
+    assert (response.status_code, response.json()["error"]) == (
+        503,
+        "export_failed",
     )

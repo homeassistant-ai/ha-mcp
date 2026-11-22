@@ -139,9 +139,10 @@ configuration:
       one through ha_manage_backup, as the Export and Import buttons on the Server
       Settings tab do. An import keeps the human-only settings, and changing the security
       policy, entity visibility or File & YAML Tools permissions also needs Dev tools
-      security policy access. An import can still turn on developer mode, tools and
-      features the file has on, so check your settings after an AI assistant imports
-      one.
+      security policy access. An import can also turn on developer mode, tools and
+      features, and turn off protections such as secret redaction, SSL verification
+      and the IPv6 allowlist, as the file says, so check your settings after an AI
+      assistant imports one.
   enable_snapshot_delete:
     name: 允许删除快照
     description: 允许 ha_manage_backup 删除完整的 Home Assistant 快照。快照可能是错误更改后恢复的最后途径，因此必须由人工开启此选项。计划备份、最新快照以及未满最小保留期限的快照将继续受到保护。

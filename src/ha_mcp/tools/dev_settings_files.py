@@ -137,7 +137,7 @@ def _agent_limits() -> ImportLimits:
 
 
 def _raise_transfer_error(code: str) -> NoReturn:
-    rollback = code in {"rollback_incomplete", "restore_failed"}
+    rollback = code in {"rollback_incomplete", "restore_failed", "export_failed"}
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED if rollback else ErrorCode.CONFIG_INVALID,

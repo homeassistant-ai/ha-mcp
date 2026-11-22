@@ -844,8 +844,10 @@ settings_file=...)`. Read Only Mode and Backup Read Only each block the import;
 the export stays available. It never moves the connection, keeps the
 destination's human-only settings, and changing security policies, entity
 visibility or File & YAML Tools permissions also needs **Dev tools security
-policy access**. An import can still turn on developer mode, tools and features
-the file has on, so check your settings after the assistant imports one.
+policy access**. An import can also turn on developer mode, tools and features,
+and turn off protections such as secret redaction, SSL verification and the IPv6
+allowlist, as the file says, so check your settings after the assistant imports
+one.
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 

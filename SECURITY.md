@@ -561,6 +561,14 @@ and carries a larger attack surface than the standard LLAT setup.
   for direct access, and at the bare root for Home Assistant ingress, where the
   routes admit only the Supervisor peer (`172.30.32.2`) and 403 every other
   caller.
+  The settings page's import is reachable through a tool too: once a person
+  turns on `enable_settings_transfer_actions`, `ha_manage_backup(scope="settings",
+  action="import")` applies a settings file an agent passes, including one it
+  wrote. It keeps the human-only settings and needs
+  `dev_tools_security_policy_access` for the tool-security policy, entity
+  visibility and File & YAML Tools permissions, but it can turn other feature
+  flags on or off, such as `redact_secrets`, `verify_ssl` and
+  `ipv6_allowed_networks`. The toggle is off by default.
 
 If you choose to run OAuth mode, restrict the consent endpoint to trusted
 networks and place it behind a TLS-terminating reverse proxy.
