@@ -42,6 +42,8 @@ class SoftwareUpdate(UpdateEntity):
     and checks for updates; a check offers ``next_latest`` when set."""
 
     _attr_should_poll = False
+    # False while its device is offline; the integration stays loaded.
+    online = True
 
     def __init__(
         self,
@@ -79,6 +81,10 @@ class SoftwareUpdate(UpdateEntity):
     @property
     def in_progress(self) -> bool | None:
         return self._progress
+
+    @property
+    def available(self) -> bool:
+        return self.online
 
     async def async_install(
         self, version: str | None, backup: bool, **kwargs: Any

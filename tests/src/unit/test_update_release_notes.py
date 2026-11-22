@@ -52,7 +52,7 @@ RAW = "https://raw.githubusercontent.com/owner/repo/v1.0.0/"
 class UnreachableUpdate(SoftwareUpdate):
     """An update whose device does not answer."""
 
-    _attr_available = False
+    online = False
 
 
 class NotesFailUpdate(SoftwareUpdate):

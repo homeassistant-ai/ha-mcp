@@ -256,6 +256,31 @@ class TestBatchActions:
             "ENTITY_UNAVAILABLE",
         )
 
+    async def test_a_write_to_an_update_whose_device_is_offline_is_refused(
+        self, hass: HomeAssistant, either_client: HomeAssistantClient
+    ) -> None:
+        """Its integration is loaded but the entity is unavailable: Core's
+        service skips it and answers success, so the skip read as done."""
+        offline = SoftwareUpdate("update.offline", features=INSTALL)
+        await set_up_updates(hass, offline)
+        offline.online = False
+        offline.async_write_ha_state()
+
+        result = await manage_updates(
+            either_client, action="skip", entity_ids=["update.offline"]
+        )
+
+        [item] = result["results"]
+        assert (result["succeeded"], item["error"]["code"]) == (
+            0,
+            "ENTITY_UNAVAILABLE",
+        )
+        offline.online = True
+        offline.async_write_ha_state()
+        state = hass.states.get("update.offline")
+        assert state is not None
+        assert state.attributes["skipped_version"] is None
+
 
 class TestLostConnection:
     """A batch whose connection to Home Assistant is lost."""

@@ -455,23 +455,30 @@ class UpdateTools:
         settings: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """One ``update.<action>`` over WebSocket per target; Core's refusal is
-        that item's error, and a restored target is refused unsent. An install
+        that item's error, and an unavailable target is refused unsent. An install
         that was sent and got no answer ends the batch as a partial item; any
         other transport failure propagates."""
         results: list[dict[str, Any]] = []
         for row in targets:
             item: dict[str, Any] = {"entity_id": row["entity_id"]}
-            if row.get("restored"):
-                # Core's service skips an entity whose integration is not
-                # loaded and answers success.
+            if row["state"] == "unavailable":
+                # Core's service skips an unavailable entity (its device is
+                # offline, or its integration is not loaded) and answers
+                # success.
+                why = (
+                    "restored: its integration is not loaded"
+                    if row.get("restored")
+                    else "unavailable"
+                )
                 results.append(
                     create_error_response(
                         ErrorCode.ENTITY_UNAVAILABLE,
-                        f"{row['entity_id']} is restored: its integration is not "
-                        "loaded, so Home Assistant would skip it without acting.",
+                        f"{row['entity_id']} is {why}, so Home Assistant would "
+                        "skip it without acting.",
                         context=item,
                         suggestions=[
-                            "Check its integration under Settings > Devices & services"
+                            "Check its device and its integration under "
+                            "Settings > Devices & services"
                         ],
                     )
                 )
@@ -793,8 +800,8 @@ class UpdateTools:
         back without Home Assistant's answer is a partial item whose message
         says whether it keeps running or must be read again before a resend,
         and not_started lists the batch targets that were not sent. An update
-        whose integration is not loaded (restored: true) is listed but not
-        written to. When this server runs as an app, its own
+        that is unavailable (its device is offline, or its integration is not
+        loaded: restored true) is listed but not written to. When this server runs as an app, its own
         app's update (runs_this_server true) is sent last: installing it
         restarts this server, so that call ends without an answer; reconnect
         and read it with action='get'. Finished updates drop out of 'list',

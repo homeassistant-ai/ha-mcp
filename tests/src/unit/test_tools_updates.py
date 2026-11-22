@@ -406,12 +406,17 @@ class TestRefresh:
         besides = timers(hass)
 
         call = asyncio.create_task(manage_updates(either_client, action="refresh"))
-        await answered(hass, call, besides)
-        # Home Assistant's clock passes Supervisor's debounce, then the wait.
-        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=10))
-        await hass.async_block_till_done()
-        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=15))
-        result = await call
+        try:
+            await answered(hass, call, besides)
+            # Home Assistant's clock passes Supervisor's debounce, then the wait.
+            async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=10))
+            await hass.async_block_till_done()
+            async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=15))
+            result = await call
+        finally:
+            if not call.done():
+                call.cancel()
+                await asyncio.gather(call, return_exceptions=True)
 
         offered = {u["entity_id"]: u["latest_version"] for u in result["updates"]}
         assert offered.get(core) == "2026.12.0"
