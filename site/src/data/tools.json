@@ -4154,7 +4154,7 @@
           "description": "'snapshot' for full HA tarballs; 'edits' for per-entity auto-backups."
         },
         "action": {
-          "type": "Literal['create', 'restore', 'list', 'view', 'diff', 'delete']",
+          "type": "Literal['create', 'restore', 'list', 'view', 'diff', 'delete', 'configure']",
           "description": "Operation to perform. Valid (scope, action) combinations are listed in the tool description."
         },
         "name": {
@@ -4216,6 +4216,11 @@
           "type": "bool",
           "default": false,
           "description": "(snapshot.delete) Must be True to confirm deletion."
+        },
+        "update_backup_settings": {
+          "type": "dict[str, Any] | None",
+          "default": null,
+          "description": "(snapshot.configure) The backup-before-update settings to change, sent to Home Assistant as given; Home Assistant validates them. It currently takes `core_backup_before_update` and `add_on_backup_before_update` (true/false) and `add_on_backup_retain_copies` (app update backups kept per app)."
         },
         "domain": {
           "type": "str | None",
