@@ -52,6 +52,10 @@ from .backup_access import (
 from .backup_on_demand import capture_on_demand
 from .backup_snapshot import create_backup, delete_backup, list_backups
 from .backup_snapshot_restore import restore_backup
+from .backup_update_settings import (
+    add_update_backup_settings,
+    configure_update_backup_settings,
+)
 from .coercion import JSON_STRING_COERCION
 from .helpers import (
     exception_to_structured_error,
@@ -82,7 +86,8 @@ def register_backup_tools(
 | scope | action | What it does |
 |---|---|---|
 | `snapshot` | `create` | Without any `include_*`: a full Home Assistant backup, made as Home Assistant's own automatic backup (its contents and locations, Home Assistant Cloud included) and counted by its retention like a scheduled backup; with no automatic-backup locations configured, a manual backup on the default location with the contents of the automatic-backup settings. Either way it holds the apps those settings select: Home Assistant's backup setup selects every app, but settings that select none give a full backup with no apps (on a Supervisor install the configuration, usually its database, the `ssl` folder and any folders the settings select). The result's `addons` lists the apps it holds, and on a Supervisor install its `note` says when there are none. With any `include_*`: a custom backup of just those parts (e.g. one app; on Supervisor installs Home Assistant's configuration brings the `ssl` folder along) on the default location. Needs the default backup password. Can take a while on a large instance; progress heartbeats are sent while waiting. |
-| `snapshot` | `list` | List full HA tarball snapshots as Home Assistant reports them (id, name, date, per-location size). Read-only — use to discover a `backup_id` or confirm a backup landed; a non-empty `agent_errors` means the list is partial. |
+| `snapshot` | `list` | List full HA tarball snapshots as Home Assistant reports them (id, name, date, per-location size). Read-only — use to discover a `backup_id` or confirm a backup landed; a non-empty `agent_errors` means the list is partial. On a Supervisor install it also returns Home Assistant's backup-before-update settings as `update_backup_settings`. |
+| `snapshot` | `configure` | Change Home Assistant's backup-before-update settings (the Backups settings page's app update backups, and the backup before a Core or OS update) from `update_backup_settings`; returns the settings Home Assistant then holds. Supervisor installs only, and not when ha-mcp runs as the Home Assistant app: Supervisor blocks an app from reading or changing these settings, so `list` then omits them with a warning. |
 | `snapshot` | `restore` | Restore from a full HA tarball. Replaces Home Assistant's configuration plus what `restore_database` / `restore_addons` / `restore_folders` select; other apps and folders stay as they are. `safety_backup` first backs up what the restore replaces. **Restarts HA.** Last-resort recovery. |
 | `snapshot` | `delete` | Delete one full HA tarball by `backup_id` (`confirm=True` required). **Disabled by default** (`enable_snapshot_delete` setting) and layered with guards even when enabled — see below. |
 | `edits` | `create` | On-demand snapshot of one entity (`domain` + `entity_id` required). Use before the user manually edits in the HA UI. Same handler path the decorator takes on writes; bypasses the `enable_auto_backup` toggle. |
@@ -106,7 +111,7 @@ refused if: the target is a scheduled/automatic backup; it's younger than
 newest snapshot remaining. These guarantee at least one recovery point always
 survives an agent's own mistakes.
 
-**Human-managed backup controls:** `enable_snapshot_actions=false` (ENABLE_SNAPSHOT_ACTIONS) blocks every snapshot action, including listing. `backup_read_only=true` (BACKUP_READ_ONLY) allows edits list/view/diff and snapshot list when snapshots are enabled; it blocks explicit create/restore/delete in both scopes. Automatic pre-edit capture still follows `enable_auto_backup`. A human must change these controls in the Backups tab, app configuration, or environment; developer tools cannot change them. Global and connection Read Only Mode still restrict writes.
+**Human-managed backup controls:** `enable_snapshot_actions=false` (ENABLE_SNAPSHOT_ACTIONS) blocks every snapshot action, including listing. `backup_read_only=true` (BACKUP_READ_ONLY) allows edits list/view/diff and snapshot list when snapshots are enabled; it blocks explicit create/restore/delete in both scopes and snapshot configure. Automatic pre-edit capture still follows `enable_auto_backup`. A human must change these controls in the Backups tab, app configuration, or environment; developer tools cannot change them. Global and connection Read Only Mode still restrict writes.
 
 **`enable_auto_backup` and `scope="edits"`:** the automatic-on-write capture (every wrapped tool call) is gated by `enable_auto_backup=true` — if the listing is empty, check the toggle (web settings UI or `ENABLE_AUTO_BACKUP=true` env var). The explicit `(edits, create)` action bypasses the toggle since the request is explicit; `list` / `view` / `restore` / `delete` operate on whatever's already on disk regardless of the toggle's current state.
 
@@ -116,6 +121,7 @@ survives an agent's own mistakes.
 - Full backup, when the user asks for one: `ha_manage_backup(scope="snapshot", action="create")`
 - Backup of one app: `ha_manage_backup(scope="snapshot", action="create", include_addons=["core_mosquitto"])`
 - List snapshots (to discover a backup_id or confirm one landed): `ha_manage_backup(scope="snapshot", action="list")`
+- Back up before each app update, keeping two copies: `ha_manage_backup(scope="snapshot", action="configure", update_backup_settings={"add_on_backup_before_update": true, "add_on_backup_retain_copies": 2})`
 - Restore a snapshot's configuration (the database follows the backup): `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed")`
 - Restore a snapshot with one of its apps: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed", restore_addons=["core_mosquitto"])`
 - Restore after a backup of what it replaces, when the user chose one: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed", safety_backup=True)`
@@ -145,7 +151,7 @@ survives an agent's own mistakes.
             ),
         ],
         action: Annotated[
-            Literal["create", "restore", "list", "view", "diff", "delete"],
+            Literal["create", "restore", "list", "view", "diff", "delete", "configure"],
             Field(
                 description="Operation to perform. Valid (scope, action) combinations are listed in the tool description."
             ),
@@ -254,6 +260,18 @@ survives an agent's own mistakes.
                 description=("(snapshot.delete) Must be True to confirm deletion."),
             ),
         ] = False,
+        update_backup_settings: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description="(snapshot.configure) The backup-before-update settings "
+                "to change, sent to Home Assistant as given; Home Assistant "
+                "validates them. It currently takes `core_backup_before_update` "
+                "and `add_on_backup_before_update` (true/false) and "
+                "`add_on_backup_retain_copies` (app update backups kept per app).",
+            ),
+        ] = None,
         # edits scope params
         domain: Annotated[
             str | None,
@@ -325,6 +343,7 @@ survives an agent's own mistakes.
                 },
                 confirm=confirm,
                 limit=limit,
+                update_backup_settings=update_backup_settings,
                 ctx=ctx,
             )
 
@@ -357,16 +376,21 @@ async def _dispatch_snapshot_action(
     parts: dict[str, Any],
     confirm: bool,
     limit: int,
+    update_backup_settings: dict[str, Any] | None,
     ctx: Context | None,
 ) -> dict[str, Any]:
-    """Route a ``scope="snapshot"`` action to its full-tarball handler.
+    """Route a ``scope="snapshot"`` action to its handler.
 
     ``parts`` holds the ``include_*`` parameters of a custom backup.
     """
     if action == "create":
         return await create_backup(client, name, ctx=ctx, **parts)
     if action == "list":
-        return await list_backups(client, limit)
+        return await add_update_backup_settings(
+            client, await list_backups(client, limit)
+        )
+    if action == "configure":
+        return await configure_update_backup_settings(client, update_backup_settings)
     if action == "delete":
         bid = _require("backup_id", backup_id, scope, action)
         return await delete_backup(client, bid, confirm, ctx=ctx)

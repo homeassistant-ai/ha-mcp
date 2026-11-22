@@ -639,6 +639,7 @@ def _served_keywords(tool: Tool | None) -> set[str]:
         ("ha_config_set_scene", ("activate",)),
         ("ha_manage_updates", ("repair", "ignore", "dismiss")),
         ("ha_set_integration", ("log", "debug")),
+        ("ha_manage_backup", ("before", "update", "retain", "configure")),
     ],
 )
 async def test_search_vocabulary_reaches_the_served_tool(
