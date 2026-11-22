@@ -38,6 +38,7 @@ from ha_mcp.visibility.resolver import (
 
 from .._command_faults import dropped_on, pooled_socket, registry_lookup_failing
 from .._component_frames import frames, pooled
+from .._deep_search_core import automation, load_automations
 from .._search_routing import SEARCH, routes
 from .._visibility_core import enforce_hiding, error_code, unreached_call_next
 from ._chained_enforcement import (
@@ -609,7 +610,7 @@ class TestScrubSeam:
 
         assert [r.get("entity_id", r.get("id")) for r in kept] == ["automation.morning"]
 
-    async def test_record_naming_an_entity_created_since_the_cached_read_is_kept(
+    async def test_search_lists_a_config_naming_an_entity_created_since_the_cached_read(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
@@ -620,14 +621,18 @@ class TestScrubSeam:
         enforce_hiding(set_config, "sensor.foo")
         assert await active_hidden_matcher(core_client) is not None
         hass.states.async_set("sensor.foo_average", "1")
-        records: list[dict[str, Any]] = [
-            {"entity_id": "automation.a", "config": {"above": "sensor.foo_average"}}
+        above = {"trigger": "numeric_state", "entity_id": "sensor.foo_average"}
+        await load_automations(
+            hass, [automation("avg", "Average watch", triggers=[{**above, "above": 5}])]
+        )
+
+        response = await SearchTools(
+            core_client, SmartSearchTools(client=core_client)
+        ).ha_search(query="average watch", search_types=["automation"])
+
+        assert [hit["entity_id"] for hit in response["automations"]] == [
+            "automation.average_watch"
         ]
-
-        matcher = await active_hidden_matcher(core_client, records)
-
-        assert matcher is not None
-        assert scrub_records(records, matcher) == records
 
     async def test_scrub_records_keeps_another_entitys_record(
         self,

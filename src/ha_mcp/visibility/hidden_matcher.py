@@ -15,7 +15,7 @@ judged with and without that tail.
 
 A hidden entity's friendly name counts in output too, as a phrase of its own
 (``Front Door Lock Battery | 87``), so that a list of names and states is
-refused like a list of ids. A name does not count where it is part of a
+refused like a list of ids. A name does not count where it is, or is part of, a
 visible entity's, a device's or an area's name: a lock named after its device
 would otherwise close every listing of that device. A name of a single word
 ("Home") is not scanned for, as it cannot be told from ordinary text. A state alone (``87``) names nothing.

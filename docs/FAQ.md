@@ -961,10 +961,11 @@ dimension. What it covers:
   an automation, such as `sensor.foo_old` to an entity that no longer exists,
   is therefore refused while `sensor.foo` is hidden. A hidden entity's friendly
   name counts too, as a phrase of its own, so a list of names and states is
-  refused like a list of ids. A name does not count where it is part of a
-  visible entity's, a device's or an area's name (a lock named after its device
-  would otherwise close every listing of that device), nor where the output
-  repeats an argument of the call that held it. A name of a single word is not
+  refused like a list of ids. A name does not count where it is, or is part
+  of, a visible entity's, a device's or an area's name (a lock named after its
+  device would otherwise close every listing of that device, so that lock's
+  name and state are returned), nor where the output repeats an argument of the
+  call that held it. A name of a single word is not
   scanned for: it cannot be told from ordinary text.
 - **Writes naming a hidden entity are concealed too.** The inbound argument scan
   applies to *every* tool, including service calls: a `ha_call_service` targeting

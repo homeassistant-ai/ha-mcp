@@ -8,9 +8,11 @@ with and without the component, which cannot import the server package:
 - A hidden entity_id counts wherever it stands, unless the longer word around
   it is another entity's own id. After a backslash the word is also judged
   without an escape's tail.
+- ``script.<storage key>`` of a hidden script counts like its entity_id: it
+  runs the script, and differs from the entity_id once that was renamed.
 - A hidden entity's friendly name of several words counts as a phrase of its
-  own, except where it is part of a visible entity's, a device's or an area's
-  name.
+  own, except where it is, or is part of, a visible entity's, a device's or an
+  area's name.
 
 Keys count as much as values: a scene keys its states by entity_id.
 """
@@ -22,7 +24,12 @@ import string
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from .registry import _all_area_entries, _all_device_entries, _RegistryView
+from .registry import (
+    _all_area_entries,
+    _all_device_entries,
+    _all_entity_entries,
+    _RegistryView,
+)
 
 _WORD = frozenset(string.ascii_letters + string.digits + "_")
 _ESCAPE_TAIL = re.compile(r"[bfnrt]|u[0-9a-f]{4}")
@@ -42,9 +49,25 @@ def _words_around(text: str, first: int, last: int, reach: int) -> set[str]:
     return {word, word[tail.end() :]} if tail else {word}
 
 
-def _id_test(hidden: set[str], known: set[str]) -> Callable[[str], bool]:
-    """A test for whether a text references one of the ``hidden`` entity_ids."""
-    terms = {entity_id.lower() for entity_id in hidden}
+def _script_services(view: _RegistryView, hidden: set[str]) -> set[str]:
+    """``script.<storage key>`` of every hidden script: the service that runs
+    it. Core keeps the storage key as the registry ``unique_id``."""
+    return {
+        f"script.{unique_id.casefold()}"
+        for entry in _all_entity_entries(view)
+        if getattr(entry, "entity_id", None) in hidden
+        and entry.entity_id.startswith("script.")
+        and isinstance(unique_id := getattr(entry, "unique_id", None), str)
+        and unique_id
+    }
+
+
+def _id_test(
+    hidden: set[str], services: set[str], known: set[str]
+) -> Callable[[str], bool]:
+    """A test for whether a text references one of the ``hidden`` entity_ids
+    or runs a hidden script by one of its ``services``."""
+    terms = {entity_id.lower() for entity_id in hidden} | services
     others = {entity_id.lower() for entity_id in known} - terms
     pattern = re.compile(
         "(?=({}))".format("|".join(re.escape(term) for term in sorted(terms))),
@@ -160,7 +183,7 @@ def _hidden_reference_test(
 
     ``known`` are the entity_ids Home Assistant has, ``states`` its states.
     """
-    names_id = _id_test(hidden, known)
+    names_id = _id_test(hidden, _script_services(view, hidden), known)
     carries_name = _name_test(
         _scanned_names(hidden, _friendly_names(states), _place_names(view))
     )
