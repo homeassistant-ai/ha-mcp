@@ -10,10 +10,11 @@ component:
   uses a single retry for scene config reads and before scene removal.
   ``entity_registration.lookup_entity_id`` is one strict lookup, which raises
   on a failed read, for the script get, run and remove and for a standalone
-  scene activation by a bare id. ``_resolve_scene`` in the REST client asks
-  ``entity_lookup`` which ``homeassistant`` scene Core registered under a bare
-  id and whether Core loaded it (``loaded``); without the component it reads
-  only the registry entry of ``scene.<id>``. The component's
+  scene activation by a bare id. ``scenes_with_id`` asks ``entity_lookup``,
+  for the REST client's ``_resolve_scene``, which ``homeassistant`` scene Core
+  registered under a bare id and whether Core loaded it (``loaded``); without
+  the component that resolution reads only the registry entry of
+  ``scene.<id>``. The component's
   ``entity_lookup`` returns only matching rows instead of a full
   registry/state listing. A hit is authoritative at once,
   but an empty read can precede HA's asynchronous entity registration even when
@@ -141,6 +142,16 @@ async def fetch_entity_lookup_via_component(
         )
         return None
     return matches
+
+
+async def scenes_with_id(client: Any, scene_id: str) -> list[dict[str, Any]] | None:
+    """The ``homeassistant`` scenes Core registered under ``scene_id``, each
+    with ``loaded``; None when the component does not answer or predates
+    ``loaded``."""
+    matches = await fetch_entity_lookup_via_component(client, scene_id, domain="scene")
+    if matches is None or any("loaded" not in match for match in matches):
+        return None
+    return [m for m in matches if m.get("platform") == "homeassistant"]
 
 
 _INSTALL_HINT = (

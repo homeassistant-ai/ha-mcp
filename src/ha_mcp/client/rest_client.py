@@ -107,9 +107,8 @@ class SceneResolution:
     the registry entry's integration domain (``"hue"``, ``"homeassistant"``, …)
     for error-message enrichment only - it never drives the classification, since
     a raw-YAML scene is ``platform="homeassistant"`` yet still 404s.
-    ``entity_id`` is the scene's entity when the registry named it, ``disabled``
-    whether that entry is disabled. ``id_unchecked`` marks a bare id resolved
-    without the component, which alone tells a YAML scene's id (#2632).
+    ``entity_id`` and ``disabled``: the entity the registry named, and whether it
+    is disabled; ``id_unchecked``: a bare id resolved without the component (#2632).
     """
 
     storage_key: str
@@ -2090,49 +2089,33 @@ class HomeAssistantClient:
         config", and ``platform`` names the owning integration (issue #1971).
 
         With the component, a bare id first names the scene Core registered
-        under that id (:meth:`_scenes_with_id`), wherever its YAML defines it;
-        the leftover entry of a removed YAML scene names nothing. Then, and
-        without the component: a bare id that is a storage key wins over
-        another scene whose entity is ``scene.<id>``; ``scene.<id>`` raises
-        :class:`SceneIdNotAnEntityError` instead of being read as key ``<id>``
-        when the registry has no such entity but that key holds a scene. The
-        config is read only for a bare id whose registry key differs or whose
-        lookup failed, and for an unregistered ``scene.<id>``.
-
-        ``registry_hit=False`` marks a key the registry did not name: a stored
-        key the config read confirmed, or the slug of an unregistered id. A
-        lookup that fails otherwise raises (:meth:`_registry_entry`), as does a
-        non-404 failure of that read.
+        under it, wherever its YAML defines it; a removed YAML scene's leftover
+        entry names nothing. Then a bare id that is a storage key wins over
+        another scene whose entity is ``scene.<id>``, and ``scene.<id>`` raises
+        SceneIdNotAnEntityError when no such entity exists but key ``<id>``
+        holds a scene. A failed read raises (:meth:`_registry_entry`).
         """
+        # Local import: component_config_reads imports this module.
+        from ..tools.component_config_reads import scenes_with_id
+
         bare_id = identifier.removeprefix("scene.")
         qualified = identifier != bare_id
-        rows = None if qualified else await self._scenes_with_id(bare_id)
+        rows = None if qualified else await scenes_with_id(self, bare_id)
         for row in rows or []:
             if row["loaded"] or row.get("disabled_by"):
+                disabled = bool(row.get("disabled_by"))
                 return SceneResolution(
-                    bare_id,
-                    registry_hit=True,
-                    platform="homeassistant",
-                    entity_id=row["entity_id"],
-                    disabled=bool(row.get("disabled_by")),
+                    bare_id, True, "homeassistant", row["entity_id"], disabled
                 )
         entry = await self._registry_entry("scene", identifier)
-        if entry and any(
-            row["entity_id"] == entry.get("entity_id") for row in rows or []
-        ):
+        if entry and entry.get("entity_id") in {row["entity_id"] for row in rows or []}:
             entry = None
-        fallback = SceneResolution(
-            bare_id,
-            registry_hit=False,
-            platform=None,
-            id_unchecked=not qualified and rows is None,
-        )
+        unchecked = not qualified and rows is None
+        fallback = SceneResolution(bare_id, False, None, id_unchecked=unchecked)
         if entry and entry.get("unique_id"):
+            disabled = bool(entry.get("disabled_by"))
             registered = SceneResolution(
-                str(entry["unique_id"]),
-                registry_hit=True,
-                platform=entry.get("platform"),
-                disabled=bool(entry.get("disabled_by")),
+                str(entry["unique_id"]), True, entry.get("platform"), disabled=disabled
             )
             if qualified or registered.storage_key == bare_id:
                 return registered
@@ -2142,20 +2125,6 @@ class HomeAssistantClient:
         if qualified and entry is None and await self._config_exists("scene", bare_id):
             raise SceneIdNotAnEntityError(identifier, bare_id)
         return fallback
-
-    async def _scenes_with_id(self, scene_id: str) -> list[dict[str, Any]] | None:
-        """The ``homeassistant`` scenes Core registered under ``scene_id``, each
-        with ``loaded``, from the component's ``entity_lookup``; None when the
-        component does not answer or predates ``loaded``."""
-        # Local import: component_config_reads imports this module.
-        from ..tools.component_config_reads import fetch_entity_lookup_via_component
-
-        matches = await fetch_entity_lookup_via_component(
-            self, scene_id, domain="scene"
-        )
-        if matches is None or any("loaded" not in match for match in matches):
-            return None
-        return [m for m in matches if m.get("platform") == "homeassistant"]
 
     async def _registry_entry(
         self, domain: str, identifier: str
@@ -2215,12 +2184,9 @@ class HomeAssistantClient:
         return (await self._resolve_scene(identifier)).storage_key
 
     async def _scene_live(self, storage_key: str) -> bool:
-        """Whether ``scene.<storage_key>`` has a state Core did not restore.
-
-        An ``id``-less YAML scene has no registry ``unique_id`` yet holds a
-        state; the ``restored`` placeholder Core keeps for a removed scene's
-        entry is no scene (#1971). A 404 is False; another failure raises.
-        """
+        """Whether ``scene.<storage_key>`` has a state Core did not restore: an
+        ``id``-less YAML scene has one, a removed scene's placeholder is no scene
+        (#1971). A 404 is False; another failure raises."""
         try:
             state = await self.get_entity_state(f"scene.{storage_key}")
         except HomeAssistantAPIError as e:
