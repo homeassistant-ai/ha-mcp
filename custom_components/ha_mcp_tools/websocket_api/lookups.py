@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import yaml  # type: ignore[import-untyped]
+from homeassistant.components.blueprint.const import BLUEPRINT_FOLDER
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -130,7 +131,7 @@ def _read_blueprint_file(hass: HomeAssistant, domain: str, path: str) -> _Bluepr
     if not callable(path_fn):
         return _UNREADABLE_BLUEPRINT
     try:
-        base = Path(path_fn("blueprints", domain))
+        base = Path(path_fn(BLUEPRINT_FOLDER, domain))
         candidate = Path(path) if path.startswith("/") else base / path
         real = candidate.resolve()
         base_real = base.resolve()

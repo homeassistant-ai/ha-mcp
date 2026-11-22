@@ -918,7 +918,7 @@ async def active_identifier_aliases(client: Any) -> IdentifierAliases | None:
 
 
 def refuse_hidden_config_file(tool_name: str) -> NoReturn:
-    """Refuse a config-file read whose file defines a hidden item."""
+    """Refuse a config-file read or edit whose file defines a hidden item."""
     _raise_enforced(tool_name, _CONFIG_FILE_REASON)
 
 

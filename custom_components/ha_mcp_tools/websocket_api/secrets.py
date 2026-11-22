@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
+from annotatedyaml import SECRET_YAML
 from homeassistant.core import HomeAssistant
 
 # All ws_* modules log through the websocket_api logger, so one logger
@@ -48,7 +49,7 @@ def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:
     if not callable(path_fn):
         return frozenset(), False
     try:
-        path = path_fn("secrets.yaml")
+        path = path_fn(SECRET_YAML)
         if not path:
             return frozenset(), False
         with open(path, encoding="utf-8") as handle:

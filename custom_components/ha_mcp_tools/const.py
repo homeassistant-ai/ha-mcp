@@ -15,6 +15,19 @@ block was folded in from the former standalone ``ha_mcp_server`` integration.
 
 import re
 
+from annotatedyaml import SECRET_YAML
+from homeassistant.__main__ import FAULT_LOG_FILENAME
+from homeassistant.bootstrap import ERROR_LOG_FILENAME
+from homeassistant.components.blueprint.const import BLUEPRINT_FOLDER
+from homeassistant.config import (
+    AUTOMATION_CONFIG_PATH,
+    SCENE_CONFIG_PATH,
+    SCRIPT_CONFIG_PATH,
+    YAML_CONFIG_FILE,
+)
+from homeassistant.helpers.storage import STORAGE_DIR
+from homeassistant.loader import PACKAGE_CUSTOM_COMPONENTS
+
 DOMAIN = "ha_mcp_tools"
 
 # Component version: the server version this release shares, stamped together
@@ -53,8 +66,34 @@ MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.11.0"
 # invokes the blueprint/save WS command internally). Prefer
 # ha_manage_blueprints(action="get") for the parsed body; raw read is the escape
 # hatch for the exact on-disk text.
-ALLOWED_READ_DIRS = ["www", "themes", "custom_templates", "dashboards", "blueprints"]
 ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
+ALLOWED_READ_DIRS = [*ALLOWED_WRITE_DIRS, BLUEPRINT_FOLDER]
+
+# Files that are allowed to be read (even if not in ALLOWED_READ_DIRS)
+ALLOWED_READ_FILES = [
+    YAML_CONFIG_FILE,
+    AUTOMATION_CONFIG_PATH,
+    SCRIPT_CONFIG_PATH,
+    SCENE_CONFIG_PATH,
+    SECRET_YAML,
+    # Read from the file Core writes it to (``core_log``).
+    ERROR_LOG_FILENAME,
+    # faulthandler's crash dump (HA Core's ``__main__`` enables it on this file).
+    # Written only on a native fatal signal, so it is the one place that
+    # traceback exists: journald / error_log never see it (issue #2373).
+    FAULT_LOG_FILENAME,
+]
+
+# Integration code under custom_components, readable but not writable by
+# default (a custom extra directory can grant writes, as for blueprints).
+CUSTOM_COMPONENTS_READ_PATTERN = f"{PACKAGE_CUSTOM_COMPONENTS}/**/*.py"
+
+# Log files the read service tails; home-assistant.log is read where Core
+# writes it (``core_log``).
+TAILED_LOG_FILES = frozenset({ERROR_LOG_FILENAME, FAULT_LOG_FILENAME})
+
+# Default tail lines for log files
+DEFAULT_LOG_TAIL_LINES = 1000
 
 # NON-OVERRIDABLE deny floor for the user-configurable extra read/write
 # directories (issue #1567). The custom allowlist is applied ON TOP of the
@@ -68,7 +107,7 @@ ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 # application_credentials, cloud) — including this component's OWN caller
 # token (.storage/ha_mcp_tools_auth). Letting a custom dir reach it would both
 # leak secrets and hand out the key to this component's own auth gate.
-DENY_PATH_SEGMENTS = frozenset({".storage"})
+DENY_PATH_SEGMENTS = frozenset({STORAGE_DIR})
 
 # Basenames the floor denies wherever they appear. Despite the historical
 # name, this set is enforced on every read, write and delete, and the file
@@ -88,7 +127,7 @@ DENY_PATH_SEGMENTS = frozenset({".storage"})
 # it with the digest of a PIN of its own and decide its own approvals. Denying
 # the basename leaves the rest of the data directory reachable, which is what
 # the rest of it is for.
-DENY_READ_BASENAMES = frozenset({"secrets.yaml", "approval_pin.json"})
+DENY_READ_BASENAMES = frozenset({SECRET_YAML, "approval_pin.json"})
 
 # HAOS sibling-volume mounts (issue #1586). These live OUTSIDE the config dir,
 # so the config-relative custom-directory allowlist (issue #1567) cannot reach
@@ -111,7 +150,7 @@ DENY_READ_BASENAMES = frozenset({"secrets.yaml", "approval_pin.json"})
 ALLOWED_VOLUME_ROOTS = ("/share", "/media", "/ssl")
 
 # Files allowed for managed YAML editing
-ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]
+ALLOWED_YAML_CONFIG_FILES = [YAML_CONFIG_FILE]
 # Also allows <packages-folder>/*.yaml via pattern matching, where the folder is
 # the one the user binds under ``homeassistant: packages:`` (default "packages",
 # detected at runtime — see _detect_package_dirs), plus themes/*.yaml.
@@ -256,8 +295,9 @@ RESERVED_DASHBOARD_URL_PATHS = frozenset(
 # import package (publish-dev.yml only renames the distribution), so only one
 # may be installed at a time — see EmbeddedServerManager's conflicting-dist
 # handling.
-# server_pin.SERVER_DISTS repeats these: tests load this file standalone, so it
-# imports nothing. test_server_pin_names_match_the_component pins the two.
+# server_pin.SERVER_DISTS repeats these: scripts and CI load server_pin.py by
+# path without Home Assistant, so it cannot import this file.
+# test_server_pin_names_match_the_component pins the two.
 DIST_NAME_STABLE = "ha-mcp"
 DIST_NAME_DEV = "ha-mcp-dev"
 
