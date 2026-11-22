@@ -6,11 +6,14 @@ import time
 from typing import Any, Literal
 
 from ..client.rest_client import (
+    HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
+from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
 from .component_config_reads import fetch_entity_lookup_via_component
+from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +123,7 @@ async def resolve_entity_id_after_write(
     timeout: float | None = None,
     poll_interval: float = 0.2,
 ) -> str | None:
-    """Poll for the actual entity ID before the post-write steps.
+    """Poll for the entity ID before post-write steps or a scene activation.
 
     An empty registry read can precede asynchronous registration even inside
     the component. Retry against one deadline, checking component availability
@@ -131,9 +134,10 @@ async def resolve_entity_id_after_write(
     object's entity. A failed registry read raises; cancellation always
     propagates.
 
-    Config reads, removals and runs do not use this helper. Writes that request
-    no post-write step should skip it entirely. The optional budget and interval
-    support deterministic tests without extending production waits.
+    Config reads, removals and script runs do not use this helper;
+    ``post_write_entity`` skips it when a write requests no post-write step.
+    The optional budget and interval support deterministic tests without
+    extending production waits.
     """
     storage_key = storage_key.removeprefix(f"{domain}.")
     budget = RESOLVE_TIMEOUT if timeout is None else timeout
@@ -153,8 +157,55 @@ async def resolve_entity_id_after_write(
     except TimeoutError:
         # The timer cancels the lookup or sleep in flight at the deadline.
         pass
-    logger.debug("Post-write registry budget exhausted for %s.%s", domain, storage_key)
+    logger.debug("Registry budget exhausted for %s.%s", domain, storage_key)
     return None
+
+
+async def scene_entity_to_activate(client: Any, scene_id: str) -> str:
+    """The entity a standalone activation of ``scene_id`` turns on.
+
+    ``scene.<x>`` is taken as-is. A bare id is the registry entry of the scene
+    with that id, wherever its YAML defines it. Without one, a key stored in
+    ``scenes.yaml`` waits for its entry and activates nothing when none appears,
+    never ``scene.<id>``, which can be another scene's; any other bare id
+    becomes ``scene.<id>`` (an integration scene, or a YAML scene without an
+    ``id``), and so does every bare id without an entry for a non-admin token,
+    which Core does not let read ``scenes.yaml``. A failed registry, config or
+    state read raises, and an entity without a state is ENTITY_NOT_FOUND.
+    """
+    if scene_id.startswith("scene."):
+        entity_id: str | None = scene_id
+    else:
+        entity_id = await lookup_entity_id(client, scene_id, "scene")
+        if entity_id is None:
+            try:
+                stored = await client._config_exists("scene", scene_id)
+            except HomeAssistantAdminRequiredError:
+                stored = False
+            if stored:
+                entity_id = await resolve_entity_id_after_write(
+                    client, scene_id, "scene"
+                )
+            else:
+                entity_id = f"scene.{scene_id}"
+    if entity_id is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.ENTITY_NOT_FOUND,
+                f"The scene stored under key '{scene_id}' has no registered "
+                "entity yet, so no scene was activated",
+                suggestions=["Retry once Home Assistant has loaded the scene"],
+                context={"scene_id": scene_id},
+            )
+        )
+    # HA's scene.turn_on is a silent no-op on an unknown entity.
+    try:
+        await client.get_entity_state(entity_id)
+    except HomeAssistantAPIError as e:
+        if e.status_code == 404:
+            raise_tool_error(create_entity_not_found_error(entity_id))
+        raise
+    return entity_id
 
 
 async def post_write_entity(
@@ -173,10 +224,11 @@ async def post_write_entity(
     With none of them requested this returns None without a lookup. When no
     entity is found, a warning in ``result`` names the cause and the skipped
     steps, and a requested activation is reported as ``activated: False``.
-    ``<domain>.<caller_id>`` stands in only when the caller's id resolved to
-    another storage key before the write: callers take that key from the
-    registry entry of ``<domain>.<caller_id>`` and refuse a bare id that names
-    another key, so the registry named it as this object's entity.
+    ``<domain>.<bare caller id>`` stands in, without a warning, only when the
+    caller's id resolved to another storage key before the write: only the
+    script write passes ``caller_id``, takes that key from the registry entry
+    of ``script.<id>`` and refuses a bare id that names another key, so the
+    registry named it as this script's entity.
     """
     steps = {"wait": wait, "category": category, "activate": activate}
     if not any(steps.values()):
@@ -186,7 +238,8 @@ async def post_write_entity(
     fallback = f"{domain}.{bare_id}" if bare_id != storage_key else None
     cause = f"the entity registry showed no entity for {domain} '{storage_key}' in time"
     try:
-        # With a wait the lookup also gets the 10 s state-wait budget: 5 s + 10 s.
+        # With a wait the lookup also gets the 10 s the state wait used to spend
+        # on a constructed id; after a hit the state wait still runs its own.
         entity_id = await resolve_entity_id_after_write(
             client, storage_key, domain, timeout=3 * RESOLVE_TIMEOUT if wait else None
         )

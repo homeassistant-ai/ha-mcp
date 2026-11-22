@@ -5,8 +5,9 @@ component:
 
 - Entity resolution maps storage keys to live registry entity IDs.
   ``entity_registration.resolve_entity_id_after_write`` polls after scene/script
-  writes against one deadline and constructs no id when it finds none.
-  ``_resolve_scene_entity_id`` uses a single retry before scene removal.
+  writes, and before a standalone activation of a stored scene key, against one
+  deadline and constructs no id when it finds none. ``_resolve_scene_entity_id``
+  uses a single retry for scene config reads and before scene removal.
   ``entity_registration.lookup_entity_id`` is one strict lookup for the script
   get, run and remove, which raises on a failed read. The component's
   ``entity_lookup`` returns only matching rows instead of a full
@@ -30,10 +31,11 @@ transport failure (``HomeAssistantConnectionError`` off ``send_command`` or from
 a failed (re)build of the pooled socket, or ``HomeAssistantAuthError``) to
 ``None`` too, NEVER propagating it: its consumers fall back to the legacy
 WebSocket registry bridge or REST state reads, which an escaping error would
-skip. The post-write resolver catches known API/transport failures and retains
-a best-effort entity ID; later wait and category operations report any
-verification or assignment failure. Removal resolvers retain their own error
-policies.
+skip. The post-write resolver returns None when its budget ends and raises on
+a failed registry read; ``entity_registration.post_write_entity`` turns either
+into a warning and skips the wait, category and activation steps, unless a
+script write by ``script.<x>`` falls back to that entity. Removal resolvers
+retain their own error policies.
 
 **GET-path invariant:** the automation/script/scene *config-get* tools never
 read the config body through the component — its in-process ``raw_config``

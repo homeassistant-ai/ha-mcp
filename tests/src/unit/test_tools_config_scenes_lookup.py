@@ -110,6 +110,7 @@ class TestEntityResolution:
             monkeypatch,
             [scene("night_light_led_desk_strip", "LED Desk Strip Night Light")],
         )
+        monkeypatch.setattr("ha_mcp.tools.entity_registration.RESOLVE_TIMEOUT", 1.0)
 
         with registered_after_first_list(
             hass, "scene.led_desk_strip_night_light", "night_light_led_desk_strip"
@@ -120,68 +121,66 @@ class TestEntityResolution:
         assert result["activated"] is True
         assert len(sent_of_type(sent, "config/entity_registry/list")) == 2
 
-    async def test_activation_by_key_of_an_unregistered_scene_falls_back(
+    async def test_activation_by_the_slug_of_a_scene_without_a_key(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """No registry entry after the recheck: ``scene.<key>``, and a debug
-        line the later warnings can be traced to."""
+        """No scene is stored under the bare id: ``scene.<id>`` is the scene."""
         tools = await scene_tools(
             hass, core_client, monkeypatch, yaml_only=[_UNREGISTERED]
         )
-        caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.tools_config_scenes")
 
         result = await _activate(tools, "test_scene")
 
         assert result["entity_id"] == "scene.test_scene"
         assert result["activated"] is True
-        assert any("test_scene" in m for m in _exhausted_logs(caplog))
 
-    async def test_first_lookup_hit_logs_no_exhausted_retry(
-        self, tools: ConfigSceneTools, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.tools_config_scenes")
-
-        result = await _activate(tools, "test_scene")
-
-        assert result["entity_id"] == "scene.test_scene"
-        assert _exhausted_logs(caplog) == []
-
-    async def test_activation_ignores_another_domains_entry_with_that_unique_id(
+    @pytest.mark.parametrize("registered", [True, False])
+    async def test_only_an_exhausted_registry_retry_logs(
         self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        monkeypatch: pytest.MonkeyPatch,
+        tools: ConfigSceneTools,
         entity_registry: er.EntityRegistry,
+        caplog: pytest.LogCaptureFixture,
+        registered: bool,
     ) -> None:
-        tools = await scene_tools(
-            hass, core_client, monkeypatch, yaml_only=[_UNREGISTERED]
-        )
-        entity_registry.async_get_or_create(
-            "automation", "automation", "test_scene", suggested_object_id="collision"
-        )
+        """The debug line a get's guessed entity traces back to; another
+        domain's entry with the key is no match."""
+        if not registered:
+            entity_registry.async_update_entity("scene.test_scene", new_unique_id="x")
+            entity_registry.async_get_or_create(
+                "automation", "automation", "test_scene"
+            )
+        caplog.set_level(logging.DEBUG, logger="ha_mcp.tools.tools_config_scenes")
 
-        result = await _activate(tools, "test_scene")
+        await tools.ha_config_get_scene(scene_id="test_scene")
 
-        assert result["entity_id"] == "scene.test_scene"
-        assert result["activated"] is True
+        assert bool(_exhausted_logs(caplog)) is not registered
 
-    async def test_activation_without_a_registry_answer_falls_back_at_once(
+    async def test_activation_without_a_registry_answer_activates_nothing(
         self, core_client: HomeAssistantClient, tools: ConfigSceneTools
     ) -> None:
         """A dead connection will not answer a retry either."""
-        with patch.object(
-            core_client,
-            "send_websocket_message",
-            AsyncMock(side_effect=HomeAssistantConnectionError("registry offline")),
-        ) as websocket:
-            result = await _activate(tools, "test_scene")
+        with (
+            patch.object(
+                core_client,
+                "send_websocket_message",
+                AsyncMock(side_effect=HomeAssistantConnectionError("registry offline")),
+            ) as websocket,
+            patch.object(
+                core_client, "call_service", wraps=core_client.call_service
+            ) as call_service,
+            pytest.raises(ToolError) as exc,
+        ):
+            await _activate(tools, "test_scene")
 
-        assert result["entity_id"] == "scene.test_scene"
-        assert result["activated"] is True
+        body = error_body(exc)
+        assert (body["error"]["code"], body.get("action")) == (
+            "CONNECTION_FAILED",
+            "activate",
+        )
+        call_service.assert_not_awaited()
         websocket.assert_awaited_once()
 
 

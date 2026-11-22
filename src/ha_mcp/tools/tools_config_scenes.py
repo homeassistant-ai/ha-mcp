@@ -24,11 +24,7 @@ from ..client.rest_client import (
     SceneResolution,
     SceneStorageConfigNotFoundError,
 )
-from ..errors import (
-    ErrorCode,
-    create_entity_not_found_error,
-    create_error_response,
-)
+from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
@@ -50,7 +46,11 @@ from .config_write_helpers import (
     merge_validation_meta,
     refuse_write_by_bare_id_of_another_key,
 )
-from .entity_registration import post_write_entity
+from .entity_registration import (
+    LOOKUP_ERRORS,
+    post_write_entity,
+    scene_entity_to_activate,
+)
 from .helpers import (
     core_error_message,
     exception_to_structured_error,
@@ -123,7 +123,7 @@ class ConfigSceneTools:
         self._client = client
 
     # Short retry retained for config reads and removals; post-write polling
-    # has its own deadline in entity_registration.
+    # and a standalone activation have their own deadline in entity_registration.
     RESOLVE_RETRY_DELAY = 0.2
 
     @staticmethod
@@ -150,8 +150,9 @@ class ConfigSceneTools:
         once; component unavailability falls through to the legacy path.
 
         Post-write waits, categories and activation use
-        ``entity_registration.post_write_entity``: their registration window
-        requires deadline-based polling (#2426).
+        ``entity_registration.post_write_entity``, and a standalone activation
+        ``entity_registration.scene_entity_to_activate``: their registration
+        window requires deadline-based polling (#2426).
         """
         scene_id = scene_id.removeprefix("scene.")
         if allow_component:
@@ -833,20 +834,15 @@ class ConfigSceneTools:
                     context={"action": "activate", "category": category},
                 )
             )
-        # Integration and YAML scenes have no storage key, so an entity_id is
-        # taken as-is; a bare key goes through the registry like other reads.
-        entity_id = (
-            scene_id
-            if scene_id.startswith("scene.")
-            else await self._resolve_scene_entity_id(scene_id)
-        )
-        # HA's scene.turn_on is a silent no-op on an unknown entity.
         try:
-            await self._client.get_entity_state(entity_id)
-        except HomeAssistantAPIError as e:
-            if e.status_code == 404:
-                raise_tool_error(create_entity_not_found_error(entity_id))
-            raise
+            entity_id = await scene_entity_to_activate(self._client, scene_id)
+        except LOOKUP_ERRORS as exc:
+            exception_to_structured_error(
+                exc,
+                context={"action": "activate", "scene_id": scene_id},
+                suggestions=["Nothing was activated: resolving the scene failed"],
+            )
+            raise  # unreachable: exception_to_structured_error always raises
         response: dict[str, Any] = {
             "success": True,
             "action": "activate",
@@ -888,6 +884,50 @@ class ConfigSceneTools:
             )
             return
         response["activated"] = True
+
+    async def _finish_scene_write(
+        self,
+        result: dict[str, Any],
+        resolved_id: str,
+        wait: bool,
+        category: str | None,
+        activate: bool,
+        *,
+        verb: str,
+    ) -> None:
+        """Wait for, categorise and activate the written scene's entity.
+
+        ``category`` was validated before the upsert (R6 blocker 15).
+        """
+        entity_id = await post_write_entity(
+            self._client,
+            resolved_id,
+            "scene",
+            result,
+            wait=wait,
+            category=category,
+            activate=activate,
+        )
+        if entity_id is None:
+            return
+        if wait:
+            try:
+                registered = await wait_for_entity_registered(self._client, entity_id)
+                if not registered:
+                    result.setdefault("warnings", []).append(
+                        f"Scene {verb} but {entity_id} not yet queryable. "
+                        "It may take a moment to become available."
+                    )
+            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                result.setdefault("warnings", []).append(
+                    f"Scene {verb} but verification failed: {e}"
+                )
+        if category:
+            await apply_entity_category(
+                self._client, entity_id, category, "scene", result, "scene"
+            )
+        if activate:
+            await self._activate_scene(result, entity_id, standalone=False)
 
     async def _run_scene_python_transform(
         self,
@@ -974,44 +1014,10 @@ class ConfigSceneTools:
             resolved_id, _resolved=True
         )
 
-        # Resolve actual entity_id and apply wait + category — same
-        # post-upsert finalisation the full-config branch runs. Without
-        # these, ``wait`` and ``category`` are silently dropped on
-        # python_transform calls.
-        entity_id = await post_write_entity(
-            self._client,
-            resolved_id,
-            "scene",
-            result,
-            wait=wait,
-            category=category,
-            activate=activate,
+        # Same post-upsert steps as the full-config branch.
+        await self._finish_scene_write(
+            result, resolved_id, wait, category, activate, verb="updated"
         )
-        if wait and entity_id:
-            try:
-                registered = await wait_for_entity_registered(self._client, entity_id)
-                if not registered:
-                    result.setdefault("warnings", []).append(
-                        f"Scene updated but {entity_id} not yet queryable. "
-                        "It may take a moment to become available."
-                    )
-            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                result.setdefault("warnings", []).append(
-                    f"Scene updated but verification failed: {e}"
-                )
-        if category and entity_id:
-            # Pre-validation of ``category`` already ran before the
-            # upsert (R6 blocker 15) — apply directly here.
-            await apply_entity_category(
-                self._client,
-                entity_id,
-                category,
-                "scene",
-                result,
-                "scene",
-            )
-        if activate and entity_id:
-            await self._activate_scene(result, entity_id, standalone=False)
 
         # Issue #1168 R3 blocker 6: build the response from
         # ``resolved_id`` directly (not the caller-input ``scene_id``)
@@ -1160,47 +1166,9 @@ class ConfigSceneTools:
         # storage key rather than a possible None.
         resolved_id = result.get("scene_id", resolved_id)
 
-        # Resolve actual entity_id via registry — HA derives scene
-        # entity_ids from the 'name' slug, not the scene_id storage key,
-        # so f"scene.{scene_id}" is wrong whenever a name is supplied.
-        entity_id = await post_write_entity(
-            self._client,
-            resolved_id,
-            "scene",
-            result,
-            wait=wait,
-            category=effective_category,
-            activate=activate,
+        await self._finish_scene_write(
+            result, resolved_id, wait, effective_category, activate, verb="saved"
         )
-
-        # Wait for scene to be queryable
-        if wait and entity_id:
-            try:
-                registered = await wait_for_entity_registered(self._client, entity_id)
-                if not registered:
-                    result.setdefault("warnings", []).append(
-                        f"Scene saved but {entity_id} not yet queryable. "
-                        "It may take a moment to become available."
-                    )
-            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                result.setdefault("warnings", []).append(
-                    f"Scene saved but verification failed: {e}"
-                )
-
-        # Apply category to entity registry if provided.
-        if effective_category and entity_id:
-            # Pre-validation of ``effective_category`` already ran before
-            # the upsert (R6 blocker 15) — apply directly here.
-            await apply_entity_category(
-                self._client,
-                entity_id,
-                effective_category,
-                "scene",
-                result,
-                "scene",
-            )
-        if activate and entity_id:
-            await self._activate_scene(result, entity_id, standalone=False)
 
         merge_validation_meta(result, references)
 

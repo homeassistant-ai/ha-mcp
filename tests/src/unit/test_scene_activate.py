@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant import config as conf_util
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -29,7 +30,7 @@ from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from ._config_dir_yaml import setup_scenes
-from ._tool_errors import error_of
+from ._tool_errors import error_body, error_of
 
 _WRITE_MODES = ("config", "python_transform")
 
@@ -114,6 +115,103 @@ async def test_activate_unknown_scene_is_entity_not_found(
 
     assert error_of(exc)["code"] == "ENTITY_NOT_FOUND"
     call_service.assert_not_awaited()
+
+
+async def test_activate_by_key_never_reaches_the_scene_named_after_it(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``key_a`` ("First") has no registered entity yet, while ``key_b``
+    ("Key A") is ``scene.key_a``: activating ``key_a`` turns on neither."""
+    monkeypatch.setattr("ha_mcp.tools.entity_registration.RESOLVE_TIMEOUT", 0.05)
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"tv": {}}}
+    )
+    on = {"input_boolean.tv": {"state": "on"}}
+    await setup_scenes(
+        hass,
+        [
+            {"id": "key_a", "name": "First", "entities": on},
+            {"id": "key_b", "name": "Key A", "entities": on},
+        ],
+    )
+    er.async_get(hass).async_update_entity("scene.first", new_unique_id="pending")
+
+    with pytest.raises(ToolError) as exc:
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="key_a", activate=True
+        )
+
+    body = error_body(exc)
+    assert (body["error"]["code"], body.get("scene_id")) == (
+        "ENTITY_NOT_FOUND",
+        "key_a",
+    )
+    assert _tv(hass) == "off"
+
+
+async def test_activate_by_the_id_of_a_yaml_scene_outside_scenes_yaml(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core's config API reads only ``scenes.yaml``, yet ``key_b`` ("Other")
+    from ``configuration.yaml`` is still a scene id: activating it turns on
+    ``scene.other``, not ``scene.key_b``, which is the stored scene "Key B"."""
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"tv": {}, "lamp": {}}}
+    )
+    await setup_scenes(
+        hass,
+        [{"id": "zz", "name": "Key B", "entities": {"input_boolean.lamp": "on"}}],
+        yaml_only=[
+            {"id": "key_b", "name": "Other", "entities": {"input_boolean.tv": "on"}}
+        ],
+    )
+
+    result = await ConfigSceneTools(core_client).ha_config_set_scene(
+        scene_id="key_b", activate=True
+    )
+
+    assert result["entity_id"] == "scene.other"
+    await hass.async_block_till_done()
+    lamp = hass.states.get("input_boolean.lamp")
+    assert (_tv(hass), lamp and lamp.state) == ("on", "off")
+
+
+@pytest.mark.parametrize(
+    ("scene_id", "entity_id"),
+    [("movie_night", "scene.film_night"), ("no_id", "scene.no_id")],
+)
+async def test_a_non_admin_token_activates_by_bare_id(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    scene_id: str,
+    entity_id: str,
+) -> None:
+    """Core lets only admins read ``scenes.yaml``: a stored scene activates
+    through its registry entry, an id-less YAML scene by its slug."""
+    assert await async_setup_component(hass, "auth", {})
+    for user in await hass.auth.async_get_users():
+        if not user.system_generated:
+            await hass.auth.async_update_user(user, group_ids=["system-users"])
+    assert await async_setup_component(
+        hass, "input_boolean", {"input_boolean": {"tv": {}}}
+    )
+    on = {"input_boolean.tv": "on"}
+    await setup_scenes(
+        hass,
+        [{"id": "movie_night", "name": "Film Night", "entities": on}],
+        yaml_only=[{"name": "No Id", "entities": on}],
+    )
+
+    result = await ConfigSceneTools(core_client).ha_config_set_scene(
+        scene_id=scene_id, activate=True
+    )
+
+    assert await core_client.token_is_admin() is False
+    assert result["entity_id"] == entity_id
+    await hass.async_block_till_done()
+    assert _tv(hass) == "on"
 
 
 async def test_activate_alone_refuses_a_category(
