@@ -89,17 +89,29 @@ def _fold(text: str) -> str:
 
 
 def _name_forms(name: str) -> set[str]:
-    """``name`` lowercased, as it is and as a JSON string writes it."""
-    return {_fold(name), _fold(json.dumps(name)[1:-1])}
+    """``name`` lowercased: as it is, and as a JSON string writes it and its
+    lowercase."""
+    written = (json.dumps(text)[1:-1] for text in (name, _fold(name)))
+    return {_fold(name), *map(_fold, written)}
 
 
-def _typed_forms(name: str) -> set[str]:
-    """The forms of a ``name`` the arguments held, also read back from a JSON
-    string, so either form there stands for both in the output."""
+def _read_back(text: str) -> str:
+    """``text`` as a JSON string holding it reads, or as it is."""
     try:
-        return _name_forms(name) | _name_forms(str(json.loads(f'"{name}"')))
+        return str(json.loads(f'"{text}"'))
     except ValueError:
-        return _name_forms(name)
+        return text
+
+
+def _plain(form: str) -> str:
+    """What every form of one name comes to: read back and lowercased."""
+    return _fold(_read_back(form))
+
+
+def _typed_forms(text: str) -> set[str]:
+    """The forms of an argument ``text``, also read back from a JSON string,
+    so either form there stands for both in the output."""
+    return _name_forms(text) | _name_forms(_read_back(text))
 
 
 def _scanned_names(
@@ -260,14 +272,16 @@ class HiddenMatcher:
         held: dict[str, set[str]] = {}
         for text in iter_strings(args):
             for name in self._named(text):
-                for form in _typed_forms(name):
-                    held.setdefault(form, set()).update(_typed_forms(text))
+                held.setdefault(_plain(name), set()).update(_typed_forms(text))
         if not typed and not held:
             return self
         return replace(
             self,
             other_ids=self.other_ids | typed,
-            names={n: (*longer, *held.get(n, ())) for n, longer in self.names.items()},
+            names={
+                name: (*longer, *held.get(_plain(name), ())) if held else longer
+                for name, longer in self.names.items()
+            },
         )
 
     def _words(self, text: str) -> Iterator[list[str]]:

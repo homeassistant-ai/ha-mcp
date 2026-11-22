@@ -189,12 +189,19 @@ async def configs_naming_a_hidden_sensor(hass: HomeAssistant) -> None:
         "input_select",
         {"probe_select": {"name": "Probe select", "options": ["sensor.hidden", "x"]}},
     )
-    MockConfigEntry(
+    entry = MockConfigEntry(
         domain="template",
         title="Probe template",
-        options={"state": "{{ states('sensor.hidden') }}"},
+        options={
+            "template_type": "sensor",
+            "name": "Probe template",
+            "state": "{{ states('sensor.hidden') }}",
+        },
         entry_id="e-probe",
-    ).add_to_hass(hass)
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
 
 
 async def test_an_enforcing_search_omits_the_configs_naming_a_hidden_entity(
@@ -208,6 +215,34 @@ async def test_an_enforcing_search_omits_the_configs_naming_a_hidden_entity(
     assert [hit["alias"] for hit in result["automations"]] == ["Probe plain"]
     assert (result["scenes"], result["helpers"]) == ([], [])
     assert result["config_total_matches"] == 1
+
+
+@pytest.mark.parametrize(
+    ("message", "listed"),
+    [
+        pytest.param("level 99sensor.hidden", False, id="run-together"),
+        pytest.param("one" + chr(92) + "nsensor.hidden", False, id="after-backslash-n"),
+        pytest.param(
+            "one" + chr(92) + "nsensor.hidden_2", True, id="another-entity-after-one"
+        ),
+    ],
+)
+async def test_an_enforcing_search_finds_a_hidden_id_as_the_output_scan_does(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    message: str,
+    listed: bool,
+) -> None:
+    """The search omits the same records with and without the component: a
+    hidden id counts wherever it stands, another entity's own id aside."""
+    hass.states.async_set("sensor.hidden_2", "1")
+    await _set_up(hass, "automation", [_automation("Probe", message=message)])
+
+    result = await _search(
+        component_ws, query="probe", visibility={**_HIDING, "enforce": True}
+    )
+
+    assert [hit["alias"] for hit in result["automations"]] == ["Probe"] * listed
 
 
 async def test_a_search_that_does_not_enforce_keeps_the_configs_naming_one(

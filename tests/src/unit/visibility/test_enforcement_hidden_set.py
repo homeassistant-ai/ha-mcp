@@ -550,21 +550,23 @@ class TestHiddenNames:
 
         assert not matcher.embeds("Home Assistant is restarting")
 
+    @pytest.mark.parametrize("query", ["Überwachung Batterie", "überwachung batterie"])
     async def test_name_the_caller_typed_is_not_a_leak_when_repeated(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
+        query: str,
     ) -> None:
         """A search that names the entity gets its own query back, which a
-        JSON result writes with the umlaut escaped."""
+        JSON result writes with the umlaut escaped, capital or small."""
         matcher = await self._hiding(
-            hass, core_client, set_config, "sensor.foo", "Wohnungstür Batterie"
+            hass, core_client, set_config, "sensor.foo", "Überwachung Batterie"
         )
-        repeated = json.dumps({"query": "wohnungstür batterie", "entities": []})
+        repeated = json.dumps({"query": query, "entities": []})
 
         assert matcher.embeds(repeated)
-        assert not matcher.for_call({"query": "wohnungstür batterie"}).embeds(repeated)
+        assert not matcher.for_call({"query": query}).embeds(repeated)
 
     async def test_name_in_a_template_does_not_open_the_result_that_lists_it(
         self, matcher: Any

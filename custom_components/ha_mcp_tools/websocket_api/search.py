@@ -116,8 +116,8 @@ def do_search(  # noqa: PLR0915
         and visibility
         and (enforce or SEARCH_TYPE_ENTITY in search_types)
     ):
-        hidden, visibility_warnings = _search_hidden(hass, view, visibility)
-    omit = _hidden_reference_test(hidden) if enforce and hidden else None
+        hidden, known, visibility_warnings = _search_hidden(hass, view, visibility)
+    omit = _hidden_reference_test(hidden, known) if enforce and hidden else None
     location = (
         resolve_search_location(view, area_filter)
         if area_filter and SEARCH_TYPE_ENTITY in search_types
@@ -260,8 +260,9 @@ def do_search(  # noqa: PLR0915
 
 def _search_hidden(
     hass: HomeAssistant, view: _RegistryView, visibility: Mapping[str, Any]
-) -> tuple[set[str], list[str]]:
-    """The entity_ids the ``visibility`` wire hides, and its degradation warnings."""
+) -> tuple[set[str], set[str], list[str]]:
+    """The entity_ids the ``visibility`` wire hides, every entity_id Home
+    Assistant knows, and the wire's degradation warnings."""
     states_list = _iter_states(hass)
     inventory = _visibility_inventory(view, states_list, visibility)
     assist_applies = (
@@ -288,7 +289,7 @@ def _search_hidden(
         assist_available=assist_available,
         inventory=inventory,
     )
-    return hidden, warnings
+    return hidden, inventory.state_ids | set(inventory.registry_by_id), warnings
 
 
 def _degradation_warnings(
