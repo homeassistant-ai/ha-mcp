@@ -2083,23 +2083,28 @@ class HomeAssistantClient:
         tells "entity missing" from "entity exists but has no editable storage
         config", and ``platform`` names the owning integration (issue #1971).
 
-        A bare id names, in order: the scene whose entity ``scene.<id>`` has
-        that id, the key stored under it, the YAML scene with that ``id``
-        unless Core holds only the restored state of its gone entity, the scene
-        whose entity is ``scene.<id>``, else the bare id (``registry_hit=False``,
-        also for a stored key). ``scene.<id>`` raises SceneIdNotAnEntityError
-        when key ``<id>`` holds a scene but the registry has no such entity.
-        A failed registry, config or state read raises.
+        A bare id names, in order: the scene whose entity ``scene.<id>`` has that id
+        (unless it is a removed YAML scene: nothing stored, state restored), the key
+        stored under it, the YAML scene with that ``id``, the scene whose entity is
+        ``scene.<id>``, else the bare id (``registry_hit=False``, also for a stored
+        key). ``scene.<id>`` raises SceneIdNotAnEntityError when key ``<id>`` holds a
+        scene but the registry has no such entity. A failed read raises.
         """
         bare_id = identifier.removeprefix("scene.")
         entry = await self._registry_entry("scene", identifier)
         fallback = SceneResolution(bare_id, registry_hit=False, platform=None)
+        if (
+            entry
+            and entry.get("unique_id") == identifier == bare_id
+            and entry.get("platform") == "homeassistant"
+            and not await self._config_exists("scene", bare_id)
+            and await self._scene_restored(f"scene.{bare_id}")
+        ):
+            return fallback
         registered = None
         if entry and entry.get("unique_id"):
             registered = SceneResolution(
-                str(entry["unique_id"]),
-                registry_hit=True,
-                platform=entry.get("platform"),
+                str(entry["unique_id"]), True, entry.get("platform")
             )
             if identifier != bare_id or registered.storage_key == bare_id:
                 return registered
@@ -2113,8 +2118,7 @@ class HomeAssistantClient:
         from ..tools.entity_registration import lookup_entity_id
 
         entity_id = await lookup_entity_id(self, bare_id, "scene")
-        state = await self._scene_state(entity_id) if entity_id else None
-        if entity_id and not (state or {}).get("attributes", {}).get("restored"):
+        if entity_id and not await self._scene_restored(entity_id):
             return SceneResolution(bare_id, True, "homeassistant", entity_id)
         return registered or fallback
 
@@ -2176,13 +2180,13 @@ class HomeAssistantClient:
         return (await self._resolve_scene(identifier)).storage_key
 
     async def _scene_state_exists(self, storage_key: str) -> bool:
-        """Return True if ``scene.<storage_key>`` exists in the state machine.
+        """Whether ``scene.<storage_key>`` has a state Core did not restore (#1971)."""
+        state = await self._scene_state(f"scene.{storage_key}")
+        return state is not None and not state.get("attributes", {}).get("restored")
 
-        An ``id``-less YAML scene has no registry ``unique_id`` but has a state:
-        this separates it from an absent scene after a config-API 404 (issue
-        #1971). A transport failure raises.
-        """
-        return await self._scene_state(f"scene.{storage_key}") is not None
+    async def _scene_restored(self, entity_id: str) -> bool:
+        state = await self._scene_state(entity_id) or {}
+        return bool(state.get("attributes", {}).get("restored"))
 
     async def _scene_state(self, entity_id: str) -> dict[str, Any] | None:
         try:
@@ -2200,15 +2204,11 @@ class HomeAssistantClient:
     ) -> NoReturn:
         """Translate a scene config-API 404 into the right exception.
 
-        When the registry resolve succeeded (``registry_hit``), the entity exists
-        and the 404 means "no editable storage config" → raise
-        :class:`SceneStorageConfigNotFoundError` carrying the platform. On a
-        registry miss the entity may still be an ``id``-less YAML scene, which has
-        no registry ``unique_id`` yet exists in the state machine: a state hit
-        upgrades the 404 to the same not-storage-scene case with ``platform=None``
-        (issue #1971). Only a state miss too is the historic genuinely-absent bare
-        404. The state check is skipped when ``resolution`` is None (the internal
-        ``_resolved`` re-fetch, where a 404 is a genuine disappearance). Raises.
+        A ``registry_hit``, or a state (:meth:`_scene_state_exists`) on a miss,
+        is a scene without editable storage config
+        (:class:`SceneStorageConfigNotFoundError`, issue #1971); else the 404 is
+        a missing scene. ``resolution`` None (the ``_resolved`` re-fetch) skips
+        the state check: a 404 there is a disappearance.
         """
         if resolution is not None:
             if resolution.registry_hit:

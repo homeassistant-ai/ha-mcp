@@ -1125,8 +1125,9 @@ class ConfigSceneTools:
             #
             # Existence takes both signals: an ``id``-less YAML scene has no
             # registry unique_id yet still holds a state-machine entity, and
-            # shadow-creates just the same. Only a scene missing from both is a
-            # real create, at the price of one extra ``/states/`` GET there.
+            # shadow-creates just the same. Only a scene missing from both (a
+            # state Core restored counts as none) is a real create, at the price
+            # of one extra ``/states/`` GET there.
             if resolution.registry_hit or await self._client._scene_state_exists(
                 resolved_id
             ):
