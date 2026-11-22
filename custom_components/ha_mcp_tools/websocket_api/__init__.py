@@ -133,9 +133,9 @@ the info handshake carries no capability entry:
   serializes a form it shows, and the step that follows it, read from the
   loaded flow handler on every call. A form or next step Core computes from
   earlier answers is marked, not evaluated. See ``flow_outline.py``.
-* ``ha_mcp_tools/flow_record`` — what a config, options or subentry flow in
-  progress was started for (its handler, source and entry anchors), read from
-  the flow manager that holds it. Core's flow endpoints do not report it, and
+* ``ha_mcp_tools/flow_record`` — what a config, options, subentry or Repairs
+  fix flow in progress was started for (its handler, source, entry and issue
+  anchors), read from the flow manager that holds it. Core's flow endpoints do not report it, and
   the server binds a ``flow_id`` it did not open itself (it restarted) to a
   call's target with it. See ``flow_record.py``.
 * ``ha_mcp_tools/update_entities`` — the loaded entities of Core's update

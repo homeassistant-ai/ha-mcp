@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from ..client.exceptions import HomeAssistantConnectionError
+from .helpers import core_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,8 @@ GITHUB_API_HEADERS = {
 
 # Core's codes for an entity without release notes and for an unknown entity.
 _NO_NOTES_CODES = frozenset({"not_supported", "not_found"})
+# Also Core's refusal for an unavailable entity or a failed notes read.
+_ANSWERED_CODES = _NO_NOTES_CODES | {"home_assistant_error"}
 _GITHUB_RELEASE = re.compile(
     r"https://github\.com/([^/]+)/([^/]+)/releases(?:/tag)?/([^/?#]+)"
 )
@@ -34,25 +37,37 @@ _MIN_CHANGELOG_LENGTH = 50
 async def release_notes_fields(
     client: Any, entity_id: str, attributes: dict[str, Any], *, is_core: bool
 ) -> dict[str, Any]:
-    """Core's release notes for the entity, else GitHub's, else a hint."""
+    """Core's release notes for the entity, else GitHub's, else a hint; Core's
+    refusal (other than having no notes) as ``release_notes_error`` either way."""
     reply = await _core_release_notes(client, entity_id)
     if reply and reply.get("success") and reply.get("result"):
         return {"release_notes": reply["result"], "release_notes_source": "websocket"}
 
+    fields: dict[str, Any] = {}
+    if (
+        reply
+        and not reply.get("success")
+        and reply.get("error_code") not in _NO_NOTES_CODES
+    ):
+        fields["release_notes_error"] = {
+            "code": reply.get("error_code"),
+            "message": core_error_message(reply.get("error", "")),
+        }
     release_url = attributes.get("release_url")
     core_version = attributes.get("latest_version") if is_core else None
     found = await _github_release_notes(release_url, core_version)
     if found:
-        notes, source = found
-        return {"release_notes": notes, "release_notes_source": source}
-    return {"release_notes_hint": _hint(release_url, reply)}
+        fields["release_notes"], fields["release_notes_source"] = found
+    else:
+        fields["release_notes_hint"] = _hint(release_url)
+    return fields
 
 
 async def _core_release_notes(client: Any, entity_id: str) -> dict[str, Any] | None:
     try:
         reply: dict[str, Any] = await client.send_websocket_message(
             {"type": "update/release_notes", "entity_id": entity_id},
-            expected_error_codes=_NO_NOTES_CODES,
+            expected_error_codes=_ANSWERED_CODES,
         )
     except HomeAssistantConnectionError as e:
         logger.debug(f"update/release_notes unanswered for {entity_id}: {e}")
@@ -60,16 +75,8 @@ async def _core_release_notes(client: Any, entity_id: str) -> dict[str, Any] | N
     return reply
 
 
-def _hint(release_url: str | None, reply: dict[str, Any] | None) -> str:
+def _hint(release_url: str | None) -> str:
     hint = "Release notes could not be fetched automatically."
-    if (
-        reply
-        and not reply.get("success")
-        and reply.get("error_code") not in _NO_NOTES_CODES
-    ):
-        hint += (
-            f" Home Assistant answered {reply.get('error_code')}: {reply.get('error')}."
-        )
     if release_url:
         hint += f" View them at: {release_url}"
     return hint

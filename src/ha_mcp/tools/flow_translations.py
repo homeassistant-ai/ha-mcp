@@ -83,14 +83,19 @@ async def fetch_flow_strings(
 
 
 def field_help(
-    strings: Mapping[str, Any], domain: str, path: str, step_id: str
+    strings: Mapping[str, Any],
+    domain: str,
+    path: str,
+    step_id: str,
+    placeholders: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     """HA's help text for a flow step's fields, keyed by field name, or by
-    ``<section>.<field>`` for a field inside a section.
+    ``<section>.<field>`` for a field inside a section, filled with
+    ``placeholders`` as ``flow_text`` fills a text.
 
-    ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
-    or ``config_subentries.<type>``. A field with no help text of its own gets
-    its UI label instead.
+    ``path`` is the flow's place in ``strings.json``: ``config``, ``options``,
+    ``config_subentries.<type>`` or ``issues.<key>.fix_flow``. A field with no
+    help text of its own gets its UI label instead.
     """
     prefix = f"component.{domain}.{path}.step.{step_id}."
     descriptions: dict[str, str] = {}
@@ -105,10 +110,17 @@ def field_help(
             continue
         name = f"{parts[1]}.{parts[-1]}" if parts[0] == "sections" else parts[-1]
         if parts[-2] == "data_description":
-            descriptions[name] = text
+            descriptions[name] = _filled(text, placeholders)
         else:
-            labels[name] = text
+            labels[name] = _filled(text, placeholders)
     return {**labels, **descriptions}
+
+
+def _filled(text: str, placeholders: Mapping[str, Any] | None) -> str:
+    values = placeholders or {}
+    return _PLACEHOLDER.sub(
+        lambda m: str(values[m[1]]) if m[1] in values else m[0], text
+    )
 
 
 def flow_text(
@@ -127,7 +139,4 @@ def flow_text(
     text = strings.get(f"component.{domain}.{key}")
     if not isinstance(text, str) or not text:
         return None
-    values = placeholders or {}
-    return _PLACEHOLDER.sub(
-        lambda m: str(values[m[1]]) if m[1] in values else m[0], text
-    )
+    return _filled(text, placeholders)

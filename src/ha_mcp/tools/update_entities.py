@@ -2,12 +2,14 @@
 
 The component's ``update_entities`` bridge names each entity's features from
 Core's ``UpdateEntityFeature``. Without it the rows come from Core's states and
-entity registry, and which updates can be installed is left unknown.
+entity registry, with ``supported_features`` left undecoded.
 """
 
 import logging
 from typing import Any, NoReturn
 
+from .._vendor.fastmcp.exceptions import ToolError
+from .._version import is_running_in_addon
 from ..client.exceptions import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
@@ -23,9 +25,10 @@ logger = logging.getLogger(__name__)
 
 _CAPABILITY = "update_entities"
 _NO_FEATURES_WARNING = (
-    "Which updates can be installed, backed up or installed at a chosen "
-    "version is only known with the HA-MCP component, so features and "
-    f"can_install are None. {COMPONENT_INSTALL_HINT}"
+    "Each row carries Home Assistant's supported_features number; decoding it "
+    "into feature names (which updates can be installed, backed up or "
+    "installed at a chosen version) needs the HA-MCP component, so features "
+    f"and can_install are None. {COMPONENT_INSTALL_HINT}"
 )
 _NO_CATEGORIES_WARNING = (
     "Home Assistant's entity registry could not be read, so the integration "
@@ -174,3 +177,30 @@ async def read_update_rows(
         if rows is not None:
             return rows, []
     return await _core_rows(client, entity_id)
+
+
+async def mark_server_app(
+    client: Any, rows: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """The row of the app this server runs in, marked ``runs_this_server``.
+
+    The hassio platform titles an app's update with the app's name, which
+    Supervisor's ``/addons/self/info`` returns. None outside the app, when no
+    row is an app's, or when Supervisor could not be read.
+    """
+    apps = [row for row in rows if row["category"] == "addons"]
+    if not apps or not is_running_in_addon():
+        return None
+    from .tools_addons import _supervisor_api_call
+
+    try:
+        reply = await _supervisor_api_call(client, "/addons/self/info")
+    except ToolError as e:
+        logger.debug("This app's own info could not be read: %s", e)
+        return None
+    info = reply.get("result")
+    name = info.get("name") if isinstance(info, dict) else None
+    own = next((row for row in apps if name and row.get("title") == name), None)
+    if own is not None:
+        own["runs_this_server"] = True
+    return own

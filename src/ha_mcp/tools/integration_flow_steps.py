@@ -8,24 +8,28 @@ the forms may hand over their answers in order; each goes to the step the
 flow is then at, unchanged, and the call stops at the first one Core refuses.
 A flow stays open between calls until Home Assistant finishes or aborts it,
 or the caller aborts it.
-``ha_set_integration`` and ``ha_config_set_helper`` both drive their flows
-through here.
+``ha_set_integration``, ``ha_config_set_helper`` and ``ha_manage_updates``
+(a Repairs issue's fix flow) drive their flows through here.
 
 Which flow manager a ``flow_id`` belongs to follows from the anchors:
 ``domain`` is the setup flow, ``entry_id`` the options flow, ``entry_id``
 with ``reconfigure=True`` the entry's reconfigure flow (a config flow with the
 reconfigure source), whose identity anchors are checked by
-``check_reconfigure_identity`` before every call that may submit, and
-``entry_id`` with a subentry type the subentry flow.
+``check_reconfigure_identity`` before every call that may submit,
+``entry_id`` with a subentry type the subentry flow, and a Repairs issue's
+domain and issue_id its fix flow.
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any, NoReturn, cast
 
+from ..client.repair_flows import abort_repair_flow, submit_repair_flow_step
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from .component_api import COMPONENT_INSTALL_HINT
@@ -41,10 +45,11 @@ from .config_entry_flow_errors import (
     _flow_texts,
     raise_flow_abort,
     raise_form_errors,
+    step_texts,
 )
 from .config_entry_flow_form import form_submission
 from .config_entry_flow_introspect import menu_choices, shielded_abort
-from .config_entry_flow_progress import _FLOW_RESOURCES, PROGRESS_STEP_TYPES
+from .config_entry_flow_progress import PROGRESS_STEP_TYPES, flow_url
 from .config_entry_flow_submit import (
     EXTERNAL_STEP_TYPES,
     RECONFIGURE_SUCCESS_REASONS,
@@ -81,15 +86,19 @@ _FLOW_MANAGERS = {
     "reconfigure": "config",
     "options": "options",
     "subentry": "subentries",
+    "repair": "repairs",
 }
 
 
 @dataclass(frozen=True)
 class FlowTarget:
     """The flow a call drives: ``kind`` is ``setup``, ``options``,
-    ``reconfigure`` or ``subentry``; ``domain`` names the integration whose
-    texts apply. A subentry flow reconfigures when it names a ``subentry_id``
-    and creates one otherwise."""
+    ``reconfigure``, ``subentry`` or ``repair``; ``domain`` names the
+    integration whose texts apply. A subentry flow reconfigures when it names
+    a ``subentry_id`` and creates one otherwise. A repair flow fixes
+    ``issue_id``; its texts live under ``strings_key`` (the issue's
+    translation_key, else its issue_id) and are filled with the issue's
+    ``placeholders``."""
 
     kind: str
     domain: str | None
@@ -97,9 +106,17 @@ class FlowTarget:
     subentry_type: str | None = None
     subentry_id: str | None = None
     title: str | None = None
+    issue_id: str | None = None
+    strings_key: str | None = None
+    placeholders: Mapping[str, Any] | None = field(default=None, compare=False)
 
     @property
     def ref(self) -> FlowRef:
+        if self.kind == "repair":
+            key = self.strings_key or self.issue_id
+            return FlowRef(
+                self.domain, f"issues.{key}.fix_flow", None, self.placeholders
+            )
         if self.kind == "subentry":
             path = f"config_subentries.{self.subentry_type}"
         else:
@@ -113,12 +130,14 @@ class FlowTarget:
                 self.kind,
                 f"{self.entry_id}/{self.subentry_type}/{self.subentry_id or ''}",
             )
+        if self.kind == "repair":
+            return (self.kind, f"{self.domain}/{self.issue_id}")
         return (self.kind, self.entry_id or self.domain)
 
     @property
     def edits_existing(self) -> bool:
-        """Options, reconfigure and subentry-reconfigure steps arrive filled
-        with the stored values."""
+        """Options, reconfigure, subentry-reconfigure and repair steps are
+        posted with the values they show, as the HA dialog posts them."""
         return self.kind != "setup" and (
             self.kind != "subentry" or self.subentry_id is not None
         )
@@ -133,6 +152,8 @@ class FlowTarget:
             return client.submit_options_flow_step
         if self.kind == "subentry":
             return client.submit_config_subentry_flow_step
+        if self.kind == "repair":
+            return partial(submit_repair_flow_step, client)
         return client.submit_config_flow_step
 
     def abort_fn(self, client: Any) -> Any:
@@ -140,11 +161,12 @@ class FlowTarget:
             return client.abort_options_flow
         if self.kind == "subentry":
             return client.abort_config_subentry_flow
+        if self.kind == "repair":
+            return partial(abort_repair_flow, client)
         return client.abort_config_flow
 
     def url(self, flow_id: str) -> str:
-        resource = _FLOW_RESOURCES[self.ref.path.split(".")[0]]
-        return f"/config/config_entries/{resource}/{flow_id}"
+        return flow_url(self.ref, flow_id)
 
 
 def _raise_flow_not_open(target: FlowTarget, flow_id: str) -> NoReturn:
@@ -164,6 +186,8 @@ def _record_anchor(kind: str, record: dict[str, Any]) -> tuple[str, str | None] 
     ``kind``; ``None`` when it is not one (a discovery or reauth flow is not a
     setup flow a caller started)."""
     handler, source = record.get("handler"), record.get("source")
+    if kind == "repair":
+        return (kind, f"{handler}/{record.get('issue_id')}")
     if kind == "subentry":
         if not (isinstance(handler, list) and len(handler) == 2):
             return None
@@ -193,14 +217,19 @@ async def _require_opened(client: Any, target: FlowTarget, flow_id: str) -> None
                 opened_flows[flow_id] = target.anchor
                 return
     unreadable = record is None and flow_id not in opened_flows
+    named_by = (
+        "the repairs item"
+        if target.kind == "repair"
+        else "domain or helper_type, entry_id or helper_id, reconfigure, "
+        "subentry_type and subentry_id"
+    )
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             f"Flow {flow_id!r} was not opened as the {target.kind} flow of "
             "this call's target: a flow continues or ends only with the arguments "
-            "that named its target when it was opened (domain or "
-            "helper_type, entry_id or helper_id, reconfigure, subentry_type "
-            "and subentry_id). Nothing was sent to the flow",
+            f"that named its target when it was opened ({named_by}). Nothing "
+            "was sent to the flow",
             suggestions=[
                 "Start the flow again without flow_id."
                 + (
@@ -368,8 +397,9 @@ async def settle(
     A progress step is waited out (up to 120 s; past that the error carries
     ``flow_id`` to poll). An external (browser) step is refused and its flow
     aborted. An abort raises with Core's reason text, except a reconfigure
-    flow's success abort. What is returned is a form, a menu,
-    ``create_entry`` or that success abort.
+    flow's success abort and a repair flow's abort that hands over to
+    ``next_flow``. What is returned is a form, a menu, ``create_entry`` or
+    one of those aborts.
     """
     is_reconfigure = target.reconfigures
     if step.get("type") in PROGRESS_STEP_TYPES:
@@ -399,7 +429,9 @@ async def settle(
     if step_type == "create_entry" and is_reconfigure:
         raise_reconfigure_created_entry(flow_id, step)
     entry_updated = (
-        step_type == "abort" and step.get("reason") in RECONFIGURE_SUCCESS_REASONS
+        target.kind != "repair"
+        and step_type == "abort"
+        and step.get("reason") in RECONFIGURE_SUCCESS_REASONS
     )
     if entry_updated and not is_reconfigure:
         # A setup flow ended by updating an existing entry
@@ -422,7 +454,7 @@ async def settle(
                 },
             )
         )
-    if step_type == "abort" and not entry_updated:
+    if step_type == "abort" and not entry_updated and not step.get("next_flow"):
         await raise_flow_abort(
             client, target.ref, flow_id, step, is_reconfigure=is_reconfigure
         )
@@ -440,26 +472,42 @@ async def settle(
 async def open_step_answer(
     client: Any, target: FlowTarget, flow_id: str, step: dict[str, Any]
 ) -> dict[str, Any]:
-    """A form or menu step as the call's response; the flow stays open."""
+    """A form or menu step as the call's response; the flow stays open. A
+    repair step comes with Core's texts for it, as a fixable issue has no
+    other description."""
+    is_repair = target.kind == "repair"
+    texts = await step_texts(client, target.ref, step) if is_repair else {}
+    warnings: list[str] = texts.pop("warnings", [])
     body: dict[str, Any] = {
         "flow_type": step.get("type"),
         "step_id": step.get("step_id"),
+        **texts,
     }
     if step.get("type") == "menu":
         body["menu_options"] = menu_choices(step)
         how = "menu_choice"
     else:
-        body.update(await describe_form(client, target.domain, target.ref.path, step))
+        body.update(
+            await describe_form(
+                client,
+                target.domain,
+                target.ref.path,
+                step,
+                (target.placeholders or {}) if is_repair else None,
+            )
+        )
+        warnings += body.pop("warnings", [])
         how = "config"
         errors = step.get("errors")
         if errors:
             body["errors"] = errors
             if isinstance(errors, dict):
                 texts = await _flow_texts(client, target.ref, step, "error", errors)
-                if warnings := texts.pop("warnings", None):
-                    body.setdefault("warnings", []).extend(warnings)
+                warnings += texts.pop("warnings", [])
                 if texts:
                     body["error_text"] = texts
+    if warnings:
+        body["warnings"] = list(dict.fromkeys(warnings))
     return {
         "success": True,
         "flow_id": flow_id,
@@ -484,9 +532,58 @@ def _require_flow_id(step: dict[str, Any], target: FlowTarget) -> str:
     return flow_id
 
 
-def _finished_response(target: FlowTarget, step: dict[str, Any]) -> dict[str, Any]:
-    """``create_entry`` of a setup or options flow, or a reconfigure flow's
-    success abort."""
+_FIXED = (
+    "Home Assistant fixed the issue and removed it from Repairs; an "
+    "integration that still finds the problem raises it again."
+)
+
+
+async def _repair_finished(
+    client: Any, target: FlowTarget, step: dict[str, Any]
+) -> dict[str, Any]:
+    """A fix flow's ``create_entry``, or its hand-over to ``next_flow``. Core
+    deleted the issue unless the flow aborted."""
+    fixed = step.get("type") == "create_entry"
+    response: dict[str, Any] = {
+        "success": True,
+        "domain": target.domain,
+        "issue_id": target.issue_id,
+        "fixed": fixed,
+    }
+    if fixed:
+        response["message"] = _FIXED
+        # The frontend fills the finish text with the step's placeholders only.
+        texts = await _flow_texts(
+            client,
+            replace(target.ref, placeholders=None),
+            step,
+            "create_entry",
+            {"create_entry_text": step.get("description") or "default"},
+        )
+        response.update(texts)
+    if next_flow := step.get("next_flow"):
+        response["next_flow"] = next_flow
+        response["result"] = step.get("result")
+        response["message"] = (
+            (
+                "Home Assistant fixed the issue and"
+                if fixed
+                else "The fix flow ended and"
+            )
+            + " handed over to another flow, next_flow ([flow type, flow_id]); "
+            "result is the config entry that flow belongs to. Continue it with "
+            "ha_set_integration and that flow_id, or in Home Assistant's UI."
+        )
+    return response
+
+
+async def _finished_response(
+    client: Any, target: FlowTarget, step: dict[str, Any]
+) -> dict[str, Any]:
+    """``create_entry`` of a setup, options or repair flow, a reconfigure
+    flow's success abort, or a repair flow's hand-over to another flow."""
+    if target.kind == "repair":
+        return await _repair_finished(client, target, step)
     result = step.get("result")
     result = result if isinstance(result, dict) else {}
     if target.kind == "reconfigure":
@@ -612,7 +709,7 @@ async def drive_flow(
     abort: bool,
     start: Any,
 ) -> dict[str, Any]:
-    """One ``ha_set_integration`` call on a setup, options or reconfigure flow."""
+    """One call on a setup, options, reconfigure or repair flow."""
     if abort:
         return await abort_open_flow(client, target, flow_id)
     flow_id, step, unsent = await advance_flow(
@@ -625,9 +722,9 @@ async def drive_flow(
     )
     if step.get("type") in ("form", "menu"):
         return await open_step_answer(client, target, flow_id, step)
-    response = _finished_response(target, step)
+    response = await _finished_response(client, target, step)
     if unsent:
-        response["warnings"] = [unsent_answers_warning(unsent)]
+        response.setdefault("warnings", []).append(unsent_answers_warning(unsent))
     return response
 
 

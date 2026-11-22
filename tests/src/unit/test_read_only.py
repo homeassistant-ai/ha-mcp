@@ -845,16 +845,12 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "confirm",
     },
     "ha_manage_updates": {
-        # Targets/scope for the write actions (install/skip/clear_skipped,
-        # ignore/unignore_repair): the inspected ``action`` blocks them first.
-        "entity_ids",
-        "categories",
-        "backup",
-        "version",
-        "repairs",
-        # Read-path modifiers of the allowed list/get actions.
-        "include_skipped",
-        "include_release_notes",
+        # Targets and payloads of the write actions (install, skip, set_channel,
+        # the repair actions): the inspected ``action`` blocks them first...
+        *("entity_ids", "categories", "backup", "version", "channel"),
+        *("repairs", "flow_id", "config", "menu_choice", "abort"),
+        # ...and read-path modifiers of the allowed list/get actions.
+        *("include_skipped", "include_release_notes"),
     },
     "ha_manage_security_policy": {
         # Both carry the write payload for action='set', which the

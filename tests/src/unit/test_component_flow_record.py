@@ -7,12 +7,15 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from homeassistant.components.repairs import repairs_flow_manager
 from homeassistant.config_entries import (
     SOURCE_USER,
     ConfigFlow,
     ConfigFlowResult,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import (
     MockConfigEntry,
     MockModule,
@@ -74,6 +77,7 @@ async def test_a_reconfigure_flow_is_told_from_a_setup_flow_of_its_domain(
         "source": "user",
         "entry_id": None,
         "subentry_id": None,
+        "issue_id": None,
     }
     assert records[1] == {
         "found": True,
@@ -81,7 +85,46 @@ async def test_a_reconfigure_flow_is_told_from_a_setup_flow_of_its_domain(
         "source": "reconfigure",
         "entry_id": entry.entry_id,
         "subentry_id": None,
+        "issue_id": None,
     }
+
+
+async def test_a_repairs_fix_flow_names_the_issue_it_fixes(
+    hass: HomeAssistant, component_ws: Any, entry: MockConfigEntry
+) -> None:
+    """Core's fix-flow answers name the domain only; the record also names
+    the issue the flow was opened for."""
+    assert await async_setup_component(hass, "repairs", {})
+    ir.async_create_issue(
+        hass,
+        _DOMAIN,
+        "probe",
+        is_fixable=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="probe",
+    )
+    manager = repairs_flow_manager(hass)
+    assert manager is not None
+    fix = await manager.async_init(_DOMAIN, context={"issue_id": "probe"})
+
+    record = await ws_result(
+        component_ws,
+        "ha_mcp_tools/flow_record",
+        manager="repairs",
+        flow_id=fix["flow_id"],
+    )
+
+    assert record["found"] is True
+    assert record["handler"] == _DOMAIN
+    assert record["issue_id"] == "probe"
+
+
+async def test_no_fix_flow_is_found_without_repairs(component_ws: Any) -> None:
+    record = await ws_result(
+        component_ws, "ha_mcp_tools/flow_record", manager="repairs", flow_id="x"
+    )
+
+    assert record == {"found": False}
 
 
 async def test_a_flow_of_another_manager_is_not_found(

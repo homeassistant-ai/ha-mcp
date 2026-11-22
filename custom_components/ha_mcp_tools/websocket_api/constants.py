@@ -241,6 +241,7 @@ CAPABILITIES: list[str] = [
     todo_items.CAPABILITY,
     update_entities.CAPABILITY,
     flow_record.CAPABILITY,
+    flow_record.REPAIRS_CAPABILITY,
     flow_outline.CAPABILITY,
     scene_editor.CAPABILITY,
     automation_config.CAPABILITY,

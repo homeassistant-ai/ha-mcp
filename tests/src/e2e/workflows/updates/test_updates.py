@@ -342,6 +342,13 @@ class TestUpdateToolsEdgeCases:
                 f"Update counts differ significantly: {count1} vs {count2}"
             )
 
+            # A check for updates answers with the same listing.
+            refreshed = await mcp.call_tool_success(
+                "ha_manage_updates", {"action": "refresh"}
+            )
+            assert "updates_available" in refreshed and "categories" in refreshed
+            assert isinstance(refreshed["refreshed"], int), refreshed
+
             logger.info("Consistency test passed")
 
     async def test_system_version_fields_presence(self, mcp_client):
@@ -671,16 +678,18 @@ class TestManageUpdates:
             )
 
     async def test_install_all_with_no_pending_updates(self, mcp_client):
-        """Category install with nothing pending succeeds with zero targets."""
+        """A category install with nothing pending in it succeeds with zero targets."""
         async with MCPAssertions(mcp_client) as mcp:
-            result = await mcp.call_tool_success(
-                "ha_manage_updates",
-                {"action": "install", "categories": ["addons", "hacs"]},
-            )
-            assert result["action"] == "install"
-            assert result["requested"] == result["succeeded"] + result["failed"]
-            assert isinstance(result["results"], list)
-            if result["requested"] == 0:
+            listing = await mcp.call_tool_success("ha_manage_updates", {})
+            # Which categories are empty depends on the lane: the app lane has
+            # the server's own app pending under "addons".
+            empty = [c for c in ("addons", "hacs") if c not in listing["categories"]]
+            if empty:
+                result = await mcp.call_tool_success(
+                    "ha_manage_updates", {"action": "install", "categories": empty}
+                )
+                assert result["action"] == "install"
+                assert (result["requested"], result["results"]) == (0, [])
                 assert "note" in result
 
     async def test_skip_nonexistent_entity_reports_item_failure(self, mcp_client):

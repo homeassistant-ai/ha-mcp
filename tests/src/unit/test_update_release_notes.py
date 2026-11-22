@@ -12,12 +12,14 @@ from typing import Any
 import pytest
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp import update_check
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.helpers import core_error_message
 
 from ._core_release_pages import (
     BLOG_202611,
@@ -45,6 +47,13 @@ class UnreachableUpdate(SoftwareUpdate):
     """An update whose device does not answer."""
 
     _attr_available = False
+
+
+class NotesFailUpdate(SoftwareUpdate):
+    """An update whose device fails to send its release notes."""
+
+    async def async_release_notes(self) -> str | None:
+        raise HomeAssistantError("The device did not send its release notes")
 
 
 @pytest.fixture(autouse=True)
@@ -139,7 +148,31 @@ class TestReleaseNotes:
         assert "release_notes" not in result
         assert "release_notes_hint" in result
 
-    async def test_hint_carries_the_code_core_refused_the_notes_with(
+    async def test_core_refusal_of_the_notes_is_shown_beside_github_notes(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    ) -> None:
+        web.serve(
+            "https://api.github.com/repos/owner/repo/releases/tags/v1.0.0",
+            json={"body": "## v1.0.0\n- First stable release"},
+        )
+        update = NotesFailUpdate(
+            "update.thing",
+            features=UpdateEntityFeature.RELEASE_NOTES,
+            release_url=RELEASE_URL,
+        )
+
+        result = await get_update(hass, core_client, update)
+
+        refusal = await core_client.send_websocket_message(
+            {"type": "update/release_notes", "entity_id": "update.thing"}
+        )
+        assert result["release_notes_error"] == {
+            "code": refusal["error_code"],
+            "message": core_error_message(refusal["error"]),
+        }
+        assert result["release_notes_source"] == "github_api"
+
+    async def test_core_refusal_of_the_notes_is_not_repeated_in_the_hint(
         self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
     ) -> None:
         update = UnreachableUpdate(
@@ -148,7 +181,9 @@ class TestReleaseNotes:
 
         result = await get_update(hass, core_client, update)
 
-        assert "home_assistant_error" in result["release_notes_hint"]
+        error = result["release_notes_error"]
+        assert error["code"] not in result["release_notes_hint"]
+        assert error["message"] not in result["release_notes_hint"]
 
     async def test_a_changelog_too_short_to_be_notes_is_not_returned(
         self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web

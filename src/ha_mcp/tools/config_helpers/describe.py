@@ -11,7 +11,7 @@ storage helper, and the response says so: Core validates the write.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -213,15 +213,21 @@ async def _with_option_labels(
 
 
 async def describe_form(
-    client: Any, domain: str | None, path: str, step: dict[str, Any]
+    client: Any,
+    domain: str | None,
+    path: str,
+    step: dict[str, Any],
+    placeholders: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """A flow form in brief: ``fields`` with HA's help text for each (and a
     select's ``option_labels``), ``more_forms``/``note`` unless the form is
     the flow's last, and ``warnings`` when Core's strings could not be read.
 
-    ``path`` is the flow's place in ``strings.json``: ``config``, ``options``
-    or ``config_subentries.<type>``. Without a ``domain`` there is no help
-    text to read.
+    ``path`` is the flow's place in ``strings.json``: ``config``, ``options``,
+    ``config_subentries.<type>`` or ``issues.<key>.fix_flow``. Without a
+    ``domain`` there is no help text to read. Given ``placeholders`` (a fix
+    flow's issue placeholders), the help text is filled with the step's
+    ``description_placeholders`` over them, as the frontend fills it.
     """
     fields = compact_schema(step.get("data_schema") or [])
     described: dict[str, Any] = {"fields": fields}
@@ -232,7 +238,12 @@ async def describe_form(
         if strings is None:
             described["warnings"] = [strings_unread_warning(domain)]
         else:
-            _with_help(fields, field_help(strings, domain, path, step_id))
+            filled = (
+                None
+                if placeholders is None
+                else {**placeholders, **(step.get("description_placeholders") or {})}
+            )
+            _with_help(fields, field_help(strings, domain, path, step_id, filled))
         unread = await _with_option_labels(
             client, domain, fields, step.get("data_schema")
         )
@@ -255,6 +266,8 @@ async def describe_form(
         described.update(_later_forms(step))
         if (
             "note" in described
+            # The component outlines no fix flow.
+            and not path.startswith("issues.")
             and not outline_lost
             and not await component_serves(client, "flow_outline")
         ):

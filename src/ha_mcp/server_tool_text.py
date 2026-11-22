@@ -148,8 +148,8 @@ SEARCH_KEYWORDS: dict[str, str] = {
         "state activate apply turn on"
     ),
     "ha_manage_updates": (
-        "update updates install skip firmware core os repair repairs issue "
-        "ignore dismiss unignore"
+        "update updates install skip firmware core os check refresh release "
+        "channel beta repair repairs issue ignore dismiss unignore fix"
     ),
     "ha_set_integration": (
         "integration config entry enable disable add options reconfigure "
