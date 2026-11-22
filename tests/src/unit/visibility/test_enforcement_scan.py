@@ -329,6 +329,33 @@ class TestOutboundScan:
 
         assert result.content[0].text == "created sensor.foo_average"
 
+    async def test_state_naming_an_entity_created_since_the_cached_read_is_whole(
+        self,
+        hass: HomeAssistant,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """A visible entity must not lose its attributes for naming a new
+        entity: the entities are read again before the state scrub."""
+        enforce_hiding(set_config, "sensor.foo")
+        await mw.on_call_tool(
+            make_context("ha_get_overview", {}), _returns(text_result())
+        )
+        hass.states.async_set("sensor.foo_average", "1")
+        payload = {
+            "data": {
+                "entity_id": "sensor.visible",
+                "attributes": {"source": "sensor.foo_average"},
+            }
+        }
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "sensor.visible"}),
+            _returns(text_result(json.dumps(payload), structured=payload)),
+        )
+
+        assert result.structured_content == payload
+
     async def test_clean_output_passes_through(
         self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
     ) -> None:

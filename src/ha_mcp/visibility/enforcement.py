@@ -673,24 +673,22 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
             effective_name, context, call_next, config, matcher.for_call(args)
         )
 
-    async def _embeds(
+    async def _settled(
         self, config: VisibilityConfig, matcher: HiddenMatcher, args: Any, text: str
-    ) -> bool:
-        """Whether output ``text`` names a hidden id.
+    ) -> HiddenMatcher:
+        """The matcher to judge output ``text`` with.
 
         A longer word that is no known entity's id may be an entity created
         since the cached read, often by this very call, so the entities are
         read again before it counts.
         """
-        if matcher.addresses(text):
-            return True
-        if not matcher.embeds(text):
-            return False
+        if not matcher.unknown_word(text):
+            return matcher
         try:
             fresh = await self._hidden_matcher(config, fresh=True)
         except VisibilityDataUnavailable:
-            return True
-        return fresh.for_call(args).embeds(text)
+            return matcher
+        return fresh.for_call(args)
 
     async def _call_and_scan_outbound(
         self,
@@ -705,13 +703,17 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         try:
             result = await call_next(context)
         except ToolError as exc:
-            if await self._embeds(config, matcher, args, _tool_error_text(exc)):
+            text = _tool_error_text(exc)
+            if (await self._settled(config, matcher, args, text)).embeds(text):
                 logger.info("visibility enforce: refused tool error from %s", name)
                 _raise_enforced(name, _outbound_reason(name))
             raise
+        text = serialize_result(result)
+        matcher = await self._settled(config, matcher, args, text)
         scrub_tally = _ScrubTally(0, 0, 0)
         if name == _STATE_TOOL:
             scrub_tally = _scrub_state_result(result, matcher)
+            text = serialize_result(result)
             if scrub_tally.unwarnable_representations:
                 # A retained original still names a hidden id; refuse here rather
                 # than rely on the scan below catching it.
@@ -721,9 +723,9 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
                     scrub_tally.unwarnable_representations,
                 )
                 _raise_enforced(name, _outbound_reason(name))
-        if await self._embeds(
-            config, matcher, args, serialize_result(result)
-        ) or result_reveals_hidden(result_payloads(result), matcher.identifier_aliases):
+        if matcher.embeds(text) or result_reveals_hidden(
+            result_payloads(result), matcher.identifier_aliases
+        ):
             logger.info("visibility enforce: refused result from %s", name)
             _raise_enforced(name, _outbound_reason(name))
         if scrub_tally.mutated_representations:
@@ -856,7 +858,7 @@ def reset_hidden_set_cache() -> None:
     _hidden_cache = _HiddenSetCache()
 
 
-async def _active_matcher(client: Any) -> HiddenMatcher | None:
+async def _active_matcher(client: Any, *, fresh: bool = False) -> HiddenMatcher | None:
     """The shared matcher while enforce mode is active; ``None`` otherwise or on error.
 
     Fail-soft: the fail-closed policy is owned by the middleware's call gates,
@@ -872,7 +874,7 @@ async def _active_matcher(client: Any) -> HiddenMatcher | None:
             and config_has_active_hide_dimensions(config)
         ):
             return None
-        return await _hidden_cache.get(config, client)
+        return await _hidden_cache.get(config, client, fresh=fresh)
     except Exception:  # noqa: BLE001
         return None
 
@@ -888,7 +890,9 @@ def refuse_hidden_config_file(tool_name: str) -> NoReturn:
     _raise_enforced(tool_name, _CONFIG_FILE_REASON)
 
 
-async def active_hidden_matcher(client: Any) -> HiddenMatcher | None:
+async def active_hidden_matcher(
+    client: Any, output: Any = None
+) -> HiddenMatcher | None:
     """Return the hidden-set matcher while enforce mode hides something, else ``None``.
 
     Collection-read surfaces (the ha_search config-body branches, legacy and
@@ -898,9 +902,27 @@ async def active_hidden_matcher(client: Any) -> HiddenMatcher | None:
     omit" contract into a wholesale refusal. ``client`` is the CALLER's live
     client, used only if the shared cache needs a refresh (the middleware's
     inbound gate for the request in flight normally primed it already).
+
+    ``output`` is what the caller is about to scrub. When it holds a longer
+    word no known entity has, the entities are read again first, as the
+    outbound scan does, so an entity created since the cached read is known.
     """
     matcher = await _active_matcher(client)
+    if (
+        matcher is not None
+        and output is not None
+        and matcher.unknown_word(_serialized(output))
+    ):
+        matcher = await _active_matcher(client, fresh=True) or matcher
     return matcher if matcher is not None and matcher.hidden else None
+
+
+def _serialized(value: Any) -> str:
+    """``value`` as the text the scans read; ``str()`` when it is not JSON."""
+    try:
+        return json.dumps(value, default=str)
+    except TypeError, ValueError:
+        return str(value)
 
 
 def scrub_records(
@@ -912,12 +934,4 @@ def scrub_records(
     A record that cannot be serialized is scanned via ``str()`` so it can never
     dodge the scrub by being unserializable.
     """
-    kept: list[dict[str, Any]] = []
-    for record in records:
-        try:
-            blob = json.dumps(record, default=str)
-        except TypeError, ValueError:
-            blob = str(record)
-        if not matcher.embeds(blob):
-            kept.append(record)
-    return kept
+    return [record for record in records if not matcher.embeds(_serialized(record))]

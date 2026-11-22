@@ -56,7 +56,7 @@ async def _scrub_results_for_enforce(
     """
     from ...visibility.enforcement import active_hidden_matcher, scrub_records
 
-    enforce_matcher = await active_hidden_matcher(client)
+    enforce_matcher = await active_hidden_matcher(client, results)
     if enforce_matcher is None:
         return
     for category, items in results.items():

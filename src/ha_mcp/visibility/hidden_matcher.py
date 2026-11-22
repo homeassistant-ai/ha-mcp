@@ -91,7 +91,7 @@ class HiddenMatcher:
             aliases,
             terms,
             frozenset(known_ids) - terms,
-            re.compile(alternation, re.IGNORECASE) if terms else None,
+            re.compile(f"(?=({alternation}))", re.IGNORECASE) if terms else None,
             max(map(len, terms | known_ids), default=0),
         )
 
@@ -103,6 +103,13 @@ class HiddenMatcher:
         """Whether output ``text`` is, or embeds, a hidden entity_id."""
         return any(
             not self.terms.isdisjoint(words) or self.other_ids.isdisjoint(words)
+            for words in self._words(text)
+        )
+
+    def unknown_word(self, text: str) -> bool:
+        """Whether ``text`` holds a longer word around a hidden id no entity has."""
+        return any(
+            self.terms.isdisjoint(words) and self.other_ids.isdisjoint(words)
             for words in self._words(text)
         )
 
@@ -128,18 +135,21 @@ class HiddenMatcher:
     def _words(self, text: str) -> Iterator[list[str]]:
         """The word around each matched term, with and without an escape's tail.
 
-        A word is followed only a little past the longest id: longer, it is no
-        entity's id, and a long run of word characters is not walked again for
-        every term in it.
+        Terms are matched where they overlap too: in ``binary_sensor.light.kitchen``
+        the hidden ``light.kitchen`` starts inside ``sensor.light``. A word is
+        followed only a little past the longest id: longer, it is no entity's
+        id, and a long run of word characters is not walked again for every
+        term in it.
         """
         if self.regex is None:
             return
         reach = self.longest + len("u0000") + 1
         for match in self.regex.finditer(text):
-            start, end = match.span()
-            while start > max(0, match.start() - reach) and text[start - 1] in _WORD:
+            first, last = match.span(1)
+            start, end = first, last
+            while start > max(0, first - reach) and text[start - 1] in _WORD:
                 start -= 1
-            while end < min(len(text), match.end() + reach) and text[end] in _WORD:
+            while end < min(len(text), last + reach) and text[end] in _WORD:
                 end += 1
             word = text[start:end].lower()
             tail = _ESCAPE_TAIL.match(word) if text[start - 1 : start] == "\\" else None

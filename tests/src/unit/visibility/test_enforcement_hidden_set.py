@@ -346,6 +346,23 @@ class TestHiddenMatcher:
         """Hiding ``sensor.foo`` must not make its siblings unreadable."""
         assert not matcher.embeds(text)
 
+    async def test_hidden_id_starting_inside_another_entitys_id_is_found(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """``light.kitchen`` starts inside ``sensor.light``, whose own word is
+        the visible ``binary_sensor.light``."""
+        hass.states.async_set("binary_sensor.light", "on")
+        enforce_hiding(set_config, "sensor.light", "light.kitchen")
+
+        matcher = await active_hidden_matcher(core_client)
+
+        assert matcher is not None
+        assert not matcher.embeds("binary_sensor.light")
+        assert matcher.embeds("binary_sensor.light.kitchen")
+
     async def test_nothing_hidden_has_no_matcher(
         self,
         core_client: HomeAssistantClient,
@@ -380,6 +397,26 @@ class TestScrubSeam:
         kept = scrub_records(records, matcher)
 
         assert [r.get("entity_id", r.get("id")) for r in kept] == ["automation.morning"]
+
+    async def test_record_naming_an_entity_created_since_the_cached_read_is_kept(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """Its id is a longer word around a hidden id that the cached read
+        does not know, so the entities are read again before the scrub."""
+        enforce_hiding(set_config, "sensor.foo")
+        assert await active_hidden_matcher(core_client) is not None
+        hass.states.async_set("sensor.foo_average", "1")
+        records: list[dict[str, Any]] = [
+            {"entity_id": "automation.a", "config": {"above": "sensor.foo_average"}}
+        ]
+
+        matcher = await active_hidden_matcher(core_client, records)
+
+        assert matcher is not None
+        assert scrub_records(records, matcher) == records
 
     async def test_scrub_records_keeps_another_entitys_record(
         self,

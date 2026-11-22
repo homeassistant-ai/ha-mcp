@@ -476,7 +476,9 @@ async def _scrub_component_config_buckets(
     """
     from ...visibility.enforcement import active_hidden_matcher, scrub_records
 
-    matcher = await active_hidden_matcher(client)
+    matcher = await active_hidden_matcher(
+        client, [response.get(bucket) for bucket in _CONFIG_BUCKETS]
+    )
     if matcher is None:
         return
     dropped = 0
