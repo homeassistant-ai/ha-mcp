@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "Istovremena preuzimanja konfiguracija po ID-ju. Smanjite ka 1 na serijskim HA serverima.",
     "advanced.enable_history_query_guardrails.label": "Zaštitne mere za upite istorije",
     "advanced.enable_history_query_guardrails.help": "Odbij upite u bazu beleženja koji premašuju konzervativne budžete entiteta i vremenskog opsega. Isključeno podrazumevano.",
-    "advanced.hacs_refresh_after_update.label": "Osveži komponentu u HACS-u nakon ažuriranja",
-    "advanced.hacs_refresh_after_update.help": "Prilikom pokretanja nakon ažuriranja servera, zatražite od HACS-a (Marketplace na Home Assistant 2026.11+) da ponovo proveri HA-MCP repozitorijum, tako da se odgovarajuće ažuriranje odmah prikaže umesto čekanja na sledeću pozadinsku proveru. Isključeno podrazumevano; instalacije koje su ovo već radile drže to uključeno.",
+    "advanced.hacs_refresh_after_update.label": "Osveži komponentu na Marketplace-u nakon ažuriranja",
+    "advanced.hacs_refresh_after_update.help": "Pri pokretanju nakon ažuriranja servera, zatražite od Marketplace-a da ponovo proveri HA-MCP skladište, tako da se odgovarajuće ažuriranje odmah prikaže umesto da se čeka sledeća pozadinska provera. Podrazumevano je isključeno; instalacije koje su ovo već radile zadržavaju uključeno.",
     "advanced.ha_tool_concurrency.label": "Istovremenost Home Assistant alata",
     "advanced.ha_tool_concurrency.help": "Opciono ograničenje spoljnih poziva Home Assistant alata kroz sve sesije. Interni REST, WebSocket i istovremenost razgranavanja po alatima ostaju nepromenjeni. 0 zadržava neograničeno ponašanje. Poziv koji čeka na kapacitet ne uspeva nakon 60 sekundi.",
     "advanced.dashboard_screenshot_engine_url.label": "URL mehanizma za snimke ekrana kontrolne table",
@@ -715,7 +715,7 @@
     },
     "ha_get_camera_image": {
       "title": "Preuzmi sliku sa kamere",
-      "description": "Preuzmite snimak ekrana sa entiteta Home Assistant kamere."
+      "description": "Preuzmite sliku snimka sa kamere ili entiteta slike u sistemu Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Preuzmi snimak ekrana kontrolne table",
@@ -730,8 +730,8 @@
       "description": "Dobijanje unosa iz registra entiteta, ili bez entiteta podešavanja registra i izloženih entiteta."
     },
     "ha_get_hacs_info": {
-      "title": "Preuzmi HACS informacije",
-      "description": "Preuzmite podatke sa HACS-a (Home Assistant Community Store) — pretražite prodavnicu ili preuzmite detalje o repozitorijumu."
+      "title": "Preuzmi informacije o Marketplace-u",
+      "description": "Preuzmite podatke sa Home Assistant Marketplace-a, u šta je HACS prerastao u verziji 2026.11."
     },
     "ha_get_history": {
       "title": "Preuzmi istoriju entiteta ili statistiku",
@@ -802,8 +802,12 @@
       "description": "Upravljajte željama Home Assistant energetske kontrolne table: mreža / solarna energija /"
     },
     "ha_manage_hacs": {
-      "title": "Upravljaj HACS-om",
-      "description": "Upravljajte HACS-om (Home Assistant Community Store) — instalirajte/ažurirajte, uklonite, dodajte prilagođene repozitorijume ili osvežite repozitorijum u"
+      "title": "Upravljaj Marketplace-om",
+      "description": "Upravljajte Home Assistant Marketplace-om (u šta je HACS prerastao u verziji 2026.11): instalirajte, ažurirajte, uklonite i dodajte skladišta."
+    },
+    "ha_manage_logs": {
+      "title": "Upravljaj sistemom Recorder, statistikom i zapisima",
+      "description": "Upravljajte Home Assistant komponentom Recorder, njenom dugoročnom statistikom i zapisima (logovima)."
     },
     "ha_manage_pipeline": {
       "title": "Upravljaj Assist cevovodom",

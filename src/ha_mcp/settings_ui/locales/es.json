@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "Obtenciones de configuración simultáneas por ID. Redúcelo hacia 1 en servidores HA en serie.",
     "advanced.enable_history_query_guardrails.label": "Protecciones de consultas del historial",
     "advanced.enable_history_query_guardrails.help": "Rechazar consultas del registrador que superen los límites conservadores de entidades y rangos de tiempo. Desactivado por defecto.",
-    "advanced.hacs_refresh_after_update.label": "Actualizar el componente en HACS después de una actualización",
-    "advanced.hacs_refresh_after_update.help": "Al iniciar después de una actualización del servidor, pide a HACS (la tienda en Home Assistant 2026.11+) que vuelva a comprobar el repositorio de HA-MCP para que su actualización correspondiente se muestre de inmediato en lugar de esperar a la próxima comprobación en segundo plano. Desactivado por defecto; las instalaciones que ya hicieron esto lo mantienen activado.",
+    "advanced.hacs_refresh_after_update.label": "Actualizar el componente en el Marketplace después de una actualización",
+    "advanced.hacs_refresh_after_update.help": "Al iniciar después de una actualización del servidor, pide al Marketplace que vuelva a comprobar el repositorio de HA-MCP, para que su actualización correspondiente se muestre de inmediato en lugar de esperar a la siguiente comprobación en segundo plano. Desactivado por defecto; las instalaciones que ya lo hacían lo mantienen activado.",
     "advanced.ha_tool_concurrency.label": "Concurrencia de herramientas de Home Assistant",
     "advanced.ha_tool_concurrency.help": "Límite opcional en las llamadas a herramientas externas de Home Assistant en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una llamada que espera capacidad falla después de 60 segundos.",
     "advanced.dashboard_screenshot_engine_url.label": "URL del motor de capturas de pantalla de paneles",
@@ -746,7 +746,7 @@
     },
     "ha_get_camera_image": {
       "title": "Obtener imagen de cámara",
-      "description": "Obtiene una imagen de captura de una entidad de cámara de Home Assistant."
+      "description": "Obtener una imagen de captura de una cámara o entidad de imagen de Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Obtener captura de panel",
@@ -761,8 +761,8 @@
       "description": "Obtiene las entradas del registro de entidades, o sin una entidad, la configuración del registro y las entidades expuestas."
     },
     "ha_get_hacs_info": {
-      "title": "Obtener información de HACS",
-      "description": "Consulta datos de HACS: busca en la tienda u obtiene los detalles de un repositorio."
+      "title": "Obtener información del Marketplace",
+      "description": "Obtener datos del Marketplace de Home Assistant, en lo que se convirtió HACS en 2026.11."
     },
     "ha_get_history": {
       "title": "Obtener historial o estadísticas de entidades",
@@ -833,8 +833,12 @@
       "description": "Gestiona las preferencias del panel de energía de Home Assistant: red / solar /"
     },
     "ha_manage_hacs": {
-      "title": "Gestionar HACS",
-      "description": "Gestionar HACS (Home Assistant Community Store) — instalar/actualizar, eliminar, añadir repositorios personalizados o actualizar repositorio en"
+      "title": "Gestionar Marketplace",
+      "description": "Gestionar el Marketplace de Home Assistant (en lo que se convirtió HACS en 2026.11): instalar, actualizar, eliminar y añadir repositorios."
+    },
+    "ha_manage_logs": {
+      "title": "Gestionar Registrador, Estadísticas y Registros",
+      "description": "Gestionar el registrador de Home Assistant, sus estadísticas a largo plazo y sus registros."
     },
     "ha_manage_pipeline": {
       "title": "Gestionar canalización de Assist",

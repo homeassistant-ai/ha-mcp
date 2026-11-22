@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "Gleichzeitige Konfigurationsabrufe pro ID. Bei seriellen HA-Servern in Richtung 1 verringern.",
     "advanced.enable_history_query_guardrails.label": "Verlauf-Abfrage-Schutzplanken",
     "advanced.enable_history_query_guardrails.help": "Recorder-Abfragen ablehnen, die konservative Entitäts- und Zeitbereichsbudgets überschreiten. Standardmäßig deaktiviert.",
-    "advanced.hacs_refresh_after_update.label": "Komponente in HACS nach einem Update aktualisieren",
-    "advanced.hacs_refresh_after_update.help": "Fordere HACS (den Marktplatz unter Home Assistant 2026.11+) beim Start nach einem Server-Update auf, das HA-MCP-Repository erneut zu überprüfen, damit das passende Update sofort angezeigt wird, anstatt auf die nächste Hintergrundprüfung zu warten. Standardmäßig aus; Installationen, die dies bereits getan haben, behalten es bei.",
+    "advanced.hacs_refresh_after_update.label": "Die Komponente im Marketplace nach einem Update aktualisieren",
+    "advanced.hacs_refresh_after_update.help": "Beim Start nach einem Server-Update den Marketplace bitten, das HA-MCP-Repository erneut zu überprüfen, damit das passende Update sofort angezeigt wird, anstatt auf die nächste Hintergrundprüfung zu warten. Standardmäßig aus; Installationen, die dies bereits getan haben, behalten es bei.",
     "advanced.ha_tool_concurrency.label": "Home-Assistant-Tool-Gleichzeitigkeit",
     "advanced.ha_tool_concurrency.help": "Optionale Begrenzung für äußere Home Assistant-Tool-Aufrufe über alle Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit bleibt unverändert. 0 belässt das Verhalten unbegrenzt. Ein Aufruf, der auf Kapazität wartet, schlägt nach 60 Sekunden fehl.",
     "advanced.dashboard_screenshot_engine_url.label": "Dashboard-Screenshot-Engine-URL",
@@ -746,7 +746,7 @@
     },
     "ha_get_camera_image": {
       "title": "Kamerabild abrufen",
-      "description": "Rufe ein Schnappschussbild von einer Home-Assistant-Kamera-Entität ab."
+      "description": "Ein Schnappschussbild von einer Home Assistant-Kamera- oder Image-Entität abrufen."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Dashboard-Screenshot abrufen",
@@ -761,8 +761,8 @@
       "description": "Ruft Entitätsregister-Einträge ab oder ohne Entität die Registereinstellungen und freigegebenen Entitäten."
     },
     "ha_get_hacs_info": {
-      "title": "HACS-Informationen abrufen",
-      "description": "Durchsucht den HACS-Store oder ruft Repository-Informationen ab."
+      "title": "Marketplace-Informationen abrufen",
+      "description": "Rufe Daten vom Home Assistant Marketplace ab, was HACS im Jahr 2026.11 wurde."
     },
     "ha_get_history": {
       "title": "Verlauf oder Statistiken abrufen",
@@ -833,8 +833,12 @@
       "description": "Verwalte die Einstellungen des Home-Assistant-Energie-Dashboards: Stromnetz / Solar /"
     },
     "ha_manage_hacs": {
-      "title": "HACS verwalten",
-      "description": "HACS (Home Assistant Community Store) verwalten — installieren/aktualisieren, entfernen, benutzerdefinierte Repositories hinzufügen oder Repository aktualisieren in"
+      "title": "Marketplace verwalten",
+      "description": "Verwalte den Home Assistant Marketplace (was HACS in 2026.11 wurde): Repositories installieren, aktualisieren, entfernen und hinzufügen."
+    },
+    "ha_manage_logs": {
+      "title": "Recorder, Statistiken und Protokolle verwalten",
+      "description": "Den Home Assistant-Recorder, seine langfristigen Statistiken und seine Protokolle verwalten."
     },
     "ha_manage_pipeline": {
       "title": "Assist-Pipeline verwalten",

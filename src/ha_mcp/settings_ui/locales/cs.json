@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "Souběžné načítání konfigurací podle ID. Snižte směrem k 1 na sériových serverech HA.",
     "advanced.enable_history_query_guardrails.label": "Ochrana historických dotazů",
     "advanced.enable_history_query_guardrails.help": "Zamítat dotazy do záznamu (recorder), které překračují konzervativní limity entit a časového rozsahu. Ve výchozím nastavení vypnuto.",
-    "advanced.hacs_refresh_after_update.label": "Po aktualizaci obnovit komponentu v HACS",
-    "advanced.hacs_refresh_after_update.help": "Při spuštění po aktualizaci serveru požádejte HACS (Marketplace v Home Assistant 2026.11+) o opětnou kontrolu repozitáře HA-MCP, aby se odpovídající aktualizace zobrazila ihned namísto čekání na další kontroly na pozadí. Ve výchozím nastavení vypnuto; instalace, které toto již provedly, to ponechají zapnuté.",
+    "advanced.hacs_refresh_after_update.label": "Aktualizovat komponentu v Marketplace po aktualizaci",
+    "advanced.hacs_refresh_after_update.help": "Při spuštění po aktualizaci serveru požádejte Marketplace o opětovnou kontrolu repozitáře HA-MCP, aby se odpovídající aktualizace zobrazila ihned namísto čekání na další kontroly na pozadí. Ve výchozím nastavení je vypnuto; instalace, které to již prováděly, si to ponechají zapnuté.",
     "advanced.ha_tool_concurrency.label": "Souběžnost nástrojů Home Assistant",
     "advanced.ha_tool_concurrency.help": "Volitelný limit pro vnější volání nástrojů Home Assistant napříč všemi relacemi. Vnitřní souběh pro REST, WebSocket a rozbočení pro jednotlivé nástroje zůstává nezměněn. 0 zachovává neomezené chování. Volání čekající na kapacitu selže po 60 sekundách.",
     "advanced.dashboard_screenshot_engine_url.label": "URL adresa enginu pro snímky obrazovky panelu",
@@ -715,7 +715,7 @@
     },
     "ha_get_camera_image": {
       "title": "Získat obraz z kamery",
-      "description": "Získá snímek z entity kamery v Home Assistant."
+      "description": "Získat snímek z kamery nebo entit obrazu v Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Získat snímek panelu",
@@ -730,8 +730,8 @@
       "description": "Získat položky registru entit, nebo bez entity nastavení registru a vystavené entit."
     },
     "ha_get_hacs_info": {
-      "title": "Získat informace o HACS",
-      "description": "Získat data HACS (Home Assistant Community Store) — prohledat obchod nebo načíst podrobnosti o repozitáři."
+      "title": "Získat informace o Marketplace",
+      "description": "Získat data z Marketplace v Home Assistant, kterým se HACS stal v 2026.11."
     },
     "ha_get_history": {
       "title": "Získat historii nebo statistiky entity",
@@ -802,8 +802,12 @@
       "description": "Spravuje předvolby panelu Energy v Home Assistant: síť / solární /"
     },
     "ha_manage_hacs": {
-      "title": "Spravovat HACS",
-      "description": "Spravovat HACS (Home Assistant Community Store) — instalovat/aktualizovat, odebrat, přidat vlastní repozitáře nebo obnovit repozitář v"
+      "title": "Spravovat Marketplace",
+      "description": "Spravovat Marketplace v Home Assistant (čím se HACS stal v 2026.11): instalovat, aktualizovat, odstraňovat a přidávat repozitáře."
+    },
+    "ha_manage_logs": {
+      "title": "Spravovat záznamník, statistiky a protokoly",
+      "description": "Spravovat záznamník v Home Assistant, jeho dlouhodobé statistiky a protokoly."
     },
     "ha_manage_pipeline": {
       "title": "Spravovat asistentskou pipeline",

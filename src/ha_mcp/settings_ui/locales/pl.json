@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "Liczba jednocześnie pobieranych konfiguracji na identyfikator. Zmniejsz w stronę 1 na wolniejszych serwerach HA.",
     "advanced.enable_history_query_guardrails.label": "Zabezpieczenia zapytań historycznych",
     "advanced.enable_history_query_guardrails.help": "Odrzucaj zapytania rejestratora przekraczające zachowawcze limity encji i zakresu czasu. Domyślnie wyłączone.",
-    "advanced.hacs_refresh_after_update.label": "Odśwież komponent w HACS po aktualizacji",
-    "advanced.hacs_refresh_after_update.help": "Podczas uruchamiania po aktualizacji serwera poproś HACS (sklep Marketplace w Home Assistant 2026.11+) o ponowne sprawdzenie repozytorium HA-MCP, aby pasująca aktualizacja pojawiła się od razu zamiast czekać na kolejne sprawdzenie w tle. Domyślnie wyłączone; instalacje, które już to zrobiły, zachowują tę opcję włączoną.",
+    "advanced.hacs_refresh_after_update.label": "Odśwież komponent w Marketplace po aktualizacji",
+    "advanced.hacs_refresh_after_update.help": "Podczas uruchamiania po aktualizacji serwera poproś Marketplace o ponowne sprawdzenie repozytorium HA-MCP, aby pasująca aktualizacja pojawiła się od razu zamiast czekać na następne sprawdzenie w tle. Domyślnie wyłączone; instalacje, które już to zrobiły, zachowają to ustawienie włączone.",
     "advanced.ha_tool_concurrency.label": "Współbieżność narzędzi Home Assistant",
     "advanced.ha_tool_concurrency.help": "Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we wszystkich sesjach. Współbieżność wewnętrznych żądań REST, WebSocket oraz rozgałęzień na narzędzie pozostaje bez zmian. Wartość 0 oznacza brak limitu. Wywołanie oczekujące na wolne zasoby zakończy się niepowodzeniem po 60 sekundach.",
     "advanced.dashboard_screenshot_engine_url.label": "Adres URL silnika zrzutów ekranu pulpitu nawigacyjnego",
@@ -715,7 +715,7 @@
     },
     "ha_get_camera_image": {
       "title": "Pobierz obraz z kamery",
-      "description": "Pobierz zrzut obrazu z encji kamery Home Assistant."
+      "description": "Pobierz obraz migawki z kamery Home Assistant lub encji obrazu."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Pobierz zrzut ekranu pulpitu nawigacyjnego",
@@ -730,8 +730,8 @@
       "description": "Pobiera wpisy rejestru encji lub, bez podania encji, ustawienia rejestru i udostępnione encje."
     },
     "ha_get_hacs_info": {
-      "title": "Pobierz informacje HACS",
-      "description": "Pobierz dane HACS (Home Assistant Community Store) — przeszukaj sklep lub pobierz szczegóły repozytorium."
+      "title": "Pobierz informacje o Marketplace",
+      "description": "Pobierz dane z Home Assistant Marketplace, w co HACS przekształcił się w wersji 2026.11."
     },
     "ha_get_history": {
       "title": "Pobierz historię lub statystyki encji",
@@ -802,8 +802,12 @@
       "description": "Zarządzaj preferencjami panelu energii Home Assistant: sieć / fotowoltaika /"
     },
     "ha_manage_hacs": {
-      "title": "Zarządzaj HACS",
-      "description": "Zarządzaj HACS (Home Assistant Community Store) — instaluj/aktualizuj, usuwaj, dodawaj niestandardowe repozytoria lub odświeżaj repozytorium w"
+      "title": "Zarządzaj Marketplace",
+      "description": "Zarządzaj Home Assistant Marketplace (w co HACS przekształcił się w wersji 2026.11): instaluj, aktualizuj, usuwaj i dodawaj repozytoria."
+    },
+    "ha_manage_logs": {
+      "title": "Zarządzaj rejestratorem (Recorder), statystykami i logami",
+      "description": "Zarządzaj rejestratorem Home Assistant (recorder), jego statystykami długoterminowymi oraz logami."
     },
     "ha_manage_pipeline": {
       "title": "Zarządzaj potokiem Assist",

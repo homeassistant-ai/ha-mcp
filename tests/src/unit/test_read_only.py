@@ -116,6 +116,7 @@ class TestExemptionRules:
             ({"scope": "snapshot", "action": "create"}, False),
             ({"scope": "snapshot", "action": "list"}, True),
             ({"scope": "snapshot", "action": "restore"}, False),
+            ({"scope": "snapshot", "action": "configure"}, False),
             # #1861: snapshot deletion must stay blocked in read-only mode
             # even with confirm=True — confirm has no bearing on the
             # scope/action gate.
@@ -758,13 +759,12 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # delete) outright, so confirm has no mutation capability of its own.
         "confirm",
         # ...edits create payload / list filters (list is an allowed read),
-        "domain",
-        "entity_id",
+        *("domain", "entity_id"),
         # ...edits view selector (read) / delete target (blocked),
         "backup_name",
-        # ...edits delete filter (blocked) and list pagination (read).
-        "older_than_days",
-        "limit",
+        # ...edits delete filter (blocked), list pagination (read) and the
+        # snapshot configure payload (blocked).
+        *("older_than_days", "limit", "update_backup_settings"),
     },
     "ha_manage_app": {
         # Read-path selectors/modifiers of the allowed GET proxy.

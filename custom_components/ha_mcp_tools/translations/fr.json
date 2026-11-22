@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "Mettre à jour l'intégration HA-MCP",
-      "description": "Le serveur ha-mcp installé requiert l'intégration HA-MCP {required} ou une version ultérieure, mais vous utilisez la version {installed}. Mettez à jour l'intégration depuis Paramètres > Système > Mises à jour (dans HACS, ou sur le Marketplace pour Home Assistant 2026.11+, ouvrez l'intégration HA-MCP et utilisez 'Update information' (HACS) ou 'Refresh information' (Marketplace) si aucune mise à jour n'apparaît encore) et redémarrez Home Assistant. Le serveur continue de fonctionner entre-temps, mais certaines fonctionnalités récentes pourraient ne pas fonctionner tant que l'intégration n'est pas mise à jour."
+      "description": "Le serveur ha-mcp installé nécessite l'intégration HA-MCP {required} ou une version ultérieure, mais vous avez la version {installed}. Mettez à jour l'intégration depuis Paramètres > Système > Mises à jour (si aucune mise à jour n'apparaît encore, ouvrez l'intégration HA-MCP dans le Marketplace et utilisez « Actualiser les informations ») et redémarrez Home Assistant. Le serveur continue de fonctionner entre-temps, mais certaines fonctionnalités récentes peuvent ne pas fonctionner tant que l'intégration n'est pas mise à jour."
     },
     "legacy_oauth_restart": {
       "title": "Redémarrez Home Assistant pour appliquer les paramètres OAuth hérités",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "Conserver HA-MCP sur une seule liste du store ?",
-            "description": "HA-MCP est indiqué comme installé à partir de {records}. Ils contiennent la même intégration (le second est le miroir de distribution des installations précédentes). Le Marketplace de Home Assistant 2026.11 ne permet qu'à une seule fiche de posséder une intégration, aucun d'eux ne pourra donc y mettre à jour HA-MCP ; HACS continue de faire les mises à jour, mais la mise à niveau vers 2026.11 bloquerait HA-MCP.\n\nSoumettre conserve **{keep}**, la fiche dans le catalogue par défaut qui ne nécessite aucun dépôt personnalisé, et marque l'autre fiche comme non installée. Rien n'est supprimé : vos entrées HA-MCP, vos paramètres et vos fichiers restent exactement tels quels, et désormais les mises à jour apparaîtront sous {keep} comme d'habitude."
+            "description": "HA-MCP est indiqué comme installé à partir de deux sources : {records}. Elles contiennent la même intégration (la seconde est le miroir de distribution des installations précédentes). Le Marketplace ne permet qu'une seule fiche par intégration, aucune d'elles ne peut donc mettre à jour HA-MCP.\n\nSoumettre conserve **{keep}**, la fiche du catalogue par défaut qui ne nécessite aucun dépôt personnalisé, et marque l'autre fiche comme non installée. Rien n'est supprimé : vos entrées HA-MCP, vos paramètres et vos fichiers restent exactement tels quels, et dorénavant les mises à jour s'afficheront sous {keep} comme d'habitude."
           }
         },
         "abort": {
           "already_resolved": "HA-MCP est maintenant installé à partir d'une seule liste du store ; rien à corriger.",
-          "store_unavailable": "Le store (HACS ou le Marketplace) n'est pas encore chargé, les listes ne peuvent donc pas être vérifiées. Réessayez dans quelques minutes."
+          "store_unavailable": "Le Marketplace n'est pas encore chargé, les fiches ne peuvent donc pas être vérifiées. Réessayez dans quelques minutes."
         }
       }
     }

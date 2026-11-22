@@ -475,8 +475,8 @@
     "advanced.individual_fetch_batch_size.help": "并发按 ID 获取配置的数量。在串行 HA 服务器上可向 1 调低。",
     "advanced.enable_history_query_guardrails.label": "历史查询安全保护",
     "advanced.enable_history_query_guardrails.help": "拒绝超过保守的实体和时间范围预算的 recorder 查询。默认禁用。",
-    "advanced.hacs_refresh_after_update.label": "更新后在 HACS 中刷新组件",
-    "advanced.hacs_refresh_after_update.help": "在服务器更新后的启动时，请求 HACS（Home Assistant 2026.11+ 上的应用商店）重新检查 HA-MCP 仓库，以便其匹配的更新立即显示，而无需等待下一次后台检查。默认关闭；此前已执行此操作的安装会保持开启状态。",
+    "advanced.hacs_refresh_after_update.label": "更新后在应用商店中刷新组件",
+    "advanced.hacs_refresh_after_update.help": "在服务器更新后的启动时，请求应用商店重新检查 HA-MCP 仓库，以便立即显示相应的更新，而无需等待下一次后台检查。默认关闭；已启用此功能的安装将保持开启状态。",
     "advanced.ha_tool_concurrency.label": "Home Assistant 工具并发数",
     "advanced.ha_tool_concurrency.help": "跨所有会话的外部 Home Assistant 工具调用的可选限制。内部 REST、WebSocket 和每个工具的分发并发性保持不变。0 表示保持无限制行为。等待容量的调用将在 60 秒后失败。",
     "advanced.dashboard_screenshot_engine_url.label": "仪表盘截图引擎 URL",
@@ -746,7 +746,7 @@
     },
     "ha_get_camera_image": {
       "title": "获取摄像头画面",
-      "description": "从 Home Assistant 摄像头实体获取快照图像。"
+      "description": "从 Home Assistant 相机或图像实体获取快照图像。"
     },
     "ha_get_dashboard_screenshot": {
       "title": "获取仪表盘截图",
@@ -761,8 +761,8 @@
       "description": "获取实体注册表条目，如果不指定实体，则获取注册表设置和公开的实体。"
     },
     "ha_get_hacs_info": {
-      "title": "获取 HACS 信息",
-      "description": "获取 HACS（Home Assistant 社区商店）数据——搜索商店或获取仓库详情。"
+      "title": "获取应用商店信息",
+      "description": "从 Home Assistant 的应用商店（即 2026.11 版本中的 HACS）获取数据。"
     },
     "ha_get_history": {
       "title": "获取实体历史或统计",
@@ -833,8 +833,12 @@
       "description": "管理 Home Assistant 能源面板首选项：电网 / 太阳能 /"
     },
     "ha_manage_hacs": {
-      "title": "管理 HACS",
-      "description": "管理 HACS (Home Assistant Community Store) — 安装/更新、移除、添加自定义存储库，或刷新存储库"
+      "title": "管理应用商店",
+      "description": "管理 Home Assistant 的应用商店（即 2026.11 版本中的 HACS）：安装、更新、移除和添加仓库。"
+    },
+    "ha_manage_logs": {
+      "title": "管理记录器、统计信息和日志",
+      "description": "管理 Home Assistant 的记录器、长期统计信息以及日志。"
     },
     "ha_manage_pipeline": {
       "title": "管理 Assist 管线",
