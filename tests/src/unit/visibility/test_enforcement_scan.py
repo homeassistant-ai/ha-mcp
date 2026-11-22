@@ -102,6 +102,12 @@ class TestInboundScan:
                 {"config": {"states.sensor.foo above 5": "alias"}},
                 id="dict-key",
             ),
+            # A config sent as a JSON string: the id follows a newline's escape.
+            pytest.param(
+                "ha_config_set_automation",
+                {"config": json.dumps({"description": "watch\nsensor.foo"})},
+                id="json-string-after-newline",
+            ),
         ],
     )
     async def test_embedded_match_refused(
@@ -131,6 +137,24 @@ class TestInboundScan:
         )
 
         assert result.content[0].text == "visible body"
+
+    async def test_longer_id_the_caller_typed_gets_the_tools_own_answer(
+        self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
+    ) -> None:
+        """Refusing it, or the error echoing it, would tell the caller that a
+        hidden id is part of what it typed."""
+        enforce_hiding(set_config, "sensor.foo")
+
+        async def _not_found(_context: Any) -> Any:
+            raise ToolError(json.dumps(create_entity_not_found_error("sensor.foo2")))
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "sensor.foo2"}),
+                _not_found,
+            )
+
+        assert error_body(exc) == create_entity_not_found_error("sensor.foo2")
 
 
 class TestProxyUnwrap:
@@ -283,6 +307,27 @@ class TestOutboundScan:
             )
 
         assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_entity_created_since_the_cached_read_is_not_a_hidden_id(
+        self,
+        hass: HomeAssistant,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """A helper named after a hidden entity must not have its own creation
+        refused: its new id is a longer word the cached read does not know."""
+        enforce_hiding(set_config, "sensor.foo")
+        await mw.on_call_tool(
+            make_context("ha_get_overview", {}), _returns(text_result())
+        )
+        hass.states.async_set("sensor.foo_average", "1")
+
+        result = await mw.on_call_tool(
+            make_context("ha_config_set_helper", {"name": "Foo average"}),
+            _returns(text_result("created sensor.foo_average")),
+        )
+
+        assert result.content[0].text == "created sensor.foo_average"
 
     async def test_clean_output_passes_through(
         self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]

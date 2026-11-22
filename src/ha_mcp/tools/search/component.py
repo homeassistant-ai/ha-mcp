@@ -474,16 +474,16 @@ async def _scrub_component_config_buckets(
     count — the component's corpus-side match count cannot be recomputed
     server-side. No-op unless enforce mode is active.
     """
-    from ...visibility.enforcement import active_hidden_regex, scrub_records
+    from ...visibility.enforcement import active_hidden_matcher, scrub_records
 
-    regex = await active_hidden_regex(client)
-    if regex is None:
+    matcher = await active_hidden_matcher(client)
+    if matcher is None:
         return
     dropped = 0
     for bucket in _CONFIG_BUCKETS:
         records = response.get(bucket)
         if records:
-            kept = scrub_records(records, regex)
+            kept = scrub_records(records, matcher)
             dropped += len(records) - len(kept)
             response[bucket] = kept
     if not dropped:

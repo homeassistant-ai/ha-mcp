@@ -501,7 +501,7 @@ async def list_visible_registry_ids(client: Any, domain: str) -> list[str]:
     failing the structured error raise. The cap lives here so a new call site
     can't bloat the error payload.
     """
-    from ..visibility.enforcement import active_hidden_regex
+    from ..visibility.enforcement import active_hidden_matcher
 
     try:
         result = await client.send_websocket_message(
@@ -513,9 +513,9 @@ async def list_visible_registry_ids(client: Any, domain: str) -> list[str]:
     entries = result.get("result", []) if isinstance(result, dict) else result
     if not isinstance(entries, list):
         return []
-    # The regex also covers ``script.<hidden storage key>``, which another
+    # The matcher also covers ``script.<hidden storage key>``, which another
     # script's entity_id can be.
-    hidden = await active_hidden_regex(client)
+    hidden = await active_hidden_matcher(client)
     prefix = f"{domain}."
     return [
         entity_id
@@ -523,5 +523,5 @@ async def list_visible_registry_ids(client: Any, domain: str) -> list[str]:
         if isinstance(entry, dict)
         and isinstance(entity_id := entry.get("entity_id"), str)
         and entity_id.startswith(prefix)
-        and not (hidden and hidden.search(entity_id))
+        and not (hidden and hidden.embeds(entity_id))
     ][:10]

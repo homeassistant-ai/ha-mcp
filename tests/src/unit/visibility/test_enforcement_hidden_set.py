@@ -8,6 +8,7 @@ read; a refused registry read is Core's own reply.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnecti
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_search import SearchTools
 from ha_mcp.visibility import enforcement, resolver
-from ha_mcp.visibility.enforcement import active_hidden_regex, scrub_records
+from ha_mcp.visibility.enforcement import active_hidden_matcher, scrub_records
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import VISIBILITY_FILENAME
 from ha_mcp.visibility.resolver import (
@@ -291,29 +292,61 @@ class TestStrictResolver:
             await load_hidden_set(registry, strict=True)
 
 
-class TestHiddenRegex:
-    """The regex the scans and the collection scrubs match hidden ids with."""
+class TestHiddenMatcher:
+    """What the output scans and the collection scrubs count as a hidden id."""
 
-    async def test_boundary_matching(
+    @pytest.fixture
+    async def matcher(
         self,
+        hass: HomeAssistant,
         core_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
-    ) -> None:
+    ) -> Any:
+        """``sensor.foo`` is hidden beside two entities whose ids contain it."""
+        hass.states.async_set("sensor.foo2", "1")
+        hass.states.async_set("binary_sensor.foo", "on")
         enforce_hiding(set_config, "sensor.foo")
+        matcher = await active_hidden_matcher(core_client)
+        assert matcher is not None
+        return matcher
 
-        regex = await active_hidden_regex(core_client)
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("sensor.foo", id="bare"),
+            pytest.param("states.sensor.foo", id="dotted-path"),
+            pytest.param("{{ states('sensor.foo') }}", id="template"),
+            # Run together with a state, as a template without a separator prints it.
+            pytest.param("12sensor.foo", id="glued-before"),
+            pytest.param("sensor.foo99", id="glued-after"),
+            # A word is only followed a little past the longest entity id.
+            pytest.param("x" * 2000 + "sensor.foo", id="glued-into-a-long-word"),
+        ],
+    )
+    async def test_hidden_id_found_wherever_it_stands(
+        self, matcher: Any, text: str
+    ) -> None:
+        assert matcher.embeds(text)
 
-        assert regex is not None
-        # Not a longer sibling id, nor an id with a leading word character.
-        assert regex.search("sensor.foo2") is None
-        assert regex.search("my_sensor.foo") is None
-        assert regex.search("binary_sensor.foo") is None
-        # A bare reference and a dotted-context template reference.
-        assert regex.search("sensor.foo") is not None
-        assert regex.search("states.sensor.foo") is not None
-        assert regex.search("{{ states('sensor.foo') }}") is not None
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("sensor.foo2", id="longer-sibling"),
+            pytest.param("binary_sensor.foo", id="other-domain"),
+            # Serialized, the id follows a newline's or a quote's escape.
+            pytest.param(
+                json.dumps("12\nbinary_sensor.foo"), id="after-newline-escape"
+            ),
+            pytest.param(json.dumps("“binary_sensor.foo”"), id="after-unicode-escape"),
+        ],
+    )
+    async def test_another_entitys_own_id_is_not_a_reference(
+        self, matcher: Any, text: str
+    ) -> None:
+        """Hiding ``sensor.foo`` must not make its siblings unreadable."""
+        assert not matcher.embeds(text)
 
-    async def test_nothing_hidden_has_no_regex(
+    async def test_nothing_hidden_has_no_matcher(
         self,
         core_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
@@ -321,7 +354,7 @@ class TestHiddenRegex:
         """An active category filter that matches no entity hides nothing."""
         set_config(enabled=True, enforce=True, exclude_categories=["diagnostic"])
 
-        assert await active_hidden_regex(core_client) is None
+        assert await active_hidden_matcher(core_client) is None
 
 
 class TestScrubSeam:
@@ -333,8 +366,8 @@ class TestScrubSeam:
         set_config: Callable[..., VisibilityConfig],
     ) -> None:
         enforce_hiding(set_config, "input_boolean.hidden_probe")
-        regex = await active_hidden_regex(core_client)
-        assert regex is not None
+        matcher = await active_hidden_matcher(core_client)
+        assert matcher is not None
         records: list[dict[str, Any]] = [
             {"entity_id": "automation.morning", "config": {"trigger": "sun"}},
             {
@@ -344,26 +377,29 @@ class TestScrubSeam:
             {"friendly_name": "Hidden Probe", "id": "input_boolean.hidden_probe"},
         ]
 
-        kept = scrub_records(records, regex)
+        kept = scrub_records(records, matcher)
 
         assert [r.get("entity_id", r.get("id")) for r in kept] == ["automation.morning"]
 
-    async def test_scrub_records_boundary_no_false_positive(
+    async def test_scrub_records_keeps_another_entitys_record(
         self,
+        hass: HomeAssistant,
         core_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
     ) -> None:
+        hass.states.async_set("sensor.foo2", "1")
+        hass.states.async_set("binary_sensor.foo", "on")
         enforce_hiding(set_config, "sensor.foo")
-        regex = await active_hidden_regex(core_client)
-        assert regex is not None
+        matcher = await active_hidden_matcher(core_client)
+        assert matcher is not None
         records: list[dict[str, Any]] = [
             {"entity_id": "sensor.foo2"},
-            {"entity_id": "my_sensor.foo"},
+            {"entity_id": "binary_sensor.foo"},
         ]
 
-        assert scrub_records(records, regex) == records
+        assert scrub_records(records, matcher) == records
 
-    async def test_active_hidden_regex_none_when_enforce_off(
+    async def test_active_hidden_matcher_none_when_enforce_off(
         self,
         core_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
@@ -374,12 +410,12 @@ class TestScrubSeam:
         with patch.object(
             core_client, "get_states", wraps=core_client.get_states
         ) as states:
-            regex = await active_hidden_regex(core_client)
+            matcher = await active_hidden_matcher(core_client)
 
-        assert regex is None
+        assert matcher is None
         states.assert_not_awaited()
 
-    async def test_active_hidden_regex_refreshes_with_caller_client(
+    async def test_active_hidden_matcher_refreshes_with_caller_client(
         self,
         core_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
@@ -390,12 +426,12 @@ class TestScrubSeam:
         with patch.object(
             core_client, "get_states", wraps=core_client.get_states
         ) as states:
-            regex = await active_hidden_regex(core_client)
+            matcher = await active_hidden_matcher(core_client)
 
-        assert regex is not None
+        assert matcher is not None
         assert states.await_count == 1
 
-    async def test_active_hidden_regex_uses_shared_cache(
+    async def test_active_hidden_matcher_uses_shared_cache(
         self,
         core_client: HomeAssistantClient,
         unreachable_client: HomeAssistantClient,
@@ -410,13 +446,12 @@ class TestScrubSeam:
         enforce_hiding(set_config, "sensor.hidden")
         await _overview(mw)
 
-        regex = await active_hidden_regex(unreachable_client)
+        matcher = await active_hidden_matcher(unreachable_client)
 
-        assert regex is not None
-        assert regex.search("states.sensor.hidden reference")
-        assert not regex.search("sensor.hidden2")
+        assert matcher is not None
+        assert matcher.embeds("states.sensor.hidden reference")
 
-    async def test_active_hidden_regex_fail_soft_on_data_error(
+    async def test_active_hidden_matcher_fail_soft_on_data_error(
         self,
         unreachable_client: HomeAssistantClient,
         set_config: Callable[..., VisibilityConfig],
@@ -424,7 +459,7 @@ class TestScrubSeam:
         """The call gates own fail-closed; a best-effort scrub just skips."""
         enforce_hiding(set_config, "sensor.hidden")
 
-        assert await active_hidden_regex(unreachable_client) is None
+        assert await active_hidden_matcher(unreachable_client) is None
 
 
 class TestComponentSearchScrub:

@@ -953,7 +953,12 @@ dimension. What it covers:
 - **Other content reads are refused on contact.** An ordinary dashboard config,
   template result, automation/script body, trace, log, or file read whose output
   would surface a hidden entity_id is refused with a generic
-  `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id.
+  `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id. The id
+  counts wherever it stands in the output, also run together with other
+  characters (`12sensor.foo`). A longer word is exempt only when it is another
+  entity's own id (`binary_sensor.foo`), so a leftover reference such as
+  `sensor.foo_old` to an entity that no longer exists is refused while
+  `sensor.foo` is hidden.
 - **Writes naming a hidden entity are concealed too.** The inbound argument scan
   applies to *every* tool, including service calls: a `ha_call_service` targeting
   a hidden entity_id is concealed as not-found, so an agent cannot confirm the
