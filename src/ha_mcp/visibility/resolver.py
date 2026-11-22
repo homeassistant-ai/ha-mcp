@@ -783,18 +783,20 @@ def config_has_active_hide_dimensions(config: VisibilityConfig) -> bool:
     )
 
 
-async def visibility_state_and_wire() -> tuple[bool, VisibilityWire | None]:
-    """Load the visibility config once and report both ``(active, wire)``.
+async def visibility_state_and_wire() -> tuple[bool, VisibilityWire | None, bool]:
+    """Load the visibility config once and report ``(active, wire, enforce)``.
 
-    The component ``search_visibility`` gate needs both values from one config
-    snapshot. Fails **closed** to ``(True, None)`` on a load error: keep the
+    The component ``search_visibility`` gate needs all three from one config
+    snapshot; ``enforce`` says whether the active filter is in enforce mode.
+    Fails **closed** to ``(True, None, True)`` on a load error: keep the
     legacy, filter-applying path, and there is no config to serialize.
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
     except Exception:  # noqa: BLE001
-        return True, None
-    return config_has_active_hide_dimensions(config), config.to_wire()
+        return True, None, True
+    active = config_has_active_hide_dimensions(config)
+    return active, config.to_wire(), active and config.enforce
 
 
 async def device_registry_needed_for_visibility() -> bool:

@@ -102,6 +102,12 @@ class TestInboundScan:
                 {"config": {"states.sensor.foo above 5": "alias"}},
                 id="dict-key",
             ),
+            # A config sent as a JSON string: the id follows a newline's escape.
+            pytest.param(
+                "ha_config_set_automation",
+                {"config": json.dumps({"description": "watch\nsensor.foo"})},
+                id="json-string-after-newline",
+            ),
         ],
     )
     async def test_embedded_match_refused(
@@ -131,6 +137,24 @@ class TestInboundScan:
         )
 
         assert result.content[0].text == "visible body"
+
+    async def test_longer_id_the_caller_typed_gets_the_tools_own_answer(
+        self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
+    ) -> None:
+        """Refusing it, or the error echoing it, would tell the caller that a
+        hidden id is part of what it typed."""
+        enforce_hiding(set_config, "sensor.foo")
+
+        async def _not_found(_context: Any) -> Any:
+            raise ToolError(json.dumps(create_entity_not_found_error("sensor.foo2")))
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "sensor.foo2"}),
+                _not_found,
+            )
+
+        assert error_body(exc) == create_entity_not_found_error("sensor.foo2")
 
 
 class TestProxyUnwrap:
@@ -267,6 +291,107 @@ class TestOutboundScan:
 
         assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
 
+    @pytest.mark.parametrize(
+        "guidance",
+        [
+            pytest.param(
+                {"skill_content": {"references/x.md": "entity_id: cover.garage_door"}},
+                id="bundled-guide",
+            ),
+            pytest.param(
+                {"best_practice_warnings": ["e.g. entity_id: cover.garage_door"]},
+                id="checker-warnings",
+            ),
+        ],
+    )
+    async def test_best_practice_text_on_a_gated_write_result_is_not_scanned(
+        self,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+        guidance: dict[str, Any],
+    ) -> None:
+        """Its examples name entities that are not this install's, and the
+        write has already happened when its result is scanned."""
+        enforce_hiding(set_config, "cover.garage_door")
+        payload = {"success": True, "entity_id": "script.night", **guidance}
+
+        result = await mw.on_call_tool(
+            make_context("ha_config_set_script", {"script_id": "night"}),
+            _returns(text_result(json.dumps(payload), structured=payload)),
+        )
+
+        assert result.structured_content == payload
+
+    @pytest.mark.parametrize(
+        ("tool", "payload"),
+        [
+            pytest.param(
+                "ha_eval_template",
+                {"skill_content": {"x": "cover.garage_door"}},
+                id="a-tool-that-attaches-no-guide",
+            ),
+            pytest.param(
+                "ha_config_set_script",
+                {"entity_id": "cover.garage_door", "skill_content": {"x": "text"}},
+                id="beside-the-guide",
+            ),
+        ],
+    )
+    async def test_hidden_id_outside_a_write_tools_guide_is_still_refused(
+        self,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+        tool: str,
+        payload: dict[str, Any],
+    ) -> None:
+        enforce_hiding(set_config, "cover.garage_door")
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(tool, {}),
+                _returns(text_result(json.dumps(payload), structured=payload)),
+            )
+
+        assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_hidden_id_on_a_later_line_of_a_list_refused(
+        self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
+    ) -> None:
+        """A template listing one entity per line returned every hidden entity
+        but the first: serialized, the newline before the id ends in a letter
+        (#3156)."""
+        enforce_hiding(set_config, "sensor.foo")
+        payload = {"result": "sensor.visible | 12\nsensor.foo | 99"}
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_eval_template", {}),
+                _returns(text_result(json.dumps(payload), structured=payload)),
+            )
+
+        assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_entity_created_since_the_cached_read_is_not_a_hidden_id(
+        self,
+        hass: HomeAssistant,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """A helper named after a hidden entity must not have its own creation
+        refused: its new id is a longer word the cached read does not know."""
+        enforce_hiding(set_config, "sensor.foo")
+        await mw.on_call_tool(
+            make_context("ha_get_overview", {}), _returns(text_result())
+        )
+        hass.states.async_set("sensor.foo_average", "1")
+
+        result = await mw.on_call_tool(
+            make_context("ha_config_set_helper", {"name": "Foo average"}),
+            _returns(text_result("created sensor.foo_average")),
+        )
+
+        assert result.content[0].text == "created sensor.foo_average"
+
     async def test_clean_output_passes_through(
         self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
     ) -> None:
@@ -295,15 +420,24 @@ class TestOutboundScan:
 
         assert exc.value.args[0] == original
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            pytest.param("reading sensor.foo failed", id="plain"),
+            # An error's JSON escapes the quote, and the escape ends in a letter.
+            pytest.param("invalid input “sensor.foo”", id="typographic-quotes"),
+        ],
+    )
     async def test_tool_error_naming_hidden_id_replaced(
-        self, mw: _ChainedEnforcement, set_config: Callable[..., VisibilityConfig]
+        self,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+        message: str,
     ) -> None:
         enforce_hiding(set_config, "sensor.foo")
 
         async def _raise_leaky(_context: Any) -> Any:
-            raise ToolError(
-                json.dumps({"error": {"message": "reading sensor.foo failed"}})
-            )
+            raise ToolError(json.dumps({"error": {"message": message}}))
 
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(make_context("ha_get_logs", {}), _raise_leaky)

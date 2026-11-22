@@ -209,6 +209,10 @@ CAPABILITIES: list[str] = [
     # server sends that key only to a component advertising this flag, and with
     # an active allowlist requires the flag or falls back to its legacy resolver.
     "search_visibility_allowlist_authorization",
+    # A semantic flag on search_visibility: this component understands the
+    # ``enforce`` wire key and then omits the config records that reference a
+    # hidden entity. The server sends an enforcing search here only with it.
+    "search_visibility_enforce",
     "server_entry",
     # The WRITE counterpart of ``server_entry`` (Phase 3). The server gates its
     # ``ha_dev_manage_server(update_source)`` embedded-mode direct-write on this; an

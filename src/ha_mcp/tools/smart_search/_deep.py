@@ -54,14 +54,14 @@ async def _scrub_results_for_enforce(
     (single memoized config load) unless enforce mode is active. Lazy import so
     the visibility package is only touched at call time, not module import.
     """
-    from ...visibility.enforcement import active_hidden_regex, scrub_records
+    from ...visibility.enforcement import active_hidden_matcher, scrub_records
 
-    enforce_regex = await active_hidden_regex(client)
-    if enforce_regex is None:
+    enforce_matcher = await active_hidden_matcher(client, results)
+    if enforce_matcher is None:
         return
     for category, items in results.items():
         if items:
-            results[category] = scrub_records(items, enforce_regex)
+            results[category] = scrub_records(items, enforce_matcher)
 
 
 async def _phase_finished(
