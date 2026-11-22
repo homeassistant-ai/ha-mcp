@@ -22,6 +22,8 @@ _VALID_COMBOS: set[tuple[str, str]] = {
     ("edits", "diff"),
     ("edits", "restore"),
     ("edits", "delete"),
+    ("settings", "export"),
+    ("settings", "import"),
 }
 
 
@@ -39,6 +41,7 @@ def gate_backup_combo(scope: str, action: str) -> None:
                 + ", ".join(sorted(f"({s},{a})" for s, a in _VALID_COMBOS)),
                 "scope='snapshot' is for full HA tarball backups (heavy, restart on restore)",
                 "scope='edits' is for per-entity auto-backups produced by write tools (lightweight)",
+                "scope='settings' exports or imports this server's settings file",
             ],
         )
     )
@@ -98,6 +101,20 @@ def _enforce_backup_controls(
                         "configuration, or ENABLE_SNAPSHOT_ACTIONS environment variable. "
                         "Developer tools cannot change this control."
                     ),
+                ],
+            )
+        )
+    if scope == "settings" and not settings.enable_settings_transfer_actions:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONFIG_VALIDATION_FAILED,
+                "Settings export and import through ha_manage_backup are off "
+                "(enable_settings_transfer_actions=false).",
+                context={"scope": scope, "action": action},
+                suggestions=[
+                    "Ask the user to turn on 'Allow ha_manage_backup to export and "
+                    "import settings' in the web settings UI's Backups tab, or set "
+                    "ENABLE_SETTINGS_TRANSFER_ACTIONS=true. Tools cannot change it.",
                 ],
             )
         )

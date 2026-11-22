@@ -762,9 +762,9 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         *("domain", "entity_id"),
         # ...edits view selector (read) / delete target (blocked),
         "backup_name",
-        # ...edits delete filter (blocked), list pagination (read) and the
-        # snapshot configure payload (blocked).
-        *("older_than_days", "limit", "update_backup_settings"),
+        # ...edits delete filter (blocked), list pagination (read), and the
+        # snapshot configure and settings import payloads (both blocked).
+        *("older_than_days", "limit", "update_backup_settings", "settings_file"),
     },
     "ha_manage_app": {
         # Read-path selectors/modifiers of the allowed GET proxy.

@@ -835,6 +835,15 @@ in-process server's entry: only an export from that entry carries it, and only
 that entry imports it. Any other server keeps its own connection and says so
 after the import. Restart HA-MCP when the import asks for it.
 
+To let your AI assistant move settings for you, turn on **Allow ha_manage_backup
+to export and import settings** in the **Backups** tab of each server's settings
+page. The assistant can then export from one server and import on another with
+`ha_manage_backup(scope="settings")`. It never moves the connection, keeps the
+destination's human-only settings, and changing security policies, entity
+visibility or File & YAML Tools permissions also needs **Dev tools security
+policy access**. An import can still turn on developer mode, tools and features
+the file has on, so check your settings after the assistant imports one.
+
 ### Do I still need the app or the webhook proxy if I use the custom component?
 
 **No.** The custom component's **HA-MCP Server** entry runs the whole ha-mcp server inside Home Assistant and is completely independent of the Home Assistant app. For remote access it registers its own built-in Home Assistant webhook, so you do not need the separate Webhook Proxy app either.

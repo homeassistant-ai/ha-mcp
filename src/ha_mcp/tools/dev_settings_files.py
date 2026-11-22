@@ -92,8 +92,8 @@ async def import_settings_file(
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "import_settings needs settings_file: an export_settings result's "
-                "settings_file, or a file downloaded from a settings page.",
+                "Importing needs settings_file: an export's settings_file, or a "
+                "file downloaded from a settings page.",
             )
         )
     try:

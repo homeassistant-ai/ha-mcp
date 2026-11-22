@@ -6,7 +6,16 @@ from typing import Any
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
 
-_HUMAN_BACKUP_CONTROLS = frozenset({"enable_snapshot_actions", "backup_read_only"})
+_HUMAN_BACKUP_CONTROLS = frozenset(
+    {
+        "enable_snapshot_actions",
+        "backup_read_only",
+        "enable_settings_transfer_actions",
+        # Snapshot deletion is a person's opt-in, never the agent's.
+        "enable_snapshot_delete",
+        "snapshot_delete_min_age_days",
+    }
+)
 
 
 def dev_backup_config_fields() -> list[dict[str, Any]]:
