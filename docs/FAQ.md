@@ -822,13 +822,16 @@ server) is not in the file: set it on the destination and check it after the
 import. In the app, the settings it keeps as app options are read from and
 written to its Configuration.
 
-The File & YAML Tools permissions move when that entry exists and is enabled on
-both sides; check them after the import when the source's entry was disabled.
-An export from the in-process server records whether it had that entry, so its
-import into another in-process server needs the same entry state on the
-destination (add or remove the entry first). A file from the app, Docker or a
-standalone server leaves the destination's entry as it is unless it carries
-permissions.
+An export from the in-process server records its File & YAML Tools entry. Its
+import into another in-process server recreates a missing enabled entry,
+restores the permissions into a disabled one when the source's was disabled
+(add and disable it on the destination first), and stops if the destination
+has an entry the source did not. The app, Docker and standalone servers read
+and write the permissions only through an enabled entry: their file carries
+none when the source's entry was disabled or missing, and then leaves the
+destination's entry as it is. In OAuth mode their settings page cannot reach
+the permissions at all and says so; set them in **Configure** for File & YAML
+Tools.
 
 The connection (webhook ID, secret path, OAuth credentials) belongs to the
 in-process server's entry: only an export from that entry carries it, and only

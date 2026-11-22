@@ -147,8 +147,9 @@ def _enforce_backup_controls(
             create_error_response(
                 ErrorCode.READ_ONLY_MODE,
                 "Backup Read Only is enabled (backup_read_only=true). Explicit "
-                "backup creation, restore, and deletion are blocked in both scopes, "
-                "and so is changing the backup-before-update settings. "
+                "backup creation, restore, and deletion are blocked in the edits "
+                "and snapshot scopes, as are a settings import and changing the "
+                "backup-before-update settings. "
                 "Automatic pre-edit capture still follows enable_auto_backup.",
                 context={"scope": scope, "action": action, "backup_read_only": True},
                 suggestions=[

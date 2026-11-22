@@ -45,6 +45,8 @@ _TOOLS_SERVICES = {
 _RESTART_DOCUMENTS = {"tools", "features"}
 # Sections whose app-managed fields the app (add-on) keeps as its options.
 _APP_SECTIONS = ("features", "backup")
+# Names what an export left out, as an import's ``skipped`` does.
+SKIPPED_HEADER = "X-HA-MCP-Skipped"
 
 
 # Imports still finishing after their request was cancelled.
@@ -96,6 +98,22 @@ class _PermissionsUnreadable(Exception):
     """Home Assistant did not answer the File & YAML Tools permission read."""
 
 
+class _PermissionsUnreachable(Exception):
+    """OAuth mode's settings page has no user's Home Assistant token to read them."""
+
+
+def _without_credentials(server: HomeAssistantSmartMCPServer | None) -> bool:
+    """OAuth mode outside an MCP call: only a tool call carries a user's token."""
+    from .._vendor.fastmcp.server.dependencies import get_access_token
+
+    # OAuth mode's proxy client picks each request's user (as component_api does).
+    return (
+        server is not None
+        and getattr(type(server.client), "current_client", None) is not None
+        and get_access_token() is None
+    )
+
+
 async def _tool_services(
     server: HomeAssistantSmartMCPServer | None,
 ) -> dict[str, Any]:
@@ -119,8 +137,11 @@ async def _read_tools(
     """The component's permission lists, or None without File & YAML Tools.
 
     Raises :class:`_PermissionsUnreadable` when Home Assistant does not answer,
-    so a transfer never reads an unanswered read as "no permissions".
+    so a transfer never reads an unanswered read as "no permissions", and
+    :class:`_PermissionsUnreachable` without credentials to ask.
     """
+    if _without_credentials(server):
+        raise _PermissionsUnreachable
     try:
         services = await _tool_services(server)
         if any(read not in services for read, _, _ in _TOOLS_SERVICES.values()):
@@ -171,15 +192,26 @@ async def _export_bundle(server: HomeAssistantSmartMCPServer | None) -> dict[str
         settings = transfer.validate_server_settings(settings, strict=False)
     try:
         tools = await _read_tools(server)
+    except _PermissionsUnreachable:
+        # Left out, which an import treats as not carried; _export says so.
+        tools = None
     except _PermissionsUnreadable as err:
         raise TransferFailed("export_failed", 503) from err
-    return {
+    bundle = {
         "format": transfer.FORMAT,
         "version": transfer.VERSION,
         "contains_credentials": False,
         "entries": {} if tools is None else {"tools": tools},
         "server_settings": settings,
     }
+    if len(_encode(bundle)) > transfer.MAX_BYTES:
+        # No import accepts it.
+        raise TransferFailed("too_large", 413)
+    return bundle
+
+
+def _encode(bundle: dict[str, Any]) -> bytes:
+    return json.dumps(bundle, ensure_ascii=False).encode("utf-8")
 
 
 async def _export(
@@ -191,13 +223,16 @@ async def _export(
         bundle = await export_bundle(server)
     except TransferFailed as err:
         return _error(err.code, err.status)
+    headers = {
+        "Content-Disposition": 'attachment; filename="ha-mcp-settings.json"',
+        "Cache-Control": "no-store",
+    }
+    if "tools" not in bundle["entries"] and _without_credentials(server):
+        headers[SKIPPED_HEADER] = "file_permissions_unreachable"
     return Response(
-        json.dumps(bundle, ensure_ascii=False).encode("utf-8"),
+        _encode(bundle),
         media_type="application/json",
-        headers={
-            "Content-Disposition": 'attachment; filename="ha-mcp-settings.json"',
-            "Cache-Control": "no-store",
-        },
+        headers=headers,
     )
 
 
@@ -215,9 +250,9 @@ def _without_app_options(settings: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _restore_files(
-    settings: dict[str, Any], limits: ImportLimits | None
+    settings: dict[str, Any], limits: ImportLimits | None, sections: frozenset[str]
 ) -> transfer.ServerSettingsChanges | None:
-    restore = partial(transfer.restore_server_settings)
+    restore = partial(transfer.restore_server_settings, sections=sections)
     if limits is not None:
         # The app's Supervisor options are checked where they are posted.
         restore = partial(
@@ -338,7 +373,7 @@ async def _apply_app_options(
 
 async def _undo(
     server: HomeAssistantSmartMCPServer | None,
-    changes: transfer.ServerSettingsChanges | None,
+    changes: list[transfer.ServerSettingsChanges],
     tools: dict[str, list[str]] | None,
     written: dict[str, list[list[str]]],
 ) -> bool:
@@ -372,10 +407,10 @@ async def _undo(
         except Exception:
             logger.exception("Settings import could not undo %s", name)
             complete = False
-    if changes is not None:
+    for change in reversed(changes):
         try:
             await asyncio.to_thread(
-                transfer.rollback_server_settings, get_data_dir(), changes
+                transfer.rollback_server_settings, get_data_dir(), change
             )
         except transfer.ServerSettingsRollbackIncomplete:
             complete = False
@@ -430,22 +465,33 @@ async def _import_transaction(
     skipped = ["connection"] if backup.has_connection else []
     written: dict[str, list[list[str]]] = {}
     async with get_config_write_lock():
-        changes = tools = None
+        changes: list[transfer.ServerSettingsChanges] = []
+        tools = None
         try:
-            changes = await _restore_files(backup.server_settings, limits)
+            restored = await _restore_files(
+                backup.server_settings, limits, transfer.OTHER_SECTIONS
+            )
+            changes += [restored] if restored else []
             if backup.tools is not None:
                 # Recorded before the first write so any failure can undo it.
                 try:
                     tools = await _read_tools(server)
+                except _PermissionsUnreachable:
+                    skipped.append("file_permissions_unreachable")
                 except _PermissionsUnreadable as err:
                     raise TransferFailed("restore_failed", 503) from err
-                if tools is None:
-                    skipped.append("file_permissions")
                 else:
-                    await _write_tools(server, tools, backup.tools, limits, written)
+                    if tools is None:
+                        skipped.append("file_permissions")
+                    else:
+                        await _write_tools(server, tools, backup.tools, limits, written)
             app_changed = await _apply_app_options(
                 server, backup.server_settings, limits
             )
+            restored = await _restore_files(
+                backup.server_settings, limits, transfer.GATE_SECTIONS
+            )
+            changes += [restored] if restored else []
         except Exception as err:
             if isinstance(err, TransferFailed):
                 logger.info("Settings import refused (%s)", err.code)
@@ -457,7 +503,7 @@ async def _import_transaction(
                 failure = TransferFailed("rollback_incomplete", failure.status)
             raise failure from err
     reset_global_settings()
-    changed = {d.key for d in changes.documents} if changes else set()
+    changed = {d.key for c in changes for d in c.documents}
     return {
         "success": True,
         "restart_required": app_changed or bool(changed & _RESTART_DOCUMENTS),

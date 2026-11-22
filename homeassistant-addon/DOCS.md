@@ -323,9 +323,10 @@ continue.
 **Default:** `false`
 
 **Allow ha_manage_backup to export and import settings.** Lets AI assistants
-download this server's settings file and import one with
-`ha_manage_backup(scope="settings")`, as the settings page's Export and Import
-buttons do. An import keeps the human-only settings, and changing the security
+download this server's settings file with
+`ha_manage_backup(scope="settings", action="export")` and import one with
+`action="import"` and the exported file as `settings_file`, as the settings
+page's Export and Import buttons do. An import keeps the human-only settings, and changing the security
 policy, entity visibility or File & YAML Tools permissions also needs Dev tools
 security policy access. An import can also turn on developer mode, tools and
 features, and turn off protections such as secret redaction, SSL verification

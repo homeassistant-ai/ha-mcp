@@ -63,6 +63,8 @@
     "transfer.restart_server": "Settings imported. Restart HA-MCP to finish applying the restored settings.",
     "transfer.connection_skipped": "The file's connection settings apply only to the HA-MCP Server in Home Assistant, so this server kept its own.",
     "transfer.file_permissions_skipped": "The file's File & YAML Tools permissions were not applied because that integration entry is not available here.",
+    "transfer.file_permissions_unreachable_skipped": "The file's File & YAML Tools permissions were not applied: in OAuth mode this page has no Home Assistant credentials to change them. Set them in Configure for File & YAML Tools in Home Assistant.",
+    "transfer.export_file_permissions_unreachable": "The file leaves out the File & YAML Tools permissions: in OAuth mode this page has no Home Assistant credentials to read them.",
     "transfer.restart": "Settings imported. Restart Home Assistant to finish applying the restored settings.",
     "transfer.too_large": "Choose a settings file of 4 MiB or less.",
     "transfer.export_too_large": "These settings exceed the 4 MiB export limit.",

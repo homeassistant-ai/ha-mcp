@@ -53,6 +53,9 @@ _FILES = {
     "features": _FEATURE_FLAG_OVERRIDE_FILENAME,
     "backup": _BACKUP_OVERRIDE_FILENAME,
 }
+# They gate tool calls, so an import replaces them only after every other step.
+GATE_SECTIONS = frozenset({"policy", "visibility"})
+OTHER_SECTIONS = frozenset(_FILES) - GATE_SECTIONS
 _FEATURE_TYPES = {row.field: row.ftype for row in FEATURE_FLAG_FIELDS}
 _FEATURE_TYPES.update(
     {row.field: row.ftype for row in ADVANCED_SETTINGS_FIELDS if row.editable}
@@ -401,12 +404,14 @@ def restore_server_settings(
     *,
     keep: Mapping[str, Collection[str]] | None = None,
     allow: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None,
+    sections: Collection[str] | None = None,
 ) -> ServerSettingsChanges | None:
     """Return a rollback record for committed changes, or None on a no-op.
 
     ``keep`` names, per section, entries that keep their stored values;
     ``allow`` sees the stored and resulting content and may refuse the change.
     Both run under the file lock, against the state the write replaces.
+    ``sections`` limits the write to those sections; ``allow`` still sees all.
     """
     incoming = validate_server_settings(settings)
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -429,6 +434,8 @@ def restore_server_settings(
             incoming[section] = merged or None
         if allow is not None and not allow(old_content, incoming):
             raise ChangeRefused("This import may not make these changes")
+        for key in _FILES.keys() - set(sections if sections is not None else _FILES):
+            incoming[key] = old_content[key]
         changed: list[_DocumentChange] = []
         try:
             for key, name in _FILES.items():

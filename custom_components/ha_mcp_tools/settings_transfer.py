@@ -352,27 +352,11 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
         _tools_setup_lock(target_tools) if checks_tools else nullcontext(),
         AsyncExitStack() as rollback,
     ):
-        try:
-            server_changes = await hass.async_add_executor_job(
-                wheel.restore_server_settings, directory, settings
+        changes = [
+            await _restore_settings(
+                hass, wheel, directory, settings, wheel.OTHER_SECTIONS, rollback
             )
-        except wheel.DecisionPinRequired as err:
-            raise TransferRefused(RefusalCode.DECISION_PIN_REQUIRED) from err
-        except wheel.LocalSettingsUnusable as err:
-            raise TransferRefused(RefusalCode.INVALID_SERVER_SETTINGS) from err
-        except ValueError as err:
-            if _INCOMPLETE_ROLLBACK in getattr(err, "__notes__", ()):
-                raise
-            raise TransferRefused(RefusalCode.INVALID_BACKUP) from err
-        if server_changes is not None:
-            _add_undo(
-                rollback,
-                "server settings",
-                hass.async_add_executor_job,
-                wheel.rollback_server_settings,
-                directory,
-                server_changes,
-            )
+        ]
         if source_tools is not None:
             await _restore_tools(
                 hass, entries.get(c.ENTRY_TYPE_TOOLS), source_tools, rollback
@@ -382,14 +366,54 @@ async def async_import(hass: HomeAssistant, bundle: Any) -> bool:
             _check_tools_entry(
                 source_tools, _entries(hass).get(c.ENTRY_TYPE_TOOLS), allow_create=False
             )
+        changes.append(
+            await _restore_settings(
+                hass, wheel, directory, settings, wheel.GATE_SECTIONS, rollback
+            )
+        )
         restart = _restore_entry(
             hass,
             entries[c.ENTRY_TYPE_SERVER],
             server,
-            server_changes is not None,
+            any(changes),
         )
         rollback.pop_all()
-    return restart or bool(server_changes and server_changes.restart_required)
+    return restart or any(change and change.restart_required for change in changes)
+
+
+async def _restore_settings(
+    hass: HomeAssistant,
+    wheel: Any,
+    directory: Path,
+    settings: dict[str, Any],
+    sections: frozenset[str],
+    rollback: AsyncExitStack,
+) -> Any:
+    """Write ``sections`` of the server settings and register their undo."""
+    try:
+        changes = await hass.async_add_executor_job(
+            partial(
+                wheel.restore_server_settings, directory, settings, sections=sections
+            )
+        )
+    except wheel.DecisionPinRequired as err:
+        raise TransferRefused(RefusalCode.DECISION_PIN_REQUIRED) from err
+    except wheel.LocalSettingsUnusable as err:
+        raise TransferRefused(RefusalCode.INVALID_SERVER_SETTINGS) from err
+    except ValueError as err:
+        if _INCOMPLETE_ROLLBACK in getattr(err, "__notes__", ()):
+            raise
+        raise TransferRefused(RefusalCode.INVALID_BACKUP) from err
+    if changes is not None:
+        _add_undo(
+            rollback,
+            "server settings",
+            hass.async_add_executor_job,
+            wheel.rollback_server_settings,
+            directory,
+            changes,
+        )
+    return changes
 
 
 class _TooLarge(ValueError):

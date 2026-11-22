@@ -6,6 +6,7 @@ import contextlib
 import copy
 import importlib.abc
 import importlib.resources
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,7 +34,8 @@ from custom_components.ha_mcp_tools import (
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.const import DOMAIN, SERVER_CONFIG_SUBDIR
 from ha_mcp import settings_transfer as server_transfer
-from ha_mcp.policy.persistence import load_policy, save_policy
+from ha_mcp.policy.model import Policy
+from ha_mcp.policy.persistence import load_policy
 from ha_mcp.utils.config_write_lock import config_file_lock
 
 from ._config_flow_core import (
@@ -287,7 +289,7 @@ async def test_failed_entry_update_restores_prior_tools_and_server_file(
     assert await settings_transfer.async_export(hass) == original
 
 
-async def test_tools_failure_keeps_policy_and_permission_saves_made_after_import(
+async def test_tools_failure_keeps_saves_made_after_import_and_never_applies_policy(
     hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -302,18 +304,21 @@ async def test_tools_failure_keeps_policy_and_permission_saves_made_after_import
         "extra_yaml_keys": ["mqtt"],
     }
     directory = Path(hass.config.path(SERVER_CONFIG_SUBDIR))
+    tool_config = directory / "tool_config.json"
+    edited = {"tools": {"ha_search": "disabled"}}
+    policies: list[int] = []
 
-    def edit_policy() -> None:
+    def edit_tool_config() -> None:
         with config_file_lock(directory):
-            policy = load_policy(directory)
-            assert policy.wait_seconds == 12
-            save_policy(directory, policy.model_copy(update={"wait_seconds": 43}))
+            assert json.loads(tool_config.read_text()) == {"tools": {}}
+            tool_config.write_text(json.dumps(edited))
+        policies.append(load_policy(directory).wait_seconds)
 
     save = Store.async_save
 
     async def fail_last_write(store, data):
         if data == {"keys": ["mqtt"]}:
-            await hass.async_add_executor_job(edit_policy)
+            await hass.async_add_executor_job(edit_tool_config)
             # An ordinary writer explicitly kept this imported value. Its
             # save still wins even though a content-only check would match.
             assert (await call(SERVICE_SET_ALLOWED_PATHS, {"paths": ["blueprints"]}))[
@@ -326,11 +331,16 @@ async def test_tools_failure_keeps_policy_and_permission_saves_made_after_import
     with pytest.raises(OSError, match="tools store unavailable"):
         await settings_transfer.async_import(hass, candidate)
     restored = await settings_transfer.async_export(hass)
-    assert restored["server_settings"]["policy"]["wait_seconds"] == 43
+    # The permissions changed under this server's own policy, never the file's.
+    assert policies == [Policy().wait_seconds]
+    assert restored["server_settings"]["policy"] is None
+    assert restored["server_settings"]["tools"] == edited
     assert restored["entries"]["tools"]["allowed_dirs"] == ["blueprints"]
-    assert restored["server_settings"]["tools"] is None
     assert restored["entries"]["tools"]["extra_yaml_keys"] == []
     assert "Kept allowed_dirs because it changed after settings import" in caplog.text
+    assert "Kept tool_config.json because it changed after settings import" in (
+        caplog.text
+    )
 
 
 async def test_importing_a_changed_search_timeout_requests_a_home_assistant_restart(

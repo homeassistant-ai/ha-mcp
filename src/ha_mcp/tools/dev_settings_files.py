@@ -105,7 +105,8 @@ async def import_settings_file(
 
 
 _GUARDED_CHANGES = (
-    "import tool security policies, entity visibility or File & YAML Tools permissions"
+    "import tool security policies, entity visibility, File & YAML Tools "
+    "permissions or the enable_tool_security_policies switch"
 )
 _SWITCH = "enable_tool_security_policies"
 
@@ -145,6 +146,8 @@ def _raise_transfer_error(code: str) -> NoReturn:
             suggestions=[
                 "Check the Home Assistant / server log for the failing step"
                 if rollback
+                else "The settings exceed the 4 MiB transfer limit"
+                if code == "too_large"
                 else "Use a file exported by HA-MCP's settings page or export_settings"
             ],
         )

@@ -168,8 +168,8 @@ def run_script(
     Parameters mirror the JSON contract in ``tests/js/harness.mjs``.
 
     ``fetch_map`` keys are URL substrings; values are
-    ``{"status": int, "body"?: str, "json"?: any, "throw"?: str,
-    "responses"?: [...], "byMethod"?: {...}}``. ``responses`` sequences
+    ``{"status": int, "body"?: str, "json"?: any, "headers"?: {...},
+    "throw"?: str, "responses"?: [...], "byMethod"?: {...}}``. ``responses`` sequences
     per-call overrides; the last entry sticks after exhaustion. Missing
     routes default to 404.
 

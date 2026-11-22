@@ -71,6 +71,9 @@ function initSettingsTransfer() {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
       report('downloaded');
+      if (response.headers.get('X-HA-MCP-Skipped') === 'file_permissions_unreachable') {
+        status.textContent += ' ' + t('transfer.export_file_permissions_unreachable');
+      }
     } catch (err) {
       console.error('HA-MCP settings export failed', err);
       report('export_failed', true);
@@ -115,7 +118,7 @@ function initSettingsTransfer() {
       const restart = result.restart === 'server' ? 'restart_server' : 'restart';
       report(result.restart_required ? restart : 'imported');
       for (const part of result.skipped || []) {
-        if (part === 'connection' || part === 'file_permissions') {
+        if (['connection', 'file_permissions', 'file_permissions_unreachable'].includes(part)) {
           status.textContent += ' ' + t('transfer.' + part + '_skipped');
         }
       }

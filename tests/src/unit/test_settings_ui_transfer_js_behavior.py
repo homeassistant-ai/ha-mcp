@@ -113,6 +113,43 @@ def test_download_preserves_the_export_without_rendering_credentials() -> None:
     assert result.status == "status: Settings download started."
 
 
+def test_an_export_without_permissions_says_so() -> None:
+    """OAuth mode's settings page cannot read File & YAML Tools permissions."""
+    result = _run(
+        "document.getElementById('transferExport').click();",
+        path="/mcp/settings",
+        responses={
+            _TRANSFER + "export": {
+                "body": _BUNDLE,
+                "headers": {"X-HA-MCP-Skipped": "file_permissions_unreachable"},
+            }
+        },
+        prelude="URL.createObjectURL = () => 'blob:https://test.local/x';"
+        "URL.revokeObjectURL = () => {};"
+        "HTMLAnchorElement.prototype.click = () => {};",
+    )
+    assert result.status == "status: " + " ".join(
+        _EN[f"transfer.{key}"]
+        for key in ("downloaded", "export_file_permissions_unreachable")
+    )
+
+
+def test_an_import_without_reachable_permissions_says_so() -> None:
+    result = _run(
+        _choose(_BUNDLE),
+        path="/mcp/settings",
+        responses={
+            _TRANSFER + "import": {
+                "json": {"success": True, "skipped": ["file_permissions_unreachable"]}
+            }
+        },
+    )
+    assert result.status == "status: " + " ".join(
+        _EN[f"transfer.{key}"]
+        for key in ("imported", "file_permissions_unreachable_skipped")
+    )
+
+
 def test_unusable_source_entries_point_to_the_integration_configuration() -> None:
     result = _run(
         "document.getElementById('transferExport').click();",

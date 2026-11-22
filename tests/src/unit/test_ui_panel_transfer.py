@@ -338,7 +338,7 @@ class TestSettingsTransfer:
         bundle = await exported.json()
         bundle["server_settings"]["tools"] = {"tools": {"uploaded_marker": "pinned"}}
 
-        def fail(directory: Path, settings: dict[str, object]) -> None:
+        def fail(directory: Path, settings: dict[str, object], **_: object) -> None:
             raise PermissionError(json.dumps(settings))
 
         monkeypatch.setattr(server_transfer, "restore_server_settings", fail)

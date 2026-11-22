@@ -13,7 +13,8 @@ import json
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.const import EVENT_CALL_SERVICE
@@ -21,8 +22,13 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.service import async_set_service_schema
 from homeassistant.helpers.storage import Store
 
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.__main__ import OAuthProxyClient
+from ha_mcp.client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.config import reset_global_settings
+from ha_mcp.utils.config_write_lock import get_config_write_lock
 
 from ._file_services import make_file_service
 from ._settings_ui_app import (
@@ -514,8 +520,19 @@ async def test_an_export_waits_for_an_import_in_progress(
     )
     try:
         await paused.wait()
+        lock = get_config_write_lock()
+        acquire, waiting = lock.acquire, asyncio.Event()
+
+        async def note_the_wait() -> bool:
+            waiting.set()
+            return await acquire()
+
+        monkeypatch.setattr(lock, "acquire", note_the_wait)
         exporting = asyncio.create_task(_export(monkeypatch, core_client))
-        await asyncio.sleep(0.3)
+        waited = asyncio.create_task(waiting.wait())
+        # Either the export queues behind the import or it reads mid-import.
+        await asyncio.wait({exporting, waited}, return_when=asyncio.FIRST_COMPLETED)
+        waited.cancel()
     finally:
         release.set()
     await importing
@@ -532,16 +549,30 @@ async def test_a_permission_saved_after_the_import_read_it_stops_the_import(
     original = await _export(monkeypatch, core_client)
     bundle = json.loads(json.dumps(original))
     bundle["entries"]["tools"] = {"allowed_dirs": ["www"], "extra_yaml_keys": []}
-    read = _on_service_call(hass, "get_extra_yaml_keys")
-    saved: list[asyncio.Task[Any]] = []
+    save = Store.async_save
+    holding, release = asyncio.Event(), asyncio.Event()
 
-    async def save_after_the_read() -> None:
-        await read.wait()
-        await administrator("set_allowed_paths", {"paths": ["media"]})
+    async def hold_the_administrators_save(store: Store, data: Any) -> None:
+        if data == {"paths": ["media"]}:
+            # Until it is stored, the directories still read ["pyscript"].
+            holding.set()
+            await release.wait()
+        await save(store, data)
 
-    saved.append(asyncio.ensure_future(save_after_the_read()))
-    response = await post_settings(monkeypatch, core_client, IMPORT, bundle)
-    await saved[0]
+    monkeypatch.setattr(Store, "async_save", hold_the_administrators_save)
+    saving = asyncio.ensure_future(
+        administrator("set_allowed_paths", {"paths": ["media"]})
+    )
+    await holding.wait()
+    # Called after both reads; it compares once the administrator's save is done.
+    written = _on_service_call(hass, "set_allowed_paths")
+    importing = asyncio.ensure_future(
+        post_settings(monkeypatch, core_client, IMPORT, bundle)
+    )
+    await written.wait()
+    release.set()
+    await saving
+    response = await importing
 
     assert (response.status_code, response.json()["error"]) == (
         409,
@@ -614,21 +645,104 @@ async def test_a_restore_the_component_rejects_is_an_incomplete_rollback(
 
 
 async def test_an_export_that_cannot_read_the_permissions_fails(
-    settings_world: Path,
+    hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
-    hass_access_token: str,
-    socket_enabled: None,
+    core_client: HomeAssistantClient,
 ) -> None:
-    # Home Assistant is restarting: nothing answers at its address.
-    unreachable = HomeAssistantClient(
-        base_url="http://127.0.0.1:9", token=hass_access_token, verify_ssl=False
+    await make_file_service(hass, allowed="pyscript")
+    # Home Assistant is restarting: the permission read gets no answer.
+    monkeypatch.setattr(
+        core_client,
+        "get_services",
+        AsyncMock(side_effect=HomeAssistantConnectionError("restarting")),
     )
-    try:
-        response = await post_settings(monkeypatch, unreachable, EXPORT, {})
-    finally:
-        await unreachable.close()
+
+    response = await post_settings(monkeypatch, core_client, EXPORT, {})
 
     assert (response.status_code, response.json()["error"]) == (
         503,
         "export_failed",
     )
+
+
+async def test_an_export_over_the_import_limit_is_refused(
+    settings_world: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+) -> None:
+    denied = [f"sensor.test_{i:06d}" for i in range(200_000)]
+    _write(settings_world, "entity_visibility.json", {"deny_entity_ids": denied})
+
+    response = await post_settings(monkeypatch, core_client, EXPORT, {})
+
+    assert (response.status_code, response.json()["error"]) == (413, "too_large")
+
+
+async def test_oauth_modes_settings_page_moves_settings_without_permissions(
+    hass: HomeAssistant,
+    settings_world: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+) -> None:
+    await make_file_service(hass, allowed="pyscript")
+    _write(settings_world, "feature_flags.json", {"redact_secrets": True})
+    # The page is no MCP call, so no user's Home Assistant token comes with it.
+    proxy = cast(HomeAssistantClient, OAuthProxyClient(core_client.base_url))
+    exported = await post_settings(monkeypatch, proxy, EXPORT, {})
+    bundle = exported.json()
+    assert exported.headers["x-ha-mcp-skipped"] == "file_permissions_unreachable"
+    assert bundle["entries"] == {}
+    assert bundle["server_settings"]["features"] == {"redact_secrets": True}
+
+    bundle["entries"]["tools"] = {"allowed_dirs": ["www"], "extra_yaml_keys": []}
+    bundle["server_settings"]["features"] = {"redact_secrets": False}
+    response = await post_settings(monkeypatch, proxy, IMPORT, bundle)
+
+    assert response.json()["skipped"] == ["file_permissions_unreachable"]
+    assert json.loads((settings_world / "feature_flags.json").read_text()) == {
+        "redact_secrets": False
+    }
+    assert (await _export(monkeypatch, core_client))["entries"]["tools"] == {
+        "allowed_dirs": ["pyscript"],
+        "extra_yaml_keys": [],
+    }
+
+
+async def test_an_import_replaces_the_policy_only_after_the_permissions(
+    hass: HomeAssistant,
+    settings_world: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+) -> None:
+    await make_file_service(hass, allowed="pyscript")
+    bundle = await _export(monkeypatch, core_client)
+    rules = [{"tool_name": "ha_call_service", "when": []}]
+    bundle["server_settings"]["policy"] = {"rules": rules}
+    bundle["server_settings"]["visibility"] = {"deny_entity_ids": ["sun.sun"]}
+    # The component refuses "../outside", so this import fails and rolls back.
+    bundle["entries"]["tools"] = {
+        "allowed_dirs": ["www", "../outside"],
+        "extra_yaml_keys": [],
+    }
+    gates = [
+        settings_world / "tool_policy.json",
+        settings_world / "entity_visibility.json",
+    ]
+    save = Store.async_save
+    seen: list[list[bool]] = []
+
+    async def note_the_gates(store: Store, data: Any) -> None:
+        if "paths" in data:
+            seen.append([await asyncio.to_thread(gate.exists) for gate in gates])
+        await save(store, data)
+
+    monkeypatch.setattr(Store, "async_save", note_the_gates)
+    failed = await post_settings(monkeypatch, core_client, IMPORT, bundle)
+    bundle["entries"]["tools"]["allowed_dirs"] = ["www"]
+    imported = await post_settings(monkeypatch, core_client, IMPORT, bundle)
+
+    assert (failed.status_code, failed.json()["error"]) == (400, "invalid_backup")
+    assert imported.json()["success"] is True
+    # Every permission write ran under this server's own policy and visibility.
+    assert seen and all(state == [False, False] for state in seen)
+    assert [gate.exists() for gate in gates] == [True, True]
