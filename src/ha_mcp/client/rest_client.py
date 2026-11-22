@@ -2085,16 +2085,15 @@ class HomeAssistantClient:
 
         A bare id names, in order: the scene whose entity ``scene.<id>`` has
         that id, the key stored under it, the YAML scene with that ``id``
-        wherever it is defined, the scene whose entity is ``scene.<id>``, and
-        else the bare id itself (``registry_hit=False``, also for a stored key).
-        ``scene.<id>`` raises :class:`SceneIdNotAnEntityError` when the registry
-        has no such entity but key ``<id>`` holds a scene. A failed registry
-        read raises (:meth:`_registry_entry`), as does a non-404 config read.
+        unless Core holds only the restored state of its gone entity, the scene
+        whose entity is ``scene.<id>``, else the bare id (``registry_hit=False``,
+        also for a stored key). ``scene.<id>`` raises SceneIdNotAnEntityError
+        when key ``<id>`` holds a scene but the registry has no such entity.
+        A failed registry, config or state read raises.
         """
         bare_id = identifier.removeprefix("scene.")
         entry = await self._registry_entry("scene", identifier)
         fallback = SceneResolution(bare_id, registry_hit=False, platform=None)
-        qualified = identifier != bare_id
         registered = None
         if entry and entry.get("unique_id"):
             registered = SceneResolution(
@@ -2102,9 +2101,9 @@ class HomeAssistantClient:
                 registry_hit=True,
                 platform=entry.get("platform"),
             )
-            if qualified or registered.storage_key == bare_id:
+            if identifier != bare_id or registered.storage_key == bare_id:
                 return registered
-        if qualified:
+        if identifier != bare_id:
             if entry is None and await self._config_exists("scene", bare_id):
                 raise SceneIdNotAnEntityError(identifier, bare_id)
             return fallback
@@ -2114,7 +2113,8 @@ class HomeAssistantClient:
         from ..tools.entity_registration import lookup_entity_id
 
         entity_id = await lookup_entity_id(self, bare_id, "scene")
-        if entity_id:
+        state = await self._scene_state(entity_id) if entity_id else None
+        if entity_id and not (state or {}).get("attributes", {}).get("restored"):
             return SceneResolution(bare_id, True, "homeassistant", entity_id)
         return registered or fallback
 
@@ -2178,18 +2178,18 @@ class HomeAssistantClient:
     async def _scene_state_exists(self, storage_key: str) -> bool:
         """Return True if ``scene.<storage_key>`` exists in the state machine.
 
-        An ``id``-less YAML scene has no registry ``unique_id`` (so
-        ``registry_hit`` is False) yet still registers a state-machine entity.
-        This one-shot existence check separates that real-but-not-storage scene
-        from a genuinely-absent one after a config-API 404 (issue #1971). A 404
-        here is a clean "absent"; a transport failure propagates (fail loud).
+        An ``id``-less YAML scene has no registry ``unique_id`` but has a state:
+        this separates it from an absent scene after a config-API 404 (issue
+        #1971). A transport failure raises.
         """
+        return await self._scene_state(f"scene.{storage_key}") is not None
+
+    async def _scene_state(self, entity_id: str) -> dict[str, Any] | None:
         try:
-            await self.get_entity_state(f"scene.{storage_key}")
-            return True
+            return await self.get_entity_state(entity_id)
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
-                return False
+                return None
             raise
 
     async def _raise_scene_config_404(
