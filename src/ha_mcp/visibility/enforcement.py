@@ -69,7 +69,12 @@ from ..renamed_tools import current_tool_name
 from ..tool_dispatch import CALL_PROXY_META_TOOLS, coerce_proxy_arguments
 from ..tools.helpers import raise_tool_error
 from . import resolver
-from .hidden_matcher import HiddenMatcher, known_entity_ids, scan_value
+from .hidden_matcher import (
+    HiddenMatcher,
+    friendly_names,
+    known_entity_ids,
+    scan_value,
+)
 from .identifier_aliases import (
     IdentifierAliases,
     build_identifier_aliases,
@@ -739,7 +744,7 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
 
 
 async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> HiddenMatcher:
-    """Fetch registry/states (+device registry when needed) and resolve strictly.
+    """Fetch registry/states and the device and area names, resolve strictly.
 
     Mirrors the search seam's fetches. Any fetch error, or a strict resolver
     degradation, raises so the caller applies its fallback policy.
@@ -748,13 +753,14 @@ async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> HiddenMa
     coros: list[Any] = [
         client.get_states(),
         client.send_websocket_message({"type": "config/entity_registry/list"}),
+        core_device_list_reply(client),
+        client.send_websocket_message({"type": "config/area_registry/list"}),
     ]
-    if need_device:
-        coros.append(core_device_list_reply(client))
     fetched = await asyncio.gather(*coros, return_exceptions=True)
     for item in fetched:
         if isinstance(item, BaseException):
             raise VisibilityDataUnavailable("registry/state fetch failed") from item
+    places = _place_names(fetched[2], fetched[3])
     device_result = fetched[2] if need_device else None
     if need_device:
         # The resolver's device parser fails open (skips unusable payloads and
@@ -781,7 +787,26 @@ async def _refresh_hidden_set(config: VisibilityConfig, client: Any) -> HiddenMa
         hidden,
         build_identifier_aliases(hidden, fetched[1]),
         known_entity_ids(fetched[0], fetched[1]),
+        friendly_names(fetched[0]),
+        places,
     )
+
+
+def _place_names(devices: Any, areas: Any) -> set[str]:
+    """The device and area names, which a hidden entity's name may be part of.
+
+    Unreadable, they raise like any other fetch: without them a hidden
+    entity's name could not be told from its device's.
+    """
+    names: set[str] = set()
+    for reply, keys in ((devices, ("name", "name_by_user")), (areas, ("name",))):
+        rows = reply.get("result") if isinstance(reply, dict) else None
+        if not (reply.get("success") and isinstance(rows, list)):
+            raise VisibilityDataUnavailable("device or area registry unusable")
+        for row in rows:
+            if isinstance(row, dict):
+                names.update(v for k in keys if isinstance(v := row.get(k), str))
+    return names
 
 
 class _HiddenSetCache:

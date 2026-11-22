@@ -186,8 +186,10 @@ all other calls fail closed.
 
 This is a strong barrier against an agent *incidentally* surfacing a hidden
 entity, not a cryptographic guarantee: enforcement scans for the hidden
-entity_id, so a Jinja template or sandbox-adjacent computation that *derives* a
-hidden entity's state without naming its entity_id cannot be caught. On enforced
+entity_id and for the hidden entity's friendly name (unless it is a single word,
+or part of a visible entity's, a device's or an area's name), so a Jinja template or
+sandbox-adjacent computation that *derives* a hidden entity's state without
+naming its entity_id or its name cannot be caught. On enforced
 scannable paths, a matching hidden entity's data is not returned. Existence
 concealment is best-effort: per-tool not-found shapes vary, so a prober comparing
 errors may infer that an id is hidden rather than absent. Enforcement checks the entity requested by

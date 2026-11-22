@@ -36,7 +36,7 @@ from ha_mcp.visibility.resolver import (
     load_hidden_set,
 )
 
-from .._command_faults import dropped_on, pooled_socket
+from .._command_faults import dropped_on, pooled_socket, registry_lookup_failing
 from .._component_frames import frames, pooled
 from .._search_routing import SEARCH, routes
 from .._visibility_core import enforce_hiding, error_code, unreached_call_next
@@ -256,6 +256,28 @@ class TestDeviceRegistry:
 
         assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
 
+    @pytest.mark.parametrize(
+        "command", ["config/device_registry/list", "config/area_registry/list"]
+    )
+    async def test_refused_read_of_the_device_or_area_names_fails_closed(
+        self,
+        hass: HomeAssistant,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+        command: str,
+    ) -> None:
+        """Without them a hidden entity's name cannot be told from its
+        device's or its area's, whatever the filter hides by."""
+        enforce_hiding(set_config, "sensor.foo")
+
+        with registry_lookup_failing(hass, command), pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "light.any"}),
+                unreached_call_next,
+            )
+
+        assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
 
 class TestStrictResolver:
     """Enforcement resolves the hidden set strictly: a degradation raises."""
@@ -372,6 +394,193 @@ class TestHiddenMatcher:
         set_config(enabled=True, enforce=True, exclude_categories=["diagnostic"])
 
         assert await active_hidden_matcher(core_client) is None
+
+
+class TestHiddenNames:
+    """A hidden entity's friendly name counts in output like its id (#3156)."""
+
+    @staticmethod
+    async def _hiding(
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+        entity_id: str,
+        name: str,
+    ) -> Any:
+        hass.states.async_set(entity_id, "87", {"friendly_name": name})
+        enforce_hiding(set_config, entity_id)
+        matcher = await active_hidden_matcher(core_client)
+        assert matcher is not None
+        return matcher
+
+    @pytest.fixture
+    async def matcher(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> Any:
+        """``sensor.foo`` is hidden and named "Front Door Lock Battery"."""
+        return await self._hiding(
+            hass, core_client, set_config, "sensor.foo", "Front Door Lock Battery"
+        )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("Front Door Lock Battery | 87", id="as-named"),
+            pytest.param("front door lock battery: 87", id="other-case"),
+            # A list of names and states, one entity per line, serialized.
+            pytest.param(
+                json.dumps("Hall | on\nFront Door Lock Battery | 87"),
+                id="after-newline-escape",
+            ),
+        ],
+    )
+    async def test_hidden_name_found_as_a_phrase_of_its_own(
+        self, matcher: Any, text: str
+    ) -> None:
+        assert matcher.embeds(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("Front Door Lock Batteryless", id="runs-on"),
+            pytest.param("Old2Front Door Lock Battery", id="runs-in"),
+            pytest.param("Front Door Lock | 87", id="part-of-the-name"),
+        ],
+    )
+    async def test_another_phrase_is_not_the_hidden_name(
+        self, matcher: Any, text: str
+    ) -> None:
+        assert not matcher.embeds(text)
+
+    async def test_hidden_name_found_beside_a_visible_name_that_contains_it(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """A visible helper named after the hidden sensor does not switch the
+        scan for the sensor's own name off."""
+        hass.states.async_set(
+            "sensor.foo_avg", "80", {"friendly_name": "Front Door Lock Battery avg"}
+        )
+        matcher = await self._hiding(
+            hass, core_client, set_config, "sensor.foo", "Front Door Lock Battery"
+        )
+
+        assert not matcher.embeds("Front Door Lock Battery avg | 80")
+        assert matcher.embeds(
+            "Front Door Lock Battery avg | 80\nFront Door Lock Battery | 87"
+        )
+
+    @pytest.mark.parametrize("carrier", ["entity", "device", "area"])
+    async def test_name_does_not_count_where_it_is_part_of_a_visible_name(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+        carrier: str,
+    ) -> None:
+        """A lock named after its device must not close every listing that
+        names the device, its area or its other entities."""
+        if carrier == "entity":
+            hass.states.async_set(
+                "binary_sensor.front_door_contact",
+                "on",
+                {"friendly_name": "Front Door Contact"},
+            )
+        elif carrier == "device":
+            entry = MockConfigEntry(domain="test")
+            entry.add_to_hass(hass)
+            dr.async_get(hass).async_get_or_create(
+                config_entry_id=entry.entry_id,
+                identifiers={("test", "lock")},
+                name="Front Door",
+            )
+        else:
+            ar.async_get(hass).async_create("Front Door")
+
+        matcher = await self._hiding(
+            hass, core_client, set_config, "lock.front_door", "Front Door"
+        )
+
+        assert not matcher.embeds("Front Door Contact | on")
+
+    async def test_shorter_hidden_name_found_where_a_longer_one_starts(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """ "Garage Side Door" is hidden too, but here only "Garage Side" stands."""
+        hass.states.async_set("lock.side", "locked", {"friendly_name": "Garage Side"})
+        hass.states.async_set(
+            "lock.side_door", "locked", {"friendly_name": "Garage Side Door"}
+        )
+        enforce_hiding(set_config, "lock.side", "lock.side_door")
+        matcher = await active_hidden_matcher(core_client)
+        assert matcher is not None
+
+        assert matcher.embeds("Garage Side Doorbell | Garage Side | locked")
+
+    async def test_name_with_a_letter_whose_lowercase_is_longer_is_found(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """Lowercasing "İ" gives two characters; the name is still found."""
+        matcher = await self._hiding(
+            hass, core_client, set_config, "lock.ic_kapi", "İç Kapı Kilidi"
+        )
+
+        assert matcher.embeds("Salon | on\nİç Kapı Kilidi | locked")
+
+    async def test_name_of_a_single_word_is_not_scanned_for(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """Hiding the zone named "Home" must not close every result that
+        says "Home Assistant"."""
+        matcher = await self._hiding(hass, core_client, set_config, "zone.home", "Home")
+
+        assert not matcher.embeds("Home Assistant is restarting")
+
+    async def test_name_the_caller_typed_is_not_a_leak_when_repeated(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """A search that names the entity gets its own query back, which a
+        JSON result writes with the umlaut escaped."""
+        matcher = await self._hiding(
+            hass, core_client, set_config, "sensor.foo", "Wohnungstür Batterie"
+        )
+        repeated = json.dumps({"query": "wohnungstür batterie", "entities": []})
+
+        assert matcher.embeds(repeated)
+        assert not matcher.for_call({"query": "wohnungstür batterie"}).embeds(repeated)
+
+    async def test_name_in_a_template_does_not_open_the_result_that_lists_it(
+        self, matcher: Any
+    ) -> None:
+        """A template that mentions the name gets itself back, not the
+        entity's name and state from the result beside it."""
+        args = {
+            "template": "{# Front Door Lock Battery #}\n"
+            "{{ states.sensor | map(attribute='name') | list }}"
+        }
+        for_call = matcher.for_call(args)
+
+        assert not for_call.embeds(json.dumps({**args, "result": "[]"}))
+        assert for_call.embeds(
+            json.dumps({**args, "result": "['Front Door Lock Battery']"})
+        )
 
 
 class TestScrubSeam:
