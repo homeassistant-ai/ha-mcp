@@ -1,6 +1,7 @@
 """Argument validation and access checks for explicit backup tool actions."""
 
 import json
+import os
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -9,6 +10,9 @@ from ..config import Settings, get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
 from .util_helpers import normalized_path, supervisor_path
+
+_TRANSFER_FIELD = "enable_settings_transfer_actions"
+_TRANSFER_ENV = "ENABLE_SETTINGS_TRANSFER_ACTIONS"
 
 _VALID_COMBOS: set[tuple[str, str]] = {
     ("snapshot", "create"),
@@ -79,6 +83,26 @@ def require_backup_access(settings: Settings, scope: str, action: str) -> None:
     _enforce_backup_controls(settings, scope, action, read_operation)
 
 
+def _settings_transfer_enabled(settings: Settings) -> bool:
+    """The toggle's stored value, read on each call.
+
+    The stdio sidecar's settings page writes the override file from another
+    process, so this process's cached settings would miss a change; the app
+    and environment variables keep their loaded value.
+    """
+    from .._version import is_running_in_addon
+    from ..config_backup import (
+        _coerce_backup_override_value,
+        _read_backup_override_file,
+    )
+
+    if is_running_in_addon() or os.environ.get(_TRANSFER_ENV) is not None:
+        return bool(settings.enable_settings_transfer_actions)
+    raw = _read_backup_override_file().get(_TRANSFER_FIELD, False)
+    ok, value = _coerce_backup_override_value(_TRANSFER_FIELD, bool, raw)
+    return ok and value is True
+
+
 def _enforce_backup_controls(
     settings: Settings, scope: str, action: str, read_operation: bool
 ) -> None:
@@ -104,7 +128,7 @@ def _enforce_backup_controls(
                 ],
             )
         )
-    if scope == "settings" and not settings.enable_settings_transfer_actions:
+    if scope == "settings" and not _settings_transfer_enabled(settings):
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONFIG_VALIDATION_FAILED,

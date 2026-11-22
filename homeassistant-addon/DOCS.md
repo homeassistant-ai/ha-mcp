@@ -318,6 +318,19 @@ and snapshot list when snapshot actions are enabled. Blocks manual create,
 restore (including edit restores), and delete. Automatic pre-edit backups
 continue.
 
+### enable_settings_transfer_actions
+
+**Default:** `false`
+
+**Allow ha_manage_backup to export and import settings.** Lets AI assistants
+download this server's settings file and import one with
+`ha_manage_backup(scope="settings")`, as the settings page's Export and Import
+buttons do. An import keeps the human-only settings, and changing the security
+policy, entity visibility or File & YAML Tools permissions also needs Dev tools
+security policy access. An import can still turn on developer mode, tools and
+features the file has on, so check your settings after an AI assistant imports
+one.
+
 `enable_snapshot_actions` and `backup_read_only` restrict AI calls to `ha_manage_backup` and the equivalent
 backup services and commands sent through `ha_call_service`
 (`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/` snapshot

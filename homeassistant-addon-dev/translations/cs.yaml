@@ -266,6 +266,15 @@ configuration:
       zálohovacích služeb a příkazů v ha_call_service. Automatické zálohy před úpravami
       pokračují. Akce se zálohami, které uživatel provádí v uživatelském rozhraní
       nastavení webu, zůstávají k dispozici.
+  enable_settings_transfer_actions:
+    name: Allow ha_manage_backup to export and import settings
+    description: Allow AI assistants to download this server's settings file and import
+      one through ha_manage_backup, as the Export and Import buttons on the Server
+      Settings tab do. An import keeps the human-only settings, and changing the security
+      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
+      security policy access. An import can still turn on developer mode, tools and
+      features the file has on, so check your settings after an AI assistant imports
+      one.
   enable_snapshot_delete:
     name: Povolit smazání snímků
     description: Umožnit ha_manage_backup mazat úplné zálohy Home Assistant. Záloha

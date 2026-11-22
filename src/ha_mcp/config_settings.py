@@ -747,9 +747,9 @@ class Settings(BaseSettings):
     )
     # Lets ha_manage_backup export and import the settings file, as the
     # settings page's buttons do. Off until a person turns it on.
-    enable_settings_transfer_actions: Annotated[bool, Setting(surface="backup")] = (
-        Field(False, alias="ENABLE_SETTINGS_TRANSFER_ACTIONS")
-    )
+    enable_settings_transfer_actions: Annotated[
+        bool, Setting(surface="backup", app=_ALL_FLAVORS)
+    ] = Field(False, alias="ENABLE_SETTINGS_TRANSFER_ACTIONS")
 
     # Snapshot-tarball deletion gate (#1861). Off by default: an agent
     # deleting a full HA snapshot is categorically riskier than the

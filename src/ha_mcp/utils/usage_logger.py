@@ -336,6 +336,9 @@ _SENSITIVE_PARAM_KEYS = frozenset(
         "apikey",
         "client_secret",
         "authorization",
+        # A settings export: the in-process server's carries its secret path and
+        # signing keys under names the key match does not cover.
+        "settings_file",
         # Not a credential but user speech: ha_manage_pipeline(action='process')
         # takes whatever the user said, which is as likely to name a person or
         # an address as it is to turn on a light.

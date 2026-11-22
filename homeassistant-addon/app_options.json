@@ -264,6 +264,15 @@
     "always": true
   },
   {
+    "key": "enable_settings_transfer_actions",
+    "env": "ENABLE_SETTINGS_TRANSFER_ACTIONS",
+    "type": "bool",
+    "default": false,
+    "range": null,
+    "choices": null,
+    "always": true
+  },
+  {
     "key": "enable_snapshot_delete",
     "env": "ENABLE_SNAPSHOT_DELETE",
     "type": "bool",

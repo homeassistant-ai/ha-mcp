@@ -837,8 +837,11 @@ after the import. Restart HA-MCP when the import asks for it.
 
 To let your AI assistant move settings for you, turn on **Allow ha_manage_backup
 to export and import settings** in the **Backups** tab of each server's settings
-page. The assistant can then export from one server and import on another with
-`ha_manage_backup(scope="settings")`. It never moves the connection, keeps the
+page. The assistant can then export from one server with
+`ha_manage_backup(scope="settings", action="export")` and import the result on
+another with `ha_manage_backup(scope="settings", action="import",
+settings_file=...)`. Read Only Mode and Backup Read Only each block the import;
+the export stays available. It never moves the connection, keeps the
 destination's human-only settings, and changing security policies, entity
 visibility or File & YAML Tools permissions also needs **Dev tools security
 policy access**. An import can still turn on developer mode, tools and features

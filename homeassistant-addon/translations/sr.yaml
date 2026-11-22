@@ -157,6 +157,15 @@ configuration:
       команде у ha_call_service. Аутоматске резервне копије пре измена се настављају.
       Акције резервних копија које особа обавља у веб корисничком интерфејсу подешавања
       остају доступне.
+  enable_settings_transfer_actions:
+    name: Allow ha_manage_backup to export and import settings
+    description: Allow AI assistants to download this server's settings file and import
+      one through ha_manage_backup, as the Export and Import buttons on the Server
+      Settings tab do. An import keeps the human-only settings, and changing the security
+      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
+      security policy access. An import can still turn on developer mode, tools and
+      features the file has on, so check your settings after an AI assistant imports
+      one.
   enable_snapshot_delete:
     name: Дозволи брисање снимка
     description: Дозволи алату ha_manage_backup да брише пуне Home Assistant резервне

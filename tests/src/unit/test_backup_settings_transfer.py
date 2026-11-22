@@ -167,3 +167,38 @@ async def test_developer_tools_cannot_change_the_human_backup_controls(
         await DevTools(core_client).ha_dev_manage_settings(
             action="set_backup_config", backup=change
         )
+
+
+async def test_the_toggle_is_read_when_the_tool_is_called(
+    settings_world: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+) -> None:
+    """The stdio sidecar's settings page writes the file from another process,
+    so this process's cached settings never see the change."""
+    _allow(settings_world)
+    mcp = FastMCP("backup-settings-tests")
+    backup.register_backup_tools(
+        mcp, core_client, server=build_server(monkeypatch, core_client)
+    )
+    tool = await mcp.get_tool("ha_manage_backup")
+    await tool.fn(scope="settings", action="export")
+
+    _write(
+        settings_world,
+        "backup_settings.json",
+        {"enable_settings_transfer_actions": False},
+    )
+    with pytest.raises(ToolError, match="enable_settings_transfer_actions"):
+        await tool.fn(scope="settings", action="export")
+
+    _write(settings_world, "backup_settings.json", {})
+    with pytest.raises(ToolError, match="enable_settings_transfer_actions"):
+        await tool.fn(scope="settings", action="export")
+
+    _write(
+        settings_world,
+        "backup_settings.json",
+        {"enable_settings_transfer_actions": True},
+    )
+    assert (await tool.fn(scope="settings", action="export"))["success"] is True

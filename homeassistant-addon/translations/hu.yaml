@@ -178,6 +178,15 @@ configuration:
       szerkesztés előtti biztonsági mentések továbbra is működnek. A webes beállítási
       felületen egy személy által végzett biztonsági mentési műveletek továbbra is
       elérhetők maradnak.
+  enable_settings_transfer_actions:
+    name: Allow ha_manage_backup to export and import settings
+    description: Allow AI assistants to download this server's settings file and import
+      one through ha_manage_backup, as the Export and Import buttons on the Server
+      Settings tab do. An import keeps the human-only settings, and changing the security
+      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
+      security policy access. An import can still turn on developer mode, tools and
+      features the file has on, so check your settings after an AI assistant imports
+      one.
   enable_snapshot_delete:
     name: Pillanatkép törlésének engedélyezése
     description: Lehetővé teszi a ha_manage_backup számára a teljes Home Assistant
