@@ -2,6 +2,7 @@
 and the update dialog act on them, Supervisor's release channel, and Repairs
 issues (ignore, un-ignore, fix)."""
 
+import asyncio
 import logging
 from typing import Annotated, Any, NoReturn
 
@@ -65,6 +66,11 @@ _BACKUP_OPTIONS = {
     "os": "core_backup_before_update",
     "addons": "add_on_backup_before_update",
 }
+# How long the frontend's "Check for updates" (checkForEntityUpdates in
+# src/data/update.ts) waits after the same service call: Supervisor's update
+# entities check only after their coordinator's debounce, and nothing reports
+# when they are done.
+_SUPERVISOR_CHECK_WAIT = 15
 
 
 def _pending(row: dict[str, Any]) -> bool:
@@ -570,7 +576,8 @@ class UpdateTools:
     async def _refresh_updates(self, include_skipped: bool) -> dict[str, Any]:
         """Ask every integration to check for updates now, then list them."""
         rows, _ = await read_update_rows(self._client)
-        entity_ids = [row["entity_id"] for row in rows if not row.get("restored")]
+        asked = [row for row in rows if not row.get("restored")]
+        entity_ids = [row["entity_id"] for row in asked]
         if entity_ids:
             reply = await self._client.send_websocket_message(
                 {
@@ -578,13 +585,16 @@ class UpdateTools:
                     "domain": "homeassistant",
                     "service": "update_entity",
                     "target": {"entity_id": entity_ids},
-                    # Core answers once every integration has checked.
+                    # Core answers once each entity has run its update; an
+                    # entity whose coordinator debounces it checks later.
                     "_wait_timeout": self._client.timeout,
                 },
                 expected_error_codes=_CORE_REFUSALS,
             )
             if not reply.get("success"):
                 raise_core_refusal("Home Assistant did not check for updates", reply)
+            if any(row["platform"] == "hassio" for row in asked):
+                await asyncio.sleep(_SUPERVISOR_CHECK_WAIT)
         result = await self._list_updates(include_skipped)
         result["refreshed"] = len(entity_ids)
         if not entity_ids:
@@ -622,7 +632,8 @@ class UpdateTools:
                 description="'list' (all pending updates, default), 'get' "
                 "(details/release notes for one update), 'refresh' (have every "
                 "integration check for updates now, as the Updates page's "
-                "'Check for updates' does, then list), 'install' (apply "
+                "'Check for updates' does, then list; about 15 seconds on a "
+                "Supervisor install), 'install' (apply "
                 "pending updates), 'skip' (hide the offered version), "
                 "'clear_skipped' (re-offer a skipped version), 'set_channel' "
                 "(Supervisor's release channel), 'ignore_repair' (dismiss "
@@ -772,6 +783,10 @@ class UpdateTools:
         Without the ha_mcp_tools component, features and can_install are None
         and warnings says so; Home Assistant then refuses what an update does
         not support. In Read Only Mode only 'list' and 'get' run.
+
+        Supervisor's updates check a few seconds after Home Assistant asks
+        them, and nothing reports when they are done, so 'refresh' reads the
+        list after a fixed wait, as the Updates page does.
 
         'install' blocks until each update finishes, which takes minutes, and
         a Core or OS update restarts Home Assistant. An install that comes

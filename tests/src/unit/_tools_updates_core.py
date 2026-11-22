@@ -25,6 +25,7 @@ from homeassistant.components.update import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.discovery import async_load_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.setup import async_setup_component
@@ -108,7 +109,9 @@ async def set_up_updates(
 async def set_up_platforms(
     hass: HomeAssistant, platforms: dict[str, list[SoftwareUpdate]]
 ) -> None:
-    """Core's update integration, with each integration's updates."""
+    """Core's update integration, with each integration's updates; added
+    through discovery when another integration has set ``update`` up."""
+    loaded = "update" in hass.config.components
     for integration, updates in platforms.items():
 
         async def setup_platform(
@@ -125,10 +128,13 @@ async def set_up_platforms(
             f"{integration}.update",
             MockPlatform(async_setup_platform=setup_platform),
         )
+        if loaded:
+            await async_load_platform(hass, "update", integration, {}, {})
     assert await async_setup_component(hass, "config", {})
-    assert await async_setup_component(
-        hass, "update", {"update": [{"platform": name} for name in platforms]}
-    )
+    if not loaded:
+        assert await async_setup_component(
+            hass, "update", {"update": [{"platform": name} for name in platforms]}
+        )
     await hass.async_block_till_done()
 
 

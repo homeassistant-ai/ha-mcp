@@ -9,17 +9,25 @@ from __future__ import annotations
 
 from ipaddress import IPv4Address, IPv4Network
 from typing import Any
+from uuid import UUID
 
 import pytest
 from aiohasupervisor.models import (
+    Backup,
+    BackupComplete,
+    BackupContent,
+    BackupLocationAttributes,
+    BackupType,
     DockerNetwork,
     HomeAssistantInfo,
     HostInfo,
     InstalledAddon,
+    Job,
     JobsInfo,
     LogLevel,
     MountsInfo,
     NetworkInfo,
+    NewBackup,
     OSInfo,
     ResolutionInfo,
     RootInfo,
@@ -28,8 +36,9 @@ from aiohasupervisor.models import (
     UpdateChannel,
 )
 from aiohasupervisor.models.addons import AddonsList
+from aiohasupervisor.models.backups import LOCATION_LOCAL_STORAGE, BackupList
 from aiohasupervisor.models.ingress import IngressPanels
-from homeassistant.components.hassio.const import ADDONS_COORDINATOR
+from homeassistant.components.hassio.const import ADDONS_COORDINATOR, MAIN_COORDINATOR
 from homeassistant.components.hassio.entity import (
     HassioAddonEntity,
     HassioCoreEntity,
@@ -39,6 +48,7 @@ from homeassistant.components.hassio.entity import (
 from homeassistant.components.update import DATA_COMPONENT, UpdateEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 
 from ._tools_addons_core import SLUG, Supervisor, app_info
 from ._tools_updates_core import supervisor_info
@@ -75,23 +85,6 @@ def _supervisor_system(supervisor: Supervisor, core_versions: tuple[str, str]) -
         channel=UpdateChannel.STABLE,
         logging=LogLevel.INFO,
         timezone="UTC",
-    )
-    core = HomeAssistantInfo(
-        version=installed,
-        version_latest=latest,
-        update_available=installed != latest,
-        machine="qemux86-64",
-        ip_address=IPv4Address("172.30.32.1"),
-        arch="amd64",
-        image="ghcr.io/home-assistant/qemux86-64-homeassistant",
-        boot=True,
-        port=8123,
-        ssl=False,
-        watchdog=True,
-        audio_input=None,
-        audio_output=None,
-        backups_exclude_database=False,
-        duplicate_log_file=False,
     )
     os_info = OSInfo(
         version="16.3",
@@ -144,7 +137,7 @@ def _supervisor_system(supervisor: Supervisor, core_versions: tuple[str, str]) -
     )
     for path, data in (
         ("/info", root.to_dict()),
-        ("/core/info", core.to_dict()),
+        ("/core/info", _core_info(installed, latest).to_dict()),
         ("/supervisor/info", supervisor_info(UpdateChannel.STABLE)),
         ("/os/info", os_info.to_dict()),
         ("/host/info", host.to_dict()),
@@ -159,6 +152,28 @@ def _supervisor_system(supervisor: Supervisor, core_versions: tuple[str, str]) -
     supervisor.answer("GET", "/supervisor/ping")
     supervisor.answer("POST", "/core/options")
     supervisor.answer("POST", "/supervisor/options")
+    supervisor.answer("POST", "/reload_updates")
+
+
+def _core_info(installed: str, latest: str) -> HomeAssistantInfo:
+    """``GET /core/info`` for Core ``installed`` with ``latest`` offered."""
+    return HomeAssistantInfo(
+        version=installed,
+        version_latest=latest,
+        update_available=installed != latest,
+        machine="qemux86-64",
+        ip_address=IPv4Address("172.30.32.1"),
+        arch="amd64",
+        image="ghcr.io/home-assistant/qemux86-64-homeassistant",
+        boot=True,
+        port=8123,
+        ssl=False,
+        watchdog=True,
+        audio_input=None,
+        audio_output=None,
+        backups_exclude_database=False,
+        duplicate_log_file=False,
+    )
 
 
 def _install_apps(supervisor: Supervisor, names: dict[str, str]) -> None:
@@ -238,3 +253,68 @@ async def hassio_updates(
     await hass.async_block_till_done()
     assert hassio_entity(hass, HassioAddonEntity, core_title)
     return supervisor
+
+
+async def offer_core_update(
+    hass: HomeAssistant, supervisor: Supervisor, latest: str
+) -> None:
+    """Supervisor reports Core ``latest`` from now on; Core has not read it."""
+    installed = hassio_entity(hass, HassioCoreEntity).installed_version
+    assert installed is not None
+    supervisor.answer("GET", "/core/info", _core_info(installed, latest).to_dict())
+    # The stand-in gives a queued answer once and keeps the last one: this
+    # refresh takes the answer Core was set up with, so Core's next read is
+    # the new one.
+    await hass.data[MAIN_COORDINATOR].async_refresh()
+    assert hassio_entity(hass, HassioCoreEntity).latest_version == installed
+
+
+async def serve_backups(hass: HomeAssistant, supervisor: Supervisor) -> None:
+    """Core's ``backup`` integration, and Supervisor's answers to the backup a
+    hassio update takes before it installs: the backup job, done at once, and
+    the backup it wrote, built from aiohasupervisor's models."""
+    job_id, slug = UUID(int=1), "c0ffee01"
+    written = dt_util.utcnow()
+    location = {LOCATION_LOCAL_STORAGE: BackupLocationAttributes(False, 1024)}
+    job = Job(
+        name="backup_manager_partial_backup",
+        reference=slug,
+        uuid=job_id,
+        progress=100,
+        stage=None,
+        done=True,
+        errors=[],
+        created=written,
+        child_jobs=[],
+        extra=None,
+    )
+    details = BackupComplete(
+        slug=slug,
+        name="Update backup",
+        date=written,
+        type=BackupType.PARTIAL,
+        location_attributes=location,
+        compressed=True,
+        supervisor_version="2026.11.0",
+        homeassistant=None,
+        addons=[],
+        repositories=[],
+        folders=[],
+        homeassistant_exclude_database=None,
+        extra=None,
+    )
+    listed = Backup(
+        slug=slug,
+        name=details.name,
+        date=written,
+        type=BackupType.PARTIAL,
+        location_attributes=location,
+        compressed=True,
+        content=BackupContent(homeassistant=False, addons=[], folders=[]),
+    )
+    supervisor.answer("POST", "/backups/new/partial", NewBackup(job_id).to_dict())
+    supervisor.answer("GET", f"/jobs/{job_id.hex}", job.to_dict())
+    supervisor.answer("GET", f"/backups/{slug}/info", details.to_dict())
+    supervisor.answer("GET", "/backups", BackupList(backups=[listed]).to_dict())
+    assert await async_setup_component(hass, "backup", {})
+    await hass.async_block_till_done()

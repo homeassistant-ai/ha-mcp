@@ -8,6 +8,8 @@ respx.
 
 from __future__ import annotations
 
+import asyncio
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -23,6 +25,8 @@ from homeassistant.components.update import UpdateDeviceClass, UpdateEntityFeatu
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant.common import async_fire_time_changed
 
 from ha_mcp import update_check
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -30,11 +34,16 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
 from ha_mcp.tools.helpers import core_error_message
 
-from ._hassio_updates_core import OTHER_APP, OTHER_SLUG, hassio_entity
+from ._hassio_updates_core import (
+    OTHER_APP,
+    OTHER_SLUG,
+    hassio_entity,
+    offer_core_update,
+)
 from ._hassio_updates_core import core_versions as core_versions
 from ._hassio_updates_core import hassio_updates as hassio_updates
 from ._tool_errors import error_body, error_of
-from ._tools_addons_core import Route, Supervisor, app_info
+from ._tools_addons_core import Route, Supervisor, app_info, timers
 from ._tools_addons_core import app_route as app_route
 from ._tools_addons_core import core_supervisor as core_supervisor
 from ._tools_addons_core import supervisor as supervisor
@@ -352,6 +361,19 @@ async def test_get_names_an_update_entity_core_does_not_have(
     assert error["message"] == "Update entity not found: update.missing"
 
 
+async def answered(
+    hass: HomeAssistant, call: asyncio.Task[Any], besides: set[asyncio.TimerHandle]
+) -> None:
+    """Return once Core has answered the refresh's call: the tool is done, or
+    it waits on a timer due in about 15 seconds."""
+    for _ in range(10_000):
+        due = [h.when() - hass.loop.time() for h in timers(hass) - besides]
+        if call.done() or any(14 < seconds <= 15 for seconds in due):
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("the refresh neither finished nor waited")
+
+
 class TestRefresh:
     """``refresh`` has every update checked, as the Updates page's "Check for
     updates" does, then lists what Home Assistant offers afterwards."""
@@ -369,6 +391,30 @@ class TestRefresh:
         assert (first.checks, second.checks) == (1, 1)
         offered = {u["entity_id"]: u["latest_version"] for u in result["updates"]}
         assert offered["update.first"] == "1.2.0"
+
+    async def test_a_version_supervisor_finds_on_its_delayed_check_is_listed(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        either_client: HomeAssistantClient,
+    ) -> None:
+        """Supervisor's updates check after their coordinator's debounce, once
+        Core has answered the call; listed at once, the new Core is missed."""
+        assert await async_setup_component(hass, "homeassistant", {})
+        await offer_core_update(hass, hassio_updates, "2026.12.0")
+        core = hassio_entity(hass, HassioCoreEntity).entity_id
+        besides = timers(hass)
+
+        call = asyncio.create_task(manage_updates(either_client, action="refresh"))
+        await answered(hass, call, besides)
+        # Home Assistant's clock passes Supervisor's debounce, then the wait.
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=10))
+        await hass.async_block_till_done()
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=15))
+        result = await call
+
+        offered = {u["entity_id"]: u["latest_version"] for u in result["updates"]}
+        assert offered.get(core) == "2026.12.0"
 
     async def test_a_restored_update_is_not_asked_to_check(
         self,

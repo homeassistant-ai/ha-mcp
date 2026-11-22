@@ -13,7 +13,6 @@ from homeassistant.components.hassio.entity import HassioAddonEntity, HassioCore
 from homeassistant.components.update import UpdateDeviceClass, UpdateEntityFeature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp import update_check
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -21,7 +20,12 @@ from ha_mcp.client.exceptions import HomeAssistantCommandNotSent
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.helpers import core_error_message
 
-from ._hassio_updates_core import OTHER_APP, OTHER_SLUG, hassio_entity
+from ._hassio_updates_core import (
+    OTHER_APP,
+    OTHER_SLUG,
+    hassio_entity,
+    serve_backups,
+)
 from ._hassio_updates_core import core_versions as core_versions
 from ._hassio_updates_core import hassio_updates as hassio_updates
 from ._tool_errors import error_of
@@ -36,7 +40,6 @@ from ._tools_updates_core import (
     core_refusal,
     manage_updates,
     restore_update,
-    set_up_platforms,
     set_up_updates,
 )
 from ._tools_updates_core import either_client as either_client
@@ -380,60 +383,66 @@ async def test_a_batch_install_sends_the_server_app_last(
     assert any(own in w for w in result["warnings"])
 
 
-async def updates_with_backup(
-    hass: HomeAssistant, options: dict[str, bool]
-) -> tuple[SoftwareUpdate, SoftwareUpdate, SoftwareUpdate]:
-    """A Core, an app and a firmware update that can back up first, on a Home
-    Assistant whose backup-before-update settings are ``options``. The Core
-    and app updates stand in for Core's hassio ones, whose backup runs Core's
-    backup integration against Supervisor's backup API."""
-    core = SoftwareUpdate(CORE_UPDATE, title=CORE_TITLE, features=INSTALL | BACKUP)
-    app = SoftwareUpdate(
-        "update.mosquitto_update", title="Mosquitto broker", features=INSTALL | BACKUP
-    )
-    firmware = SoftwareUpdate(
-        "update.bulb_firmware",
-        device_class=UpdateDeviceClass.FIRMWARE,
-        features=INSTALL | BACKUP,
-    )
-    await set_up_platforms(hass, {"hassio": [core, app], "test": [firmware]})
-    MockConfigEntry(domain="hassio", options=options).add_to_hass(hass)
-    return core, app, firmware
+def set_backup_options(hass: HomeAssistant, options: dict[str, bool]) -> None:
+    """Home Assistant's backup-before-update settings, stored on hassio's entry."""
+    [entry] = hass.config_entries.async_entries("hassio")
+    hass.config_entries.async_update_entry(entry, options={**entry.options, **options})
 
 
 class TestBackupSetting:
     """Without ``backup``, an install follows Home Assistant's own
     backup-before-update setting, as the update dialog of one update does."""
 
+    @pytest.mark.parametrize("core_versions", [("2026.11.1", "2026.11.2")])
     @pytest.mark.parametrize(
-        ("options", "backed_up"),
+        ("option", "backed_up"),
         [
-            pytest.param(
-                {"core_backup_before_update": True}, (True, False, False), id="core"
-            ),
-            pytest.param(
-                {"add_on_backup_before_update": True}, (False, True, False), id="app"
-            ),
+            pytest.param("core_backup_before_update", (True, False, False), id="core"),
+            pytest.param("add_on_backup_before_update", (False, True, False), id="app"),
         ],
     )
     async def test_each_update_follows_the_setting_for_its_kind(
         self,
         hass: HomeAssistant,
-        core_supervisor: Supervisor,
+        hassio_updates: Supervisor,
         component_core_client: HomeAssistantClient,
-        options: dict[str, bool],
+        option: str,
         backed_up: tuple[bool, bool, bool],
     ) -> None:
-        updates = await updates_with_backup(hass, options)
+        set_backup_options(hass, {option: True})
+        await serve_backups(hass, hassio_updates)
+        hassio_updates.answer("POST", "/core/update")
+        firmware = SoftwareUpdate(
+            "update.bulb_firmware",
+            device_class=UpdateDeviceClass.FIRMWARE,
+            features=INSTALL | BACKUP,
+        )
+        await set_up_updates(hass, firmware)
+        core = hassio_entity(hass, HassioCoreEntity).entity_id
+        app = hassio_entity(hass, HassioAddonEntity, OTHER_APP).entity_id
 
         result = await manage_updates(
             component_core_client,
             action="install",
-            entity_ids=[u.entity_id for u in updates],
+            entity_ids=[core, app, firmware.entity_id],
         )
 
-        assert tuple(u.installs[0][1] for u in updates) == backed_up
         assert tuple(r["backup"] for r in result["results"]) == backed_up
+        assert all(r["success"] for r in result["results"])
+        # Core's hassio entity backs up through Supervisor, then installs.
+        [backup] = hassio_updates.sent("POST", "/backups/new/partial")
+        backed = (
+            backup.get("homeassistant") is True,
+            OTHER_SLUG in (backup.get("addons") or []),
+        )
+        assert backed == backed_up[:2]
+        app_install = f"/store/addons/{OTHER_SLUG}/update"
+        assert [
+            path
+            for method, path in hassio_updates.requests
+            if method == "POST" and path in ("/core/update", app_install)
+        ] == ["/core/update", app_install]
+        assert firmware.installs == [(None, False)]
 
     @pytest.mark.parametrize("core_versions", [("2026.11.1", "2026.11.2")])
     async def test_backup_false_overrides_a_setting_that_is_on(
