@@ -107,11 +107,13 @@ class SceneResolution:
     the registry entry's integration domain (``"hue"``, ``"homeassistant"``, …)
     for error-message enrichment only - it never drives the classification, since
     a raw-YAML scene is ``platform="homeassistant"`` yet still 404s.
+    ``entity_id`` is the scene found by its ``id`` when that differs from the slug.
     """
 
     storage_key: str
     registry_hit: bool
     platform: str | None
+    entity_id: str | None = None
 
 
 class SceneStorageConfigNotFoundError(HomeAssistantAPIError):
@@ -2081,22 +2083,19 @@ class HomeAssistantClient:
         tells "entity missing" from "entity exists but has no editable storage
         config", and ``platform`` names the owning integration (issue #1971).
 
-        A bare id that is a storage key wins over another scene whose entity
-        is ``scene.<id>``; ``scene.<id>`` raises :class:`SceneIdNotAnEntityError`
-        instead of being read as key ``<id>`` when the registry has no such
-        entity but that key holds a scene. The config is read only for a bare id
-        whose registry key differs or whose lookup failed, and for an
-        unregistered ``scene.<id>``.
-
-        ``registry_hit=False`` marks a key the registry did not name: a stored
-        key the config read confirmed, or the slug of an unregistered id. A
-        lookup that fails otherwise raises (:meth:`_registry_entry`), as does a
-        non-404 failure of that read.
+        A bare id names, in order: the scene whose entity ``scene.<id>`` has
+        that id, the key stored under it, the YAML scene with that ``id``
+        wherever it is defined, the scene whose entity is ``scene.<id>``, and
+        else the bare id itself (``registry_hit=False``, also for a stored key).
+        ``scene.<id>`` raises :class:`SceneIdNotAnEntityError` when the registry
+        has no such entity but key ``<id>`` holds a scene. A failed registry
+        read raises (:meth:`_registry_entry`), as does a non-404 config read.
         """
         bare_id = identifier.removeprefix("scene.")
         entry = await self._registry_entry("scene", identifier)
         fallback = SceneResolution(bare_id, registry_hit=False, platform=None)
         qualified = identifier != bare_id
+        registered = None
         if entry and entry.get("unique_id"):
             registered = SceneResolution(
                 str(entry["unique_id"]),
@@ -2105,12 +2104,19 @@ class HomeAssistantClient:
             )
             if qualified or registered.storage_key == bare_id:
                 return registered
-            return (
-                fallback if await self._config_exists("scene", bare_id) else registered
-            )
-        if qualified and entry is None and await self._config_exists("scene", bare_id):
-            raise SceneIdNotAnEntityError(identifier, bare_id)
-        return fallback
+        if qualified:
+            if entry is None and await self._config_exists("scene", bare_id):
+                raise SceneIdNotAnEntityError(identifier, bare_id)
+            return fallback
+        if await self._config_exists("scene", bare_id):
+            return fallback
+        # Local import: entity_registration imports this module.
+        from ..tools.entity_registration import lookup_entity_id
+
+        entity_id = await lookup_entity_id(self, bare_id, "scene")
+        if entity_id:
+            return SceneResolution(bare_id, True, "homeassistant", entity_id)
+        return registered or fallback
 
     async def _registry_entry(
         self, domain: str, identifier: str
@@ -2153,19 +2159,12 @@ class HomeAssistantClient:
 
     async def resolve_scene_id(self, identifier: str) -> str:
         """
-        Resolve a scene identifier to its storage key (entity registry, plus a
-        config read when ids collide).
+        Resolve a scene identifier to its storage key (:meth:`_resolve_scene`).
 
         Scenes may be renamed in the HA UI, changing the entity_id but keeping
-        the original storage key. Like :meth:`_resolve_script_id`, this returns
-        the bare storage key and reads the entity registry, which also holds a
-        scene that has no state (a disabled one), and gives a bare storage key
-        precedence. Unlike it, :meth:`_resolve_scene` raises
-        :class:`SceneIdNotAnEntityError` for an unregistered ``scene.<id>`` when
-        key ``<id>`` holds a scene, and carries ``registry_hit``/``platform``.
-
-        Thin wrapper over :meth:`_resolve_scene` for callers that only need the
-        storage key (e.g. the write path); the read/delete paths use the richer
+        the original storage key; the registry also holds a scene that has no
+        state (a disabled one). Thin wrapper for callers that only need the
+        key (e.g. the write path); the read/delete paths use the richer
         :class:`SceneResolution` directly.
 
         Args:
@@ -2209,13 +2208,14 @@ class HomeAssistantClient:
         upgrades the 404 to the same not-storage-scene case with ``platform=None``
         (issue #1971). Only a state miss too is the historic genuinely-absent bare
         404. The state check is skipped when ``resolution`` is None (the internal
-        ``_resolved`` re-fetch fast path, where a 404 is a genuine disappearance).
-        Always raises.
+        ``_resolved`` re-fetch, where a 404 is a genuine disappearance). Raises.
         """
         if resolution is not None:
             if resolution.registry_hit:
                 raise SceneStorageConfigNotFoundError(
-                    scene_id, platform=resolution.platform, storage_key=resolved_id
+                    resolution.entity_id or scene_id,
+                    platform=resolution.platform,
+                    storage_key=resolved_id,
                 )
             if await self._scene_state_exists(resolved_id):
                 raise SceneStorageConfigNotFoundError(
