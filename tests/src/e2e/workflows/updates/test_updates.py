@@ -643,8 +643,7 @@ class TestManageUpdates:
             )
             assert current["installed_version"] == current["latest_version"], current
 
-            refused = await safe_call_tool(
-                mcp_client,
+            refused = await mcp.call_tool_failure(
                 "ha_manage_updates",
                 {"action": "install", "entity_ids": [entity_id]},
             )

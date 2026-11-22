@@ -402,6 +402,13 @@ async def step_texts(
         }
         if found:
             texts[name] = found
+    supplied = step.get("menu_options")
+    if options and isinstance(supplied, dict):
+        # A flow may label its options itself ({step_id: label}); the frontend
+        # shows those labels and looks up no translation for them.
+        texts["menu_option_labels"] = {
+            o: label for o in options if isinstance(label := supplied[o], str)
+        }
     return texts
 
 

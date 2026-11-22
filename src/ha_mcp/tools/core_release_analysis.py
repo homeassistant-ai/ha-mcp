@@ -45,6 +45,18 @@ def _version(tag: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in parts)
 
 
+_PRERELEASE = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:a|b|rc|\.dev)\d")
+
+
+def _below_its_release(version: str) -> tuple[int, ...] | None:
+    """The bound just below the release a prerelease such as ``2026.11.0b3``
+    leads to, so that release counts as newer than it; None for any other form."""
+    if not (match := _PRERELEASE.match(version)):
+        return None
+    major, minor, patch = (int(part) for part in match.groups())
+    return (major, minor, patch - 1)
+
+
 @dataclass
 class _Entry:
     summary: list[str] = field(default_factory=list)
@@ -340,7 +352,8 @@ async def _read_release(
 
 async def _check_releases(installed: str, target: str) -> _Releases:
     found = _Releases()
-    low, high = _version(installed), _version(target)
+    low = _version(installed) or _below_its_release(installed)
+    high = _version(target)
     span = f">{installed},<={target}"
     if low is None or high is None:
         unreadable = installed if low is None else target

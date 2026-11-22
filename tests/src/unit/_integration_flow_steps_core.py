@@ -63,6 +63,9 @@ FOLLOWUP = "flow_steps_followup"
 MENU_OPTIONS = ["routing", "tunneling"]
 # STEPS' strings for its pick menu.
 MENU_LABELS = {"routing": "Routing", "tunneling": "Tunneling"}
+# Its menu labels its own options, as elmax labels its panels by name.
+LABELLED = "flow_steps_labelled"
+OWN_LABELS = {"routing": "Kitchen panel", "tunneling": "Garage panel"}
 REFUSED_ADDRESS = "0.0.0"
 # The host STEPS' reauth form refuses.
 REFUSED_HOST = "refused.invalid"
@@ -184,6 +187,13 @@ class _MenuFlow(_StepsFlow):
         return self.async_show_menu(step_id="user", menu_options=MENU_OPTIONS)
 
 
+class _LabelledMenuFlow(_StepsFlow):
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_show_menu(step_id="user", menu_options=OWN_LABELS)
+
+
 class _SingleFlow(ConfigFlow):
     VERSION = 1
 
@@ -285,6 +295,7 @@ class _FollowUpFlow(_StepsFlow):
 _FLOWS: dict[str, type[ConfigFlow]] = {
     STEPS: _StepsFlow,
     MENU: _MenuFlow,
+    LABELLED: _LabelledMenuFlow,
     SINGLE: _SingleFlow,
     INSTANT: _InstantFlow,
     EXTERNAL: _ExternalFlow,

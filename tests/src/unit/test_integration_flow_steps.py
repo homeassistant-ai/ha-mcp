@@ -32,10 +32,12 @@ from ._integration_flow_steps_core import (
     HANDOVER,
     HANDOVER_REASON,
     INSTANT,
+    LABELLED,
     MAC,
     MENU,
     MENU_LABELS,
     MENU_OPTIONS,
+    OWN_LABELS,
     REFUSED_ADDRESS,
     REFUSED_HOST,
     REJOIN,
@@ -210,6 +212,18 @@ async def test_a_menu_answer_lists_its_options(
     assert result["menu_option_labels"] == MENU_LABELS
     assert result["title"] == STEP_STRINGS["pick"]["title"]
     assert "menu_choice" in result["message"]
+
+
+async def test_a_menu_that_labels_its_own_options_keeps_those_labels(
+    flow_tools: IntegrationTools,
+) -> None:
+    """A flow may hand Core its options as {step_id: label} (elmax labels its
+    panels by name) and the UI shows those labels: without them the caller sees
+    only the step ids and cannot tell the choices apart."""
+    result = await flow_tools.ha_set_integration(domain=LABELLED)
+
+    assert result["menu_options"] == list(OWN_LABELS)
+    assert result["menu_option_labels"] == OWN_LABELS
 
 
 async def test_a_form_step_carries_cores_title_and_description(

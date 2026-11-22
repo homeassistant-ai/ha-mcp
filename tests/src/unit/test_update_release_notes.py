@@ -474,6 +474,27 @@ class TestCoreReleaseAnalysis:
         assert changes["count"] == 0
         assert any(unverified in warning for warning in result["warnings"])
 
+    @pytest.mark.parametrize("core_versions", [("2026.11.0b3", "2026.11.1")])
+    async def test_an_installed_beta_gets_the_releases_after_it_checked(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        core_client: HomeAssistantClient,
+        web: Web,
+    ) -> None:
+        """Updating from a beta to the stable release read as "not checked" for
+        the whole range, the release the beta led to included."""
+        web.listings[RELEASES] = listing(
+            "2026.11.1", "2026.11.0", "2026.11.0b6", "2026.10.4"
+        )
+        web.serve(BLOG_202611, text=blog_page())
+
+        result = await core_analysis(core_client)
+
+        changes = result["breaking_changes"]
+        assert changes["versions_checked"] == ["2026.11.0", "2026.11.1"]
+        assert changes["versions_unverified"] == []
+
     @pytest.mark.parametrize("core_versions", [("2026.11.2", "2026.12.0b1")])
     async def test_a_beta_target_is_reported_not_guessed(
         self,
