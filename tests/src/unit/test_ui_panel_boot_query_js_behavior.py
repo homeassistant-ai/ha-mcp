@@ -3,13 +3,15 @@
 Home Assistant hands the panel route its query string, but the boot page embeds
 the settings app at a fixed URL, so a notification link such as
 ``/ha-mcp?tab=tool-security-policies&token=<token>`` landed on the default tab.
-These tests drive the shipped boot script through the JSDOM harness and assert
-what it would load, including what it refuses to carry over.
+
+``buildAppUrl()`` returns the URL ``showApp()`` assigns to the iframe's ``src``
+verbatim, so asserting on it asserts the load target. The harness runs the boot
+script in JSDOM's top window, where ``window.parent`` is the window itself and
+cannot be swapped for a fake one; ``parentSearch()`` is therefore covered
+separately against fake parent windows, including a cross-origin one.
 """
 
 from __future__ import annotations
-
-import json
 
 from custom_components.ha_mcp_tools import ui_panel
 
@@ -22,52 +24,85 @@ _HTML = """<!DOCTYPE html><html><body>
 <div class="msg"></div><iframe></iframe>
 </body></html>"""
 
+_APP = "/api/ha_mcp_tools/ui/app/settings"
 
-def _forwarded(search: str) -> str:
-    """Return the query the boot script would forward, as ``key:value`` pairs."""
+
+def _value(expression: str) -> str:
+    """Evaluate ``expression`` after the boot script and return it as a string."""
     result = run_script(
         ui_panel.render_boot_script(),
         initial_html=_HTML,
-        settle_ms=10,  # no token retry loop: the parent never yields one here
+        settle_ms=10,  # no token retry loop: the top window yields no bearer
         invoke=(
             "(() => {"
-            f"const params = window.forwardedQuery({json.dumps(search)});"
-            "const parts = [];"
-            "params.forEach((value, key) => { parts.push(key + ':' + value); });"
-            "document.body.dataset.forwarded = parts.join('|');"
+            "const value = " + expression + ";"
+            "document.body.dataset.value = String(value).replace(/&/g, '|');"
             "})();"
         ),
     )
-    forwarded = probe(result, "forwarded")
-    assert forwarded is not None, result.errors
-    return forwarded
+    value = probe(result, "value")
+    assert value is not None, result.errors
+    return value
 
 
-def test_boot_script_wires_the_parent_query_into_the_app_url() -> None:
-    """The wiring itself: read the panel's query and build the iframe URL from it."""
-    script = ui_panel.render_boot_script()
-
-    assert "window.parent.location.search" in script
-    assert "forwardedQuery(parentSearch())" in script
-    assert "APPROVAL_TOKEN_PATTERN" in script
+def test_app_url_carries_the_forwarded_query_and_language() -> None:
+    """The built URL keeps both forwarded values and the language hint."""
+    assert _value(
+        "window.buildAppUrl('?tab=tool-security-policies&token=abc-123&drop=me', 'en')"
+    ) == _APP + "?tab=tool-security-policies|token=abc-123|ha_lang=en"
 
 
-def test_known_tab_and_token_are_forwarded() -> None:
+def test_app_url_without_a_forwarded_query_keeps_the_language() -> None:
+    assert _value("window.buildAppUrl('', 'en')") == _APP + "?ha_lang=en"
+
+
+def test_app_url_without_a_query_or_language_is_the_plain_prefix() -> None:
+    assert _value("window.buildAppUrl('', '')") == _APP
+
+
+def test_app_url_for_the_top_window_is_the_plain_prefix() -> None:
+    """Outside a parent frame there is nothing to forward (JSDOM's top window)."""
+    assert _value("window.appUrl()") == _APP
+
+
+def test_parent_search_reads_the_parent_query() -> None:
     assert (
-        _forwarded("?tab=tool-security-policies&token=abc-123")
-        == "tab:tool-security-policies|token:abc-123"
+        _value("window.parentSearch({parent: {location: {search: '?tab=backups'}}})")
+        == "?tab=backups"
     )
 
 
-def test_unknown_tab_and_foreign_parameters_are_dropped() -> None:
+def test_parent_search_ignores_the_top_window() -> None:
+    assert _value("window.parentSearch(window)") == ""
+
+
+def test_parent_search_survives_a_cross_origin_parent() -> None:
+    assert _value(
+        "window.parentSearch({get parent() { throw new Error('cross-origin'); }})"
+    ) == ""
+
+
+def test_forwarded_query_drops_unknown_tab_and_foreign_parameters() -> None:
     """Only the two documented keys cross into the app; the query is untrusted."""
-    assert _forwarded("?tab=../../etc&drop=me&token=abc") == "token:abc"
-    assert _forwarded("?tab=not-a-panel&token=abc") == "token:abc"
-    assert _forwarded("?tab=tool-security-policies") == "tab:tool-security-policies"
+    assert (
+        _value("window.forwardedQuery('?tab=../../etc&drop=me&token=abc').toString()")
+        == "token=abc"
+    )
+    assert (
+        _value("window.forwardedQuery('?tab=not-a-panel&token=abc').toString()")
+        == "token=abc"
+    )
+    assert (
+        _value("window.forwardedQuery('?tab=tool-security-policies').toString()")
+        == "tab=tool-security-policies"
+    )
 
 
-def test_token_is_length_capped_and_character_checked() -> None:
+def test_forwarded_query_caps_and_checks_the_token() -> None:
     """A crafted link must not smuggle arbitrary text through the token."""
-    assert _forwarded("?token=" + "a" * 129) == ""
-    assert _forwarded("?token=abc%0Adef") == ""
-    assert _forwarded("?token=" + "a" * 128) == "token:" + "a" * 128
+    assert _value("window.forwardedQuery('?token=" + "a" * 129 + "').toString()") == ""
+    assert _value("window.forwardedQuery('?token=abc%0Adef').toString()") == ""
+    assert (
+        _value("window.forwardedQuery('?token=" + "a" * 128 + "').toString()")
+        == "token=" + "a" * 128
+    )
