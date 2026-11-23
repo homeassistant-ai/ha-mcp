@@ -45,10 +45,10 @@ async def _switch_entry(
     )
 
 
-async def _allow_changes_entry(
+async def _read_only_mode_entry(
     hass: HomeAssistant, entity_registry: er.EntityRegistry
 ) -> er.RegistryEntry:
-    """The Allow changes switch after Home Assistant set the entry up."""
+    """The Read Only Mode switch after Home Assistant set the entry up."""
     entry = add_server_entry(hass)
     assert await set_up(hass, entry)
     return next(
@@ -56,7 +56,7 @@ async def _allow_changes_entry(
         for registered in er.async_entries_for_config_entry(
             entity_registry, entry.entry_id
         )
-        if registered.unique_id == f"{entry.entry_id}_server_allow_changes"
+        if registered.unique_id == f"{entry.entry_id}_server_read_only_mode"
     )
 
 
@@ -95,10 +95,10 @@ async def test_the_switch_name_comes_from_the_catalog(
     assert registered.translation_key in names
 
 
-async def test_the_allow_changes_name_comes_from_the_catalog(
+async def test_the_read_only_mode_name_comes_from_the_catalog(
     hass: HomeAssistant, entity_registry: er.EntityRegistry, server: SimpleNamespace
 ) -> None:
-    registered = await _allow_changes_entry(hass, entity_registry)
+    registered = await _read_only_mode_entry(hass, entity_registry)
     strings = Path(switch_platform.__file__).with_name("strings.json")
     names = json.loads(strings.read_text(encoding="utf-8"))["entity"]["switch"]
 
@@ -127,28 +127,28 @@ async def test_an_everything_off_call_cannot_close_access_on_a_default_install(
     assert hass.states.get(registered.entity_id) is None
 
 
-async def test_allow_changes_is_opt_in_and_hidden_from_assist(
+async def test_read_only_mode_is_opt_in_and_hidden_from_assist(
     hass: HomeAssistant, entity_registry: er.EntityRegistry, server: SimpleNamespace
 ) -> None:
-    registered = await _allow_changes_entry(hass, entity_registry)
+    registered = await _read_only_mode_entry(hass, entity_registry)
 
     assert registered.disabled_by is er.RegistryEntryDisabler.INTEGRATION
     assert registered.entity_category is not None
     assert hass.states.get(registered.entity_id) is None
 
 
-async def test_allow_changes_defaults_on(
+async def test_read_only_mode_defaults_off(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
     entity_registry_enabled_by_default: None,
     server: SimpleNamespace,
 ) -> None:
-    registered = await _allow_changes_entry(hass, entity_registry)
+    registered = await _read_only_mode_entry(hass, entity_registry)
 
-    assert _shown(hass, registered.entity_id) == STATE_ON
+    assert _shown(hass, registered.entity_id) == STATE_OFF
 
 
-async def test_allow_changes_reads_the_panel_setting(
+async def test_read_only_mode_reads_the_panel_setting(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
     entity_registry_enabled_by_default: None,
@@ -158,12 +158,12 @@ async def test_allow_changes_reads_the_panel_setting(
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"read_only_mode": True}), encoding="utf-8")
 
-    registered = await _allow_changes_entry(hass, entity_registry)
+    registered = await _read_only_mode_entry(hass, entity_registry)
 
-    assert _shown(hass, registered.entity_id) == STATE_OFF
+    assert _shown(hass, registered.entity_id) == STATE_ON
 
 
-async def test_turning_allow_changes_off_preserves_other_settings(
+async def test_turning_read_only_mode_on_preserves_other_settings(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
     entity_registry_enabled_by_default: None,
@@ -172,27 +172,27 @@ async def test_turning_allow_changes_off_preserves_other_settings(
     path = _feature_flags_path(hass)
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"enable_tool_search": True}), encoding="utf-8")
-    registered = await _allow_changes_entry(hass, entity_registry)
+    registered = await _read_only_mode_entry(hass, entity_registry)
 
     await hass.services.async_call(
-        "switch", "turn_off", {"entity_id": registered.entity_id}, blocking=True
+        "switch", "turn_on", {"entity_id": registered.entity_id}, blocking=True
     )
 
-    assert _shown(hass, registered.entity_id) == STATE_OFF
+    assert _shown(hass, registered.entity_id) == STATE_ON
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "enable_tool_search": True,
         "read_only_mode": True,
     }
 
 
-async def test_allow_changes_refreshes_after_a_panel_change(
+async def test_read_only_mode_refreshes_after_a_panel_change(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
     entity_registry_enabled_by_default: None,
     server: SimpleNamespace,
 ) -> None:
-    registered = await _allow_changes_entry(hass, entity_registry)
-    assert _shown(hass, registered.entity_id) == STATE_ON
+    registered = await _read_only_mode_entry(hass, entity_registry)
+    assert _shown(hass, registered.entity_id) == STATE_OFF
     path = _feature_flags_path(hass)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"read_only_mode": True}), encoding="utf-8")
@@ -201,7 +201,7 @@ async def test_allow_changes_refreshes_after_a_panel_change(
     assert entity is not None
     await entity.async_update_ha_state(force_refresh=True)
 
-    assert _shown(hass, registered.entity_id) == STATE_OFF
+    assert _shown(hass, registered.entity_id) == STATE_ON
 
 
 async def test_turning_the_switch_on_shows_on(

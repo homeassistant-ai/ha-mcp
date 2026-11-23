@@ -3,8 +3,8 @@
 Turning Access off closes every way into the server while the entry stays
 loaded, so access can be granted on demand and revoked by automations. Its
 state lives in ``entry.data`` (see :func:`embedded_entry.access_enabled`).
-Allow changes persists the server's existing Read Only Mode flag and applies
-it live; its polling keeps the entity aligned with edits from the web panel.
+Read Only Mode persists the server's existing flag and applies it live; its
+polling keeps the entity aligned with edits from the web panel.
 
 Both entities are registered disabled, so they are opt-in: a service call with
 ``entity_id: all`` reaches every enabled entity of the switch platform,
@@ -47,7 +47,7 @@ async def async_setup_entry(
 ) -> None:
     """Add server controls; only the server entry forwards this platform."""
     async_add_entities(
-        [ServerAccessSwitch(entry), ServerAllowChangesSwitch(hass, entry)],
+        [ServerAccessSwitch(entry), ServerReadOnlyModeSwitch(hass, entry)],
         update_before_add=True,
     )
 
@@ -85,24 +85,24 @@ class ServerAccessSwitch(SwitchEntity):
             self.async_write_ha_state()
 
 
-class ServerAllowChangesSwitch(SwitchEntity):
-    """Allow writes by turning the embedded server's Read Only Mode off."""
+class ServerReadOnlyModeSwitch(SwitchEntity):
+    """Control the embedded server's Read Only Mode."""
 
     _attr_has_entity_name = True
-    _attr_translation_key = "server_allow_changes"
+    _attr_translation_key = "server_read_only_mode"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_entity_registry_enabled_default = False
     _attr_should_poll = True
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        self._attr_unique_id = f"{entry.entry_id}_server_allow_changes"
+        self._attr_unique_id = f"{entry.entry_id}_server_read_only_mode"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)})
         self._read_only = False
         self._config_dir: Path = embedded_config_dir(hass.config.config_dir)
 
     @property
     def is_on(self) -> bool:
-        return not self._read_only
+        return self._read_only
 
     async def async_update(self) -> None:
         try:
@@ -116,10 +116,10 @@ class ServerAllowChangesSwitch(SwitchEntity):
             self._attr_available = True
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._set_read_only(False)
+        await self._set_read_only(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._set_read_only(True)
+        await self._set_read_only(False)
 
     async def _set_read_only(self, enabled: bool) -> None:
         await self.hass.async_add_executor_job(

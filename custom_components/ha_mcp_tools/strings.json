@@ -251,8 +251,8 @@
             "server_access": {
                 "name": "Access"
             },
-            "server_allow_changes": {
-                "name": "Allow changes"
+            "server_read_only_mode": {
+                "name": "Read Only Mode"
             }
         }
     }

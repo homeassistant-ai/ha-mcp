@@ -769,7 +769,14 @@ class DevTools:
                     existing.pop(key, None)
                 else:
                     existing[key] = val
-        await asyncio.to_thread(_persistence._atomic_write_json, path, existing)
+            write_task = asyncio.create_task(
+                asyncio.to_thread(_persistence._atomic_write_json, path, existing)
+            )
+            try:
+                await asyncio.shield(write_task)
+            except asyncio.CancelledError:
+                await write_task
+                raise
 
     # ----- server-entry helpers -----
 
