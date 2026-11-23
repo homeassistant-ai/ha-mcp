@@ -255,8 +255,13 @@ UNREAD = {
         "names = {'a': 'made_up_probe'}\nnames.update(b='hassio')\n"
         "for name in names.values():\n    MockModule(name)\n"
     ),
-    "set-updated-with-a-list-and-a-keyword": (
-        "names = {'made_up_probe'}\nnames.update(['x_probe'], more='hassio')\n"
+    "dict-updated-with-a-dict-and-a-keyword-values-read": (
+        "names = {'a': 'made_up_probe'}\n"
+        "names.update({'b': 'other_probe'}, c='hassio')\n"
+        "for name in names.values():\n    MockModule(name)\n"
+    ),
+    "dict-updated-with-a-dict-and-a-keyword-keys-read": (
+        "names = {'made_up_probe': 1}\nnames.update({'x_probe': 2}, hassio=3)\n"
         "for name in names:\n    MockModule(name)\n"
     ),
     "parametrize-names-that-cannot-be-read": (

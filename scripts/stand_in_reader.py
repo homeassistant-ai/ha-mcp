@@ -106,6 +106,17 @@ def function_key(module: str, node: ast.AST) -> tuple[str, str, int, int]:
     return (module, name, getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
 
 
+def _holds(value: object, place: Place | None) -> bool:
+    """Whether the expression ``value`` spans ``place``."""
+    if place is None or not isinstance(value, ast.expr):
+        return False
+    if not hasattr(value, "lineno"):
+        return False  # no place in the source: a value the check made itself
+    start = (value.lineno, value.col_offset)
+    end = (value.end_lineno or value.lineno, value.end_col_offset or 0)
+    return start <= place <= end
+
+
 def _only_names(target: ast.expr) -> bool:
     """Whether an assignment to ``target`` binds names and nothing else: a
     name, or names unpacked into (``a, *b = row``), not ``rows[0]``."""
@@ -296,24 +307,33 @@ class Reader:
 
     def _added_outside(self, scope: Scope, outer: Chain) -> None:
         """Settle the writes into collections once the scope is read. A write
-        through an alias (``alias = rows``, ``alias.append(...)``) is a write
-        into what it is an alias of. A name a scope only writes into is not
-        its own: the write is bound where the name lives, at no fixed point
-        there."""
+        through a name is a write into every name that holds the same
+        collection at the write: what it is an alias of (``alias = rows``,
+        ``alias.append(...)``) and the aliases of it. A name a scope only
+        writes into is not its own: the write is bound where the name lives,
+        at no fixed point there."""
         loops = self.loops.get(id(scope), [])
-        for bounds in list(scope.values()):
-            held = [(v, own) for v, own in bounds if not isinstance(v, Added)]
-            for written, own in [b for b in bounds if isinstance(b[0], Added)]:
-                # What the name can hold where the write is made.
-                place = self.assigned.get(id(written))
-                there = self._latest(held, place, loops) if place and held else held
-                for other in [v.id for v, _ in there if isinstance(v, ast.Name)]:
-                    again = Added(
-                        ast.Name(id=other, ctx=ast.Load()), ast.Add(), written.right
-                    )
-                    scope.setdefault(other, []).append((again, own))
-                    if id(written) in self.assigned:
-                        self.assigned[id(again)] = self.assigned[id(written)]
+        pending = [
+            (name, written, own)
+            for name, bounds in scope.items()
+            for written, own in bounds
+            if isinstance(written, Added)
+        ]
+        given = {(name, id(written.right)) for name, written, _ in pending}
+        while pending:
+            name, written, own = pending.pop()
+            place = self.assigned.get(id(written))
+            for other in self._sharing(scope, name, place, loops):
+                if (other, id(written.right)) in given:
+                    continue
+                given.add((other, id(written.right)))
+                again = Added(
+                    ast.Name(id=other, ctx=ast.Load()), ast.Add(), written.right
+                )
+                scope.setdefault(other, []).append((again, own))
+                if place is not None:
+                    self.assigned[id(again)] = place
+                pending.append((other, again, own))
         written_only = [
             name
             for name, bounds in scope.items()
@@ -326,6 +346,36 @@ class Reader:
             for value, own in scope.pop(name):
                 self.assigned.pop(id(value), None)
                 home.setdefault(name, []).append((value, own or [*outer, scope]))
+
+    def _sharing(
+        self, scope: Scope, name: str, place: Place | None, loops: list[Loop]
+    ) -> list[str]:
+        """The names that hold, at ``place``, the collection ``name`` holds:
+        the one ``name`` is an alias of, and each one that is an alias of
+        ``name``. An assignment whose value holds ``place`` is not made yet."""
+
+        def held(of: str, at: Place | None) -> list[Bound]:
+            bounds = [
+                (v, own)
+                for v, own in scope.get(of, [])
+                if not isinstance(v, Added) and not _holds(v, place)
+            ]
+            return self._latest(bounds, at, loops) if at and bounds else bounds
+
+        found = [v.id for v, _ in held(name, place) if isinstance(v, ast.Name)]
+        now = {id(v) for v, _ in held(name, place)}
+        for other in scope:
+            if other == name:
+                continue
+            for value, _ in held(other, place):
+                if not (isinstance(value, ast.Name) and value.id == name):
+                    continue
+                # Still the same collection: ``name`` not rebound since then.
+                made = self.assigned.get(id(value))
+                if made is None or {id(v) for v, _ in held(name, made)} == now:
+                    found.append(other)
+                    break
+        return found
 
     def _bind_outside(
         self, module: Module, node: ast.AST, scope: Scope, outer: Chain

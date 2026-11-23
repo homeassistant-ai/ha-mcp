@@ -414,6 +414,19 @@ REFUSED = {
         "names = {'made_up_probe'}\nnames.update(['hassio'], ['x_probe'])\n"
         "for name in names:\n    MockModule(name)\n"
     ),
+    "alias-rebound-to-what-its-append-returns": (
+        "names = ['made_up_probe']\nalias = names\n"
+        "alias = alias.append('hassio')\nfor name in names:\n    MockModule(name)\n"
+    ),
+    "list-written-through-the-original-read-through-an-alias": (
+        "def test_it(hass):\n    names = ['made_up_probe']\n    keep = names\n"
+        "    names.append('hassio')\n    for name in keep:\n        MockModule(name)\n"
+    ),
+    "original-rebound-to-what-its-append-returns": (
+        "def test_it(hass):\n    names = ['made_up_probe']\n    keep = names\n"
+        "    names = names.append('hassio')\n"
+        "    for name in keep:\n        MockModule(name)\n"
+    ),
     "list-appended-to-through-an-alias-rebound-afterwards": (
         "def test_it(hass):\n    names = ['made_up_probe']\n    alias = names\n"
         "    alias.append('hassio')\n    alias = []\n"
@@ -645,6 +658,10 @@ ALLOWED = {
         "def test_it(hass):\n    name = 'made_up_probe'\n"
         "    for _ in range(2):\n        MockModule(name)\n"
         "    else:\n        name = 'hassio'\n"
+    ),
+    "original-rebound-before-the-write": (
+        "names = ['made_up_probe']\nkeep = names\nnames = []\n"
+        "names.append('hassio')\nfor name in keep:\n    MockModule(name)\n"
     ),
     "alias-rebound-before-the-write": (
         "names = ['made_up_probe']\nalias = names\nalias = []\n"
