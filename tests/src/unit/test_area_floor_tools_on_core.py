@@ -51,14 +51,6 @@ def component_tools(component_core_client: HomeAssistantClient) -> AreaTools:
     return AreaTools(component_core_client)
 
 
-@pytest.fixture
-def routed_client(request: pytest.FixtureRequest) -> HomeAssistantClient:
-    """The client fixture whose name the test passes through the indirect
-    ``routed_client`` parametrization."""
-    client: HomeAssistantClient = request.getfixturevalue(request.param)
-    return client
-
-
 @contextmanager
 def _floor_list_failing_on_read(
     monkeypatch: pytest.MonkeyPatch, read: int

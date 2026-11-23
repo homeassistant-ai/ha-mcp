@@ -81,6 +81,10 @@ ENTITY_COMPOSED_NAME = "entity_composed_name"
 # (as under ENTITY_COMPOSED_NAME) as ``full_name``.
 ENTITY_ENRICH_FULL_NAME = "entity_enrich_full_name"
 
+# Additive flag on entity_lookup: each match carries ``loaded``, whether the
+# domain's entity component holds the entity.
+ENTITY_LOOKUP_LOADED = "entity_lookup_loaded"
+
 # Negative (None) caps entries expire after this many seconds of monotonic
 # time, so a component installed / upgraded mid-session is re-probed and
 # adopted instead of being pinned to "absent" for the whole process lifetime

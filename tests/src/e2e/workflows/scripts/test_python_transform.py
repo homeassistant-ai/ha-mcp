@@ -48,7 +48,9 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
     assert result["config_hash"] is not None
 
     assert not any(
-        "not yet queryable" in warning or "verification failed" in warning
+        "not yet queryable" in warning
+        or "verification failed" in warning
+        or "skipped" in warning
         for warning in result.get("warnings", [])
     )
     # The transform's default wait=True is the completion signal under test.

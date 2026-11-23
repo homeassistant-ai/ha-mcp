@@ -377,11 +377,12 @@ class TestSceneLifecycle:
                 },
             )
         assert create_data.get("success") is True, f"Scene create failed: {create_data}"
-        # No 'not yet queryable' warning means the resolver picked up the
-        # real entity_id correctly — the regression KP13 surfaced via BAT.
+        # No skipped-steps warning means the resolver found the real entity_id;
+        # no 'not yet queryable' warning means wait=True saw it queryable.
         assert not any(
-            "not yet queryable" in w.lower() for w in create_data.get("warnings", [])
-        ), f"Resolver fell back to scene.{scene_id}; create_data={create_data}"
+            "not yet queryable" in w.lower() or "skipped" in w.lower()
+            for w in create_data.get("warnings", [])
+        ), f"No queryable entity for {scene_id}; create_data={create_data}"
 
         # wait=True must finish with the name-derived entity queryable.
         # The tool's wait is the completion signal under test: an exception to
@@ -420,8 +421,9 @@ class TestSceneLifecycle:
             f"Transform failed: {transform_data}"
         )
         assert not any(
-            "not yet queryable" in w.lower() for w in transform_data.get("warnings", [])
-        ), f"Resolver fell back on transform path; transform_data={transform_data}"
+            "not yet queryable" in w.lower() or "skipped" in w.lower()
+            for w in transform_data.get("warnings", [])
+        ), f"No queryable entity on transform path; transform_data={transform_data}"
 
         # Cleanup via remove uses the same resolver under the hood.
         async with MCPAssertions(mcp_client) as mcp:
