@@ -565,3 +565,19 @@ class TestReleaseChannel:
 
         # The channel the fixture's Supervisor reports.
         assert result["channel"] == UpdateChannel.STABLE.value
+
+    async def test_a_channel_supervisor_does_not_answer_is_named_in_a_warning(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        """A hassio row means a Supervisor runs, so a missing channel is a read
+        that failed; the list says so instead of dropping it silently."""
+        hassio_updates.drop("GET", "/supervisor/info")
+
+        result = await manage_updates(component_core_client)
+
+        assert any(row["platform"] == "hassio" for row in result["updates"])
+        assert "channel" not in result
+        assert any("release channel could not be read" in w for w in result["warnings"])

@@ -67,7 +67,7 @@ Scope = dict[str, list[Bound]]
 FunctionKey = tuple[str, str, int, int]
 # (function key, parameter, mode): the mode says what of the argument names
 # integrations: "value" the argument, "item" what a ``for`` over it takes, and
-# "dict_value" its values.
+# "dict_value" its values; "item:1" or "dict_value:1" takes element 1 of each.
 Param = tuple[FunctionKey, str, str]
 
 
@@ -187,8 +187,7 @@ def _parametrized(node: ast.FunctionDef | ast.AsyncFunctionDef, scope: Scope) ->
             continue
         for index, name in enumerate(fields):
             column = index if len(fields) > 1 else None
-            rows_of = _rows(rows, single=column is None)
-            scope.setdefault(name, []).append((_Each(rows_of, column), None))
+            scope.setdefault(name, []).append((_Each(rows, column), None))
 
 
 def _column(found: Sequence[Bound], column: int | None) -> list[Bound]:
@@ -290,17 +289,15 @@ def _parts(node: object) -> list[ast.expr] | None:
     return _interleave(["", *[text] * (len(joined.elts) - 1), ""], joined.elts)
 
 
-def _rows(rows: ast.expr, *, single: bool) -> ast.expr:
-    """The rows with each ``pytest.param(...)`` replaced by its values."""
-    if not isinstance(rows, _SEQUENCES):
-        return rows
-    cells: list[ast.expr] = []
-    for row in rows.elts:
-        if isinstance(row, ast.Call) and ast.unparse(row.func).endswith("param"):
-            cells.append(row.args[0] if single and row.args else ast.Tuple(row.args))
-        else:
-            cells.append(row)
-    return ast.List(cells)
+def _row(element: ast.expr, column: int | None) -> ast.expr:
+    """A ``pytest.param(...)`` row as its values; any other element as it is."""
+    if not (
+        isinstance(element, ast.Call) and ast.unparse(element.func).endswith("param")
+    ):
+        return element
+    if column is None:
+        return element.args[0] if element.args else element
+    return ast.Tuple(element.args)
 
 
 class Checker:
@@ -559,7 +556,8 @@ class Checker:
         if isinstance(node, (ast.Name, ast.Attribute)):
             return self._named(node, chain, seen, column, "item")
         if isinstance(node, _SEQUENCES):
-            return _column([(element, chain) for element in node.elts], column)
+            rows = [(_row(element, column), chain) for element in node.elts]
+            return _column(rows, column)
         if isinstance(node, ast.Dict):
             keys = [(key, chain) for key in node.keys if key is not None]
             return _column(keys, column)
@@ -589,14 +587,15 @@ class Checker:
         mode: str,
     ) -> list[Bound]:
         """``items`` (mode "item") or ``dict_values`` of what ``node`` names; a
-        parameter's are its marker in that mode."""
+        parameter's are its marker in that mode and column."""
         found: list[Bound] = []
         for value, own in self.objects(node, chain, seen):
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                if column is None and (match := _MARKER.fullmatch(value.value)):
+                if match := _MARKER.fullmatch(value.value):
                     function, param, _ = self.params[int(match.group(1))]
+                    taken = mode if column is None else f"{mode}:{column}"
                     found.append(
-                        (ast.Constant(self.marker(function, param, mode)), own)
+                        (ast.Constant(self.marker(function, param, taken)), own)
                     )
             elif isinstance(value, ast.expr) and id(value) not in seen:
                 inner = seen | {id(value)}
@@ -696,8 +695,12 @@ class Checker:
             self.record(
                 module, call, _argument(call, position, keyword), chain, "value", ""
             )
-        # Resolve the callee only when it may be a function that passes a name on.
-        if name not in {key[1] for key, _, _ in self.sinks}:
+        # Resolve the callee when a helper passes names on: under its own name,
+        # or under any name an import gives it (a re-export can rename it).
+        if not self.sinks or (
+            name not in {key[1] for key, _, _ in self.sinks}
+            and not self._imported(call.func, chain)
+        ):
             return
         for target, _ in self.objects(call.func, chain, frozenset()):
             key = self.functions.get(id(target))
@@ -708,6 +711,15 @@ class Checker:
                 if function == key:
                     argument = _bound_argument(call, target, param, bound=bound)
                     self.record(module, call, argument, chain, mode, target.name)
+
+    def _imported(self, func: ast.expr, chain: Chain) -> bool:
+        """Whether the callee's name, or the module it is read off, is imported."""
+        while isinstance(func, ast.Attribute):
+            func = func.value
+        return isinstance(func, ast.Name) and any(
+            isinstance(value, (_Imported, _ModuleRef))
+            for value, _ in self.lookup(func.id, chain)
+        )
 
     def fills_first_parameter(
         self, call: ast.Call, function: ast.FunctionDef | ast.AsyncFunctionDef
@@ -753,11 +765,13 @@ class Checker:
         if mode == "value":
             names = self.values(argument, chain)
         else:
-            collect = self.items if mode == "item" else self.dict_values
+            kind, _, taken = mode.partition(":")
+            column = int(taken) if taken else None
+            collect = self.items if kind == "item" else self.dict_values
             names = set().union(
                 *(
                     self.values(v, c or chain)
-                    for v, c in collect(argument, chain, frozenset())
+                    for v, c in collect(argument, chain, frozenset(), column)
                 )
             )
             if not names and not isinstance(argument, (*_SEQUENCES, ast.Dict)):

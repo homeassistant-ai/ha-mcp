@@ -126,6 +126,16 @@ REFUSED = {
     "percent-format": "NAME = 'hassio'\nmock_platform(hass, '%s.update' % NAME)\n",
     "str-format": "NAME = 'hassio'\nmock_platform(hass, '{}.update'.format(NAME))\n",
     "str-join": "NAME = 'hassio'\nmock_platform(hass, '.'.join([NAME, 'update']))\n",
+    "parametrize-named-table": (
+        "CASES = ['made_up', pytest.param('hassio', id='real')]\n"
+        "@pytest.mark.parametrize('name', CASES)\n"
+        "def test_it(hass, name):\n    MockModule(name)\n"
+    ),
+    "helper-tuple-column": (
+        "def register(hass, rows):\n"
+        "    for label, name in rows:\n        mock_component(hass, name)\n"
+        "register(hass, [('case', 'hassio')])\n"
+    ),
 }
 
 
@@ -154,6 +164,24 @@ def test_a_name_passed_to_a_helper_in_another_module_is_refused_at_the_call(
         f"{_SAMPLE}:4: a stand-in registered under Home Assistant's 'frontend' "
         "integration through register()"
     )
+
+
+def test_a_helper_re_exported_under_another_name_is_refused(guard, tmp_path, capsys):
+    helper = "def register(hass, name):\n    mock_component(hass, name)\n"
+    test = "from ._reexport import install\n\n\ninstall(hass, 'hassio')\n"
+    repo = _repo(
+        tmp_path,
+        {
+            "tests/src/unit/_helpers.py": helper,
+            "tests/src/unit/_reexport.py": "from ._helpers import register as install\n",
+            _SAMPLE: test,
+        },
+    )
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert out.startswith(f"{_SAMPLE}:4: ")
 
 
 def test_a_constant_from_a_local_helper_module_is_refused(guard, tmp_path, capsys):

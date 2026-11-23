@@ -44,14 +44,27 @@ async def _supervisor(
     return result
 
 
-async def supervisor_channel(client: Any) -> str | None:
-    """The channel Supervisor reports; None when no Supervisor answers."""
+def _reason(error: ToolError) -> str:
+    """The message of a relayed call's error, or the error as it is."""
+    try:
+        payload = json.loads(str(error))
+    except ValueError:
+        return str(error)
+    found = payload.get("error") if isinstance(payload, dict) else None
+    message = found.get("message") if isinstance(found, dict) else None
+    return message if isinstance(message, str) else str(error)
+
+
+async def supervisor_channel(client: Any) -> tuple[str | None, str | None]:
+    """The channel Supervisor reports, or None and why it could not be read."""
     try:
         info = await _supervisor(client, _INFO)
-    except ToolError:
-        return None
+    except ToolError as e:
+        return None, _reason(e)
     channel = info.get("channel")
-    return channel if isinstance(channel, str) else None
+    if isinstance(channel, str):
+        return channel, None
+    return None, "Supervisor's info names no channel"
 
 
 async def set_supervisor_channel(client: Any, channel: str | None) -> dict[str, Any]:

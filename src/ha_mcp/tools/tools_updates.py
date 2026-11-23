@@ -266,12 +266,17 @@ class UpdateTools:
             "categories": categories,
             "include_skipped": include_skipped,
         }
+        if any(row["platform"] == "hassio" for row in rows):
+            channel, problem = await supervisor_channel(self._client)
+            if channel is not None:
+                result["channel"] = channel
+            else:
+                warnings.append(
+                    f"Supervisor's release channel could not be read ({problem}), "
+                    "so channel is left out."
+                )
         if warnings:
             result["warnings"] = warnings
-        if any(row["platform"] == "hassio" for row in rows) and (
-            channel := await supervisor_channel(self._client)
-        ):
-            result["channel"] = channel
 
         # Surface the MCP server's OWN update status alongside HA's updates so the
         # model is more likely to mention "you're on X, but Y is out" — this tool
