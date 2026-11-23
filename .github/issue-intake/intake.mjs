@@ -229,10 +229,12 @@ export const isHuman = (user) => user?.type === "User" && user.login !== "ghhamc
 export const authorLogin = (issue) => issue.user?.login ?? "ghost";
 export const isMaintainer = (role) => ["maintain", "admin"].includes(role);
 const timestamp = (item) => item.updated_at ?? item.created_at;
+export const compareEvents = (a, b) =>
+  a.created_at.localeCompare(b.created_at) || a.id - b.id;
 export const latestEvent = (events, predicate) =>
   events
     .filter(predicate)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
+    .sort(compareEvents)
     .at(-1);
 export const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const ignoredCommand = (comment, roles) =>

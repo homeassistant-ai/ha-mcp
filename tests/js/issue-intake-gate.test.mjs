@@ -729,3 +729,39 @@ test("a report accepted while the sweep closes the issue keeps it open", async (
   assert.equal(api.data.issue.state, "open");
   assert.deepEqual(api.data.issue.labels, []);
 });
+
+test("withdrawing the same request before the sweep's close undoes only that close", async () => {
+  for (const [scenario, expected] of [
+    ["withdrawn first", "open"], ["withdrawn afterwards", "closed"],
+    ["human closure", "closed"], ["new request", "closed"],
+  ]) {
+    const api = new FakeGitHub(requireReport());
+    await gate(api, "test/repo", 1, bot, { action: "labeled" }, true);
+    const request = api.request.bind(api);
+    api.request = async (path, options = {}) => {
+      if (options.data?.state === "closed") {
+        const at = "2026-09-23T00:00:00Z";
+        api.data.issue.labels = [];
+        api.data.events.push({
+          id: scenario === "withdrawn afterwards" ? 52 : 49, event: "unlabeled",
+          label: { name: requiredLabel }, actor: user("maintainer"), created_at: at,
+        }, {
+          id: 50, event: "closed", created_at: at,
+          actor: scenario === "human closure" ? user("maintainer") : { login: bot, type: "Bot" },
+        });
+        if (scenario === "new request") {
+          api.data.issue.labels.push({ name: requiredLabel });
+          api.data.events.push({
+            id: 51, event: "labeled", label: { name: requiredLabel },
+            actor: user("maintainer"), created_at: at,
+          });
+        }
+      }
+      if (options.data?.state) api.data.issue.state = options.data.state;
+      return request(path, options);
+    };
+    await expire(api, "test/repo", bot, Date.parse(overrideAt) + 24 * hour, true);
+    assert.equal(api.data.issue.state, expected, scenario);
+    if (expected === "open") assert.match(api.writes.at(-1).data.body, /withdrawn/);
+  }
+});

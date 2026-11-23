@@ -10,6 +10,7 @@ import {
   GitHub,
   authorLogin,
   collect,
+  compareEvents,
   escapeRegExp,
   hasHiddenReport,
   hasReport,
@@ -393,16 +394,30 @@ export async function gate(api, repository, number, bot, event, write) {
   return action;
 }
 
-// A concurrent report edit can clear the override between the sweep's read
-// and its close. Reconcile even when that edit already removed the label.
+// A reporter can supply output or a maintainer can withdraw the request
+// between the sweep's read and its close. Recheck that same application.
 async function reconcileRequiredClose(api, repository, number, bot, applied) {
   const fresh = await gateSnapshot(api, repository, number);
   if (fresh.issue.state !== "closed" || latestApplication(fresh.events)?.id !== applied.id)
     return false;
   const closed = latestEvent(fresh.events, (e) => e.event === "closed");
-  if (closed?.actor?.login !== bot || !reporterTexts(fresh).some(hasReport))
+  if (closed?.actor?.login !== bot) return false;
+  if (reporterTexts(fresh).some(hasReport)) {
+    await applyGate(api, repository, number, bot, fresh, "reopen", applied);
+    return true;
+  }
+  const removed = latestEvent(fresh.events, (e) => e.event === "unlabeled" && e.label?.name === requiredLabel);
+  // Use timeline order (including same-second event IDs). Removing a label
+  // from an already closed issue should leave the closure in place.
+  if (
+    !removed || requiredApplication(fresh) ||
+    compareEvents(applied, removed) >= 0 || compareEvents(removed, closed) >= 0
+  )
     return false;
-  await applyGate(api, repository, number, bot, fresh, "reopen", applied);
+  await retrying(api, () => api.request(`repos/${repository}/issues/${number}`, {
+    method: "PATCH", data: { state: "open" },
+  }));
+  await applyGate(api, repository, number, bot, fresh, "withdraw", null);
   return true;
 }
 
