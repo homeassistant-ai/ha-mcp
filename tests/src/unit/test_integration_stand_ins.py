@@ -194,6 +194,20 @@ REFUSED = {
         "for name in {**base, 'other': 'made_up_probe'}.values():\n"
         "    MockModule(name)\n"
     ),
+    "helper-default-used": (
+        "def register(hass, a, b='sio'):\n    MockModule(a + b)\n"
+        "register(hass, 'has')\n"
+    ),
+    "default-of-a-function-no-call-reaches": (
+        "def test_it(hass, name='hassio'):\n    MockModule(name)\n"
+    ),
+    "alias-of-a-helper": "register = mock_component\nregister(hass, 'hassio')\n",
+    "format-named-tuple": "PARTS = ('has', 'sio')\nMockModule('%s%s' % PARTS)\n",
+    "param-imported-from-pytest": (
+        "from pytest import param\nROWS = [param('hassio')]\n"
+        "@pytest.mark.parametrize('name', ROWS)\n"
+        "def test_it(hass, name):\n    MockModule(name)\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -321,6 +335,21 @@ def test_a_helper_wrapping_its_own_name_without_end_fails(guard, tmp_path, capsy
     assert f"{_SAMPLE}:3: more than 8 helpers add text to the name" in out
 
 
+def test_too_many_names_through_a_helper_fail(guard, tmp_path, capsys):
+    """Each argument stays under the limit; together they are 289 names."""
+    values = ", ".join(f"'m{number}'" for number in range(17))
+    source = (
+        "def register(hass, a, b):\n    MockModule(a + b)\n"
+        f"for a in ({values}):\n    for b in ({values}):\n"
+        "        register(hass, a, b)\n"
+    )
+
+    status, out = run_guard(guard, _repo(tmp_path, {_SAMPLE: source}), capsys)
+
+    assert status == 1
+    assert f"{_SAMPLE}:5: more than 256 possible names to check" in out
+
+
 def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
     repo = _repo(tmp_path, {_SAMPLE: "x = 1\ndef broken(:\n"})
 
@@ -332,8 +361,10 @@ def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
 
 def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, capsys):
     """Listed: a call's result, a fixture's value at each stand-in it reaches,
-    and ``*`` and ``**`` arguments. Left out: a parameter a call fills, one
-    with a default and one ``parametrize`` fills."""
+    ``*`` and ``**`` arguments, a collection one branch reads at runtime, and
+    a parameter ``parametrize`` gives a fixture. Left out: a parameter a call
+    fills, one with a default, one ``parametrize`` fills, and a loop over a
+    list known to be empty."""
     source = (
         "MockModule('made_up_probe')\nMockModule(pick())\n"
         "def test_it(hass, name):\n    mock_component(hass, name)\n    MockModule(name)\n"
@@ -343,6 +374,11 @@ def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, c
         "def default(hass, name='made_up_probe'):\n    mock_component(hass, name)\n"
         "@pytest.mark.parametrize('name', ['made_up_probe'])\n"
         "def test_each(hass, name):\n    mock_component(hass, name)\n"
+        "rows = ['made_up_probe']\nif flag:\n    rows = load_rows()\n"
+        "for row in rows:\n    MockModule(row)\n"
+        "for none in []:\n    MockModule(none)\n"
+        "@pytest.mark.parametrize('name', ['hassio'], indirect=True)\n"
+        "def test_indirect(hass, name):\n    MockModule(name)\n"
     )
     repo = _repo(tmp_path, {_SAMPLE: source})
 
@@ -350,6 +386,7 @@ def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, c
 
     listed = [(2, "MockModule"), (4, "mock_component"), (5, "MockModule")]
     listed += [(6, "MockModule"), (7, "MockModule"), (11, "register")]
+    listed += [(21, "MockModule"), (26, "MockModule")]
     assert (status, capsys.readouterr().out.splitlines()) == (
         0,
         [
@@ -394,6 +431,17 @@ ALLOWED = {
     ),
     "call-named-like-param": (
         "for name in [make_param('hassio')]:\n    MockModule(name)\n"
+    ),
+    "helper-default-not-used": (
+        "def register(hass, a, b='sio'):\n    MockModule(a + b)\n"
+        "register(hass, 'has', '_probe')\n"
+    ),
+    "function-named-like-an-alias": (
+        "def register(hass, name):\n    pass\nregister(hass, 'hassio')\n"
+    ),
+    "function-named-param": (
+        "def param(_):\n    return 'made_up_probe'\n"
+        "for name in [param('hassio')]:\n    MockModule(name)\n"
     ),
     "helper-many-suffixes": (
         "def register(hass, base):\n"
@@ -473,8 +521,9 @@ def test_an_entry_allows_only_its_own_file(guard, tmp_path, capsys):
         f"- file: {_SAMPLE}\n  integration: hassio\n  reason: ''\n",
         _LISTED + "  extra: 1\n",
         _LISTED + "  1: x\n",
+        f"- file: {_SAMPLE}\n  integration: hassio\n  reason: '   '\n",
     ],
-    ids=["no-reason", "empty-reason", "unknown-key", "non-string-key"],
+    ids=["no-reason", "empty-reason", "unknown-key", "non-string-key", "blank-reason"],
 )
 def test_an_entry_without_exactly_a_file_integration_and_reason_fails(
     guard, tmp_path, capsys, allowlist
@@ -518,6 +567,8 @@ def test_an_entry_cannot_silence_the_checks_own_failures(guard, tmp_path, capsys
     ("allowlist", "problem"),
     [
         pytest.param("{}\n", "must be a list of entries", id="mapping"),
+        pytest.param("null\n", "must be a list of entries", id="null"),
+        pytest.param("~\n", "must be a list of entries", id="tilde"),
         pytest.param("&rows [*rows]\n", "cannot be read", id="holds-itself"),
     ],
 )

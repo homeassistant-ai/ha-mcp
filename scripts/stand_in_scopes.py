@@ -111,6 +111,17 @@ def bind_parametrized(
         ):
             continue
         names, rows = decorator.args[:2]
+        # ``indirect`` hands the rows to fixtures: what the test gets is theirs.
+        indirect = next(
+            (k.value for k in decorator.keywords if k.arg == "indirect"), None
+        )
+        to_fixtures: set[object] = set()
+        if isinstance(indirect, (ast.List, ast.Tuple)):
+            to_fixtures = {
+                e.value for e in indirect.elts if isinstance(e, ast.Constant)
+            }
+        elif indirect is not None and getattr(indirect, "value", True) is not False:
+            continue
         if isinstance(names, ast.Constant) and isinstance(names.value, str):
             fields = [name.strip() for name in names.value.split(",")]
         elif isinstance(names, _SEQUENCES):
@@ -121,7 +132,8 @@ def bind_parametrized(
             continue
         for index, name in enumerate(fields):
             column = index if len(fields) > 1 else None
-            scope.setdefault(name, []).append((Each(rows, column), None))
+            if name not in to_fixtures:
+                scope.setdefault(name, []).append((Each(rows, column), None))
 
 
 def column_of(found: Sequence[Bound], column: int | None) -> list[Bound]:

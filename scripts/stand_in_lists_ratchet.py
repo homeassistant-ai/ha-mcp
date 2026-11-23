@@ -144,6 +144,7 @@ INTEGRATION_CHECK = (
     "scripts/integration_stand_ins.py",
     "scripts/stand_in_syntax.py",
     "scripts/stand_in_scopes.py",
+    "scripts/stand_in_resolver.py",
     "scripts/stand_in_allowlist.py",
 )
 INTEGRATION_ALLOWLIST: str = _INTEGRATION.ALLOWLIST

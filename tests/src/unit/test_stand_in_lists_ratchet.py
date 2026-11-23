@@ -505,6 +505,13 @@ def test_an_exempted_test_is_reported(
             },
             id="check-widened-in-its-syntax-script-allowlists-an-older-file",
         ),
+        pytest.param(
+            {
+                _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_CLEAN, "frontend")),
+                "scripts/stand_in_resolver.py": "FOLLOWS = ('alias',)\n",
+            },
+            id="check-widened-in-its-resolver-script-allowlists-an-older-file",
+        ),
         pytest.param({_ALLOWLIST_PATH: "[]\n"}, id="allowlisted-stand-in-converted"),
     ],
 )

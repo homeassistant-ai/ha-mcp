@@ -55,16 +55,16 @@ def parse_allowlist(text: str, problems: list[str]) -> dict[tuple[str, str], str
     is still returned when it names both, so a reader comparing two versions of
     the list sees every file on each."""
     try:
-        repeated = _repeated_key(yaml.compose(text, Loader=yaml.SafeLoader))
-        entries = yaml.safe_load(text)
+        document = yaml.compose(text, Loader=yaml.SafeLoader)
+        repeated = _repeated_key(document)
+        # Only a file with no document in it lists nothing; ``null`` is not a list.
+        entries = [] if document is None else yaml.safe_load(text)
     except yaml.YAMLError as err:
         problems.append(f"{ALLOWLIST}: cannot be read: {err}")
         return {}
     if repeated is not None:
         line = repeated.start_mark.line + 1
         problems.append(f"{ALLOWLIST}:{line}: repeats the key {repeated.value!r}")
-    if entries is None:  # an empty file lists nothing
-        entries = []
     if not isinstance(entries, list):
         problems.append(f"{ALLOWLIST}: must be a list of entries")
         return {}
@@ -73,7 +73,8 @@ def parse_allowlist(text: str, problems: list[str]) -> dict[tuple[str, str], str
         fields = entry if isinstance(entry, dict) else {}
         file, integration, reason = (fields.get(key) for key in ENTRY_KEYS)
         if set(fields) != set(ENTRY_KEYS) or not all(
-            isinstance(value, str) and value for value in (file, integration, reason)
+            isinstance(value, str) and value.strip()
+            for value in (file, integration, reason)
         ):
             problems.append(
                 f"{ALLOWLIST}: entry {number} needs exactly a non-empty "
