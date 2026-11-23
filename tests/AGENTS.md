@@ -317,6 +317,8 @@ integration of the installed Core, also when the name reaches them through
 helpers' parameters: the test would run against a stand-in while the
 integration's own code never runs (#3178). Set the real integration
 up, or register the stand-in under a made-up domain, as Core's own tests do.
+A name the check cannot read fails too (one only known at runtime, or given
+to a helper handed on instead of called): write it in the call or a constant.
 A case is fixed, not listed: only one the real integration was tried for and
 cannot serve is recorded, with its reason, in
 `src/unit/integration_stand_in_allowlist.yml`, and an entry that matches

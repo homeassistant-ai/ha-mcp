@@ -130,13 +130,15 @@ _FETCH_WAITS = (5, 15, 30, 60)
 _FETCH_WAIT_CAP = 120
 
 
-def _fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
+def fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
     """Fetch the HA release's direct integration requirements (fail-closed).
 
-    Five attempts against raw.githubusercontent, waiting as long as GitHub's
-    ``Retry-After`` asks when it throttles the runner (429); a total failure
-    FAILS the test rather than silently weakening the governed set — a guard
-    that can quietly shrink its protection is worse than a loud fetch error.
+    Up to five attempts against raw.githubusercontent, waiting at least as
+    long as GitHub's ``Retry-After`` asks when it throttles the runner (429).
+    An answer that will not change (a 404 for a release that does not exist)
+    is not asked for again. A total failure FAILS the test rather than
+    silently weakening the governed set — a guard that can quietly shrink its
+    protection is worse than a loud fetch error.
     """
     url = _REQUIREMENTS_ALL_URL.format(version=ha_version)
     last_error: Exception | None = None
@@ -147,10 +149,13 @@ def _fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
             return _parse_requirement_specs(response.text)
         except requests.exceptions.RequestException as err:
             last_error = err
-            if wait is None:  # no pointless backoff after the final attempt
+            status = getattr(err.response, "status_code", None)
+            settled = status is not None and status != 429 and status < 500
+            if wait is None or settled:  # no backoff after the final attempt
                 break
             asked = getattr(err.response, "headers", {}).get("Retry-After", "")
-            time.sleep(min(int(asked), _FETCH_WAIT_CAP) if asked.isdigit() else wait)
+            longer = min(int(asked), _FETCH_WAIT_CAP) if asked.isdigit() else 0
+            time.sleep(max(wait, longer))
     raise AssertionError(
         f"could not fetch {url} to build the governed-package set "
         f"(last error: {last_error}); the no-stomp guard cannot run "
@@ -167,7 +172,7 @@ def _governed_specs(config_path: Path) -> dict[str, SpecifierSet]:
     )
     ha_version = HA_TEST_IMAGE.rsplit(":", 1)[-1]
     specs = _parse_requirement_specs(constraints_file.read_text(encoding="utf-8"))
-    for name, pin in _fetch_requirements_all(ha_version).items():
+    for name, pin in fetch_requirements_all(ha_version).items():
         specs[name] = specs.get(name, SpecifierSet()) & pin
     return specs
 

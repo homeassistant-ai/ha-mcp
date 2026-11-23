@@ -12,7 +12,6 @@ focused (see issue #925):
 - ``fetch``, ``graph``: config fetches and the related-entity graph
 """
 
-import logging
 from collections.abc import Callable
 
 from ...client.rest_client import HomeAssistantClient

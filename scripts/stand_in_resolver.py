@@ -29,6 +29,7 @@ from stand_in_scopes import (  # type: ignore[import-not-found]
     bind_import,
     bind_loop,
     bind_parametrized,
+    bind_unread,
     column_of,
     fixed_length,
 )
@@ -43,8 +44,11 @@ TOO_MANY = "\1"  # more alternatives than are checked: reported, never dropped
 ENDLESS = "\5"  # text added by more than MAX_WRAPS helpers: reported
 MAX_WRAPS = 8
 MAX_ALTERNATIVES = 256
-MAX_STEPS = 100  # names followed one into the next before a value: reported past it
-# The calls a ``for`` over takes the same elements from as from their argument.
+# Steps from a name to its value, one for each name or expression on the way:
+# reported past it.
+MAX_STEPS = 100
+# Calls that give their argument's elements unchanged: ``for x in sorted(y)``
+# loops over ``y``'s.
 _SAME_ITEMS = ("sorted", "list", "tuple", "set", "frozenset")
 NAME_HERE = "\x04"  # where the name goes in the text a helper puts around it
 MARKER = re.compile("\x02([0-9]+)\x03")
@@ -59,7 +63,9 @@ FunctionKey = tuple[str, str, int, int]
 class Mode(NamedTuple):
     """What of a helper's argument names integrations."""
 
-    kind: str = "value"  # the argument; "item": a loop's items; "dict_value"
+    # "value": the argument itself; "item": the items a loop takes from it;
+    # "dict_value": its values, as a dict.
+    kind: str = "value"
     column: int | None = None  # the element of each item that does
     around: tuple[str, str] | None = None  # text the helper puts around each
 
@@ -110,8 +116,9 @@ def _from_start(column: int | None, width: int) -> int | None:
 
 
 def _scope_nodes(scope: ast.AST) -> Iterator[ast.AST]:
-    """Nodes in one scope, leaving nested definitions' bodies, and the targets
-    of comprehensions inside it, to their own."""
+    """Nodes in one scope, leaving nested definitions' bodies, and the ``for``
+    clauses of comprehensions inside it (which bind their targets), to their
+    own."""
     own = {id(clause) for clause in getattr(scope, "generators", ())}
     pending = list(ast.iter_child_nodes(scope))
     while pending:
@@ -146,9 +153,11 @@ class Resolver:
         self.called: set[FunctionKey] = set()  # functions a call in the trees fills
         # Parameters with values of their own: a default or ``parametrize``.
         self.given: set[tuple[FunctionKey, str]] = set()
-        # Where each value is bound: its statement's line and column.
-        self.assigned: dict[object, tuple[int, int]] = {}
-        self.straight: set[object] = set()  # values a function always binds
+        # Where each value is bound, by its id (two imports of one name are
+        # equal, and bound in two places): its statement's line and column.
+        self.assigned: dict[int, tuple[int, int]] = {}
+        self.straight: set[int] = set()  # the values a function always binds
+        self.class_bodies: dict[int, Scope] = {}  # what each class body binds
         self.findings: set[Finding] = set()
         self.unresolved: set[Site] = set()
         for tree in TREES:
@@ -230,7 +239,7 @@ class Resolver:
                 for a, d in zip(args.kwonlyargs, args.kw_defaults, strict=True)
                 if d
             ]
-            # A default applies where a call leaves the argument out (G1).
+            # A default applies where a call leaves the argument out.
             for arg, default in defaults:
                 self.defaults[(key, arg.arg)] = (default, here)
         if isinstance(node, FUNCTIONS):
@@ -261,7 +270,27 @@ class Resolver:
         for child in _scope_nodes(node):
             self._bind_node(scope, child, package, body)
             self._note_loop(scope, child)
+        self._bind_outside(module, node, scope, outer or [module.top])
         return scope
+
+    def _bind_outside(
+        self, module: Module, node: ast.AST, scope: Scope, outer: Chain
+    ) -> None:
+        """What a function binds to a name it declares ``global`` or
+        ``nonlocal`` is bound where the name lives, at no fixed point there."""
+        if not isinstance(node, FUNCTIONS):
+            return
+        for child in _scope_nodes(node):
+            if not isinstance(child, (ast.Global, ast.Nonlocal)):
+                continue
+            for name in child.names:
+                home = module.top
+                if isinstance(child, ast.Nonlocal):
+                    home = next((s for s in outer[:0:-1] if name in s), outer[-1])
+                for value, own in scope.pop(name, []):
+                    self.assigned.pop(id(value), None)
+                    self.straight.discard(id(value))
+                    home.setdefault(name, []).append((value, own or [*outer, scope]))
 
     def _note_loop(self, scope: Scope, node: ast.AST) -> None:
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
@@ -339,23 +368,24 @@ class Resolver:
         elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
             bind_loop(scope, node.target, node.iter, new)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            bind_import(scope, node, package)
+            bind_import(scope, node, package, new)
         elif isinstance(node, (*FUNCTIONS, ast.ClassDef)):
             scope.setdefault(node.name, []).append((node, None))
-        if isinstance(node, (ast.stmt, ast.expr)):
-            # A plain assignment in the function's own body always runs, in order.
-            straight = (
-                id(node) in body
-                and bool(targets)
-                and all(isinstance(target, ast.Name) for target in targets)
-            )
+        else:
+            targets = bind_unread(scope, node, new)
+        if isinstance(node, (ast.stmt, ast.expr, ast.ExceptHandler, ast.pattern)):
+            # A plain assignment, an import or a ``with`` in the function's own
+            # body always runs, in order.
+            named = bool(targets) and all(isinstance(t, ast.Name) for t in targets)
+            imported = isinstance(node, (ast.Import, ast.ImportFrom))
+            straight = id(node) in body and (named or imported)
             for value in new:
                 self._bound_at(value, (node.lineno, node.col_offset), straight=straight)
 
     def _bound_at(self, value: object, at: tuple[int, int], *, straight: bool) -> None:
-        self.assigned[value] = at
+        self.assigned[id(value)] = at
         if straight:
-            self.straight.add(value)
+            self.straight.add(id(value))
 
     def scope_of(self, module: Module, node: ast.AST, outer: Chain) -> Scope:
         if id(node) not in self.scopes:
@@ -393,7 +423,7 @@ class Resolver:
                 return [(v, own if own is not None else inner) for v, own in bound]
             loops = self.loops.get(id(chain[depth]), [])
             return [
-                (v, AsOf(inner, self.assigned.get(v, at)) if own is None else own)
+                (v, AsOf(inner, self.assigned.get(id(v), at)) if own is None else own)
                 for v, own in self._latest(bound, at, loops)
             ]
         return []
@@ -409,7 +439,8 @@ class Resolver:
         parameter's value), and not a later binding, unless a loop holding
         both brings it round again."""
         placed = [
-            (self.assigned.get(value), value in self.straight) for value, _ in bound
+            (self.assigned.get(id(value)), id(value) in self.straight)
+            for value, _ in bound
         ]
         always = [
             place for place, straight in placed if straight and place and place < at
@@ -435,7 +466,8 @@ class Resolver:
         return kept or bound
 
     def resolve(self, value: object, chain: Chain, seen: frozenset[int]) -> list[Bound]:
-        """What an import names: a value in another module, or a module."""
+        """What an import names (a value in another module, or a module); any
+        other value as it is."""
         if not isinstance(value, Imported):
             return [(value, chain)]
         if id(value) in seen:
@@ -477,9 +509,11 @@ class Resolver:
         self, owner: object, chain: Chain | None, attr: str, seen: frozenset[int]
     ) -> list[Bound]:
         if isinstance(owner, ast.ClassDef):
-            body: Scope = {}
-            for statement in owner.body:
-                self._bind_node(body, statement, "")
+            # Read once: a value's place is kept by the object the scope holds.
+            body = self.class_bodies.setdefault(id(owner), {})
+            if not body:
+                for statement in owner.body:
+                    self._bind_node(body, statement, "")
             if attr in body:
                 return [(v, own or [*(chain or []), body]) for v, own in body[attr]]
             if id(owner) in seen:
@@ -502,7 +536,7 @@ class Resolver:
         if id(node) in seen:
             return {UNKNOWN}
         if len(seen) > MAX_STEPS:
-            return {TOO_MANY}  # a chain of names too long to follow: reported
+            return {TOO_MANY}  # too many steps to follow: reported
         seen |= {id(node)}
         if isinstance(node, (Names, ast.Constant)):
             return self._written(node)
@@ -668,7 +702,20 @@ class Resolver:
                 else:
                     keys.append((key, chain))
             return self._column(keys, column)
-        return []
+        return self._other_items(node, chain, seen, column)
+
+    def _other_items(
+        self, node: ast.expr, chain: Chain, seen: frozenset[int], column: int | None
+    ) -> list[Bound]:
+        """``items`` of two collections added or chosen between; a runtime
+        name for anything else, which cannot be read."""
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            sides = [node.left, node.right]
+        elif isinstance(node, ast.IfExp):
+            sides = [node.body, node.orelse]
+        else:
+            return [(ast.Constant(None), chain)]
+        return [b for side in sides for b in self.items(side, chain, seen, column)]
 
     def _pytest_param(self, call: ast.Call, chain: Chain) -> bool:
         """Whether ``call`` calls pytest's own ``param``: read off the pytest
@@ -691,7 +738,8 @@ class Resolver:
     def _column(found: list[Bound], column: int | None) -> list[Bound]:
         taken: list[Bound] = column_of(found, column)
         if column is not None:
-            # A row that cannot be read stays a runtime name in every column.
+            # A row that cannot be read (bound as ``Constant(None)``) stays a
+            # runtime name in every column.
             taken += [
                 b
                 for b in found

@@ -61,6 +61,8 @@ WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # A string that is a name or a path to one (``getattr``, a registry key, a patch
 # target, ``module:function``); a sentence that mentions a name is not a use.
 NAMING = re.compile(r"[A-Za-z_][\w.:]*")
+# A ``#`` comment in YAML or TOML: at the line's start or after white space.
+COMMENT = re.compile(r"(^|\s)#.*")
 # Module state the tests reset between tests, and the cleanup of a server
 # process a test started; production needs neither.
 EXEMPT = frozenset(
@@ -131,7 +133,8 @@ class _Uses(NamedTuple):
     # Every attribute read: a method's receiver cannot be resolved statically.
     attributes: set[str]
     # Words of the strings that are a name or a path to one (``NAMING``),
-    # ``__all__`` entries aside, and of the non-Python files' lines.
+    # ``__all__`` entries aside; ``test_only_names`` adds the words of the
+    # non-Python files' lines.
     strings: set[str]
 
 
@@ -283,8 +286,8 @@ def _bindings(nodes: list[ast.AST], package: str) -> dict[str, str]:
 
 
 def _words(paths: list[Path], *, comments: bool = True) -> set[str]:
-    """The words in ``paths``; without ``comments``, lines that are a ``#``
-    comment are left out."""
+    """The words in ``paths``; without ``comments``, a ``#`` comment is left
+    out, whether it is the whole line or follows a value."""
     words: set[str] = set()
     for path in paths:
         try:
@@ -292,8 +295,7 @@ def _words(paths: list[Path], *, comments: bool = True) -> set[str]:
         except UnicodeDecodeError, IsADirectoryError:
             continue
         if not comments:
-            lines = text.splitlines()
-            text = "\n".join(ln for ln in lines if not ln.lstrip().startswith("#"))
+            text = "\n".join(COMMENT.sub("", line) for line in text.splitlines())
         words |= set(WORD.findall(text))
     return words
 

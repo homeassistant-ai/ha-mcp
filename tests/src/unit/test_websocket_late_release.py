@@ -1,8 +1,8 @@
 """Subscription cleanup must survive the connection going away under it.
 
 Background cleanup collects failures on its original socket; a direct
-``unsubscribe_events`` treats a socket closed during
-the send or before the answer as the transport loss it is.
+``unsubscribe_events`` treats a socket closed during the send or before the
+answer as the transport loss it is.
 
 The client is the server's own, connected to Core's ``websocket_api``. Core
 acknowledges a command late when ``execute_script`` waits on a state, and a

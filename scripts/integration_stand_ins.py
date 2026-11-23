@@ -22,10 +22,11 @@ a later plain assignment replaces an earlier one, and a saved copy keeps what
 it was given. ``zip`` stops at its shortest input when every length is known.
 More than ``MAX_ALTERNATIVES`` possible names fail, since they are not checked,
 and so does a name more than ``MAX_WRAPS`` helpers add text to, which is how a
-helper calling itself looks. A name only known at runtime is left to review;
-``--all`` lists where one reaches a helper, also through a function no call in
-the trees reaches (a fixture, for example) or an argument passed with ``*`` or
-``**``.
+helper calling itself looks. A name the check cannot read fails as well, since
+it could be any integration's: one only known at runtime (a call's result, a
+fixture's value, an argument passed with ``*`` or ``**``), and one given to a
+helper that is handed on instead of called (to ``partial``, in a list, as an
+argument). The integration's name goes in the call, or in a constant.
 
 A kept case is an entry of ``ALLOWLIST`` naming the file, the integration and
 the reason. An entry that matches nothing fails.
@@ -109,9 +110,21 @@ class Checker(Resolver):
     """The scan: every stand-in call in the test trees, and the helpers that
     pass names on to one."""
 
+    def __init__(self, repo: Path, real: frozenset[str]) -> None:
+        super().__init__(repo, real)
+        self.checking = True  # off while the scopes are first read
+        # Where a helper's name stands as a callee, an alias or a base class.
+        self.direct: set[int] = set()
+
     # --- the scan ------------------------------------------------------------
 
     def run(self) -> list[Finding]:
+        # Read every scope first: a function binds a ``global`` for the ones
+        # before it too.
+        self.checking = False
+        for module in self.local:
+            self.visit(module, module.tree, [module.top])
+        self.checking = True
         # Repeat until helpers passing names on to other helpers add no more;
         # each round only adds parameters, and MAX_WRAPS bounds the ones with
         # text around them, so this ends.
@@ -158,10 +171,48 @@ class Checker(Resolver):
         if isinstance(node, COMPREHENSIONS):
             # Its targets are its own: nothing after it sees them.
             chain = [*chain, self.scope_of(module, node, chain)]
-        if isinstance(node, ast.Call):
+        if self.checking:
+            self.note_reference(module, node, chain)
+        if self.checking and isinstance(node, ast.Call):
             self.check_call(module, node, chain)
         for child in ast.iter_child_nodes(node):
             self.visit(module, child, chain)
+
+    def note_reference(self, module: Module, node: ast.AST, chain: Chain) -> None:
+        """A helper of Core's handed on instead of called (to ``partial``, in a
+        list, as an argument) gets its name where the check cannot read it."""
+        if isinstance(node, ast.Call):
+            self.direct.add(id(node.func))
+            if ast.unparse(node.func) in ("isinstance", "issubclass"):
+                self.direct.update(id(n) for a in node.args[1:] for n in ast.walk(a))
+        elif isinstance(node, ast.Assign):
+            self.direct.update(id(value) for value in self._aliased(node))
+        elif isinstance(node, ast.AnnAssign):
+            self.direct.update(id(n) for n in ast.walk(node.annotation))
+        elif (
+            isinstance(node, (ast.Name, ast.Attribute))
+            and isinstance(node.ctx, ast.Load)
+            and id(node) not in self.direct
+            and (isinstance(node, ast.Name) or node.attr in SINKS or node.attr == "add")
+        ):
+            here = AsOf(chain, (node.lineno, node.col_offset))
+            if self._spelled(node, here) in SINKS and not self._in_trees(node, here):
+                site = Site(module.path, node.lineno, ast.unparse(node))
+                self.unresolved.add(site)
+
+    @staticmethod
+    def _aliased(node: ast.Assign) -> list[ast.expr]:
+        """The values a plain assignment gives a name (``a = x``, ``a, b = x,
+        y``): a call through such an alias is followed."""
+        found: list[ast.expr] = []
+        rows = (ast.Tuple, ast.List)
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                found.append(node.value)
+            elif isinstance(target, rows) and isinstance(node.value, rows):
+                pairs = zip(target.elts, node.value.elts, strict=False)
+                found += [value for name, value in pairs if isinstance(name, ast.Name)]
+        return found
 
     def visit_definition(
         self,
@@ -171,6 +222,7 @@ class Checker(Resolver):
     ) -> None:
         if isinstance(node, ast.ClassDef):
             header: list[ast.AST] = [*node.decorator_list, *node.bases, *node.keywords]
+            self.direct.update(id(base) for base in node.bases)
         else:
             header = [*node.args.defaults, *filter(None, node.args.kw_defaults)]
             header += node.decorator_list if isinstance(node, FUNCTIONS) else []
@@ -263,7 +315,7 @@ class Checker(Resolver):
         for target, own in self.objects(func, chain, frozenset()):
             if isinstance(target, FUNCTIONS):
                 found.append(target)
-            elif isinstance(target, ast.Name) and depth < 5:
+            elif isinstance(target, (ast.Name, ast.Attribute)) and depth < 5:
                 found += self._targets(target, own or chain, depth + 1)
         return found
 
@@ -282,7 +334,7 @@ class Checker(Resolver):
         for target, own in self.objects(func, chain, frozenset()):
             if id(target) in self._tree_definitions:
                 return True
-            if isinstance(target, ast.Name) and depth < 5:
+            if isinstance(target, (ast.Name, ast.Attribute)) and depth < 5:
                 if self._in_trees(target, own or chain, depth + 1):
                     return True
         return False
@@ -293,7 +345,7 @@ class Checker(Resolver):
         for target, own in self.objects(func, chain, frozenset()):
             scopes = own or chain
             bases: list[ast.expr]
-            if isinstance(target, ast.Name) and depth < 5:
+            if isinstance(target, (ast.Name, ast.Attribute)) and depth < 5:
                 bases = [target]
             elif isinstance(target, ast.ClassDef) and depth < 5:
                 bases = target.bases
@@ -311,27 +363,30 @@ class Checker(Resolver):
         """The callee's name, read through imports and local aliases, and whether
         it can be one of Core's helpers: a function, method or class the trees
         define under a helper's name is not."""
-        func = call.func
-        core = not self._in_trees(func, chain)
+        return self._spelled(call.func, chain), not self._in_trees(call.func, chain)
+
+    def _spelled(self, func: ast.expr, chain: Chain, depth: int = 0) -> str | None:
+        """The name ``func`` goes by: the attribute read, the name an import
+        gives it, or the name a local alias stands for (a helper's, when one
+        of its aliases is one), a few names deep at most."""
         if isinstance(func, ast.Attribute):
             owner = ast.unparse(func.value).split(".")
             if func.attr == "add" and owner[-2:] == ["config", "components"]:
-                return "config.components.add", core
-            return func.attr, core
+                return "config.components.add"
+            return func.attr
         if not isinstance(func, ast.Name):
-            return None, core
-        name, scopes = func.id, chain
-        for _ in range(5):  # a local alias of a helper, a few names deep at most
-            bound = self.lookup(name, scopes)
-            imported = [value for value, _ in bound if isinstance(value, Imported)]
-            if imported:
-                helper: str = imported[0].name
-                return helper, core
-            aliases = [(v, own) for v, own in bound if isinstance(v, ast.Name)]
-            if not aliases:
-                break
-            name, scopes = aliases[0][0].id, aliases[0][1] or scopes
-        return name, core
+            return None
+        bound = self.lookup(func.id, chain)
+        imported = [value for value, _ in bound if isinstance(value, Imported)]
+        if imported:
+            helper: str = imported[0].name
+            return helper
+        names = [
+            self._spelled(value, own or chain, depth + 1)
+            for value, own in bound
+            if isinstance(value, (ast.Name, ast.Attribute)) and depth < 5
+        ]
+        return next((n for n in names if n in SINKS), names[0] if names else func.id)
 
     def record(
         self,
@@ -402,7 +457,7 @@ class Checker(Resolver):
         follow: bool = True,
     ) -> None:
         """A finding for a real integration's name, a new sink for a helper's
-        parameter (when ``follow``), a site left to review for a runtime name."""
+        parameter (when ``follow``), a refused site for a name it cannot read."""
         endless = Finding(site.path, site.line, ENDLESS, via)
         for name in names:
             domain = name.partition(".")[0]
@@ -466,6 +521,12 @@ class Checker(Resolver):
         self.sink_sites.setdefault(param, set()).add(site)
 
 
+UNREAD = (
+    "gets a name the check cannot read; write the integration's name in the "
+    "call or in a constant"
+)
+
+
 def _describe(finding: Finding) -> str:
     through = f" through {finding.via}()" if finding.via else ""
     if finding.integration == ENDLESS:
@@ -477,7 +538,7 @@ def _describe(finding: Finding) -> str:
     if finding.integration == TOO_MANY:
         return (
             f"{finding.path}:{finding.line}: more than {MAX_ALTERNATIVES} possible "
-            f"names to check, or a name more than {MAX_STEPS} names from its value"
+            f"names to check, or a name more than {MAX_STEPS} steps from its value"
             f"{through}; name the integration directly"
         )
     return (
@@ -489,11 +550,6 @@ def _describe(finding: Finding) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--repo", type=Path, default=REPO)
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="list every case, allowlisted or not, and every name left to review",
-    )
     args = parser.parse_args(argv)
     problems: list[str] = []
     allowed = load_allowlist(args.repo / ALLOWLIST, problems)
@@ -505,15 +561,13 @@ def main(argv: list[str] | None = None) -> int:
     except SyntaxError as error:
         print(f"{error.filename}:{error.lineno}: {error.msg}")
         return 1
-    if args.all:
-        listed = [_describe(f) for f in findings] + [
-            f"{path}:{line}: {callee}() gets a name only known at runtime"
-            for path, line, callee in sorted(checker.unresolved)
-        ]
-        if listed:
-            print("\n".join(listed))
     problems += [
         _describe(f) for f in findings if (f.path, f.integration) not in exempt
+    ]
+    # A name the check cannot read could be any integration's: no entry allows it.
+    problems += [
+        f"{path}:{line}: {callee}() {UNREAD}"
+        for path, line, callee in sorted(checker.unresolved)
     ]
     matched = {(f.path, f.integration) for f in findings}
     problems += [

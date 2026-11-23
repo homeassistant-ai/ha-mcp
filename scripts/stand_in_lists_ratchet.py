@@ -29,18 +29,19 @@ added file and integration. That check counts as wider when the code of one
 of its scripts (``INTEGRATION_CHECK``) changed: an edit cannot be told to
 widen or narrow it, and the check itself still fails an entry that matches no
 stand-in it finds. The list is read with the check's own reader, so an entry
-the check refuses fails here too. A file taken off it is taken off every list, as below. Its entries are
-kept stand-ins with a reason, not files waiting for conversion, so an edit to
-a listed file does not take it off, and a file converted off the other lists
-may stay on it.
+the check refuses fails here too. A file taken off it is converted, as below.
+Its entries are kept stand-ins with a reason, not files waiting for
+conversion: an edit to a listed file does not take it off, and a file
+converted off the other lists may stay on it.
 
 A listed file is exempt as a whole, so a pull request that edits one could
 add a new faked test to it. A listed file the pull request changes is
 therefore converted, which takes it off every list.
 
 A file the pull request takes off any list is converted, and a converted file
-is on no list but the integration allowlist: one taken off an ast-grep rule's list but left on ``SLF001``
-still reaches into private members the conversion was meant to remove.
+is on none of them, the integration allowlist aside: one taken off an ast-grep
+rule's list but left on ``SLF001`` still reaches into private members the
+conversion was meant to remove.
 
 The script also refuses the ways around a list: narrowing a rule's ``files``,
 removing or renaming a rule (except one named in ``RETIRED_RULES`` whose list
@@ -71,7 +72,7 @@ from typing import Any, NamedTuple
 import yaml  # type: ignore[import-untyped]
 
 
-def _integration_check() -> ModuleType:
+def _allowlist_reader() -> ModuleType:
     """``scripts/stand_in_allowlist.py`` beside this script: the reader
     ``scripts/integration_stand_ins.py`` reads its allowlist with."""
     path = Path(__file__).resolve().with_name("stand_in_allowlist.py")
@@ -83,7 +84,7 @@ def _integration_check() -> ModuleType:
     return module
 
 
-_INTEGRATION = _integration_check()
+_READER = _allowlist_reader()
 
 REPO = Path(__file__).resolve().parent.parent
 GUARD = "tests/core_stand_in_guard.py"
@@ -149,7 +150,7 @@ INTEGRATION_CHECK = (
     "scripts/stand_in_resolver.py",
     "scripts/stand_in_allowlist.py",
 )
-INTEGRATION_ALLOWLIST: str = _INTEGRATION.ALLOWLIST
+INTEGRATION_ALLOWLIST: str = _READER.ALLOWLIST
 
 
 class Base:
@@ -608,7 +609,7 @@ def _allowlisted(text: str | None, problems: list[str]) -> set[tuple[str, str]] 
     check reads them."""
     if text is None:
         return None
-    return set(_INTEGRATION.parse_allowlist(text, problems))
+    return set(_READER.parse_allowlist(text, problems))
 
 
 def _code(text: str | None) -> str | None:

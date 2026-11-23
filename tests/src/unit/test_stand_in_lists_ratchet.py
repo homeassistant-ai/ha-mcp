@@ -7,6 +7,7 @@ repository: one commit is the base, the working tree is the pull request.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import subprocess
 from pathlib import Path
@@ -498,20 +499,6 @@ def test_an_exempted_test_is_reported(
             },
             id="widened-check-allowlists-an-older-file-it-now-finds",
         ),
-        pytest.param(
-            {
-                _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_CLEAN, "frontend")),
-                "scripts/stand_in_syntax.py": "FORMS = ('f-string', 'replace')\n",
-            },
-            id="check-widened-in-its-syntax-script-allowlists-an-older-file",
-        ),
-        pytest.param(
-            {
-                _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_CLEAN, "frontend")),
-                "scripts/stand_in_resolver.py": "FOLLOWS = ('alias',)\n",
-            },
-            id="check-widened-in-its-resolver-script-allowlists-an-older-file",
-        ),
         pytest.param({_ALLOWLIST_PATH: "[]\n"}, id="allowlisted-stand-in-converted"),
     ],
 )
@@ -520,6 +507,46 @@ def test_converting_a_file_or_widening_a_rule_passes(
 ) -> None:
     """The ratchet stays out of the way of the changes it is meant to allow."""
     assert ratchet.problems_since(_pull_request(tmp_path, changes), "HEAD") == []
+
+
+def test_a_code_change_in_any_script_of_the_check_widens_it(
+    ratchet: ModuleType, tmp_path: Path
+) -> None:
+    for script in ratchet.INTEGRATION_CHECK:
+        changes: dict[str, str | None] = {
+            _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_CLEAN, "frontend")),
+            script: "CHANGED = ('code',)\n",
+        }
+        folder = tmp_path / Path(script).stem
+        folder.mkdir()
+        repo = _pull_request(folder, changes)
+
+        assert ratchet.problems_since(repo, "HEAD") == [], script
+
+
+def test_the_check_is_its_script_and_every_script_that_one_imports(
+    ratchet: ModuleType,
+) -> None:
+    """A script left out of ``INTEGRATION_CHECK`` could change the check
+    without counting as a change to it."""
+    scripts = _SCRIPT.parent
+    found: set[str] = set()
+    pending = ["integration_stand_ins"]
+    while pending:
+        name = pending.pop()
+        if name in found:
+            continue
+        found.add(name)
+        tree = ast.parse((scripts / f"{name}.py").read_text(encoding="utf-8"))
+        pending += [
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            and node.module
+            and (scripts / f"{node.module}.py").is_file()
+        ]
+
+    assert set(ratchet.INTEGRATION_CHECK) == {f"scripts/{name}.py" for name in found}
 
 
 def test_a_listed_file_the_pull_request_changes_must_be_converted(

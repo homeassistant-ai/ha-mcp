@@ -196,8 +196,9 @@ def install_apps(supervisor: SupervisorApi, apps: list[dict[str, Any]]) -> None:
         supervisor.default("POST", f"/store/addons/{info['slug']}/update")
 
 
-# Where Core logs a failed hassio setup: the integration and the entity domains
-# it forwards to, a platform that fails to set up, and the config entry.
+# Where Core logs a failed setup: every integration (hassio, the entity domains
+# it forwards to, and whatever else sets up with it), a platform that fails to
+# set up, and the config entry.
 _SETUP_LOGGERS = (
     "homeassistant.components",
     "homeassistant.helpers.entity_platform",

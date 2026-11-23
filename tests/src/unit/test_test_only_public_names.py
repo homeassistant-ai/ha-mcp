@@ -241,6 +241,30 @@ def _files(tmp_path: Path, files: dict[str, str]) -> Path:
         ),
         pytest.param(
             {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "lefthook.yml": "run: lint  # probe runs here\n",
+            },
+            True,
+            id="named-only-in-a-comment-after-a-value",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": 'TARGET = "ha_mcp.a.probe"\n',
+            },
+            False,
+            id="named-by-a-dotted-path-in-a-string",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": 'ENTRY = "ha_mcp.a:probe"\n',
+            },
+            False,
+            id="named-by-a-module-and-function-in-a-string",
+        ),
+        pytest.param(
+            {
                 "src/ha_mcp/a.py": "class Tool(Base):\n    def probe(self):\n        pass\n"
             },
             False,

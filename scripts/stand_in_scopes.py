@@ -16,7 +16,10 @@ _SEQUENCES = (ast.Tuple, ast.List, ast.Set)
 Chain = list["Scope"]
 
 
-Bound = tuple[object, "Chain | None"]  # a value, and the scopes it resolves in
+# A value (an expression, a definition, or an ``Each``, ``Imported``,
+# ``ModuleRef`` or ``Names``) and the scopes it resolves in: ``None`` for the
+# scopes its name is found in.
+Bound = tuple[object, "Chain | None"]
 
 
 Scope = dict[str, list[Bound]]
@@ -59,12 +62,42 @@ def bind(scope: Scope, target: ast.expr, value: object, new: list[object]) -> No
     if isinstance(target, ast.Name):
         scope.setdefault(target.id, []).append((value, None))
         new.append(value)
+    elif isinstance(target, ast.Starred):
+        # ``*rest`` holds a list only known at runtime.
+        bind(scope, target.value, ast.Constant(None), new)
     elif isinstance(target, (ast.Tuple, ast.List)):
         values = value.elts if isinstance(value, (ast.Tuple, ast.List)) else []
-        same_shape = len(values) == len(target.elts)
+        stars = [isinstance(element, ast.Starred) for element in target.elts]
+        named = len(stars) - any(stars)
+        # An element for every target, and none a ``*`` of unknown length.
+        readable = (
+            len(values) >= named if any(stars) else len(values) == named
+        ) and not any(isinstance(element, ast.Starred) for element in values)
         for index, element in enumerate(target.elts):
-            part = values[index] if same_shape else ast.Constant(None)
+            # A target after ``*rest`` is counted from the end.
+            column = index - len(stars) if any(stars[:index]) else index
+            part = values[column] if readable else ast.Constant(None)
             bind(scope, element, part, new)
+
+
+def bind_unread(scope: Scope, node: ast.AST, new: list[object]) -> list[ast.expr]:
+    """Bind what ``with``, ``except`` and ``match`` name to a value only known
+    at runtime; the targets of a ``with``."""
+    targets: list[ast.expr] = []
+    names: list[str | None] = []
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        targets = [item.optional_vars for item in node.items if item.optional_vars]
+        for target in targets:
+            bind(scope, target, ast.Constant(None), new)
+    elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+        names = [node.name]
+    elif isinstance(node, ast.MatchMapping):
+        names = [node.rest]
+    for name in filter(None, names):
+        value = ast.Constant(None)
+        scope.setdefault(name, []).append((value, None))
+        new.append(value)
+    return targets
 
 
 def bind_loop(
@@ -90,20 +123,26 @@ def fixed_length(node: object) -> int | None:
     return None
 
 
-def bind_import(scope: Scope, node: ast.Import | ast.ImportFrom, package: str) -> None:
+def bind_import(
+    scope: Scope, node: ast.Import | ast.ImportFrom, package: str, new: list[object]
+) -> None:
+    """Bind what an import names; ``new`` collects each value bound."""
+    value: Imported | ModuleRef
     if isinstance(node, ast.Import):
         for alias in node.names:
             name = alias.name if alias.asname else alias.name.split(".")[0]
-            scope.setdefault(alias.asname or name, []).append((ModuleRef(name), None))
+            value = ModuleRef(name)
+            scope.setdefault(alias.asname or name, []).append((value, None))
+            new.append(value)
         return
     base = node.module or ""
     if node.level:
         parent = package.split(".")[: len(package.split(".")) - node.level + 1]
         base = ".".join([*parent, *([base] if base else [])])
     for alias in node.names:
-        scope.setdefault(alias.asname or alias.name, []).append(
-            (Imported(base, alias.name), None)
-        )
+        value = Imported(base, alias.name)
+        scope.setdefault(alias.asname or alias.name, []).append((value, None))
+        new.append(value)
 
 
 def _parametrized(
@@ -121,12 +160,15 @@ def _parametrized(
     rows = decorator.args[1] if len(decorator.args) > 1 else keywords.get("argvalues")
     if names is None or rows is None:
         return None
-    if isinstance(names, ast.Constant) and isinstance(names.value, str):
-        fields = [name.strip() for name in names.value.split(",")]
-    elif isinstance(names, _SEQUENCES):
-        fields = [str(e.value) for e in names.elts if isinstance(e, ast.Constant)]
+    if isinstance(names, _SEQUENCES):
+        # One argument each: a name that cannot be read leaves the rows unread.
+        read = [text_of(element) for element in names.elts]
+        fields = [name for name in read if name is not None]
+        if len(fields) != len(read):
+            return None
     elif (text := text_of(names)) is not None:
-        fields = [name.strip() for name in text.split(",")]
+        # As pytest does: a trailing comma names no argument.
+        fields = [name.strip() for name in text.split(",") if name.strip()]
     else:
         return None
     # ``indirect`` hands rows to fixtures: what the test then gets is theirs.

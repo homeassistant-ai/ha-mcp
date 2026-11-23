@@ -28,11 +28,17 @@ def load_allowlist(path: Path, problems: list[str]) -> dict[tuple[str, str], str
 
 
 def _repeated_key(
-    node: yaml.Node | None, above: frozenset[int] = frozenset()
+    node: yaml.Node | None,
+    above: frozenset[int] = frozenset(),
+    clean: set[int] | None = None,
 ) -> yaml.ScalarNode | None:
     """A key repeated in one mapping, which loading would settle silently by
     keeping the last value. A node that holds itself through an alias is not
-    a list of entries."""
+    a list of entries. ``clean`` holds the nodes already read without one: an
+    alias makes one node part of many."""
+    clean = set() if clean is None else clean
+    if id(node) in clean:
+        return None
     if id(node) in above:
         raise yaml.YAMLError("an alias makes the list hold itself")
     above |= {id(node)}
@@ -46,8 +52,11 @@ def _repeated_key(
         children = list(node.value)
     else:
         return None
-    found = (_repeated_key(child, above) for child in children)
-    return next((key for key in found if key is not None), None)
+    found = (_repeated_key(child, above, clean) for child in children)
+    repeated = next((key for key in found if key is not None), None)
+    if repeated is None:
+        clean.add(id(node))
+    return repeated
 
 
 def parse_allowlist(text: str, problems: list[str]) -> dict[tuple[str, str], str]:

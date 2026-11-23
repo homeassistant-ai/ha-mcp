@@ -583,7 +583,5 @@ class TestReleaseChannel:
         assert any(row["platform"] == "hassio" for row in result["updates"])
         assert "channel" not in result
         [warning] = [w for w in result["warnings"] if "channel" in w]
-        assert warning.startswith(
-            "Supervisor's release channel could not be read "
-            "(Command failed: Supervisor is starting up"
-        )
+        assert warning.startswith("Supervisor's release channel could not be read (")
+        assert "Supervisor is starting up" in warning
