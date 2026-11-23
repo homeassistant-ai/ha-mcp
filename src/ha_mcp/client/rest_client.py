@@ -2091,8 +2091,8 @@ class HomeAssistantClient:
         scene) names nothing. Then a bare id that is a storage key wins over
         another scene whose entity is ``scene.<id>``, else names that scene;
         ``scene.<id>`` raises SceneIdNotAnEntityError when no such entity exists
-        but key ``<id>`` holds a scene. Without a component answer the registry
-        decides; a failed registry or config read raises.
+        but key ``<id>`` holds a scene. Otherwise the registry decides; a
+        failed registry or config read raises.
         """
         # Local import: component_config_reads imports this module.
         from ..tools.component_config_reads import scenes_with_id

@@ -6,9 +6,9 @@ component:
 - Entity resolution maps storage keys to live registry entity IDs.
   ``entity_registration.resolve_entity_id_after_write`` polls after scene/script
   writes, and before a standalone activation of a stored scene key, against one
-  deadline and constructs no id when it finds none. ``_resolve_scene_entity_id``
-  uses a single retry for scene config reads and before a scene removal whose
-  resolution named no entity.
+  deadline and constructs no id when it finds none. When a scene's resolution
+  named no entity, ``_resolve_scene_entity_id`` uses a single retry for its
+  config read or before its removal.
   ``entity_registration.lookup_entity_id`` is one strict lookup, which raises
   on a failed read, for the script get, run and remove and for a standalone
   scene activation by a bare id. ``scenes_with_id`` asks ``entity_lookup``,

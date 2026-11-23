@@ -118,6 +118,28 @@ async def test_activate_unknown_scene_is_entity_not_found(
     call_service.assert_not_awaited()
 
 
+async def test_a_failed_state_read_is_no_missing_scene(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core answers 500 for ``scene.broken``'s state (an attribute it cannot
+    serialize): the activation fails with that error, not as a missing or
+    disabled scene, and calls no service."""
+    hass.states.async_set("scene.broken", "on", {"unserializable": object()})
+
+    with (
+        patch.object(
+            core_client, "call_service", wraps=core_client.call_service
+        ) as call_service,
+        pytest.raises(ToolError) as exc,
+    ):
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="scene.broken", activate=True
+        )
+
+    assert "500" in error_of(exc)["message"]
+    call_service.assert_not_awaited()
+
+
 async def test_activate_by_key_never_reaches_the_scene_named_after_it(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
@@ -430,7 +452,8 @@ async def test_write_does_not_activate_a_disabled_scene(
     hass: HomeAssistant, core_client: HomeAssistantClient, mode: str
 ) -> None:
     """``scene.film_night`` is disabled, so it has no state and Core's
-    ``scene.turn_on`` would skip it: the write stands, without an activation."""
+    ``scene.turn_on`` would skip it: the write stands, without an activation,
+    and its plain-text warning names the step to enable the scene."""
     await _scene(hass, {"input_boolean.tv": {"state": "off"}})
     er.async_get(hass).async_update_entity(
         "scene.film_night", disabled_by=er.RegistryEntryDisabler.USER
@@ -449,6 +472,7 @@ async def test_write_does_not_activate_a_disabled_scene(
     assert result["activated"] is False
     step = "ha_set_entity(entity_id='scene.film_night', enabled=True)"
     assert any("could not be activated" in w and step in w for w in result["warnings"])
+    assert not any('"error"' in w for w in result["warnings"])
     assert _tv(hass) == "off"
 
 

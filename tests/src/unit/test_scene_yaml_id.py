@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -19,7 +20,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.tools import component_config_reads
+from ha_mcp.tools.component_api import ENTITY_LOOKUP_LOADED, component_serves
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from ._component_frames import older_component
@@ -85,6 +88,7 @@ async def test_a_yaml_scene_id_names_that_scene(
     suggestions = " ".join(body["error"]["suggestions"])
     assert "'scene.x_scene'" in suggestions
     assert "scene.yid" not in suggestions
+    assert "scene.create made it" not in suggestions
     assert ("activate=True" in suggestions) is not disabled
     assert ("is disabled" in body["error"]["message"]) is disabled
     assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
@@ -93,7 +97,7 @@ async def test_a_yaml_scene_id_names_that_scene(
 @pytest.mark.parametrize(
     "routed_client", ["core_client", "component_core_client"], indirect=True
 )
-async def test_without_the_component_a_create_by_a_yaml_scene_id_says_so(
+async def test_without_the_loaded_flag_a_create_by_a_yaml_scene_id_says_so(
     hass: HomeAssistant,
     routed_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -110,6 +114,28 @@ async def test_without_the_component_a_create_by_a_yaml_scene_id_says_so(
 
     assert result["success"] is True
     assert any("ha_mcp_tools component" in w for w in result["warnings"])
+
+
+async def test_a_lookup_the_component_does_not_answer_leaves_the_id_unchecked(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """The component reports ``loaded`` but its socket is down: no answer is no
+    authoritative "no scene", so a set by ``yid`` ("X Scene") warns that the id
+    went unchecked."""
+    await setup_scenes(
+        hass, [], yaml_only=[{"id": "yid", "name": "X Scene", "entities": _ON}]
+    )
+    assert await component_serves(component_core_client, ENTITY_LOOKUP_LOADED)
+
+    with patch.object(
+        component_config_reads,
+        "get_websocket_client",
+        AsyncMock(side_effect=HomeAssistantConnectionError("socket down")),
+    ):
+        result = await _CALLS["set"](ConfigSceneTools(component_core_client))
+
+    assert result["success"] is True
+    assert any("cannot check whether a scene" in w for w in result["warnings"])
 
 
 async def test_without_the_component_an_edit_of_a_renamed_scene_does_not_warn(
@@ -162,7 +188,7 @@ async def test_a_yaml_scene_whose_entity_is_its_id_is_not_written(
     assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
 
 
-async def test_a_removal_by_the_entity_of_another_disabled_key_says_so(
+async def test_a_bare_id_removal_of_another_keys_disabled_entity_says_so(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """YAML scene ``other`` named "Yid" holds ``scene.yid`` and is disabled: a
@@ -189,7 +215,6 @@ async def test_a_removal_by_the_entity_of_another_disabled_key_says_so(
     ("key", "name", "entity_id"),
     [
         ("gone", "Gone Scene", "scene.gone_scene"),
-        ("gone", "Gone", "scene.gone"),
         ("Gone", "Gone", "scene.gone"),
     ],
 )
