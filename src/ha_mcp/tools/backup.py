@@ -79,6 +79,7 @@ def register_backup_tools(
     pair (merged into one tool, separated by ``scope``). All existing
     snapshot functionality is preserved under ``scope="snapshot"``.
     """
+    server = kwargs.get("server")
     manage_backup_description = """Manage Home Assistant backups — both full HA snapshots AND per-edit auto-backups.
 
 **Pick the scope first**, then the action. Wrong scope routes through the wrong code path:
@@ -96,6 +97,8 @@ def register_backup_tools(
 | `edits` | `diff` | Compare one auto-backup against the entity's current config. RFC 6902 JSON-Patch + add/remove/replace counts; bounded output. Read-only — fetches the live config, makes no changes. |
 | `edits` | `restore` | Re-apply one auto-backup. Existing flow helpers (template, group, utility_meter, …), config subentries and integration config entries require a fresh per-entity backup; other domains follow auto-backup settings and may proceed without one. A deleted flow helper is recreated with a new config-entry ID and its saved entity IDs are restored if unoccupied; a deleted subentry is recreated with a new subentry ID. An integration config entry's snapshot holds its metadata, its enabled state and its options, which are kept only when the ha_mcp_tools component serves the read, its `secrets.yaml` scrub ran, and no value is a redaction placeholder; a restore re-enables the entry first when needed, then puts back differing options through its options flow, and reports options it cannot put back (none kept, or empty ones) as not restored. It holds neither the entry's data nor its subentries, so a deleted integration config entry cannot be recreated. **No HA restart.** |
 | `edits` | `delete` | Delete one auto-backup by `backup_name`, or bulk-delete by filter. |
+| `settings` | `export` | Return this server's settings file (tool settings, security policy, entity visibility, feature and backup settings, File & YAML Tools permissions), the file the settings page's Export button downloads. Never carries a connection. |
+| `settings` | `import` | Apply a settings file from `export` or a settings page (`settings_file`), as the Import button does. Keeps this server's human-only settings; changing the security policy, its on/off switch, entity visibility or File & YAML Tools permissions also needs `dev_tools_security_policy_access`. May ask for a restart. |
 
 **When to use which scope:**
 - `scope="edits"`: ha-mcp's own per-entity YAML backups of automations, scripts, scenes, dashboards and helpers. Use them to undo a recent edit by the agent. Lightweight, fast, no restart.
@@ -110,6 +113,8 @@ refused if: the target is a scheduled/automatic backup; it's younger than
 `snapshot_delete_min_age_days` (default 7, 0 disables the floor); or it's the single
 newest snapshot remaining. These guarantee at least one recovery point always
 survives an agent's own mistakes.
+
+**`scope="settings"` is off until a person turns on** "Allow ha_manage_backup to export and import settings" (`enable_settings_transfer_actions`) in the Backups tab; until then both actions return that error.
 
 **Human-managed backup controls:** `enable_snapshot_actions=false` (ENABLE_SNAPSHOT_ACTIONS) blocks every snapshot action, including listing. `backup_read_only=true` (BACKUP_READ_ONLY) allows edits list/view/diff and snapshot list when snapshots are enabled; it blocks explicit create/restore/delete in both scopes and snapshot configure. Automatic pre-edit capture still follows `enable_auto_backup`. A human must change these controls in the Backups tab, app configuration, or environment; developer tools cannot change them. Global and connection Read Only Mode still restrict writes.
 
@@ -133,6 +138,7 @@ survives an agent's own mistakes.
 - Restore an auto-backup: `ha_manage_backup(scope="edits", action="restore", backup_name="automation.welcome_home.20260521_153000.yaml")`
 - Delete one auto-backup: `ha_manage_backup(scope="edits", action="delete", backup_name="...")`
 - Bulk-delete old auto-backups: `ha_manage_backup(scope="edits", action="delete", older_than_days=30)`
+- Move settings to another server: `ha_manage_backup(scope="settings", action="export")`, then on the other server `ha_manage_backup(scope="settings", action="import", settings_file=<the export's settings_file>)`
 """
 
     @mcp.tool(
@@ -145,13 +151,24 @@ survives an agent's own mistakes.
     @log_tool_usage
     async def ha_manage_backup(
         scope: Annotated[
-            Literal["snapshot", "edits"],
+            Literal["snapshot", "edits", "settings"],
             Field(
-                description="'snapshot' for full HA tarballs; 'edits' for per-entity auto-backups."
+                description="'snapshot' for full HA tarballs; 'edits' for per-entity "
+                "auto-backups; 'settings' for this server's settings file."
             ),
         ],
         action: Annotated[
-            Literal["create", "restore", "list", "view", "diff", "delete", "configure"],
+            Literal[
+                "create",
+                "restore",
+                "list",
+                "view",
+                "diff",
+                "delete",
+                "configure",
+                "export",
+                "import",
+            ],
             Field(
                 description="Operation to perform. Valid (scope, action) combinations are listed in the tool description."
             ),
@@ -307,6 +324,15 @@ survives an agent's own mistakes.
                 description="(edits.delete) Bulk-delete auto-backups older than this many days.",
             ),
         ] = None,
+        settings_file: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description="(settings.import) A settings.export result's settings_file, "
+                "or a file downloaded from a settings page.",
+            ),
+        ] = None,
         limit: Annotated[
             int,
             Field(
@@ -322,6 +348,13 @@ survives an agent's own mistakes.
         _gate_combo(scope, action)
         settings = get_global_settings()
         require_backup_access(settings, scope, action)
+
+        if scope == "settings":
+            from .dev_settings_files import export_settings_file, import_settings_file
+
+            if action == "export":
+                return await export_settings_file(server)
+            return await import_settings_file(server, settings_file)
 
         if scope == "snapshot":
             return await _dispatch_snapshot_action(

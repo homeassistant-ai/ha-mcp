@@ -132,6 +132,16 @@ configuration:
     name: 將備份管理設為唯讀
     description: 允許 AI 助理列出、檢視及比對（diff）編輯備份，並在啟用快照動作時列出完整的 HA 快照。封鎖手動建立備份、還原（包含編輯還原）與刪除，包含
       ha_call_service 中的對應備份服務和指令。自動編輯前備份將繼續運作。使用者在網頁設定介面中進行的備份動作仍然可用。
+  enable_settings_transfer_actions:
+    name: Allow ha_manage_backup to export and import settings
+    description: Allow AI assistants to download this server's settings file and import
+      one through ha_manage_backup, as the Export and Import buttons on the Server
+      Settings tab do. An import keeps the human-only settings, and changing the security
+      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
+      security policy access. An import can also turn on developer mode, tools and
+      features, and turn off protections such as secret redaction, SSL verification
+      and the IPv6 allowlist, as the file says, so check your settings after an AI
+      assistant imports one.
   enable_snapshot_delete:
     name: 允許刪除快照
     description: 允許 ha_manage_backup 刪除完整的 Home Assistant 快照。快照可能是發生錯誤變更後的最後復原手段，因此必須由使用者手動開啟此功能。排程備份、最新快照以及小於最低保留期限的快照將受到保護。

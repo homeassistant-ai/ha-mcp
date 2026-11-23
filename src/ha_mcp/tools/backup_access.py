@@ -1,6 +1,7 @@
 """Argument validation and access checks for explicit backup tool actions."""
 
 import json
+import os
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -9,6 +10,9 @@ from ..config import Settings, get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
 from .util_helpers import normalized_path, supervisor_path
+
+_TRANSFER_FIELD = "enable_settings_transfer_actions"
+_TRANSFER_ENV = "ENABLE_SETTINGS_TRANSFER_ACTIONS"
 
 _VALID_COMBOS: set[tuple[str, str]] = {
     ("snapshot", "create"),
@@ -22,6 +26,8 @@ _VALID_COMBOS: set[tuple[str, str]] = {
     ("edits", "diff"),
     ("edits", "restore"),
     ("edits", "delete"),
+    ("settings", "export"),
+    ("settings", "import"),
 }
 
 
@@ -39,6 +45,7 @@ def gate_backup_combo(scope: str, action: str) -> None:
                 + ", ".join(sorted(f"({s},{a})" for s, a in _VALID_COMBOS)),
                 "scope='snapshot' is for full HA tarball backups (heavy, restart on restore)",
                 "scope='edits' is for per-entity auto-backups produced by write tools (lightweight)",
+                "scope='settings' exports or imports this server's settings file",
             ],
         )
     )
@@ -76,6 +83,26 @@ def require_backup_access(settings: Settings, scope: str, action: str) -> None:
     _enforce_backup_controls(settings, scope, action, read_operation)
 
 
+def _settings_transfer_enabled(settings: Settings) -> bool:
+    """The toggle's stored value, read on each call.
+
+    The stdio sidecar's settings page writes the override file from another
+    process, so this process's cached settings would miss a change; the app
+    and environment variables keep their loaded value.
+    """
+    from .._version import is_running_in_addon
+    from ..config_backup import (
+        _coerce_backup_override_value,
+        _read_backup_override_file,
+    )
+
+    if is_running_in_addon() or os.environ.get(_TRANSFER_ENV) is not None:
+        return bool(settings.enable_settings_transfer_actions)
+    raw = _read_backup_override_file().get(_TRANSFER_FIELD, False)
+    ok, value = _coerce_backup_override_value(_TRANSFER_FIELD, bool, raw)
+    return ok and value is True
+
+
 def _enforce_backup_controls(
     settings: Settings, scope: str, action: str, read_operation: bool
 ) -> None:
@@ -101,13 +128,28 @@ def _enforce_backup_controls(
                 ],
             )
         )
+    if scope == "settings" and not _settings_transfer_enabled(settings):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONFIG_VALIDATION_FAILED,
+                "Settings export and import through ha_manage_backup are off "
+                "(enable_settings_transfer_actions=false).",
+                context={"scope": scope, "action": action},
+                suggestions=[
+                    "Ask the user to turn on 'Allow ha_manage_backup to export and "
+                    "import settings' in the web settings UI's Backups tab, or set "
+                    "ENABLE_SETTINGS_TRANSFER_ACTIONS=true. Tools cannot change it.",
+                ],
+            )
+        )
     if settings.backup_read_only is True and not read_operation:
         raise_tool_error(
             create_error_response(
                 ErrorCode.READ_ONLY_MODE,
                 "Backup Read Only is enabled (backup_read_only=true). Explicit "
-                "backup creation, restore, and deletion are blocked in both scopes, "
-                "and so is changing the backup-before-update settings. "
+                "backup creation, restore, and deletion are blocked in the edits "
+                "and snapshot scopes, as are a settings import and changing the "
+                "backup-before-update settings. "
                 "Automatic pre-edit capture still follows enable_auto_backup.",
                 context={"scope": scope, "action": action, "backup_read_only": True},
                 suggestions=[

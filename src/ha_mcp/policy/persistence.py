@@ -132,13 +132,29 @@ def _migrate_policy_any_semantics_locked(data_dir: Path) -> bool:
             exc_info=True,
         )
         return False
+    migrated, split = unpack_legacy_policy(policy)
+    save_policy(data_dir, migrated)
     if policy.rule_effect == "allow":
-        # An allow list postdates #1993, so its rules were never packed by the
-        # old editor; splitting one would turn an AND into an OR and widen
-        # what it approves.
-        save_policy(data_dir, policy)
         logger.info("Stamped schema_version on %s (allow list, rules untouched).", path)
         return True
+    logger.info(
+        "Migrated %s to ANY-match condition semantics: split %d multi-condition "
+        "rule(s) into one rule per condition (%d -> %d rules) and stamped "
+        "schema_version. Conditions that previously ALL had to match now EACH "
+        "gate on their own.",
+        path,
+        split,
+        len(policy.rules),
+        len(migrated.rules),
+    )
+    return True
+
+
+def unpack_legacy_policy(policy: Policy) -> tuple[Policy, int]:
+    """Resolve an unstamped document as startup would, without touching disk."""
+    if policy.rule_effect == "allow":
+        # Allow lists postdate the old editor; splitting one would widen it.
+        return policy, 0
     new_rules: list[Rule] = []
     split = 0
     for rule in policy.rules:
@@ -154,18 +170,7 @@ def _migrate_policy_any_semantics_locked(data_dir: Path) -> bool:
             )
         else:
             new_rules.append(rule)
-    save_policy(data_dir, policy.model_copy(update={"rules": new_rules}))
-    logger.info(
-        "Migrated %s to ANY-match condition semantics: split %d multi-condition "
-        "rule(s) into one rule per condition (%d -> %d rules) and stamped "
-        "schema_version. Conditions that previously ALL had to match now EACH "
-        "gate on their own.",
-        path,
-        split,
-        len(policy.rules),
-        len(new_rules),
-    )
-    return True
+    return policy.model_copy(update={"rules": new_rules}), split
 
 
 def save_policy(data_dir: Path, policy: Policy) -> None:

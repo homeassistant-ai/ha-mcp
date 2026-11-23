@@ -1275,12 +1275,12 @@
   {
     "name": "ha_dev_manage_settings",
     "title": "Manage Server Settings (dev)",
-    "description": "Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).\n\nDrives everything the web settings UI can change: the Server\nSettings matrix, the Tools tab, the Tool Security Policies editor,\nand agent-editable backup config. Snapshot Actions and Backup Read\nOnly are human-only controls. Use ha_dev_manage_server for\nthe live approval queue and to restart.\n\nWhen NOT to use: for HA entity/automation configuration use the\nha_config_* tools.\n\nCaveats: enable/disable/pin and most server settings take effect\nonly after a restart (ha_dev_manage_server action=\"restart\");\nLLM-API exposure, security gates, and policy edits apply live.\nEnv-pinned settings/tools are read-only until the env var is unset.\nThese actions can flip security-sensitive state — treat with the\nsame care as editing the web UI. The policy-override surfaces\n(set_policy, set_tool with gated=, and set/reset of\nenable_tool_security_policies) additionally require the\n'dev_tools_security_policy_access' setting, which is off by\ndefault; reads are always available. That setting itself is never\nwritable by these tools — change it in the web settings UI or via\nHAMCP_DEV_SECURITY_POLICY_ACCESS.\n\nEXAMPLES:\nha_dev_manage_settings(\"list_tools\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_write_file\", state=\"disabled\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_call_service\", gated=True)\nha_dev_manage_settings(\"get_policy\")\nha_dev_manage_settings(\"set_backup_config\", backup={\"enable_auto_backup\": False})",
+    "description": "Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).\n\nDrives everything the web settings UI can change: the Server\nSettings matrix, the Tools tab, the Tool Security Policies editor,\nand agent-editable backup config. Snapshot Actions and Backup Read\nOnly are human-only controls. Use ha_dev_manage_server for\nthe live approval queue and to restart.\n\nWhen NOT to use: for HA entity/automation configuration use the\nha_config_* tools.\n\nexport_settings / import_settings move tool states, security\npolicies, entity visibility, feature, server and backup settings, and\nthe File & YAML Tools permissions between HA-MCP installations; the\nHA-MCP Server entry's connection moves only through its sidebar panel.\n\nCaveats: enable/disable/pin and most server settings take effect\nonly after a restart (ha_dev_manage_server action=\"restart\");\nLLM-API exposure, security gates, and policy edits apply live.\nEnv-pinned settings/tools are read-only until the env var is unset.\nThese actions can flip security-sensitive state — treat with the\nsame care as editing the web UI. The policy-override surfaces\n(set_policy, set_tool with gated=, and set/reset of\nenable_tool_security_policies) additionally require the\n'dev_tools_security_policy_access' setting, which is off by\ndefault; reads are always available. That setting itself is never\nwritable by these tools — change it in the web settings UI or via\nHAMCP_DEV_SECURITY_POLICY_ACCESS.\n\nEXAMPLES:\nha_dev_manage_settings(\"list_tools\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_write_file\", state=\"disabled\")\nha_dev_manage_settings(\"set_tool\", tool=\"ha_call_service\", gated=True)\nha_dev_manage_settings(\"get_policy\")\nha_dev_manage_settings(\"set_backup_config\", backup={\"enable_auto_backup\": False})\nha_dev_manage_settings(\"export_settings\")  # then, on the other server:\nha_dev_manage_settings(\"import_settings\", settings_file=<its settings_file>)",
     "inputSchema": {
       "properties": {
         "action": {
-          "type": "Literal['list', 'set', 'reset', 'list_tools', 'set_tool', 'get_policy', 'set_policy', 'get_backup_config', 'set_backup_config']",
-          "description": "Server-settings matrix: list / set / reset. Tools tab: list_tools / set_tool (enable-disable-pin, LLM-API, security gate). Security policies: get_policy / set_policy. Auto-backup config: get_backup_config / set_backup_config."
+          "type": "Literal['list', 'set', 'reset', 'list_tools', 'set_tool', 'get_policy', 'set_policy', 'get_backup_config', 'set_backup_config', 'export_settings', 'import_settings']",
+          "description": "Server-settings matrix: list / set / reset. Tools tab: list_tools / set_tool (enable-disable-pin, LLM-API, security gate). Security policies: get_policy / set_policy. Auto-backup config: get_backup_config / set_backup_config. The settings page's whole-file transfer: export_settings / import_settings."
         },
         "setting": {
           "type": "str | None",
@@ -1326,6 +1326,11 @@
           "type": "dict[str, Any] | None",
           "default": null,
           "description": "set_backup_config: {field: value} of auto-backup settings to change (see get_backup_config for field names)"
+        },
+        "settings_file": {
+          "type": "dict[str, Any] | None",
+          "default": null,
+          "description": "import_settings: the settings_file from another server's export_settings, or a settings page's downloaded JSON"
         }
       },
       "required": [
@@ -4150,11 +4155,11 @@
     "inputSchema": {
       "properties": {
         "scope": {
-          "type": "Literal['snapshot', 'edits']",
-          "description": "'snapshot' for full HA tarballs; 'edits' for per-entity auto-backups."
+          "type": "Literal['snapshot', 'edits', 'settings']",
+          "description": "'snapshot' for full HA tarballs; 'edits' for per-entity auto-backups; 'settings' for this server's settings file."
         },
         "action": {
-          "type": "Literal['create', 'restore', 'list', 'view', 'diff', 'delete', 'configure']",
+          "type": "Literal['create', 'restore', 'list', 'view', 'diff', 'delete', 'configure', 'export', 'import']",
           "description": "Operation to perform. Valid (scope, action) combinations are listed in the tool description."
         },
         "name": {
@@ -4244,6 +4249,11 @@
             "ge": 0
           },
           "description": "(edits.delete) Bulk-delete auto-backups older than this many days."
+        },
+        "settings_file": {
+          "type": "dict[str, Any] | None",
+          "default": null,
+          "description": "(settings.import) A settings.export result's settings_file, or a file downloaded from a settings page."
         },
         "limit": {
           "type": "int",

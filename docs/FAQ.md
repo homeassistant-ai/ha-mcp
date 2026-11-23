@@ -771,8 +771,86 @@ Two things to know in the Marketplace:
   GitHub connection and refreshes every six hours.
 - The store lists HA-MCP twice, once per repository, and refuses to install the
   second listing over the first ("The ha_mcp_tools directory belongs to …").
-  That refusal is expected, because one listing owns an integration. Keep the
-  one you have.
+  That refusal is expected, because one listing owns an integration.
+
+To move to the catalog listing, use versions on both sides that offer settings
+transfer in the **HA-MCP** sidebar panel.
+
+1. As a Home Assistant administrator, open **HA-MCP → Server Settings** and
+   select **Download settings JSON**.
+   Keep the downloaded JSON private. It includes the credentials used for
+   the server's connect URL.
+2. Open **Settings → Devices & services** and delete each HA-MCP integration
+   entry, including **HA-MCP Server** and **File & YAML Tools** if present.
+3. In Marketplace, uninstall the `homeassistant-ai/ha-mcp-integration`
+   mirror. Install the catalog listing, `homeassistant-ai/ha-mcp`, and restart
+   Home Assistant when prompted.
+4. Add the **HA-MCP Server** integration entry. In its sidebar panel, open
+   **Server Settings**, choose the JSON under **Settings file to import**, and
+   select **Import settings**. If the panel asks you to restart Home Assistant,
+   do so to apply the restored settings. Reopen the panel and try an existing
+   client with its saved URL.
+
+The backup includes tool states, security policies, entity visibility, server
+and feature settings, automatic backup settings, and the File & YAML Tools
+allowed directories and extra YAML keys. Backup snapshots stay on the source
+instance, and the destination keeps its own **Access** switch.
+Import recreates an enabled **File & YAML Tools** entry when needed. If the
+source had that entry disabled, add the **File & YAML Tools** entry on the
+destination and disable it before importing.
+If the source had no tools entry, import into a destination with only the server
+entry.
+The backup never carries Home Assistant credentials: on a different Home
+Assistant instance, setting up the **HA-MCP Server** entry asks for that
+instance's administrator token or login. A change of hostname or cloudhook can
+change the public URL.
+If you use PIN-based approval events, set a decision PIN on the destination
+before importing their policy.
+
+### Can I move my settings between the app, Docker, standalone and the in-process server?
+
+Yes. Every HA-MCP settings page has **Server Settings → Download settings
+JSON** and **Import settings**: the **HA-MCP** sidebar panel of the in-process
+server, the app's (add-on's) page, and the standalone or Docker server's
+`/settings` page. A file from any of them imports into any other, for example
+from a standalone server into the in-process server.
+
+Tool states, security policies, entity visibility, feature, server and
+automatic backup settings saved on the settings page move with the file. A value
+set by an environment variable (for example `READ_ONLY_MODE` on a Docker
+server) is not in the file: set it on the destination and check it after the
+import. In the app, the settings it keeps as app options are read from and
+written to its Configuration.
+
+An export from the in-process server records its File & YAML Tools entry. Its
+import into another in-process server recreates a missing enabled entry,
+restores the permissions into a disabled one when the source's was disabled
+(add and disable it on the destination first), and stops if the destination
+has an entry the source did not. The app, Docker and standalone servers read
+and write the permissions only through an enabled entry: their file carries
+none when the source's entry was disabled or missing, and then leaves the
+destination's entry as it is. In OAuth mode their settings page cannot reach
+the permissions at all and says so; set them in **Configure** for File & YAML
+Tools.
+
+The connection (webhook ID, secret path, OAuth credentials) belongs to the
+in-process server's entry: only an export from that entry carries it, and only
+that entry imports it. Any other server keeps its own connection and says so
+after the import. Restart HA-MCP when the import asks for it.
+
+To let your AI assistant move settings for you, turn on **Allow ha_manage_backup
+to export and import settings** in the **Backups** tab of each server's settings
+page. The assistant can then export from one server with
+`ha_manage_backup(scope="settings", action="export")` and import the result on
+another with `ha_manage_backup(scope="settings", action="import",
+settings_file=...)`. Read Only Mode and Backup Read Only each block the import;
+the export stays available. It never moves the connection, keeps the
+destination's human-only settings, and changing security policies, entity
+visibility or File & YAML Tools permissions also needs **Dev tools security
+policy access**. An import can also turn on developer mode, tools and features,
+and turn off protections such as secret redaction, SSL verification and the IPv6
+allowlist, as the file says, so check your settings after the assistant imports
+one.
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 

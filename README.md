@@ -57,7 +57,7 @@ The recommended way to run ha-mcp is the **HA-MCP integration**. It installs int
 
 - **Replaces other install methods:** the in-process server is a complete, standalone ha-mcp install — it takes the place of the app (add-on), Docker, and uvx/PyPI (stdio) methods. Run only one; do not run the in-process server alongside another install.
 - **Local only?** Leave remote access disabled at setup (or turn off **Remote access via webhook** in the entry options) — no webhook is registered at all, while the direct port and sidebar panel keep working.
-- **Settings panel:** while the server runs, an admin-only **HA-MCP** panel appears in the Home Assistant sidebar for managing tools, feature flags, backups, and themes.
+- **Settings panel:** while the server runs, an admin-only **HA-MCP** panel appears in the Home Assistant sidebar for managing tools, feature flags, backups, and themes. You can export and import your settings there to [move between the mirror and catalog installations](docs/FAQ.md#do-i-need-to-move-from-homeassistant-aiha-mcp-integration-to-the-catalog-listing) or [from the app, Docker or a standalone server](docs/FAQ.md#can-i-move-my-settings-between-the-app-docker-standalone-and-the-in-process-server).
 - **Optional authentication:** set **Authentication mode** to `ha_auth` to require a Home Assistant account sign-in instead of using the secret URL as the credential.
 - **Manual install (no Marketplace):** copy `custom_components/ha_mcp_tools/` from this repository into your Home Assistant `config/custom_components/` directory, then restart and add the integration as above.
 
