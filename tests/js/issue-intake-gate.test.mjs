@@ -733,7 +733,7 @@ test("a report accepted while the sweep closes the issue keeps it open", async (
 test("withdrawing the same request before the sweep's close undoes only that close", async () => {
   for (const [scenario, expected] of [
     ["withdrawn first", "open"], ["withdrawn afterwards", "closed"],
-    ["human closure", "closed"], ["new request", "closed"],
+    ["human closure", "closed"], ["new request", "open"],
   ]) {
     const api = new FakeGitHub(requireReport());
     await gate(api, "test/repo", 1, bot, { action: "labeled" }, true);
@@ -743,7 +743,7 @@ test("withdrawing the same request before the sweep's close undoes only that clo
         const at = "2026-09-23T00:00:00Z";
         api.data.issue.labels = [];
         api.data.events.push({
-          id: scenario === "withdrawn afterwards" ? 52 : 49, event: "unlabeled",
+          id: scenario === "withdrawn afterwards" ? 52 : 48, event: "unlabeled",
           label: { name: requiredLabel }, actor: user("maintainer"), created_at: at,
         }, {
           id: 50, event: "closed", created_at: at,
@@ -752,7 +752,7 @@ test("withdrawing the same request before the sweep's close undoes only that clo
         if (scenario === "new request") {
           api.data.issue.labels.push({ name: requiredLabel });
           api.data.events.push({
-            id: 51, event: "labeled", label: { name: requiredLabel },
+            id: 49, event: "labeled", label: { name: requiredLabel },
             actor: user("maintainer"), created_at: at,
           });
         }
@@ -762,6 +762,16 @@ test("withdrawing the same request before the sweep's close undoes only that clo
     };
     await expire(api, "test/repo", bot, Date.parse(overrideAt) + 24 * hour, true);
     assert.equal(api.data.issue.state, expected, scenario);
-    if (expected === "open") assert.match(api.writes.at(-1).data.body, /withdrawn/);
+    if (scenario === "withdrawn first") assert.match(api.writes.at(-1).data.body, /withdrawn/);
+    if (scenario === "new request") {
+      assert.deepEqual(api.data.issue.labels, [{ name: requiredLabel }]);
+      const notice = api.data.comments.at(-1);
+      assert.match(notice.body, /required-report 49 require/);
+      assert.match(notice.body, /@reporter.*24 hours/);
+      notice.created_at = "2026-09-23T00:00:00Z";
+      const beforeDeadline = Date.parse(notice.created_at) + 24 * hour - 1;
+      assert.deepEqual((await expire(api, "test/repo", bot, beforeDeadline, false)).acted, []);
+      assert.deepEqual((await expire(api, "test/repo", bot, beforeDeadline + 1, false)).acted, ["1:close"]);
+    }
   }
 });

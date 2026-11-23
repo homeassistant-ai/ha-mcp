@@ -398,26 +398,26 @@ export async function gate(api, repository, number, bot, event, write) {
 // between the sweep's read and its close. Recheck that same application.
 async function reconcileRequiredClose(api, repository, number, bot, applied) {
   const fresh = await gateSnapshot(api, repository, number);
-  if (fresh.issue.state !== "closed" || latestApplication(fresh.events)?.id !== applied.id)
-    return false;
+  if (fresh.issue.state !== "closed") return false;
   const closed = latestEvent(fresh.events, (e) => e.event === "closed");
   if (closed?.actor?.login !== bot) return false;
-  if (reporterTexts(fresh).some(hasReport)) {
+  if (latestApplication(fresh.events)?.id === applied.id && reporterTexts(fresh).some(hasReport)) {
     await applyGate(api, repository, number, bot, fresh, "reopen", applied);
     return true;
   }
-  const removed = latestEvent(fresh.events, (e) => e.event === "unlabeled" && e.label?.name === requiredLabel);
-  // Use timeline order (including same-second event IDs). Removing a label
-  // from an already closed issue should leave the closure in place.
-  if (
-    !removed || requiredApplication(fresh) ||
-    compareEvents(applied, removed) >= 0 || compareEvents(removed, closed) >= 0
-  )
-    return false;
+  // A withdrawal before this close invalidates it even if another request
+  // has since been applied. A withdrawal after a valid close leaves it closed.
+  const withdrawn = fresh.events.some((e) =>
+    e.event === "unlabeled" && e.label?.name === requiredLabel &&
+    compareEvents(applied, e) < 0 && compareEvents(e, closed) < 0
+  );
+  if (!withdrawn) return false;
   await retrying(api, () => api.request(`repos/${repository}/issues/${number}`, {
     method: "PATCH", data: { state: "open" },
   }));
-  await applyGate(api, repository, number, bot, fresh, "withdraw", null);
+  // Use live labels and notices after reopening. The normal event handler
+  // acknowledges a withdrawal or starts the replacement request exactly once.
+  await gate(api, repository, number, bot, { action: "unlabeled", label: requiredLabel }, true);
   return true;
 }
 
