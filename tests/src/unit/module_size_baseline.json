@@ -1,5 +1,5 @@
 {
-  "custom_components/ha_mcp_tools/__init__.py": 3510,
+  "custom_components/ha_mcp_tools/__init__.py": 3472,
   "custom_components/ha_mcp_tools/embedded_server.py": 2378,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py": 1146,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py": 1269,
