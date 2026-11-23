@@ -45,6 +45,7 @@ from .entity_bulk_update import bulk_update_entities
 from .entity_expose_batch import (
     changed_entity_ids,
     expose_update,
+    expose_write,
     refresh_warning,
     reject_unknown_assistants,
 )
@@ -655,20 +656,14 @@ class EntityTools:
             if not assistants:
                 continue
 
-            expose_msg: dict[str, Any] = {
-                "type": "homeassistant/expose_entity",
-                "assistants": assistants,
-                "entity_ids": [target],
-                "should_expose": should_expose,
-            }
             logger.info(
                 f"{'Exposing' if should_expose else 'Hiding'} {target} "
                 f"{'to' if should_expose else 'from'} {assistants}"
             )
-            expose_result = await self._client.send_websocket_message(expose_msg)
-
-            if not expose_result.get("success"):
-                error_msg = _extract_ws_error(expose_result)
+            error_msg, expose_result = await expose_write(
+                self._client, assistants, [target], should_expose, _extract_ws_error
+            )
+            if error_msg is not None:
                 failed = dict.fromkeys(assistants, should_expose)
                 context = self._build_expose_failure_context(
                     entity_id,
@@ -682,7 +677,7 @@ class EntityTools:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
-                        f"Exposure failed: {error_msg}",
+                        error_msg,
                         context=context,
                     )
                 )
@@ -938,7 +933,7 @@ class EntityTools:
             )
 
         # Phase 7: Build response
-        return self._build_entity_response(
+        response = self._build_entity_response(
             entity_id,
             original_entity_id,
             entity_entry,
@@ -949,6 +944,9 @@ class EntityTools:
             [w for w in (device_name_warning, exposure_warning) if w],
             core_result,
         )
+        if not include_entity_entry:
+            del response["entity_entry"]
+        return response
 
     async def _fetch_entity(self, eid: str) -> dict[str, Any]:
         """Fetch a single entity from the registry."""
@@ -1354,7 +1352,7 @@ class EntityTools:
 
             # Single entity case
             if not is_bulk:
-                result = await self._update_single_entity(
+                return await self._update_single_entity(
                     entity_ids[0],
                     area_id,
                     name,
@@ -1374,9 +1372,6 @@ class EntityTools:
                     use_device_name=use_device_name,
                     include_entity_entry=include_entity_entry,
                 )
-                if not include_entity_entry:
-                    del result["entity_entry"]
-                return result
 
             # Bulk case
             registry_work = any(

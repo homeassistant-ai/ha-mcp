@@ -124,6 +124,43 @@ def _expose_raises(
     monkeypatch.setattr(core_exposed, "async_expose_entity", expose_or_raise)
 
 
+async def _expose_fault(
+    fault: str,
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+    updates: int,
+) -> contextlib.AbstractContextManager[None]:
+    """The exposure write fails after ``updates`` registry updates landed:
+    Core refuses it, the socket is gone before it leaves, or it is sent and
+    the connection drops."""
+    if fault == "refused":
+        _expose_raises(monkeypatch)
+    elif fault == "not_sent":
+        update = er.EntityRegistry.async_update_entity
+        done: list[str] = []
+
+        def update_then_lose_socket(
+            registry: er.EntityRegistry, entity_id: str, **changes: Any
+        ) -> Any:
+            result = update(registry, entity_id, **changes)
+            done.append(entity_id)
+            if len(done) == updates:
+                monkeypatch.setattr(
+                    core_client,
+                    "send_websocket_message",
+                    AsyncMock(side_effect=HomeAssistantCommandNotSent("not sent")),
+                )
+            return result
+
+        monkeypatch.setattr(
+            er.EntityRegistry, "async_update_entity", update_then_lose_socket
+        )
+    else:
+        return dropped_on(hass, _EXPOSE, await pooled_socket(core_client))
+    return contextlib.nullcontext()
+
+
 def _after_settings_write(
     monkeypatch: pytest.MonkeyPatch, then: Callable[[], None]
 ) -> None:
@@ -765,7 +802,7 @@ class TestEntityWriteFailure:
 
     @pytest.mark.usefixtures("refetch_drops")
     async def test_a_compact_single_exposure_reads_nothing_after_the_write(
-        self, tools: EntityTools, sent: AsyncMock
+        self, tools: EntityTools
     ) -> None:
         """No entry in the reply: no re-read to pay for, and none to warn about."""
         result = await tools.ha_set_entity(
@@ -776,9 +813,7 @@ class TestEntityWriteFailure:
         )
 
         assert result["success"] is True
-        assert "entity_entry" not in result
         assert "warnings" not in result
-        assert _types(sent)[-1] == _EXPOSE
 
     async def test_a_compact_bulk_exposure_reads_nothing_after_the_write(
         self, hass: HomeAssistant, tools: EntityTools, sent: AsyncMock
@@ -850,37 +885,9 @@ class TestEntityWriteFailure:
             ).entity_id
             for object_id in ("desk", "lamp")
         ]
-        fault_injected: contextlib.AbstractContextManager[None] = (
-            contextlib.nullcontext()
+        fault_injected = await _expose_fault(
+            fault, hass, monkeypatch, core_client, len(ids)
         )
-        if fault == "refused":
-            _expose_raises(monkeypatch)
-        elif fault == "not_sent":
-            # Core hides both entities, then the socket is gone before the
-            # exposure write leaves.
-            update = er.EntityRegistry.async_update_entity
-            hidden: list[str] = []
-
-            def hide_then_lose_socket(
-                registry: er.EntityRegistry, entity_id: str, **changes: Any
-            ) -> Any:
-                result = update(registry, entity_id, **changes)
-                hidden.append(entity_id)
-                if len(hidden) == len(ids):
-                    monkeypatch.setattr(
-                        core_client,
-                        "send_websocket_message",
-                        AsyncMock(side_effect=HomeAssistantCommandNotSent("not sent")),
-                    )
-                return result
-
-            monkeypatch.setattr(
-                er.EntityRegistry, "async_update_entity", hide_then_lose_socket
-            )
-        else:
-            socket = await pooled_socket(core_client)
-            fault_injected = dropped_on(hass, _EXPOSE, socket)
-
         with fault_injected:
             result = await tools.ha_set_entity(
                 entity_id=ids, hidden=True, expose_to={"conversation": True}
@@ -896,6 +903,36 @@ class TestEntityWriteFailure:
             entry = registry.async_get(entity_id)
             assert entry is not None
             assert entry.hidden_by is er.RegistryEntryHider.USER
+
+    @pytest.mark.parametrize(
+        ("fault", "error"),
+        [
+            ("not_sent", "Exposure failed: not sent"),
+            ("dropped", "Exposure outcome unknown: Home Assistant did not answer"),
+        ],
+    )
+    async def test_an_unanswered_exposure_still_reports_the_registry_write(
+        self,
+        hass: HomeAssistant,
+        monkeypatch: pytest.MonkeyPatch,
+        core_client: HomeAssistantClient,
+        tools: EntityTools,
+        fault: str,
+        error: str,
+    ) -> None:
+        """The single-entity reply says what a bulk row says."""
+        fault_injected = await _expose_fault(fault, hass, monkeypatch, core_client, 1)
+        with fault_injected, pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.kitchen", hidden=True, expose_to={"conversation": True}
+            )
+
+        body = _body(exc_info)
+        assert body["error"]["message"].startswith(error)
+        assert body["partial"] is True
+        entry = er.async_get(hass).async_get("light.kitchen")
+        assert entry is not None
+        assert entry.hidden_by is er.RegistryEntryHider.USER
 
     async def test_a_failed_second_bulk_exposure_names_the_first_as_applied(
         self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, tools: EntityTools

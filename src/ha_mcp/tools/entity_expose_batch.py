@@ -49,6 +49,40 @@ async def reject_unknown_assistants(
         await read_expose_new(client, assistant)
 
 
+async def expose_write(
+    client: Any,
+    assistants: list[str],
+    entity_ids: list[str],
+    should_expose: bool,
+    extract_error: Callable[[dict[str, Any]], str],
+) -> tuple[str | None, dict[str, Any]]:
+    """Send one ``homeassistant/expose_entity`` write: (error, Core's reply).
+
+    error is None on success. A refusal, or a write that never left, failed
+    for sure; one sent without an answer may have been applied, and says so.
+    """
+    try:
+        result = await client.send_websocket_message(
+            {
+                "type": "homeassistant/expose_entity",
+                "assistants": assistants,
+                "entity_ids": entity_ids,
+                "should_expose": should_expose,
+            }
+        )
+    except HomeAssistantError as exc:
+        detail = extract_error({"error": str(exc)})
+        if isinstance(exc, HomeAssistantCommandNotSent):
+            return f"Exposure failed: {detail}", {}
+        return (
+            f"Exposure outcome unknown: Home Assistant did not answer ({detail}); "
+            "the exposure may have been applied, and sending it again is safe"
+        ), {}
+    if result.get("success"):
+        return None, result
+    return f"Exposure failed: {extract_error(result)}", result
+
+
 async def apply_bulk_expose(
     client: Any,
     entity_ids: list[str],
@@ -78,43 +112,22 @@ async def apply_bulk_expose(
             f"{'Exposing' if should_expose else 'Hiding'} {len(entity_ids)} "
             f"entities {'to' if should_expose else 'from'} {assistants}"
         )
-        error: str | None
-        try:
-            result = await client.send_websocket_message(
-                {
-                    "type": "homeassistant/expose_entity",
-                    "assistants": assistants,
-                    "entity_ids": entity_ids,
-                    "should_expose": should_expose,
-                }
-            )
-        except HomeAssistantCommandNotSent as exc:
-            error = f"Exposure failed: {extract_error({'error': str(exc)})}"
-        except HomeAssistantError as exc:
-            # Sent, then no answer: Core may have applied it.
+        error, result = await expose_write(
+            client, assistants, entity_ids, should_expose, extract_error
+        )
+        if error is None:
+            applied.update(dict.fromkeys(assistants, should_expose))
+            changed |= changed_entity_ids(result)
+            continue
+        if applied:
+            # The earlier assistant group already changed — say so, or
+            # the all-failed report implies no exposure was touched.
             error = (
-                "Exposure outcome unknown: Home Assistant did not answer "
-                f"({extract_error({'error': str(exc)})}); "
-                "the exposure may have been applied, and sending it again is safe"
+                f"{error} (note: expose changes for "
+                f"{', '.join(applied)} were already applied before "
+                "this failure)"
             )
-        else:
-            error = (
-                None
-                if result.get("success")
-                else f"Exposure failed: {extract_error(result)}"
-            )
-        if error is not None:
-            if applied:
-                # The earlier assistant group already changed — say so, or
-                # the all-failed report implies no exposure was touched.
-                error = (
-                    f"{error} (note: expose changes for "
-                    f"{', '.join(applied)} were already applied before "
-                    "this failure)"
-                )
-            return error, set(), applied
-        applied.update(dict.fromkeys(assistants, should_expose))
-        changed |= changed_entity_ids(result)
+        return error, set(), applied
     return None, changed, applied
 
 
