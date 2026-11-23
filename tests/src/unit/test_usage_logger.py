@@ -573,6 +573,20 @@ class TestParameterRedaction:
         assert _shown(logged, "front door") == []
         assert logged["action"] == "process"
 
+    async def test_a_settings_file_is_left_out(self, reported: Reported) -> None:
+        """An in-process server's export carries its secret path and signing keys
+        under names the key match does not know."""
+        logged = await reported(
+            {
+                "action": "import",
+                "settings_file": {
+                    "entries": {"server": {"data": {"secret_path": "/private_x"}}}
+                },
+            }
+        )
+        assert _shown(logged, "private_x") == []
+        assert logged["action"] == "import"
+
     async def test_case_insensitive(self, reported: Reported) -> None:
         logged = await reported({"CODE": "code-1234", "Token": "tok-7"})
         assert _shown(logged, "code-1234", "tok-7") == []

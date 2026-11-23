@@ -13,7 +13,7 @@
 //     prelude:          string,   // JS to run before `script` (Astro define:vars injection)
 //     invoke:           string,   // JS to run after `script` (e.g. "await window.restartAddon()")
 //     initialHtml:      string,   // DOM seed (defaults to a blank page)
-//     fetchMap:         { [pattern]: { status, ok?, body?, json?, throw?, responses? } },
+//     fetchMap:         { [pattern]: { status, ok?, body?, json?, headers?, throw?, responses? } },
 //     broadcastEvents:  [{ channel, data, delayMs? }],
 //     settleMs:         number,   // virtual-time advance after script + invoke (default 120000)
 //     language:         "js" | "ts",  // when "ts", `script` and `invoke` are type-stripped via esbuild
@@ -102,9 +102,13 @@ function buildFetchStub(fetchMap, fetches) {
     const ok = entry.ok ?? (status >= 200 && status < 300);
     const bodyText =
       entry.json !== undefined ? JSON.stringify(entry.json) : (entry.body ?? "");
+    const headers = Object.fromEntries(
+      Object.entries(entry.headers ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]),
+    );
     return {
       ok,
       status,
+      headers: { get: (name) => headers[String(name).toLowerCase()] ?? null },
       async json() {
         // Honour the "truncated body that fails to parse" scenario the
         // saveFeatureFlag fallback specifically guards against.

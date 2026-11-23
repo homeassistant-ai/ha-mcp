@@ -24,6 +24,7 @@ _CONFIG_TOGGLE_FIELDS: tuple[str, ...] = (
     "enabled_tool_modules",
     "enable_snapshot_actions",
     "backup_read_only",
+    "enable_settings_transfer_actions",
 )
 
 

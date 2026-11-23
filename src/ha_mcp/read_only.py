@@ -118,6 +118,8 @@ def _backup_write(args: dict[str, Any]) -> str | None:
         return None
     if scope == "snapshot" and action == "list":
         return None
+    if scope == "settings" and action == "export":
+        return None
     return f"scope={scope!r}, action={action!r}"
 
 
@@ -288,8 +290,9 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
     "ha_manage_backup": ReadOnlyExemption(
         _backup_write,
         "listing, viewing, and diffing per-edit backups (scope='edits', "
-        "action='list', 'view', or 'diff') and listing snapshots "
-        "(scope='snapshot', action='list')",
+        "action='list', 'view', or 'diff'), listing snapshots "
+        "(scope='snapshot', action='list') and exporting settings "
+        "(scope='settings', action='export')",
     ),
     "ha_manage_app": ReadOnlyExemption(
         _addon_write,

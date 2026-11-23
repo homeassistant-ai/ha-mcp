@@ -106,6 +106,16 @@ configuration:
     description: AI 어시스턴트가 편집 백업을 나열, 보기 및 비교(diff)하고, 스냅샷 작업이 활성화된 경우 전체 HA 스냅샷을
       나열할 수 있도록 허용합니다. ha_call_service의 동등한 백업 서비스 및 명령을 포함하여 수동 백업 생성, 복원(편집 복원 포함)
       및 삭제를 차단합니다. 자동 편집 전 백업은 계속 유지됩니다. 웹 설정 UI에서 사람이 수행하는 백업 작업은 계속 사용할 수 있습니다.
+  enable_settings_transfer_actions:
+    name: Allow ha_manage_backup to export and import settings
+    description: Allow AI assistants to download this server's settings file and import
+      one through ha_manage_backup, as the Export and Import buttons on the Server
+      Settings tab do. An import keeps the human-only settings, and changing the security
+      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
+      security policy access. An import can also turn on developer mode, tools and
+      features, and turn off protections such as secret redaction, SSL verification
+      and the IPv6 allowlist, as the file says, so check your settings after an AI
+      assistant imports one.
   enable_snapshot_delete:
     name: 스냅숏 삭제 허용
     description: ha_manage_backup이 전체 Home Assistant 스냅샷을 삭제할 수 있도록 허용합니다. 실수로 변경한

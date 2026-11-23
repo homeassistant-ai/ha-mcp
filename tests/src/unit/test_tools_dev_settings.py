@@ -6,10 +6,18 @@ add-on, at the Supervisor upstream (``_tools_dev_core.supervisor``).
 """
 
 import asyncio
+import os
+import sys
+import threading
+from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
+from ha_mcp import settings_transfer as transfer
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -21,6 +29,7 @@ from ha_mcp.config import (
 from ha_mcp.tools.tools_dev import FEATURE_FLAG, DevTools
 
 from ._dev_tool_env import _isolated_env as _isolated_env
+from ._file_services import make_file_service
 from ._real_server import build_server
 from ._tools_dev_core import (
     Supervisor,
@@ -30,6 +39,7 @@ from ._tools_dev_core import (
     write_overrides,
 )
 from ._tools_dev_core import dev_tools as dev_tools
+from ._tools_dev_core import served as served
 from ._tools_dev_core import supervisor as supervisor
 
 DEV_TOOLS = {"ha_dev_manage_server", "ha_dev_manage_settings"}
@@ -99,6 +109,61 @@ class TestSettingsMatrix:
             action="set", setting="log_level", value="ERROR"
         )
         assert stored_overrides() == {"debug": True, "log_level": "ERROR"}
+
+    async def test_cancelled_set_holds_file_lock_until_replace_finishes(
+        self, dev_tools: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        writing = threading.Event()
+        resume = threading.Event()
+        finished = threading.Event()
+
+        target = override_path()
+        replace = os.replace
+
+        def paused_replace(source: str, destination: str) -> None:
+            if Path(destination) != target:
+                replace(source, destination)
+                return
+            try:
+                writing.set()
+                assert resume.wait(10)
+                replace(source, destination)
+            finally:
+                finished.set()
+
+        monkeypatch.setattr(os, "replace", paused_replace)
+        setter = asyncio.create_task(
+            dev_tools.ha_dev_manage_settings(
+                action="set", setting="log_level", value="DEBUG"
+            )
+        )
+        try:
+            assert await asyncio.to_thread(writing.wait, 10)
+            setter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await setter
+
+            # A second writer must still contend on a separately opened lockfile.
+            with (
+                override_path().with_name(".config_write.lock").open("r+b") as lockfile,
+                pytest.raises(OSError),
+            ):
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    msvcrt.locking(lockfile.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lockfile.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            resume.set()
+            assert await asyncio.to_thread(finished.wait, 10)
+
+        await dev_tools.ha_dev_manage_settings(
+            action="set", setting="debug", value=True
+        )
+        assert stored_overrides() == {"log_level": "DEBUG", "debug": True}
 
     async def test_set_refuses_a_setting_pinned_by_its_env_var(
         self, dev_tools: DevTools, monkeypatch: pytest.MonkeyPatch
@@ -203,7 +268,7 @@ class TestSettingsMatrix:
             await dev_tools.ha_dev_manage_settings(action="reset", setting="log_level")
 
     async def test_overlapping_sets_both_land(self, dev_tools: DevTools) -> None:
-        """The shared override-file lock keeps one write from clobbering the other."""
+        """The config write lock keeps one write from clobbering the other."""
         await asyncio.gather(
             dev_tools.ha_dev_manage_settings(
                 action="set", setting="log_level", value="DEBUG"
@@ -328,3 +393,202 @@ class TestBackupConfig:
         assert supervisor.saved == [{"enable_auto_backup": False}]
         assert result["data"]["mode"] == "addon"
         assert result["data"]["restart_required"] is True
+
+
+class TestSettingsTransfer:
+    async def test_an_export_restores_the_settings_it_was_taken_from(
+        self, served: DevTools
+    ) -> None:
+        write_overrides({"redact_secrets": True})
+        exported = await served.ha_dev_manage_settings(action="export_settings")
+        settings_file = exported["settings_file"]
+        assert settings_file["contains_credentials"] is False
+        write_overrides({"redact_secrets": False})
+
+        result = await served.ha_dev_manage_settings(
+            action="import_settings", settings_file=settings_file
+        )
+
+        assert result["success"] is True
+        assert stored_overrides() == {"redact_secrets": True}
+
+    async def test_an_unusable_file_is_refused_as_invalid_configuration(
+        self, served: DevTools
+    ) -> None:
+        with pytest.raises(ToolError, match="invalid_backup"):
+            await served.ha_dev_manage_settings(
+                action="import_settings", settings_file={"format": "other"}
+            )
+        with pytest.raises(ToolError, match="needs settings_file"):
+            await served.ha_dev_manage_settings(action="import_settings")
+
+    async def test_an_agent_import_keeps_the_human_only_settings(
+        self, served: DevTools
+    ) -> None:
+        write_overrides({"custom_instructions": "set by a person"})
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["features"] = {
+            "custom_instructions": "from the file",
+            "redact_secrets": True,
+        }
+
+        await served.ha_dev_manage_settings(
+            action="import_settings", settings_file=settings_file
+        )
+
+        assert stored_overrides() == {
+            "custom_instructions": "set by a person",
+            "redact_secrets": True,
+        }
+
+    async def test_an_agent_import_of_a_policy_needs_policy_access(
+        self, served: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["policy"] = {"wait_seconds": 12}
+
+        with pytest.raises(ToolError, match="security-policy access is disabled"):
+            await served.ha_dev_manage_settings(
+                action="import_settings", settings_file=settings_file
+            )
+        monkeypatch.setenv("HAMCP_DEV_SECURITY_POLICY_ACCESS", "true")
+        reset_global_settings()
+        await served.ha_dev_manage_settings(
+            action="import_settings", settings_file=settings_file
+        )
+        exported = await served.ha_dev_manage_settings(action="export_settings")
+        assert (
+            exported["settings_file"]["server_settings"]["policy"]["wait_seconds"] == 12
+        )
+
+    async def test_a_revocation_just_before_the_import_commits_holds(
+        self, served: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        write_overrides({"dev_tools_security_policy_access": True})
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["policy"] = {"wait_seconds": 12}
+        restore = transfer.restore_server_settings
+
+        def revoke_then_restore(*args: Any, **kwargs: Any) -> Any:
+            # A person turns access off while the import is under way.
+            write_overrides({"dev_tools_security_policy_access": False})
+            return restore(*args, **kwargs)
+
+        monkeypatch.setattr(transfer, "restore_server_settings", revoke_then_restore)
+        with pytest.raises(ToolError, match="security-policy access is disabled"):
+            await served.ha_dev_manage_settings(
+                action="import_settings", settings_file=settings_file
+            )
+
+        assert stored_overrides() == {"dev_tools_security_policy_access": False}
+
+    async def test_a_cancelled_import_still_finishes_as_one_transaction(
+        self, hass: HomeAssistant, served: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HAMCP_DEV_SECURITY_POLICY_ACCESS", "true")
+        reset_global_settings()
+        await make_file_service(hass, allowed="pyscript")
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["entries"]["tools"] = {
+            "allowed_dirs": ["www"],
+            "extra_yaml_keys": ["mqtt"],
+        }
+        first_written, release, returned = (
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+        )
+        save = Store.async_save
+
+        async def pause_after_the_first_write(store: Store, data: Any) -> None:
+            await save(store, data)
+            if data == {"paths": ["www"]}:
+                first_written.set()
+                await release.wait()
+
+        monkeypatch.setattr(Store, "async_save", pause_after_the_first_write)
+        scopes: list[anyio.CancelScope] = []
+
+        async def call() -> None:
+            with anyio.CancelScope() as scope:
+                scopes.append(scope)
+                try:
+                    await served.ha_dev_manage_settings(
+                        action="import_settings", settings_file=settings_file
+                    )
+                finally:
+                    returned.set()
+
+        try:
+            async with anyio.create_task_group() as calls:
+                calls.start_soon(call)
+                await first_written.wait()
+                # The MCP server cancels a tool call through an anyio cancel scope.
+                scopes[0].cancel()
+                await asyncio.sleep(0.3)
+                # The call waits for the import it started instead of leaving it half done.
+                assert not returned.is_set()
+                release.set()
+                with anyio.fail_after(10):
+                    await returned.wait()
+        finally:
+            release.set()
+        await hass.async_block_till_done()
+
+        exported = await served.ha_dev_manage_settings(action="export_settings")
+        assert exported["settings_file"]["entries"]["tools"] == {
+            "allowed_dirs": ["www"],
+            "extra_yaml_keys": ["mqtt"],
+        }
+
+
+class TestSettingsTransferInTheApp:
+    """In the app, the human-only settings and the policy switch are options."""
+
+    async def test_an_agent_import_leaves_the_human_only_options_alone(
+        self, supervisor: Supervisor, served: DevTools
+    ) -> None:
+        supervisor.options = {
+            "custom_instructions": "set by a person",
+            "redact_secrets": False,
+        }
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["features"] = {
+            "custom_instructions": "from the file",
+            "redact_secrets": True,
+        }
+
+        await served.ha_dev_manage_settings(
+            action="import_settings", settings_file=settings_file
+        )
+
+        assert supervisor.saved == [
+            {"custom_instructions": "set by a person", "redact_secrets": True}
+        ]
+
+    async def test_switching_the_policy_engine_needs_policy_access(
+        self, supervisor: Supervisor, served: DevTools
+    ) -> None:
+        supervisor.options = {"enable_tool_security_policies": True}
+        settings_file = (await served.ha_dev_manage_settings(action="export_settings"))[
+            "settings_file"
+        ]
+        settings_file["server_settings"]["features"] = {
+            "enable_tool_security_policies": False
+        }
+
+        with pytest.raises(ToolError, match="security-policy access is disabled"):
+            await served.ha_dev_manage_settings(
+                action="import_settings", settings_file=settings_file
+            )
+        assert supervisor.saved == []
