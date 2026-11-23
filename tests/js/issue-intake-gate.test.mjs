@@ -631,6 +631,7 @@ test("a maintainer can require output after the reporter supplied a reason", asy
   const run = (event) => gate(api, "test/repo", 1, bot, event, true);
   await run({ action: "labeled" });
   assert.deepEqual(api.data.issue.labels.map((l) => l.name), [requiredLabel]);
+  api.data.comments.at(-1).created_at = overrideAt;
   const warning = api.data.comments.at(-1).body;
   assert.match(warning, /@reporter.*maintainer/i);
   assert.match(warning, /24 hours/);
@@ -671,6 +672,7 @@ test("withdrawal cancels the deadline and reapplication starts a fresh one", asy
   const sweep = (date) => expire(api, "test/repo", bot, Date.parse(date), true);
   // The sweep recovers a missed labeling event and warns only once.
   assert.deepEqual((await sweep(overrideAt)).acted, ["1:require"]);
+  api.data.comments.at(-1).created_at = overrideAt;
   assert.deepEqual((await sweep(overrideAt)).acted, []);
   api.data.issue.labels = [];
   const removed = { action: "unlabeled", label: requiredLabel };
@@ -679,8 +681,12 @@ test("withdrawal cancels the deadline and reapplication starts a fresh one", asy
   assert.deepEqual((await sweep("2026-09-24T00:00:00Z")).acted, []);
   requireReport(api.data);
   Object.assign(api.data.events.at(-1), { id: 45, created_at: "2026-09-25T00:00:00Z" });
-  assert.deepEqual((await sweep("2026-09-25T23:59:59Z")).acted, ["1:require"]);
-  assert.deepEqual((await sweep("2026-09-26T00:00:00Z")).acted, ["1:close"]);
+  // A delayed or missed event must still give the reporter a full day to respond.
+  const recoveredAt = "2026-09-27T00:00:00Z";
+  assert.deepEqual((await sweep(recoveredAt)).acted, ["1:require"]);
+  api.data.comments.at(-1).created_at = recoveredAt;
+  assert.deepEqual((await sweep("2026-09-27T23:59:59Z")).acted, []);
+  assert.deepEqual((await sweep("2026-09-28T00:00:00Z")).acted, ["1:close"]);
 });
 
 test("the sweep accepts a report in the body and human closures stay closed", async () => {
@@ -693,6 +699,7 @@ test("the sweep accepts a report in the body and human closures stay closed", as
 
   const closed = requireReport();
   const earlier = new FakeGitHub(closed);
+  await gate(earlier, "test/repo", 1, bot, { action: "labeled" }, true);
   await expire(earlier, "test/repo", bot, Date.parse(overrideAt) + 24 * hour, true);
   earlier.data.issue.state = "closed";
   earlier.data.issue.body += "\n" + report;

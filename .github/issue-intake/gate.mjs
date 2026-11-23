@@ -26,7 +26,7 @@ export const gateMarker = "<!-- ha-mcp-report-gate -->";
 // The label that starts the 24-hour clock. A maintainer removing it waives
 // the requirement for that issue.
 export const gateLabel = "missing bug report output";
-export const requiredLabel = "bug report output required";
+export const requiredLabel = "missing bug report output (Override)";
 export const gateGraceHours = 24;
 // The issue forms' required report field. Any text the page shows there,
 // "N/A" included, counts as an answer.
@@ -112,8 +112,7 @@ const gateNotice = (snapshot, bot) =>
     )
     .at(-1);
 
-// The current application owns the deadline and the bot's notices for this
-// request. Reapplying the label starts a new cycle even within the same second.
+// Tie each notice to the label event so reapplying it starts a fresh request.
 function requiredApplication({ issue, events }) {
   if (!issue.labels.some((l) => l.name === requiredLabel)) return null;
   return latestEvent(
@@ -135,8 +134,8 @@ const requestMarker = (applied, action) =>
 function requiredAction(snapshot, bot, applied, now) {
   const { issue, events } = snapshot;
   const report = reporterTexts(snapshot).some(hasReport);
-  const notice = gateNotice(snapshot, bot)?.body || "";
-  const announced = (action) => notice.includes(requestMarker(applied, action));
+  const notice = gateNotice(snapshot, bot);
+  const announced = (action) => notice?.body.includes(requestMarker(applied, action));
   if (issue.state === "closed") {
     const closed = latestEvent(events, (e) => e.event === "closed");
     if (report && closed?.actor?.login === bot && announced("close"))
@@ -144,10 +143,13 @@ function requiredAction(snapshot, bot, applied, now) {
     return null;
   }
   if (report) return "clear";
-  if (now !== undefined && now - Date.parse(applied.created_at) >= gateGraceHours * 3600 * 1000)
-    return "close";
-  if (announced("require") || announced("close")) return null;
-  return "require";
+  // A close notice can survive a failed state update. Retry only the close.
+  if (announced("close")) return now === undefined ? null : "close";
+  if (!announced("require")) return "require";
+  // On recovery the first request may be hours late. Give the reporter the
+  // full response period from the notice for this application of the label.
+  const notifiedAt = Date.parse(notice.created_at);
+  return now >= notifiedAt + gateGraceHours * 3600 * 1000 ? "close" : null;
 }
 
 // A maintainer removed the label: the report is not required here.
@@ -278,7 +280,7 @@ function requiredComment(applied, action, login) {
     return `${marker}\nThanks for adding the requested \`ha_report_issue\` output.\n`;
   const message = action === "close"
     ? `this issue was closed because the requested report was still missing after ${gateGraceHours} hours. Add the report to reopen it automatically.`
-    : `a maintainer has requested the generated \`ha_report_issue\` output. Please add it within ${gateGraceHours} hours of the label being applied to keep this issue open.`;
+    : `a maintainer has requested the generated \`ha_report_issue\` output. Please add it within ${gateGraceHours} hours of this notice to keep this issue open.`;
   return `${marker}\n@${login}, ${message}\n\n${reportInstructions}\n`;
 }
 

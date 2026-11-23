@@ -76,7 +76,7 @@ def test_report_gate_runs_trusted_code_and_mints_write_access_only_to_act() -> N
     assert "github.event.sender.type == 'User'" in gate["if"]
     assert "!github.event.issue.pull_request" in gate["if"]
     # Both applying and withdrawing the manual override must reach the gate.
-    required_label = "bug report output required"
+    required_label = "missing bug report output (Override)"
     for action in ("labeled", "unlabeled"):
         condition = next(
             line for line in gate["if"].split(" || ") if f"== '{action}'" in line
@@ -89,6 +89,9 @@ def test_report_gate_runs_trusted_code_and_mints_write_access_only_to_act() -> N
     assert checkout["ref"] == "${{ github.event.repository.default_branch }}"
     assert checkout["persist-credentials"] is False
     token = next(s for s in steps if s.get("id") == "app-token")
+    # A label event must be able to publish both the request and its withdrawal.
+    for action in ("require", "withdraw"):
+        assert f'"{action}"' in token["if"]
     assert "steps.check.outputs.action" in token["if"]
     check = next(s for s in steps if s.get("id") == "check")
     assert steps.index(check) < steps.index(token)

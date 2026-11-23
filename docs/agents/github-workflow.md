@@ -119,7 +119,7 @@ Triage-state labels:
 | `ready-to-implement` | Clear path with no unresolved decisions. |
 | `needs-choices` | Multiple approaches need stakeholder input. |
 | `needs-info` | Awaiting the reporter. Any label application starts reminders on days 3/5/6 and closure on day 7; a reporter reply after labeling removes it. See [issue intake](issue-intake.md). |
-| `bug report output required` | A maintainer or admin requires generated output. The reporter has 24 hours from labeling to supply it. See [issue intake](issue-intake.md#report-gate). |
+| `missing bug report output (Override)` | A maintainer or admin requires generated output. The reporter has 24 hours from the request notice to supply it. See [issue intake](issue-intake.md#report-gate). |
 | `missing bug report output` | A bug report with neither an `ha_report_issue` report nor a reason. The report gate applies it and closes the issue after 24 hours; adding either clears it, and a maintainer removing it waives the requirement. See [issue intake](issue-intake.md#report-gate). |
 | `priority: high/medium/low` | Relative priority. |
 | `triaged` | Historical marker from the retired triage bot. |
