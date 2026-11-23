@@ -573,10 +573,10 @@ function homeAssistantRoot() {{
   }}
 }}
 
-function parentSearch() {{
+function parentSearch(win) {{
   try {{
-    if (window.parent === window) return "";
-    return window.parent.location.search || "";
+    if (!win.parent || win.parent === win) return "";
+    return win.parent.location.search || "";
   }} catch (err) {{
     return "";  // cross-origin parent: nothing to forward
   }}
@@ -594,15 +594,19 @@ function forwardedQuery(source) {{
   return params;
 }}
 
+function buildAppUrl(search, language) {{
+  const params = forwardedQuery(search);
+  if (language) params.set("ha_lang", language);
+  const query = params.toString();
+  return APP_BASE_URL + (query ? "?" + query : "");
+}}
+
 function appUrl() {{
   // The panel URL is the only place a notification link can name a tab and an
   // approval card; carry them into the app instead of dropping them.
-  const params = forwardedQuery(parentSearch());
   const root = homeAssistantRoot();
-  const language = root && root.hass && root.hass.language;
-  if (language) params.set("ha_lang", language);
-  const search = params.toString();
-  return APP_BASE_URL + (search ? "?" + search : "");
+  const language = (root && root.hass && root.hass.language) || "";
+  return buildAppUrl(parentSearch(window), language);
 }}
 
 function showMessage(text, isError) {{
