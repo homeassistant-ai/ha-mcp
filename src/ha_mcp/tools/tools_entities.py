@@ -180,7 +180,7 @@ def _merge_entity_enrichment(
 
 
 def _single_entity_target(kw: dict[str, Any]) -> str:
-    """The entity the decorator backs up; for a longer list, none.
+    """The entity the decorator backs up; for a list of two or more, none.
 
     Snapshotting only the first entity of a list would leave the rest without
     a backup while looking covered, so a list path backs up each entity itself
@@ -1227,7 +1227,7 @@ class EntityTools:
         exposure, and entity_id rename in a single call.
 
         BULK OPERATIONS:
-        When entity_id is a list, only labels, categories, enabled, hidden, and expose_to are supported.
+        When entity_id is a list of two or more, only labels, categories, enabled, hidden, and expose_to are supported.
         Other parameters (area_id, name, use_device_name, icon, device_class, options, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
 
         SHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload
@@ -1311,7 +1311,6 @@ class EntityTools:
             for eid in entity_ids:
                 validate_identifier_not_empty(eid, "entity_id")
 
-            # Validate: bulk operations only support categories, labels, enabled, hidden and expose_to
             non_null_single_params = [
                 k for k, v in single_entity_params.items() if v is not None
             ]
@@ -1322,7 +1321,7 @@ class EntityTools:
                         f"Bulk operations (multiple entity_ids) only support categories, labels, enabled, hidden, and expose_to. "
                         f"Single-entity parameters provided: {non_null_single_params}",
                         suggestions=[
-                            "Use a single entity_id for area_id, name, use_device_name, icon, device_class, options, aliases, or use_entity_name_alias",
+                            f"Use a single entity_id for {', '.join(single_entity_params)}",
                             "Or remove single-entity parameters to use bulk categories/labels/enabled/hidden/expose_to",
                         ],
                     )
@@ -1379,26 +1378,26 @@ class EntityTools:
                 v is not None
                 for v in (parsed_categories, parsed_labels, enabled, hidden)
             )
+
+            async def update_one(eid: str) -> dict[str, Any]:
+                return await self._update_single_entity(
+                    eid,
+                    area_id=None,
+                    name=None,
+                    icon=None,
+                    enabled=enabled,
+                    hidden=hidden,
+                    parsed_aliases=None,
+                    parsed_categories=parsed_categories,
+                    parsed_labels=parsed_labels,
+                    label_operation=label_operation,
+                    parsed_expose_to=None,  # expose_to is batched across the list
+                )
+
             return await bulk_update_entities(
                 self._client,
                 entity_ids,
-                (
-                    lambda eid: self._update_single_entity(
-                        eid,
-                        None,
-                        None,
-                        None,
-                        enabled,
-                        hidden,
-                        None,
-                        parsed_categories,
-                        parsed_labels,
-                        label_operation,
-                        None,  # expose_to is batched across the list
-                    )
-                )
-                if registry_work
-                else None,
+                update_one if registry_work else None,
                 parsed_expose_to,
                 include_entity_entry,
             )
@@ -1705,8 +1704,9 @@ class EntityTools:
         )
 
     async def _bulk_remove_entities(self, entity_ids: list[str]) -> dict[str, Any]:
-        """Validate the id list, then remove the ids one at a time; registry
-        writes are not parallelized (see ``remove_registry_entries``)."""
+        """Validate the id list, back up each entity (auto-backup on), then
+        remove the ids one at a time; registry writes are not parallelized
+        (see ``remove_registry_entries``)."""
         if not isinstance(entity_ids, list):
             raise_tool_error(
                 create_error_response(
@@ -1754,7 +1754,9 @@ class EntityTools:
         result = await remove_registry_entries(
             self._client, entity_ids, _extract_ws_error
         )
-        return result | ({"warnings": warnings} if warnings else {})
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     @tool(
         name="ha_remove_entity",

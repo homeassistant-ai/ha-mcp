@@ -1,6 +1,5 @@
-"""ha_set_entity with a list of entity_id on a real ``hass``.
-
-The registries, every reply and every refusal are Core's.
+"""ha_set_entity with a list of entity_id, and its compact reply, on a real
+``hass``: the registries and every write's answer are Core's.
 """
 
 from typing import Any
@@ -20,7 +19,6 @@ from ._entity_tools_core import registry_entity, stored_entry
 from ._entity_tools_core import tools as tools
 from ._tool_errors import error_of
 
-_UPDATE = "config/entity_registry/update"
 _LABELS = "config/label_registry/list"
 
 
@@ -156,7 +154,7 @@ class TestBulk:
         field: str,
         value: object,
     ) -> None:
-        """A list of entities is hidden or disabled in one call, not one per entity."""
+        """One tool call hides or disables every entity of a list."""
         ids = ["light.a", "light.b"]
         for entity_id in ids:
             registry_entity(entity_registry, entity_id)
