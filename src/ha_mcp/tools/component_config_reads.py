@@ -150,13 +150,15 @@ async def fetch_entity_lookup_via_component(
 async def scenes_with_id(client: Any, scene_id: str) -> list[dict[str, Any]] | None:
     """The ``homeassistant`` scenes Core registered under ``scene_id``, each
     with ``loaded``; None when the component does not answer or lacks
-    ``entity_lookup_loaded``."""
+    ``entity_lookup_loaded``, also when a scene row of the answer lacks
+    ``loaded`` (an older component on a connection opened after the check)."""
     if not await component_serves(client, ENTITY_LOOKUP_LOADED):
         return None
     matches = await fetch_entity_lookup_via_component(client, scene_id, domain="scene")
     if matches is None:
         return None
-    return [m for m in matches if m.get("platform") == "homeassistant"]
+    rows = [m for m in matches if m.get("platform") == "homeassistant"]
+    return None if any("loaded" not in m for m in rows) else rows
 
 
 _INSTALL_HINT = (

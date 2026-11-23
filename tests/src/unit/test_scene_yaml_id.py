@@ -25,6 +25,7 @@ from ha_mcp.tools import component_config_reads
 from ha_mcp.tools.component_api import ENTITY_LOOKUP_LOADED, component_serves
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
+from ._command_faults import registry_lookup_failing
 from ._component_frames import older_component
 from ._config_dir_yaml import remove_yaml_only_scenes, setup_scenes, write_config_files
 from ._tool_errors import error_body
@@ -114,6 +115,53 @@ async def test_without_the_loaded_flag_a_create_by_a_yaml_scene_id_says_so(
 
     assert result["success"] is True
     assert any("ha_mcp_tools component" in w for w in result["warnings"])
+
+
+async def test_with_the_component_a_create_by_a_new_id_is_not_unchecked(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """The component answers that no scene has the id ``fresh``: that is an
+    answer, so the create does not warn that the id went unchecked."""
+    await setup_scenes(hass, [])
+
+    result = await ConfigSceneTools(component_core_client).ha_config_set_scene(
+        scene_id="fresh",
+        config={"name": "Fresh", "entities": _ON},
+        wait=False,
+        MandatoryBPS=False,
+    )
+
+    assert result["success"] is True
+    warnings = result.get("warnings", [])
+    assert not any("cannot check whether a scene" in w for w in warnings)
+
+
+async def test_a_lookup_answer_without_loaded_leaves_the_id_unchecked(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The capability check passed, but an older component answers the lookup
+    without ``loaded``: that is no answer, so a set by ``yid`` ("X Scene")
+    warns that the id went unchecked instead of failing."""
+    await setup_scenes(
+        hass, [], yaml_only=[{"id": "yid", "name": "X Scene", "entities": _ON}]
+    )
+    assert await component_serves(component_core_client, ENTITY_LOOKUP_LOADED)
+    lookup = component_config_reads.fetch_entity_lookup_via_component
+
+    async def older_answer(*args: Any, **kwargs: Any) -> list[dict[str, Any]] | None:
+        matches = await lookup(*args, **kwargs)
+        return [{k: v for k, v in m.items() if k != "loaded"} for m in matches or []]
+
+    monkeypatch.setattr(
+        component_config_reads, "fetch_entity_lookup_via_component", older_answer
+    )
+
+    result = await _CALLS["set"](ConfigSceneTools(component_core_client))
+
+    assert result["success"] is True
+    assert any("cannot check whether a scene" in w for w in result["warnings"])
 
 
 async def test_a_lookup_the_component_does_not_answer_leaves_the_id_unchecked(
@@ -292,6 +340,46 @@ async def test_a_removed_yaml_scenes_leftover_entry_is_named_for_removal(
     assert "activate=True" not in " ".join(rest)
 
 
+@pytest.mark.parametrize("call", ["get", "set"])
+async def test_a_disabled_then_removed_yaml_scene_is_named_disabled(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient, call: str
+) -> None:
+    """``gone`` ("Gone", ``scene.gone``) was disabled, then removed from YAML;
+    Core writes no restored state for it. A get or set by ``gone`` says it is
+    disabled and gives the step to remove its entry, with no activation hint,
+    and leaves ``scenes.yaml`` as it was."""
+    await setup_scenes(
+        hass, [], yaml_only=[{"id": "gone", "name": "Gone", "entities": _ON}]
+    )
+    er.async_get(hass).async_update_entity(
+        "scene.gone", disabled_by=er.RegistryEntryDisabler.USER
+    )
+    await remove_yaml_only_scenes(hass)
+    assert hass.states.get("scene.gone") is None
+    scenes_yaml = Path(hass.config.path("scenes.yaml"))
+    before = await hass.async_add_executor_job(scenes_yaml.read_text)
+    tools = ConfigSceneTools(component_core_client)
+
+    with pytest.raises(ToolError) as exc:
+        if call == "get":
+            await tools.ha_config_get_scene(scene_id="gone")
+        else:
+            await tools.ha_config_set_scene(
+                scene_id="gone",
+                config={"name": "Gone", "entities": _ON},
+                wait=False,
+                MandatoryBPS=False,
+            )
+
+    body = error_body(exc)
+    assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+    assert "is disabled" in body["error"]["message"]
+    suggestions = " ".join(body["error"]["suggestions"])
+    assert "ha_remove_entity(entity_id='scene.gone')" in suggestions
+    assert "activate=True" not in suggestions
+    assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
+
+
 async def test_a_leftover_entry_of_another_entity_hides_no_scene(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
@@ -399,6 +487,27 @@ async def test_a_failed_state_read_is_no_create(
         Path(hass.config.path("scenes.yaml")).read_text
     )
     assert "fresh" not in stored
+
+
+async def test_without_the_component_a_failed_registry_read_is_no_create(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core answers the registry read of ``scene.fresh`` with an error: a set
+    by the new id ``fresh`` fails instead of storing a new scene."""
+    await setup_scenes(hass, [])
+    scenes_yaml = Path(hass.config.path("scenes.yaml"))
+    before = await hass.async_add_executor_job(scenes_yaml.read_text)
+
+    with registry_lookup_failing(hass), pytest.raises(ToolError) as exc:
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="fresh",
+            config={"name": "Fresh", "entities": _ON},
+            wait=False,
+            MandatoryBPS=False,
+        )
+
+    assert "registry unavailable" in error_body(exc)["error"]["message"]
+    assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
 
 
 _OWN_KEY_CALLS: dict[str, dict[str, Any]] = {

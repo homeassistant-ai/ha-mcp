@@ -107,8 +107,8 @@ class SceneResolution:
     ``entity_lookup`` named (None on the registry path); ``disabled``: whether
     it is disabled; ``leftover``: the component named only entries Core no
     longer loads, ``scene.<id>`` among them (a removed YAML scene);
-    ``id_unchecked``: a bare id that fell back to itself with no component
-    answer to check it (none, no ``entity_lookup_loaded``, no reply; #2632).
+    ``id_unchecked``: a bare id that fell back to itself, no component answer
+    checking it (none, no ``entity_lookup_loaded``, no reply, no ``loaded``).
     """
 
     storage_key: str

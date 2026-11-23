@@ -442,6 +442,41 @@ async def test_budget_on_the_real_clock_ends_in_no_entity(
     assert "showed no entity" in warning
 
 
+async def test_a_wait_adds_the_state_waits_budget_to_a_stalled_lookup(
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a wait, a stalled lookup runs past either budget alone and past
+    three lookup budgets, and is cancelled before one more lookup budget has
+    passed after both together are spent."""
+    monkeypatch.setattr(registration, "RESOLVE_TIMEOUT", 0.2)
+    monkeypatch.setattr(registration, "REGISTER_TIMEOUT", 1.0)
+    cancelled = asyncio.Event()
+
+    async def stall(*args: Any, **kwargs: Any) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    result: dict[str, Any] = {}
+    with patch.object(registration, "lookup_entity_id", AsyncMock(side_effect=stall)):
+        write = asyncio.create_task(
+            registration.post_write_entity(
+                component_core_client, KEY, "scene", result, wait=True, category=None
+            )
+        )
+        await asyncio.sleep(1.1)
+        assert not cancelled.is_set()
+        async with asyncio.timeout(0.25):
+            entity_id = await write
+
+    assert cancelled.is_set()
+    assert entity_id is None
+    (warning,) = result["warnings"]
+    assert "showed no entity" in warning
+
+
 async def test_cancellation_propagates(
     client: HomeAssistantClient, clock: PollClock
 ) -> None:
