@@ -141,13 +141,62 @@ REFUSED = {
         "def test_it(hass, name):\n    mock_component(hass, name)\n"
     ),
     "join-named-sequence": "PARTS = ('has', 'sio')\nMockModule(''.join(PARTS))\n",
-    "zip-both-rows": (
-        "for n, name in zip((0, 1), ('made_up_probe', 'hassio')):\n"
-        "    MockModule(name)\n"
-    ),
     "reassigned-to-real": (
         "def test_it(hass):\n    domain = 'made_up_probe'\n    domain = 'hassio'\n"
         "    mock_component(hass, domain)\n"
+    ),
+    "saved-by-tuple-unpack": (
+        "def test_it(hass):\n    domain = 'hassio'\n    saved, other = domain, 1\n"
+        "    domain = 'made_up_probe'\n    MockModule(saved)\n"
+    ),
+    "saved-annotated": (
+        "def test_it(hass):\n    domain = 'hassio'\n    saved: str = domain\n"
+        "    domain = 'made_up_probe'\n    MockModule(saved)\n"
+    ),
+    "saved-by-walrus": (
+        "def test_it(hass):\n    domain = 'hassio'\n    if (saved := domain):\n        pass\n"
+        "    domain = 'made_up_probe'\n    MockModule(saved)\n"
+    ),
+    "saved-by-a-loop": (
+        "def test_it(hass):\n    domain = 'hassio'\n    for saved in (domain,):\n        pass\n"
+        "    domain = 'made_up_probe'\n    MockModule(saved)\n"
+    ),
+    "saved-in-a-list": (
+        "def test_it(hass):\n    domain = 'hassio'\n    names = [domain]\n"
+        "    domain = 'made_up_probe'\n    for name in names:\n        MockModule(name)\n"
+    ),
+    "saved-in-a-list-for-a-helper": (
+        "def register_all(hass, names):\n    for name in names:\n"
+        "        mock_component(hass, name)\n"
+        "def test_it(hass):\n    domain = 'hassio'\n    names = [domain]\n"
+        "    domain = 'made_up_probe'\n    register_all(hass, names)\n"
+    ),
+    "saved-as-a-dict-key": (
+        "def test_it(hass):\n    domain = 'hassio'\n    flows = {domain: 1}\n"
+        "    domain = 'made_up_probe'\n    for name in flows:\n        MockModule(name)\n"
+    ),
+    "augmented-assignment": (
+        "def test_it(hass):\n    domain = 'has'\n    domain += 'sio'\n"
+        "    mock_component(hass, domain)\n"
+    ),
+    "helper-two-parameters": (
+        "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
+        "register(hass, 'hass', 'io')\n"
+    ),
+    "dict-spread": (
+        "REAL = {'hassio': 1}\n"
+        "for name in {**REAL, 'made_up_probe': 1}:\n    MockModule(name)\n"
+    ),
+    "join-one-binding-unknown": (
+        "PARTS = ('has', 'sio')\nif flag:\n    PARTS = make()\n"
+        "MockModule(''.join(PARTS))\n"
+    ),
+    "zip-set-column": (
+        "for n, name in zip((1,), {'made_up_probe', 'hassio'}):\n    MockModule(name)\n"
+    ),
+    "zip-starred-length": (
+        "for n, name in zip(['a', *MORE], ['made_up_probe', 'x_probe', 'hassio']):\n"
+        "    MockModule(name)\n"
     ),
     "saved-before-reassignment": (
         "def test_it(hass):\n    domain = 'hassio'\n    saved = domain\n"
@@ -254,7 +303,7 @@ def test_a_helper_wrapping_its_own_name_without_end_fails(guard, tmp_path, capsy
     status, out = run_guard(guard, _repo(tmp_path, {_SAMPLE: source}), capsys)
 
     assert status == 1
-    assert f"{_SAMPLE}:3: a helper builds the name on itself without end" in out
+    assert f"{_SAMPLE}:3: more than 8 helpers add text to the name" in out
 
 
 def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
@@ -267,20 +316,33 @@ def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
 
 
 def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, capsys):
+    """Listed: a call's result, a fixture's value at each stand-in it reaches,
+    and ``*`` and ``**`` arguments. Left out: a parameter a call fills, one
+    with a default and one ``parametrize`` fills."""
     source = (
         "MockModule('made_up_probe')\nMockModule(pick())\n"
         "def test_it(hass, name):\n    mock_component(hass, name)\n    MockModule(name)\n"
+        "MockModule(*names)\nMockModule(**options)\n"
+        "def register(hass, name):\n    mock_component(hass, name)\n"
+        "register(hass, 'made_up_probe')\nregister(*row)\n"
+        "def default(hass, name='made_up_probe'):\n    mock_component(hass, name)\n"
+        "@pytest.mark.parametrize('name', ['made_up_probe'])\n"
+        "def test_each(hass, name):\n    mock_component(hass, name)\n"
     )
     repo = _repo(tmp_path, {_SAMPLE: source})
 
     status = guard.main(["--repo", str(repo), "--all"])
 
-    assert (status, capsys.readouterr().out.splitlines()[:3]) == (
+    listed = [(2, "MockModule"), (4, "mock_component"), (5, "MockModule")]
+    listed += [(6, "MockModule"), (7, "MockModule"), (11, "register")]
+    assert (status, capsys.readouterr().out.splitlines()) == (
         0,
         [
-            f"{_SAMPLE}:2: MockModule() gets a name only known at runtime",
-            f"{_SAMPLE}:4: mock_component() gets a name only known at runtime",
-            f"{_SAMPLE}:5: MockModule() gets a name only known at runtime",
+            *(
+                f"{_SAMPLE}:{line}: {callee}() gets a name only known at runtime"
+                for line, callee in listed
+            ),
+            "No unlisted stand-in for a real integration; 0 allowlisted.",
         ],
     )
 
@@ -301,6 +363,17 @@ ALLOWED = {
     "saved-before-reassignment-to-real": (
         "def test_it(hass):\n    domain = 'made_up_probe'\n    saved = domain\n"
         "    domain = 'hassio'\n    mock_component(hass, saved)\n"
+    ),
+    "helper-many-suffixes": (
+        "def register(hass, base):\n"
+        "    for s in ('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'):\n"
+        "        mock_component(hass, f'{base}_{s}')\n"
+        "register(hass, 'made_up')\n"
+    ),
+    "parameter-reassigned": (
+        "def helper(hass, name):\n    name = 'made_up_probe'\n"
+        "    mock_component(hass, name)\n"
+        "helper(hass, 'hassio')\n"
     ),
     "zip-stops-short": (
         "for n, name in zip((0,), ('made_up_probe', 'hassio')):\n    MockModule(name)\n"
@@ -368,8 +441,9 @@ def test_an_entry_allows_only_its_own_file(guard, tmp_path, capsys):
         f"- file: {_SAMPLE}\n  integration: hassio\n",
         f"- file: {_SAMPLE}\n  integration: hassio\n  reason: ''\n",
         _LISTED + "  extra: 1\n",
+        f"- file: {_SAMPLE}\n  integration: hassio\n  1: x\n",
     ],
-    ids=["no-reason", "empty-reason", "unknown-key"],
+    ids=["no-reason", "empty-reason", "unknown-key", "non-string-key"],
 )
 def test_an_entry_without_exactly_a_file_integration_and_reason_fails(
     guard, tmp_path, capsys, allowlist
@@ -390,6 +464,27 @@ def test_a_key_repeated_in_an_entry_fails(guard, tmp_path, capsys):
 
     assert status == 1
     assert "integration_stand_in_allowlist.yml:4: repeats the key 'reason'" in out
+
+
+def test_an_entry_for_the_checks_own_failures_fails(guard, tmp_path, capsys):
+    """Too many names, or endless wrapping, cannot be allowlisted away."""
+    allowlist = _LISTED.replace("integration: hassio", 'integration: "\\x01"')
+    repo = _repo(tmp_path, {_SAMPLE: "mock_component(hass, 'hassio')\n"}, allowlist)
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert "entry 1 names no integration: '\\x01'" in out
+
+
+def test_a_refused_entry_still_names_its_file(guard, tmp_path):
+    """The ratchet compares two versions of the list, also when one is bad."""
+    listed = tmp_path / "allowlist.yml"
+    listed.write_text(f"- file: {_SAMPLE}\n  integration: hassio\n  reason: ''\n")
+    problems: list[str] = []
+
+    assert guard.load_allowlist(listed, problems) == {(_SAMPLE, "hassio"): ""}
+    assert problems
 
 
 def test_no_test_stands_in_for_a_real_integration_unlisted(guard, capsys):

@@ -16,12 +16,16 @@ or ``parametrize`` value (a dict's keys or values, ``enumerate`` and ``zip``
 columns included), an f-string, concatenation, ``%``, ``str.format`` or
 ``str.join`` of those, or a value passed on through the parameters of
 functions in the test trees, or of methods called on ``self`` or ``cls``,
-until it reaches one of the helpers. Within one function a later plain
-assignment replaces an earlier one, and ``zip`` stops at its shortest input.
-More than ``MAX_ALTERNATIVES`` possible names fail, since they are not checked.
-A name only known at runtime is left to review; ``--all`` lists where one
-reaches a helper, also through a parameter no call in the trees fills (a
-fixture's, for example).
+until it reaches one of the helpers, also when a helper puts text around its
+parameter. A name is read as it stood where it was bound: within one function
+a later plain assignment replaces an earlier one, and a saved copy keeps what
+it was given. ``zip`` stops at its shortest input when every length is known.
+More than ``MAX_ALTERNATIVES`` possible names fail, since they are not checked,
+and so does a name more than ``MAX_WRAPS`` helpers add text to, which is how a
+helper calling itself looks. A name only known at runtime is left to review;
+``--all`` lists where one reaches a helper, also through a function no call in
+the trees reaches (a fixture, for example) or an argument passed with ``*`` or
+``**``.
 
 A kept case is an entry of ``ALLOWLIST`` naming the file, the integration and
 the reason. An entry that matches nothing fails.
@@ -40,10 +44,13 @@ from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-import yaml  # type: ignore[import-untyped]
-
+# The ratchet and the tests load this script by path, without its folder.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from stand_in_allowlist import (  # type: ignore[import-not-found]
+    ALLOWLIST,
+    load_allowlist,
+)
 from stand_in_syntax import (  # type: ignore[import-not-found]
     bound_argument,
     call_argument,
@@ -53,8 +60,6 @@ from stand_in_syntax import (  # type: ignore[import-not-found]
 
 REPO = Path(__file__).resolve().parent.parent
 TREES = ("tests/src/unit", "tests/addon")
-ALLOWLIST = "tests/src/unit/integration_stand_in_allowlist.yml"
-ENTRY_KEYS = ("file", "integration", "reason")
 # Each helper and the argument that names the integration: (position, keyword).
 SINKS: dict[str, tuple[int, str | None]] = {
     "mock_component": (1, "component"),
@@ -65,12 +70,11 @@ SINKS: dict[str, tuple[int, str | None]] = {
 }
 UNKNOWN = "\0"
 TOO_MANY = "\1"  # more alternatives than are checked: reported, never dropped
-ENDLESS = "\5"  # a helper wrapping its own name again on every call: reported
-MAX_WRAPS = 8  # names one parameter may be wrapped into before that is ENDLESS
+ENDLESS = "\5"  # text added by more than MAX_WRAPS helpers: reported
+MAX_WRAPS = 8
 MAX_ALTERNATIVES = 256
 # The calls a ``for`` over takes the same elements from as from their argument.
 _SAME_ITEMS = ("sorted", "list", "tuple", "set", "frozenset")
-_AROUND = "\x04"  # where a wrapped parameter's name goes
 _MARKER = re.compile("\x02([0-9]+)\x03")
 _FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _DEFINITIONS = (*_FUNCTIONS, ast.Lambda, ast.ClassDef)
@@ -80,11 +84,34 @@ Chain = list["Scope"]
 Bound = tuple[object, "Chain | None"]  # a value, and the scopes it resolves in
 Scope = dict[str, list[Bound]]
 FunctionKey = tuple[str, str, int, int]
-# (function key, parameter, mode): the mode says what of the argument names
-# integrations: "value" the argument, "item" what a ``for`` over it takes, and
-# "dict_value" its values; "item:1" or "dict_value:1" takes element 1 of each;
-# a "|prefix\x04suffix" ending wraps each name in text the helper adds.
-Param = tuple[FunctionKey, str, str]
+
+
+class _AsOf(list["Scope"]):
+    """Scopes whose innermost one is read as it stood at ``line``."""
+
+    def __init__(self, scopes: Chain, line: int) -> None:
+        super().__init__(scopes)
+        self.line = line
+
+
+class Mode(NamedTuple):
+    """What of a helper's argument names integrations."""
+
+    kind: str = "value"  # the argument; "item": a loop's items; "dict_value"
+    column: int | None = None  # the element of each item that does
+    around: tuple[str, str] | None = None  # text the helper puts around each
+
+
+class Param(NamedTuple):
+    function: FunctionKey
+    name: str
+    mode: Mode = Mode()
+
+
+class Site(NamedTuple):
+    path: str
+    line: int
+    callee: str
 
 
 class _Imported(NamedTuple):
@@ -151,22 +178,37 @@ def _scope_nodes(scope: ast.AST) -> Iterator[ast.AST]:
             pending += ast.iter_child_nodes(node)
 
 
-def _bind(scope: Scope, target: ast.expr, value: object) -> None:
+def _bind(scope: Scope, target: ast.expr, value: object, new: list[object]) -> None:
+    """Bind ``target`` to ``value``; ``new`` collects each value bound."""
     if isinstance(target, ast.Name):
         scope.setdefault(target.id, []).append((value, None))
+        new.append(value)
     elif isinstance(target, (ast.Tuple, ast.List)):
         values = value.elts if isinstance(value, (ast.Tuple, ast.List)) else []
         same_shape = len(values) == len(target.elts)
         for index, element in enumerate(target.elts):
-            _bind(scope, element, values[index] if same_shape else ast.Constant(None))
+            part = values[index] if same_shape else ast.Constant(None)
+            _bind(scope, element, part, new)
 
 
-def _bind_loop(scope: Scope, target: ast.expr, iterable: ast.expr) -> None:
+def _bind_loop(
+    scope: Scope, target: ast.expr, iterable: ast.expr, new: list[object]
+) -> None:
     if isinstance(target, (ast.Tuple, ast.List)):
         for index, element in enumerate(target.elts):
-            _bind(scope, element, _Each(iterable, index))
+            _bind(scope, element, _Each(iterable, index), new)
     else:
-        _bind(scope, target, _Each(iterable, None))
+        _bind(scope, target, _Each(iterable, None), new)
+
+
+def _fixed_length(node: object) -> int | None:
+    """How many elements a list or tuple literal has; a set's order and size,
+    and a starred element's size, are only known at runtime."""
+    if isinstance(node, (ast.Tuple, ast.List)) and not any(
+        isinstance(element, ast.Starred) for element in node.elts
+    ):
+        return len(node.elts)
+    return None
 
 
 def _bind_import(scope: Scope, node: ast.Import | ast.ImportFrom, package: str) -> None:
@@ -191,7 +233,7 @@ def _parametrized(
     text_of: Callable[[ast.expr], str | None],
 ) -> None:
     """Bind the values ``pytest.mark.parametrize`` gives each argument;
-    ``text_of`` reads argument names given as a constant."""
+    ``text_of`` reads argument names given through a name."""
     for decorator in node.decorator_list:
         if not (
             isinstance(decorator, ast.Call)
@@ -237,17 +279,15 @@ class Checker:
         self.functions: dict[int, FunctionKey] = {}
         self.methods: dict[int, ast.ClassDef] = {}  # each method's class
         self.sinks: set[Param] = set()
-        # Each sink parameter's call sites.
-        self.sink_sites: dict[Param, set[tuple[str, int, str]]] = {}
+        self.sink_sites: dict[Param, set[Site]] = {}
+        self.depths: dict[Param, int] = {}  # helpers adding text to each name
         self.called: set[FunctionKey] = set()  # functions a call in the trees fills
         # Parameters with values of their own: a default or ``parametrize``.
         self.given: set[tuple[FunctionKey, str]] = set()
-        self.assigned: dict[int, int] = {}  # each assigned value's line
-        self.straight: set[int] = set()  # values a function body always assigns
-        # The line and scope of the call being recorded.
-        self.at: tuple[int, int] | None = None
+        self.assigned: dict[object, int] = {}  # the line each value is bound at
+        self.straight: set[object] = set()  # values a function always binds
         self.findings: set[Finding] = set()
-        self.unresolved: set[tuple[str, int, str]] = set()
+        self.unresolved: set[Site] = set()
         for tree in TREES:
             for path in sorted((repo / tree).rglob("*.py")):
                 relative = path.relative_to(repo)
@@ -299,8 +339,8 @@ class Checker:
 
     # --- scopes --------------------------------------------------------------
 
-    def marker(self, function: FunctionKey, param: str, mode: str) -> str:
-        key = (function, param, mode)
+    def marker(self, function: FunctionKey, param: str, mode: Mode = Mode()) -> str:
+        key = Param(function, param, mode)
         if key not in self.markers:
             self.markers[key] = f"\x02{len(self.params)}\x03"
             self.params.append(key)
@@ -313,7 +353,7 @@ class Checker:
         if isinstance(node, (*_FUNCTIONS, ast.Lambda)):
             key = _key(module.name, node)
             for name in _parameters(node):
-                scope[name] = [(ast.Constant(self.marker(key, name, "value")), None)]
+                scope[name] = [(ast.Constant(self.marker(key, name)), None)]
             args = node.args
             positional = [*args.posonlyargs, *args.args]
             defaults = list(zip(positional[::-1], args.defaults[::-1], strict=False))
@@ -332,6 +372,11 @@ class Checker:
             self.given |= {
                 (key, name) for name, bound in scope.items() if len(bound) > 1
             }
+        if isinstance(node, (*_FUNCTIONS, ast.Lambda)):
+            # A parameter holds its value from the definition's line on.
+            for bound in scope.values():
+                for value, _ in bound:
+                    self._bound_at(value, node.lineno, straight=True)
         package = module.name
         if not module.path.endswith("__init__.py"):
             package = module.name.rpartition(".")[0]
@@ -359,21 +404,41 @@ class Checker:
         package: str,
         body: frozenset[int] = frozenset(),
     ) -> None:
+        new: list[object] = []
+        targets: list[ast.expr] = []
         if isinstance(node, ast.Assign):
-            self.assigned[id(node.value)] = node.lineno
-            if id(node) in body and all(isinstance(t, ast.Name) for t in node.targets):
-                # A statement of the function's own body runs every time, in order.
-                self.straight.add(id(node.value))
-            for target in node.targets:
-                _bind(scope, target, node.value)
+            targets = node.targets
+            for target in targets:
+                _bind(scope, target, node.value, new)
         elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value:
-            _bind(scope, node.target, node.value)
+            targets = [node.target]
+            _bind(scope, node.target, node.value, new)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            # ``name += text``: the name's earlier value with the text added.
+            targets = [node.target]
+            earlier = ast.Name(id=node.target.id, ctx=ast.Load())
+            _bind(scope, node.target, ast.BinOp(earlier, node.op, node.value), new)
         elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
-            _bind_loop(scope, node.target, node.iter)
+            _bind_loop(scope, node.target, node.iter, new)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             _bind_import(scope, node, package)
         elif isinstance(node, (*_FUNCTIONS, ast.ClassDef)):
             scope.setdefault(node.name, []).append((node, None))
+        line = getattr(node, "lineno", None)
+        if line is not None:
+            # A plain assignment in the function's own body always runs, in order.
+            straight = (
+                id(node) in body
+                and bool(targets)
+                and all(isinstance(target, ast.Name) for target in targets)
+            )
+            for value in new:
+                self._bound_at(value, line, straight=straight)
+
+    def _bound_at(self, value: object, line: int, *, straight: bool) -> None:
+        self.assigned[value] = line
+        if straight:
+            self.straight.add(value)
 
     def scope_of(self, module: _Module, node: ast.AST, outer: Chain) -> Scope:
         if id(node) not in self.scopes:
@@ -392,26 +457,35 @@ class Checker:
     # --- what an expression can be --------------------------------------------
 
     def lookup(self, name: str, chain: Chain) -> list[Bound]:
+        """What ``name`` is bound to. In scopes read as of a line, the innermost
+        scope gives what the name held at that line, and each value goes on
+        being read as of the line it was bound at."""
+        line = chain.line if isinstance(chain, _AsOf) else None
         for depth in range(len(chain) - 1, -1, -1):
-            if name in chain[depth]:
-                inner = chain[: depth + 1]
-                bound = chain[depth][name]
-                if self.at is not None and id(chain[depth]) == self.at[1]:
-                    bound = self._latest(bound, self.at[0])
-                return [
-                    (value, own if own is not None else inner) for value, own in bound
-                ]
+            if name not in chain[depth]:
+                continue
+            inner = chain[: depth + 1]
+            bound = chain[depth][name]
+            if line is None or depth != len(chain) - 1:
+                return [(v, own if own is not None else inner) for v, own in bound]
+            return [
+                (v, _AsOf(inner, self.assigned.get(v, line)) if own is None else own)
+                for v, own in self._latest(bound, line)
+            ]
         return []
 
     def _latest(self, bound: list[Bound], line: int) -> list[Bound]:
-        """Of a name's plain assignments in a function body, the last one before
-        ``line``; every binding when any of them may not run in order."""
-        if not all(id(value) in self.straight for value, _ in bound):
+        """Of a name's parameter value and plain assignments in a function body,
+        the last one before ``line``; every binding when any of them may not
+        run in order."""
+        if not all(value in self.straight for value, _ in bound):
             return bound
-        before = [b for b in bound if self.assigned[id(b[0])] < line]
+        lines = [self.assigned[value] for value, _ in bound]
+        before = [at for at in lines if at < line]
         if not before:
             return bound
-        return [max(before, key=lambda b: self.assigned[id(b[0])])]
+        # A parameter's default and its argument share the definition's line.
+        return [b for b, at in zip(bound, lines, strict=True) if at == max(before)]
 
     def resolve(self, value: object, chain: Chain, seen: frozenset[int]) -> list[Bound]:
         """What an import names: a value in another module, or a module."""
@@ -486,7 +560,7 @@ class Checker:
         if isinstance(node, (ast.Name, ast.Attribute)):
             found = self.objects(node, chain, seen)
             return set().union(
-                *(self._value_where_assigned(v, c or chain, seen) for v, c in found)
+                *(self.values(v, c or chain, seen) for v, c in found)
             ) or {UNKNOWN}
         if isinstance(node, _Each):
             return set().union(
@@ -502,20 +576,6 @@ class Checker:
         if (joined := self._named_join(node, chain, seen)) is not None:
             return joined
         return self._joined(node, chain, seen)
-
-    def _value_where_assigned(
-        self, value: object, chain: Chain, seen: frozenset[int]
-    ) -> set[str]:
-        """``value``'s strings, its own names read as they were at its assignment
-        when it is assigned in the scope of the call being recorded."""
-        line = self.assigned.get(id(value))
-        if line is None or self.at is None or id(chain[-1]) != self.at[1]:
-            return self.values(value, chain, seen)
-        at, self.at = self.at, (line, self.at[1])
-        try:
-            return self.values(value, chain, seen)
-        finally:
-            self.at = at
 
     def _named_join(
         self, node: object, chain: Chain, seen: frozenset[int]
@@ -533,7 +593,8 @@ class Checker:
         found: set[str] = set()
         for value, own in self.objects(node.args[0], chain, seen):
             if not isinstance(value, _SEQUENCES):
-                return {UNKNOWN}
+                found.add(UNKNOWN)
+                continue
             inline = ast.Call(func=node.func, args=[value], keywords=[])
             found |= self._joined(inline, own or chain, seen)
         return found or {UNKNOWN}
@@ -570,9 +631,19 @@ class Checker:
             rows = [(param_row(element, column), chain) for element in node.elts]
             return _column(rows, column)
         if isinstance(node, ast.Dict):
-            keys = [(key, chain) for key in node.keys if key is not None]
+            keys: list[Bound] = []
+            for key, value in zip(node.keys, node.values, strict=True):
+                if key is None:
+                    keys += self._spread(self.items(value, chain, seen), chain)
+                else:
+                    keys.append((key, chain))
             return _column(keys, column)
         return []
+
+    @staticmethod
+    def _spread(found: list[Bound], chain: Chain) -> list[Bound]:
+        """What a ``**other`` entry adds; a runtime name when it cannot be read."""
+        return found or [(ast.Constant(None), chain)]
 
     def dict_values(
         self,
@@ -583,8 +654,13 @@ class Checker:
     ) -> list[Bound]:
         """The values of the dict ``node`` is, or element ``column`` of each."""
         if isinstance(node, ast.Dict):
-            pairs = zip(node.keys, node.values, strict=True)
-            return _column([(v, chain) for k, v in pairs if k is not None], column)
+            held: list[Bound] = []
+            for key, value in zip(node.keys, node.values, strict=True):
+                if key is None:
+                    held += self._spread(self.dict_values(value, chain, seen), chain)
+                else:
+                    held.append((value, chain))
+            return _column(held, column)
         if isinstance(node, (ast.Name, ast.Attribute)):
             return self._named(node, chain, seen, column, "dict_value")
         return []
@@ -604,10 +680,8 @@ class Checker:
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 if match := _MARKER.fullmatch(value.value):
                     function, param, _ = self.params[int(match.group(1))]
-                    taken = mode if column is None else f"{mode}:{column}"
-                    found.append(
-                        (ast.Constant(self.marker(function, param, taken)), own)
-                    )
+                    taken = self.marker(function, param, Mode(mode, column))
+                    found.append((ast.Constant(taken), own))
             elif isinstance(value, ast.expr) and id(value) not in seen:
                 inner = seen | {id(value)}
                 collect = self.items if mode == "item" else self.dict_values
@@ -638,14 +712,11 @@ class Checker:
         return []
 
     def _length(self, node: ast.expr, chain: Chain, seen: frozenset[int]) -> int | None:
-        """How many elements a literal sequence, or a name holding one, has."""
-        if isinstance(node, _SEQUENCES):
-            return len(node.elts)
+        """How many elements a list or tuple literal, or a name holding one, has."""
         if isinstance(node, (ast.Name, ast.Attribute)):
             found = self.objects(node, chain, seen)
-            if len(found) == 1 and isinstance(found[0][0], _SEQUENCES):
-                return len(found[0][0].elts)
-        return None
+            return _fixed_length(found[0][0]) if len(found) == 1 else None
+        return _fixed_length(node)
 
     def _view_items(
         self,
@@ -669,7 +740,8 @@ class Checker:
 
     def run(self) -> list[Finding]:
         # Repeat until helpers passing names on to other helpers add no more;
-        # each round can only add parameters, so this ends.
+        # each round only adds parameters, and MAX_WRAPS bounds the ones with
+        # text around them, so this ends.
         while True:
             before = set(self.sinks)
             self.findings.clear()
@@ -681,8 +753,8 @@ class Checker:
                     site
                     for param, sites in self.sink_sites.items()
                     for site in sites
-                    if param[0] not in self.called
-                    and (param[0], param[1]) not in self.given
+                    if param.function not in self.called
+                    and (param.function, param.name) not in self.given
                 }
                 return sorted(
                     self.findings, key=lambda f: (f.path, f.line, f.integration)
@@ -723,13 +795,11 @@ class Checker:
         name = self.callee_name(call, chain)
         if name in SINKS:
             position, keyword = SINKS[name]
-            self.record(
-                module, call, call_argument(call, position, keyword), chain, "value", ""
-            )
+            self.record(module, call, call_argument(call, position, keyword), chain, "")
         # Resolve the callee when a helper passes names on: under its own name,
         # or under any name an import gives it (a re-export can rename it).
         if not self.sinks or (
-            name not in {key[1] for key, _, _ in self.sinks}
+            name not in {sink.function[1] for sink in self.sinks}
             and not self._imported(call.func, chain)
         ):
             return
@@ -739,10 +809,10 @@ class Checker:
                 continue
             self.called.add(key)
             bound = self.fills_first_parameter(call, target)
-            for function, param, mode in sorted(self.sinks):
-                if function == key:
-                    argument = bound_argument(call, target, param, bound=bound)
-                    self.record(module, call, argument, chain, mode, target.name)
+            for sink in tuple(self.sinks):
+                if sink.function == key:
+                    argument = bound_argument(call, target, sink.name, bound=bound)
+                    self.record(module, call, argument, chain, target.name, sink)
 
     def _imported(self, func: ast.expr, chain: Chain) -> bool:
         """Whether the callee's name, or the module it is read off, is imported."""
@@ -753,17 +823,15 @@ class Checker:
             for value, _ in self.lookup(func.id, chain)
         )
 
-    def _names(self, argument: ast.expr, chain: Chain, mode: str) -> set[str]:
+    def _names(self, argument: ast.expr, chain: Chain, mode: Mode) -> set[str]:
         """The names ``argument`` gives, read as ``mode`` says."""
-        if mode == "value":
+        if mode.kind == "value":
             return self.values(argument, chain)
-        kind, _, taken = mode.partition(":")
-        column = int(taken) if taken else None
-        collect = self.items if kind == "item" else self.dict_values
+        collect = self.items if mode.kind == "item" else self.dict_values
         names: set[str] = set().union(
             *(
                 self.values(v, c or chain)
-                for v, c in collect(argument, chain, frozenset(), column)
+                for v, c in collect(argument, chain, frozenset(), mode.column)
             )
         )
         if not names and not isinstance(argument, (*_SEQUENCES, ast.Dict)):
@@ -806,119 +874,67 @@ class Checker:
         call: ast.Call,
         argument: ast.expr | None,
         chain: Chain,
-        mode: str,
         via: str,
+        sink: Param | None = None,
     ) -> None:
+        """Check the names ``call`` gives a stand-in, directly or as the argument
+        of the helper parameter ``sink``."""
+        site = Site(module.path, call.lineno, ast.unparse(call.func))
         if argument is None:
+            # ``*`` or ``**`` may carry the name where it cannot be read.
+            if any(isinstance(a, ast.Starred) for a in call.args) or any(
+                keyword.arg is None for keyword in call.keywords
+            ):
+                self.unresolved.add(site)
             return
-        base, _, template = mode.partition("|")
-        self.at = (call.lineno, id(chain[-1]))
-        try:
-            names = self._names(argument, chain, base)
-        finally:
-            self.at = None
-        if template:
-            prefix, _, suffix = template.partition(_AROUND)
+        mode = sink.mode if sink else Mode()
+        names = self._names(argument, _AsOf(chain, call.lineno), mode)
+        if mode.around:
+            before, after = mode.around
             names = {
-                n if n in (UNKNOWN, TOO_MANY) else f"{prefix}{n}{suffix}" for n in names
+                n if n in (UNKNOWN, TOO_MANY) else f"{before}{n}{after}" for n in names
             }
-        site = (module.path, call.lineno, ast.unparse(call.func))
+        endless = Finding(module.path, call.lineno, ENDLESS, via)
         for name in names:
             domain = name.partition(".")[0]
-            if match := _MARKER.fullmatch(domain):
-                param = self.params[int(match.group(1))]
-                self.sinks.add(param)
-                self.sink_sites.setdefault(param, set()).add(site)
-            elif (match := _MARKER.search(domain)) and not _MARKER.search(
-                domain, match.end()
-            ):
-                # The helper builds the name around its parameter.
-                function, param_name, taken = self.params[int(match.group(1))]
-                wrap = f"{domain[: match.start()]}{_AROUND}{domain[match.end() :]}"
-                if UNKNOWN in wrap or TOO_MANY in wrap:
-                    self.unresolved.add(site)
-                    continue
-                param = (function, param_name, f"{taken}|{wrap}")
-                wraps = {p for p in self.sinks if p[:2] == param[:2] and "|" in p[2]}
-                if param not in wraps and len(wraps) >= MAX_WRAPS:
-                    self.findings.add(Finding(module.path, call.lineno, ENDLESS, via))
-                    continue
-                self.sinks.add(param)
-                self.sink_sites.setdefault(param, set()).add(site)
+            if match := _MARKER.search(domain):
+                self._follow(match, site, sink, endless)
             elif domain == TOO_MANY or domain in self.real:
                 self.findings.add(Finding(module.path, call.lineno, domain, via))
             elif UNKNOWN in domain:
-                self.unresolved.add((module.path, call.lineno, ast.unparse(call.func)))
+                self.unresolved.add(site)
 
-
-# --- the allowlist ------------------------------------------------------------
-
-
-def load_allowlist(path: Path, problems: list[str]) -> dict[tuple[str, str], str]:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as err:
-        problems.append(f"{ALLOWLIST}: cannot be read: {err}")
-        return {}
-    return parse_allowlist(text, problems)
-
-
-def _repeated_key(node: yaml.Node | None) -> yaml.ScalarNode | None:
-    """A key repeated in one mapping, which loading would settle silently by
-    keeping the last value."""
-    if isinstance(node, yaml.MappingNode):
-        keys = [key.value for key, _ in node.value if isinstance(key, yaml.ScalarNode)]
-        for index, (key, _) in enumerate(node.value):
-            if isinstance(key, yaml.ScalarNode) and key.value in keys[:index]:
-                return key
-        children = [value for _, value in node.value]
-    elif isinstance(node, yaml.SequenceNode):
-        children = list(node.value)
-    else:
-        return None
-    return next((k for c in children if (k := _repeated_key(c)) is not None), None)
-
-
-def parse_allowlist(text: str, problems: list[str]) -> dict[tuple[str, str], str]:
-    """Each entry's reason by (file, integration); a bad entry is a problem.
-    ``scripts/stand_in_lists_ratchet.py`` reads the allowlist with this too."""
-    try:
-        repeated = _repeated_key(yaml.compose(text, Loader=yaml.SafeLoader))
-        entries = yaml.safe_load(text) or []
-    except yaml.YAMLError as err:
-        problems.append(f"{ALLOWLIST}: cannot be read: {err}")
-        return {}
-    if repeated is not None:
-        line = repeated.start_mark.line + 1
-        problems.append(f"{ALLOWLIST}:{line}: repeats the key {repeated.value!r}")
-        return {}
-    if not isinstance(entries, list):
-        problems.append(f"{ALLOWLIST}: must be a list of entries")
-        return {}
-    allowed: dict[tuple[str, str], str] = {}
-    for number, entry in enumerate(entries, 1):
-        valid = isinstance(entry, dict) and sorted(entry) == sorted(ENTRY_KEYS)
-        if not valid or not all(
-            isinstance(entry[k], str) and entry[k] for k in ENTRY_KEYS
-        ):
-            problems.append(
-                f"{ALLOWLIST}: entry {number} needs exactly a non-empty "
-                + ", ".join(ENTRY_KEYS)
-            )
-            continue
-        key = (entry["file"], entry["integration"])
-        if key in allowed:
-            problems.append(f"{ALLOWLIST}: entry {number} repeats {key[0]} {key[1]}")
-        allowed[key] = entry["reason"]
-    return allowed
+    def _follow(
+        self, match: re.Match[str], site: Site, sink: Param | None, endless: Finding
+    ) -> None:
+        """Make a sink of the helper parameter ``match`` found in a name, with
+        the text the helpers put around it; that text may hold further
+        parameters, followed the same way. ``endless`` is the finding when more
+        than ``MAX_WRAPS`` helpers have added text."""
+        domain = match.string
+        around = (domain[: match.start()], domain[match.end() :])
+        if UNKNOWN in "".join(around) or TOO_MANY in "".join(around):
+            self.unresolved.add(site)
+            return
+        param = self.params[int(match.group(1))]
+        if any(around):
+            param = param._replace(mode=param.mode._replace(around=around))
+            depth = self.depths.get(sink, 0) + 1 if sink else 1
+            if param not in self.sinks and depth > MAX_WRAPS:
+                self.findings.add(endless)
+                return
+            self.depths.setdefault(param, depth)
+        self.sinks.add(param)
+        self.sink_sites.setdefault(param, set()).add(site)
 
 
 def _describe(finding: Finding) -> str:
     through = f" through {finding.via}()" if finding.via else ""
     if finding.integration == ENDLESS:
         return (
-            f"{finding.path}:{finding.line}: a helper builds the name on itself "
-            f"without end{through}; name the integration directly"
+            f"{finding.path}:{finding.line}: more than {MAX_WRAPS} helpers add "
+            f"text to the name{through}, as a helper calling itself does; name "
+            "the integration directly"
         )
     if finding.integration == TOO_MANY:
         return (

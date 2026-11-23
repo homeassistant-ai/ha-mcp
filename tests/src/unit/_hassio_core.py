@@ -1,6 +1,5 @@
 """Core's own ``hassio`` integration, set up as on Home Assistant OS against a
-stand-in Supervisor (``SupervisorApi``): the one of ``_tools_addons_core``,
-``_supervisor_core`` or ``_backup_snapshot_core``.
+stand-in Supervisor (``SupervisorApi``).
 
 Core's ``async_setup`` and its config entry run unchanged. The stand-in answers
 what they read with aiohasupervisor's models, given to it as defaults.
@@ -10,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from ipaddress import IPv4Address, IPv4Network
-from logging.handlers import BufferingHandler
 from typing import Any, Protocol
 
 import pytest
@@ -198,6 +196,26 @@ def install_apps(supervisor: SupervisorApi, apps: list[dict[str, Any]]) -> None:
         supervisor.default("POST", f"/store/addons/{info['slug']}/update")
 
 
+# Where Core logs a failed hassio setup: the integration and the entity domains
+# it forwards to, a platform that fails to set up, and the config entry.
+_SETUP_LOGGERS = (
+    "homeassistant.components",
+    "homeassistant.helpers.entity_platform",
+    "homeassistant.config_entries",
+)
+
+
+class _Warnings(logging.Handler):
+    """What Core logs at warning level or above."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(f"{record.name}: {record.getMessage()}")
+
+
 async def set_up_hassio(
     hass: HomeAssistant,
     supervisor: SupervisorApi,
@@ -212,26 +230,25 @@ async def set_up_hassio(
     Supervisor's token is in the environment only while Core sets the
     integration up, so the server under test does not take itself for the app.
     The requests Core made while setting up are forgotten. Core logs a request
-    the stand-in does not answer and still loads, so a warning it logs while
-    setting up fails here.
+    the stand-in does not answer, or a platform that fails to set up, and still
+    loads, so a warning it logs while setting up fails here.
     """
     _serve_system(supervisor, core_versions)
     install_apps(supervisor, apps or [])
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     monkeypatch.setenv("SUPERVISOR", supervisor.url)
     monkeypatch.setenv("SUPERVISOR_TOKEN", "core-supervisor-token")
-    logged = BufferingHandler(capacity=1000)
-    logged.setLevel(logging.WARNING)
-    hassio_logger = logging.getLogger("homeassistant.components.hassio")
-    hassio_logger.addHandler(logged)
+    logged = _Warnings()
+    watched = [logging.getLogger(name) for name in _SETUP_LOGGERS]
+    for logger in watched:
+        logger.addHandler(logged)
     try:
         assert await async_setup_component(hass, "hassio", {})
         await hass.async_block_till_done()
     finally:
-        hassio_logger.removeHandler(logged)
-    warned = [record.getMessage() for record in logged.buffer]
-    logged.close()
-    assert not warned, warned
+        for logger in watched:
+            logger.removeHandler(logged)
+    assert not logged.messages, logged.messages
     [entry] = hass.config_entries.async_entries("hassio")
     assert entry.state is ConfigEntryState.LOADED, entry.reason
     monkeypatch.delenv("SUPERVISOR_TOKEN")

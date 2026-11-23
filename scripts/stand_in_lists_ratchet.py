@@ -25,9 +25,9 @@ Two rules decide every added entry:
 
 The allowlist of ``scripts/integration_stand_ins.py`` lists a file with each
 real integration it keeps a stand-in for, and gets the same two rules for every
-added file and integration; that check is wider when its code changed. It is
-read with that script's own reader, so an entry the check refuses fails here
-too. A file taken off it is taken off every list, as below. Its entries are
+added file and integration; that check is wider when the code of one of its
+scripts (``INTEGRATION_CHECK``) changed. It is read with the check's own
+reader, so an entry the check refuses fails here too. A file taken off it is taken off every list, as below. Its entries are
 kept stand-ins with a reason, not files waiting for conversion, so an edit to
 a listed file does not take it off, and a file converted off the other lists
 may stay on it.
@@ -37,7 +37,7 @@ add a new faked test to it. A listed file the pull request changes is
 therefore converted, which takes it off every list.
 
 A file the pull request takes off any list is converted, and a converted file
-is on no list: one taken off an ast-grep rule's list but left on ``SLF001``
+is on no list but the integration allowlist: one taken off an ast-grep rule's list but left on ``SLF001``
 still reaches into private members the conversion was meant to remove.
 
 The script also refuses the ways around a list: narrowing a rule's ``files``,
@@ -70,10 +70,10 @@ import yaml  # type: ignore[import-untyped]
 
 
 def _integration_check() -> ModuleType:
-    """``scripts/integration_stand_ins.py`` beside this script, whose reader of
-    its allowlist is the one this script uses."""
-    path = Path(__file__).resolve().with_name("integration_stand_ins.py")
-    spec = importlib.util.spec_from_file_location("integration_stand_ins", path)
+    """``scripts/stand_in_allowlist.py`` beside this script: the reader
+    ``scripts/integration_stand_ins.py`` reads its allowlist with."""
+    path = Path(__file__).resolve().with_name("stand_in_allowlist.py")
+    spec = importlib.util.spec_from_file_location("stand_in_allowlist", path)
     if spec is None or spec.loader is None:  # pragma: no cover - unreachable
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
@@ -140,7 +140,11 @@ MYPY_LIST = f"{PYPROJECT} (mypy)"
 # no file is left to import from any of them. Matters only while a pull
 # request's base still has the rule, and only with its list empty.
 RETIRED_RULES = frozenset({"no-shared-core-fakes"})
-INTEGRATION_CHECK = "scripts/integration_stand_ins.py"
+INTEGRATION_CHECK = (
+    "scripts/integration_stand_ins.py",
+    "scripts/stand_in_syntax.py",
+    "scripts/stand_in_allowlist.py",
+)
 INTEGRATION_ALLOWLIST: str = _INTEGRATION.ALLOWLIST
 
 
@@ -637,9 +641,14 @@ def _check_integration_allowlist(base: Base, repo: Path, problems: list[str]) ->
     """The allowlist is one its check accepts, and grows by the same two rules
     as every other list, per file and integration."""
     head, before = _allowlists(base, repo, problems)
-    check = repo / INTEGRATION_CHECK
-    widened = before is None or _code(base.text(INTEGRATION_CHECK)) != _code(
-        check.read_text(encoding="utf-8") if check.is_file() else None
+    widened = before is None or any(
+        _code(base.text(name))
+        != _code(
+            (repo / name).read_text(encoding="utf-8")
+            if (repo / name).is_file()
+            else None
+        )
+        for name in INTEGRATION_CHECK
     )
     for entry, integration in sorted((head or set()) - (before or set())):
         if not base.has(entry):

@@ -534,7 +534,8 @@ class TestRepositories:
     async def test_a_failed_repository_action_gets_repository_advice(
         self, core_route: Route, action: str, message: str, advice: str
     ) -> None:
-        """The store cannot be read back to explain the refusal."""
+        """A refused repository action still gets repository advice when the
+        store cannot be read back."""
         path = REPOSITORIES if action == "add_repository" else f"{REPOSITORIES}/abc123"
         method = "POST" if action == "add_repository" else "DELETE"
         core_route.supervisor.refuse(method, path, message)

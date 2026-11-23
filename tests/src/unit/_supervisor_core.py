@@ -64,13 +64,10 @@ async def load_supervisor_api(
     monkeypatch: pytest.MonkeyPatch,
     answers: dict[tuple[str, str], Any],
 ) -> None:
-    """Set up Core's ``hassio``, which registers ``supervisor/api``. Once
-    ``hassio`` is set up, every earlier ``aioclient_mock`` registration is
-    cleared, so the stand-in's defaults answer only setup. The Supervisor then
-    answers only each ``(method, path)`` in ``answers``, with
-    ``{"result": "ok", "data": ...}``, and what the test registers on
-    ``aioclient_mock`` afterwards. ``SUPERVISOR_TOKEN`` is left set, as in
-    Core's container."""
+    """Set up Core's ``hassio``, which registers ``supervisor/api``, then
+    clear every earlier ``aioclient_mock`` registration: the Supervisor answers
+    only ``answers`` and what the test registers afterwards.
+    ``SUPERVISOR_TOKEN`` is left set, as in Core's container."""
     await set_up_hassio(hass, _MockedSupervisor(aioclient_mock), monkeypatch)
     aioclient_mock.clear_requests()
     monkeypatch.setenv("SUPERVISOR_TOKEN", "abcdefgh")

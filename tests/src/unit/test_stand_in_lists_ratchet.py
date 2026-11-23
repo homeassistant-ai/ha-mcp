@@ -498,6 +498,13 @@ def test_an_exempted_test_is_reported(
             },
             id="widened-check-allowlists-an-older-file-it-now-finds",
         ),
+        pytest.param(
+            {
+                _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_CLEAN, "frontend")),
+                "scripts/stand_in_syntax.py": "FORMS = ('f-string', 'replace')\n",
+            },
+            id="check-widened-in-its-syntax-script-allowlists-an-older-file",
+        ),
         pytest.param({_ALLOWLIST_PATH: "[]\n"}, id="allowlisted-stand-in-converted"),
     ],
 )
