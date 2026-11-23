@@ -247,6 +247,14 @@ UNREAD = {
         "async def made(name):\n    MockModule(name)\n"
         "async def test_other():\n    await made('made_up_probe')\n"
     ),
+    "item-written-into-a-list-from-a-call": (
+        "names = ['made_up_probe']\nnames[0] = pick()\n"
+        "for name in names:\n    MockModule(name)\n"
+    ),
+    "dict-updated-by-keyword": (
+        "names = {'a': 'made_up_probe'}\nnames.update(b='hassio')\n"
+        "for name in names.values():\n    MockModule(name)\n"
+    ),
     "parametrize-names-that-cannot-be-read": (
         "@pytest.mark.parametrize([pick(), 'name'], [('a', 'hassio')])\n"
         "def test_it(hass, label, name):\n    MockModule(name)\n"

@@ -404,6 +404,35 @@ REFUSED = {
         "@pytest.fixture\ndef made(name='hassio'):\n    MockModule(name)\n"
         "def test_other():\n    made('made_up_probe')\n"
     ),
+    "item-written-into-a-list": (
+        "names = ['made_up_probe']\nnames[0] = 'hassio'\n"
+        "for name in names:\n    MockModule(name)\n"
+    ),
+    "name-appended-to-a-list": (
+        "names = ['made_up_probe']\nnames.append('hassio')\n"
+        "for name in names:\n    MockModule(name)\n"
+    ),
+    "list-extended": (
+        "names = ['made_up_probe']\nnames.extend(['hassio'])\n"
+        "for name in names:\n    MockModule(name)\n"
+    ),
+    "list-appended-to-in-another-function": (
+        "names = ['made_up_probe']\ndef fill():\n    names.append('hassio')\n"
+        "def test_it(hass):\n    for name in names:\n        MockModule(name)\n"
+    ),
+    "list-appended-to-through-an-alias": (
+        "names = ['made_up_probe']\nalias = names\nalias.append('hassio')\n"
+        "for name in names:\n    MockModule(name)\n"
+    ),
+    "helpers-parameter-appended-to": (
+        "def register(names):\n    names.append('hassio')\n"
+        "    for name in names:\n        MockModule(name)\n"
+        "register(['made_up_probe'])\n"
+    ),
+    "while-test-reads-what-its-body-assigns": (
+        "def test_it(hass):\n    name = 'made_up_probe'\n"
+        "    while check(MockModule(name)):\n        name = 'hassio'\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -572,6 +601,23 @@ def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
 
 
 ALLOWED = {
+    "for-iterable-read-before-its-body-runs": (
+        "def test_it(hass):\n    name = 'made_up_probe'\n"
+        "    for _ in [MockModule(name)]:\n        name = 'hassio'\n"
+    ),
+    "made-up-name-appended-to-a-list": (
+        "names = ['made_up_probe']\nnames.append('x_probe')\n"
+        "for name in names:\n    MockModule(name)\n"
+    ),
+    "name-appended-after-the-loop": (
+        "def test_it(hass):\n    names = ['made_up_probe']\n"
+        "    for name in names:\n        MockModule(name)\n"
+        "    names.append('hassio')\n"
+    ),
+    "another-list-appended-to": (
+        "names = ['made_up_probe']\ncalls = []\ncalls.append('hassio')\n"
+        "for name in names:\n    MockModule(name)\n"
+    ),
     "decorator-named-like-a-fixture": (
         "def fixture_label(function):\n    return function\n"
         "@fixture_label\ndef register(name='hassio'):\n    MockModule(name)\n"

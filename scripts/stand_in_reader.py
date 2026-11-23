@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from stand_in_scopes import (  # type: ignore[import-not-found]
+    Added,
     AsOf,
     Bound,
     Chain,
@@ -265,6 +266,7 @@ class Reader:
             self._bind_node(scope, child, package, body)
             self._note_loop(scope, child)
         self._bind_outside(module, node, scope, outer or [module.top])
+        self._added_outside(scope, outer or [])
         self._first_iterable_outside(node, scope, here)
         return scope
 
@@ -279,6 +281,36 @@ class Reader:
                 (v, around if isinstance(v, Each) and v.iterable is first else own)
                 for v, own in bounds
             ]
+
+    def _added_outside(self, scope: Scope, outer: Chain) -> None:
+        """Settle the writes into collections once the scope is read. A write
+        through an alias (``alias = rows``, ``alias.append(...)``) is a write
+        into what it is an alias of. A name a scope only writes into is not
+        its own: the write is bound where the name lives, at no fixed point
+        there."""
+        for bounds in list(scope.values()):
+            writes = [(v, own) for v, own in bounds if isinstance(v, Added)]
+            aliased = [v.id for v, _ in bounds if isinstance(v, ast.Name)]
+            for other in aliased if writes else []:
+                for written, own in writes:
+                    again = Added(
+                        ast.Name(id=other, ctx=ast.Load()), ast.Add(), written.right
+                    )
+                    scope.setdefault(other, []).append((again, own))
+                    if id(written) in self.assigned:
+                        self.assigned[id(again)] = self.assigned[id(written)]
+        written_only = [
+            name
+            for name, bounds in scope.items()
+            if all(isinstance(value, Added) for value, _ in bounds)
+        ]
+        for name in written_only:
+            home = next((s for s in outer[::-1] if name in s), None)
+            if home is None:
+                continue
+            for value, own in scope.pop(name):
+                self.assigned.pop(id(value), None)
+                home.setdefault(name, []).append((value, own or [*outer, scope]))
 
     def _bind_outside(
         self, module: Module, node: ast.AST, scope: Scope, outer: Chain
@@ -303,11 +335,19 @@ class Reader:
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
             end = (node.end_lineno or node.lineno, node.end_col_offset or 0)
             first, last = node.body[0], node.body[-1]
-            body_end = (last.end_lineno or last.lineno, last.end_col_offset or 0)
-            spans = self.loops.setdefault(id(scope), [])
-            spans.append(
-                ((node.lineno, node.col_offset), end, (first.lineno, 0), body_end)
+            start = (node.lineno, node.col_offset)
+            # What each run of the loop reads again: a ``for``'s body, and a
+            # ``while``'s test too. A ``for``'s iterable is read once.
+            again = (
+                start
+                if isinstance(node, ast.While)
+                else (
+                    first.lineno,
+                    first.col_offset,
+                )
             )
+            body_end = (last.end_lineno or last.lineno, last.end_col_offset or 0)
+            self.loops.setdefault(id(scope), []).append((start, end, again, body_end))
 
     def header_scopes(self, node: ast.AST, outer: Chain) -> Chain:
         """The scopes a definition's decorators and defaults are read in: for
@@ -501,7 +541,8 @@ class Reader:
             if straight and cutoff is not None:
                 return False  # the function has not got there yet
             return place == at or any(
-                start <= at <= end and start <= place <= end for start, end, *_ in loops
+                again <= at <= body_end and start <= place <= end
+                for start, end, again, body_end in loops
             )
 
         kept = [

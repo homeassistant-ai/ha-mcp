@@ -59,11 +59,33 @@ class Names(NamedTuple):
     names: frozenset[str]
 
 
+class Added(ast.BinOp):
+    """A collection with items written into it after it was bound: the name's
+    earlier value with the items added."""
+
+
+# The methods that put their argument into a collection: as one item, or as a
+# collection of items.
+ADDS_ONE = ("append", "appendleft", "add", "insert")
+ADDS_MANY = ("extend", "extendleft", "update")
+
+
+def bind_added(scope: Scope, name: str, items: ast.expr, new: list[object]) -> None:
+    """Bind ``name`` to what it held with ``items`` added."""
+    value = Added(ast.Name(id=name, ctx=ast.Load()), ast.Add(), items)
+    scope.setdefault(name, []).append((value, None))
+    new.append(value)
+
+
 def bind(scope: Scope, target: ast.expr, value: object, new: list[object]) -> None:
     """Bind ``target`` to ``value``; ``new`` collects each value bound."""
     if isinstance(target, ast.Name):
         scope.setdefault(target.id, []).append((value, None))
         new.append(value)
+    elif isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+        # ``names[0] = value``: the collection with the value in it.
+        item = value if isinstance(value, ast.expr) else ast.Constant(None)
+        bind_added(scope, target.value.id, ast.List([item], ast.Load()), new)
     elif isinstance(target, ast.Starred):
         # ``*rest`` holds a list only known at runtime.
         bind(scope, target.value, ast.Constant(None), new)
@@ -85,7 +107,8 @@ def bind(scope: Scope, target: ast.expr, value: object, new: list[object]) -> No
 
 def bind_unread(scope: Scope, node: ast.AST, new: list[object]) -> list[ast.expr]:
     """Bind what ``with``, ``except`` and ``match`` name to a value only known
-    at runtime; the targets of a ``with``."""
+    at runtime, and a collection a method call adds to; the targets of a
+    ``with``."""
     targets: list[ast.expr] = []
     names: list[str | None] = []
     if isinstance(node, (ast.With, ast.AsyncWith)):
@@ -96,6 +119,18 @@ def bind_unread(scope: Scope, node: ast.AST, new: list[object]) -> list[ast.expr
         names = [node.name]
     elif isinstance(node, ast.MatchMapping):
         names = [node.rest]
+    elif (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.attr in (*ADDS_ONE, *ADDS_MANY)
+    ):
+        # ``names.append(value)``: an argument the check cannot read (a keyword,
+        # none at all) leaves the collection unread.
+        last: ast.expr = node.args[-1] if node.args else ast.Constant(None)
+        many = node.func.attr in ADDS_MANY
+        items = last if many else ast.List([last], ast.Load())
+        bind_added(scope, node.func.value.id, items, new)
     for name in filter(None, names):
         value = ast.Constant(None)
         scope.setdefault(name, []).append((value, None))
