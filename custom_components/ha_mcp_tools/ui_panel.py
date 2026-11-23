@@ -570,6 +570,9 @@ let timer = null;
 let busy = false;
 let tokenMisses = 0;
 let authDead = false;
+// Set once the session is minted and the app URL probed: before that, a
+// navigation must not point the iframe at the app (see applyLink).
+let appReady = false;
 
 function homeAssistantRoot() {{
   try {{
@@ -619,8 +622,11 @@ function appUrl() {{
 
 function applyLink(force) {{
   // A link that names nothing is the user leaving the panel: keep the app as
-  // it is instead of reloading it behind them.
-  if (!force && !parentSearch(window)) return;
+  // it is instead of reloading it behind them. Before the session is minted
+  // and the app probed, a navigation must not load the app either: the proxy
+  // answers 401 and that document would stay. The link is not lost --
+  // showApp() applies the parent's current query once the session is ready.
+  if (!force && (!appReady || !parentSearch(window))) return;
   const target = appUrl();
   if (frame.getAttribute("src") !== target) frame.setAttribute("src", target);
 }}
@@ -780,6 +786,7 @@ async function showApp() {{
     transientFailure("The settings UI returned HTTP " + probe.status + ".");
     return;
   }}
+  appReady = true;
   applyLink(true);
   msg.classList.add("hidden");
   frame.classList.remove("hidden");
