@@ -640,6 +640,11 @@ def test_except_group(hass):
 rest = 'made_up_probe'
 *rest, = pick()
 MockModule(rest)  # unread: MockModule
+later = functools.partial(register, None)  # unread: register
+list(map(register, rows))  # unread: register
+def plain():
+    pass
+apply(plain)
 """
 
 
@@ -654,9 +659,13 @@ def test_a_name_the_check_cannot_read_is_refused_where_it_is_used(
     ``partial``, put in a list, passed as an argument or a default, returned,
     or chosen by a condition.
 
+    A helper of the tests' own that gives its name on to a stand-in is
+    refused the same way when it is handed on.
+
     Not refused: a parameter a call, a default or ``parametrize`` fills, a
-    loop over an empty list, and a helper in ``isinstance`` or an annotation,
-    under a plain alias, or as a base class."""
+    loop over an empty list, a helper in ``isinstance`` or an annotation,
+    under a plain alias, or as a base class, and a function handed on that
+    registers nothing."""
     refused = [
         f"{SAMPLE}:{number}: {line.rpartition('# unread: ')[2]}() {guard.UNREAD}"
         for number, line in enumerate(_UNREAD_SOURCE.splitlines(), 1)
@@ -737,6 +746,15 @@ UNREAD = {
     "row-that-is-a-call": "for label, name in [pick()]:\n    MockModule(name)\n",
     "loop-over-a-function": (
         "def rows():\n    return ['hassio']\nfor name in rows:\n    MockModule(name)\n"
+    ),
+    "method-that-registers-handed-on": (
+        "class TestIt:\n    def register(self, name):\n        MockModule(name)\n"
+        "    def test_it(self, hass):\n        self.register('made_up_probe')\n"
+        "        apply(self.register, 'hassio')\n"
+    ),
+    "function-that-registers-returned-by-a-fixture": (
+        "def register(name):\n    MockModule(name)\nregister('made_up_probe')\n"
+        "@pytest.fixture\ndef maker():\n    return register\n"
     ),
     "parametrize-names-that-cannot-be-read": (
         "@pytest.mark.parametrize([pick(), 'name'], [('a', 'hassio')])\n"

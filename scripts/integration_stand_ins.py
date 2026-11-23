@@ -52,6 +52,7 @@ from stand_in_allowlist import (  # type: ignore[import-not-found]
 )
 from stand_in_resolver import (  # type: ignore[import-not-found]
     COMPREHENSIONS,
+    FunctionKey,
     DEFINITIONS,
     ENDLESS,
     FUNCTIONS,
@@ -116,6 +117,9 @@ class Checker(Resolver):
         # Where a helper's name stands as a callee, an alias or a base class.
         self.direct: set[int] = set()
         self.read_outside: set[int] = set()  # iterables visited ahead of their turn
+        # The tests' own functions that give a name on to a stand-in, as each
+        # round of the scan starts.
+        self.helpers: set[FunctionKey] = set()
 
     # --- the scan ------------------------------------------------------------
 
@@ -131,6 +135,7 @@ class Checker(Resolver):
         # text around them, so this ends.
         while True:
             before = set(self.sinks)
+            self.helpers = {sink.function for sink in before}
             self.findings.clear()
             self.unresolved.clear()
             for module in self.local:
@@ -187,8 +192,9 @@ class Checker(Resolver):
             self.visit(module, child, chain)
 
     def note_reference(self, module: Module, node: ast.AST, chain: Chain) -> None:
-        """A helper of Core's handed on instead of called (to ``partial``, in a
-        list, as an argument) gets its name where the check cannot read it."""
+        """A helper handed on instead of called (to ``partial``, in a list, as
+        an argument) gets its name where the check cannot read it: one of
+        Core's, or one of the tests' own that gives its name on to a stand-in."""
         if isinstance(node, ast.Call):
             self.direct.add(id(node.func))
             if ast.unparse(node.func) in ("isinstance", "issubclass"):
@@ -201,10 +207,16 @@ class Checker(Resolver):
             isinstance(node, (ast.Name, ast.Attribute))
             and isinstance(node.ctx, ast.Load)
             and id(node) not in self.direct
-            and (isinstance(node, ast.Name) or node.attr in SINKS or node.attr == "add")
         ):
             here = AsOf(chain, (node.lineno, node.col_offset))
-            if self._spelled(node, here) in SINKS and not self._in_trees(node, here):
+            name = self._spelled(node, here)
+            if (name in SINKS and not self._in_trees(node, here)) or (
+                name in {helper[1] for helper in self.helpers}
+                and any(
+                    self.functions.get(id(target)) in self.helpers
+                    for target in self._targets(node, here)
+                )
+            ):
                 site = Site(module.path, node.lineno, ast.unparse(node))
                 self.unresolved.add(site)
 
