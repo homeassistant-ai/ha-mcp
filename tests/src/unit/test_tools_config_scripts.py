@@ -8,12 +8,15 @@ entity_id changes in the entity registry, as a rename in the UI leaves it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import partial
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-from homeassistant.core import HomeAssistant
+from homeassistant.const import ATTR_DOMAIN, ATTR_SERVICE, EVENT_CALL_SERVICE
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util.yaml import dump, load_yaml_dict
@@ -27,7 +30,7 @@ from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.tools.ws_waiters import wait_for_entity_registered
 
 from ._blueprint_actions_core import BEDTIME, SCRIPT_PATH
-from ._command_faults import registry_lookup_failing, unanswered
+from ._command_faults import before_handling, registry_lookup_failing, unanswered
 from ._config_dir_yaml import setup_from_configuration, write_config_files
 from ._tool_errors import rejected_call_body
 
@@ -375,6 +378,67 @@ async def test_write_to_a_renamed_script_updates_its_storage_key(
     args, kwargs = upserts.call_args
     assert args[1] == renamed
     assert kwargs["resolved_id"] == KEY
+
+
+async def test_a_transform_reads_its_hash_back_without_the_registry(
+    hass: HomeAssistant, tools: ConfigScriptTools
+) -> None:
+    """Once Core has the transformed script, its registry answers only errors:
+    the write that landed still succeeds, with the stored config's hash."""
+    current = await tools.ha_config_get_script(script_id=f"script.{KEY}")
+    saved: list[Event] = []
+
+    @callback
+    def reloads_scripts(data: Mapping[str, Any]) -> bool:
+        return bool(data[ATTR_DOMAIN] == "script" and data[ATTR_SERVICE] == "reload")
+
+    @callback
+    def note(event: Event) -> None:
+        # In the loop, not in the executor: seen before the readback's lookup.
+        saved.append(event)
+
+    hass.bus.async_listen(EVENT_CALL_SERVICE, note, reloads_scripts)
+
+    def fail_once_saved(msg: dict[str, Any]) -> None:
+        if saved:
+            raise HomeAssistantError("registry unavailable")
+
+    with before_handling(hass, "config/entity_registry/get", fail_once_saved):
+        result = await tools.ha_config_set_script(
+            script_id=f"script.{KEY}",
+            python_transform=TRANSFORM,
+            config_hash=current["config_hash"],
+            wait=False,
+        )
+
+    assert saved
+    assert result["success"] is True
+    stored = await tools.ha_config_get_script(script_id=KEY)
+    assert stored["config"]["mode"] == "single"
+    assert result["config_hash"] == stored["config_hash"]
+
+
+async def test_a_transform_returns_the_hash_of_the_config_core_stored(
+    tools: ConfigScriptTools,
+) -> None:
+    """Core stores a ``service:`` step as ``action:``: the transform returns the
+    hash of what Core stored, which the next hash-checked write must match."""
+    current = await tools.ha_config_get_script(script_id=KEY)
+
+    result = await tools.ha_config_set_script(
+        script_id=KEY,
+        python_transform=(
+            "config['sequence'].append({'service': 'homeassistant.update_entity',"
+            " 'target': {'entity_id': 'script.storage_key'}})"
+        ),
+        config_hash=current["config_hash"],
+        wait=False,
+        MandatoryBPS=False,
+    )
+
+    stored = await tools.ha_config_get_script(script_id=KEY)
+    assert "action" in stored["config"]["sequence"][-1]
+    assert result["config_hash"] == stored["config_hash"]
 
 
 async def test_write_without_alias_keeps_the_callers_name(

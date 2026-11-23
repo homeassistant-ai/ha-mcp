@@ -309,7 +309,7 @@ class ConfigScriptTools:
         ``resolved_id`` is the storage key the REST client resolved the input to
         (from the envelope's ``script_id``). Threading ``resolved_id`` lets the
         upsert call site skip the redundant re-resolve (issue #1813 Phase 0).
-        Used internally by _fetch_and_verify_hash and ha_config_get_script.
+        Used internally by _fetch_and_verify_hash and _take_control_config.
 
         ``resolved_id`` is ``None`` when the envelope omits ``script_id`` — the
         write target must then be re-resolved from the caller's input rather
@@ -983,8 +983,9 @@ class ConfigScriptTools:
             transformed_config, script_id, resolved_id=resolved_id
         )
 
-        # Re-fetch to get authoritative hash (HA may normalize after save)
-        _, new_config_hash, _ = await self._get_script_config_internal(script_id)
+        # Re-read the written key for the hash (HA may normalize): no registry read
+        readback = await self._client.get_script_config(script_id, result["script_id"])
+        new_config_hash = compute_config_hash(readback["config"])
 
         await self._finalize_script_write(
             result, script_id, resolved_id, wait, effective_category

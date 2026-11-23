@@ -1977,9 +1977,11 @@ class HomeAssistantClient:
             return str(unique_id)
         return bare_id
 
-    async def get_script_config(self, script_id: str) -> dict[str, Any]:
-        """Get Home Assistant script configuration by script_id."""
-        resolved_id = await self._resolve_script_id(script_id)
+    async def get_script_config(
+        self, script_id: str, resolved_id: str | None = None
+    ) -> dict[str, Any]:
+        """A script's config by script_id; ``resolved_id`` is a known key."""
+        resolved_id = resolved_id or await self._resolve_script_id(script_id)
         try:
             endpoint = f"config/script/config/{resolved_id}"
             response = await self._request("GET", endpoint)
