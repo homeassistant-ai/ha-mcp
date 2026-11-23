@@ -3291,7 +3291,7 @@
       "properties": {
         "scene_id": {
           "type": "str | None",
-          "description": "Scene storage ID from listing (e.g. 'movie_night') or the scene's entity_id (e.g. 'scene.movie_night'). A bare id names the scene stored under that key or, when none is, the scene whose entity is 'scene.<id>'; 'scene.<x>' is an entity_id, resolved to its storage key.",
+          "description": "Scene storage ID from listing (e.g. 'movie_night') or the scene's entity_id (e.g. 'scene.movie_night'). A bare id names the scene stored under that key, else, with the ha_mcp_tools component, the YAML scene with that id (answered as CONFIG_NOT_FOUND, with no config), else the scene whose entity is 'scene.<id>'; 'scene.<x>' is an entity_id, resolved to its storage key.",
           "default": null
         },
         "query": {
@@ -3373,7 +3373,7 @@
       "properties": {
         "scene_id": {
           "type": "str",
-          "description": "Scene storage key (e.g. 'movie_night') or entity_id (e.g. 'scene.movie_night'). A bare id writes the scene stored under that key; when none is but another scene's entity is scene.<id>, the write is refused (pass scene.<id> for that scene). A new scene takes the bare key; Core names its entity after 'name'."
+          "description": "Scene storage key (e.g. 'movie_night') or entity_id (e.g. 'scene.movie_night'). A bare id writes the scene stored under that key. With no scene stored under it, it is refused when another scene's entity is scene.<id> (pass scene.<id> for that scene) or, with the ha_mcp_tools component, for a YAML scene with that id (not editable). A new scene takes the bare key; Core names its entity after 'name'."
         },
         "config": {
           "type": "dict[str, Any] | None",
