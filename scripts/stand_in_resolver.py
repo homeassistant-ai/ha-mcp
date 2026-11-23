@@ -271,7 +271,20 @@ class Resolver:
             self._bind_node(scope, child, package, body)
             self._note_loop(scope, child)
         self._bind_outside(module, node, scope, outer or [module.top])
+        self._first_iterable_outside(node, scope, here)
         return scope
+
+    @staticmethod
+    def _first_iterable_outside(node: ast.AST, scope: Scope, around: Chain) -> None:
+        """A comprehension reads its first iterable in the scopes around it."""
+        if not isinstance(node, COMPREHENSIONS):
+            return
+        first = node.generators[0].iter
+        for bounds in scope.values():
+            bounds[:] = [
+                (v, around if isinstance(v, Each) and v.iterable is first else own)
+                for v, own in bounds
+            ]
 
     def _bind_outside(
         self, module: Module, node: ast.AST, scope: Scope, outer: Chain
@@ -693,7 +706,7 @@ class Resolver:
                 )
                 for element in node.elts
             ]
-            return self._column(rows, column)
+            return self._column(rows, column, seen)
         if isinstance(node, ast.Dict):
             keys: list[Bound] = []
             for key, value in zip(node.keys, node.values, strict=True):
@@ -701,7 +714,7 @@ class Resolver:
                     keys += self._spread(self.items(value, chain, seen), chain)
                 else:
                     keys.append((key, chain))
-            return self._column(keys, column)
+            return self._column(keys, column, seen)
         return self._other_items(node, chain, seen, column)
 
     def _other_items(
@@ -734,17 +747,20 @@ class Resolver:
             and self._is_pytest(func.value.id, chain)
         )
 
-    @staticmethod
-    def _column(found: list[Bound], column: int | None) -> list[Bound]:
-        taken: list[Bound] = column_of(found, column)
-        if column is not None:
-            # A row that cannot be read (bound as ``Constant(None)``) stays a
-            # runtime name in every column.
-            taken += [
-                b
-                for b in found
-                if isinstance(b[0], ast.Constant) and b[0].value is None
-            ]
+    def _column(
+        self, found: list[Bound], column: int | None, seen: frozenset[int]
+    ) -> list[Bound]:
+        """``found``, or element ``column`` of each row; a row given by a name
+        is the tuple the name holds."""
+        if column is None:
+            return found
+        rows: list[Bound] = []
+        for row, own in found:
+            held: list[Bound] = []
+            if isinstance(row, (ast.Name, ast.Attribute)) and own:
+                held = self.objects(row, own, seen)
+            rows += held or [(row, own)]
+        taken: list[Bound] = column_of(rows, column)
         return taken
 
     def _held(
@@ -784,7 +800,7 @@ class Resolver:
         """The values of the dict ``node`` is, or element ``column`` of each."""
         if isinstance(node, ast.Dict):
             held = list(self._held(node, chain, seen).values())
-            return self._column(held, column)
+            return self._column(held, column, seen)
         if isinstance(node, (ast.Name, ast.Attribute)):
             return self._named(node, chain, seen, column, "dict_value")
         return []
@@ -799,22 +815,55 @@ class Resolver:
     ) -> list[Bound]:
         """``items`` (mode "item") or ``dict_values`` of what ``node`` names; a
         parameter's are its marker in that mode and column."""
-        found: list[Bound] = []
         held_by = self.objects(node, chain, seen)
         if not held_by:
             # Nothing the check reads binds the name: its items are runtime names.
             return [(ast.Constant(None), chain)]
+        found: list[Bound] = []
+        circular = False
         for value, own in held_by:
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                if match := MARKER.fullmatch(value.value):
-                    function, param, _ = self.params[int(match.group(1))]
-                    taken = self.marker(function, param, Mode(mode, column))
-                    found.append((ast.Constant(taken), own))
-            elif isinstance(value, ast.expr) and id(value) not in seen:
-                inner = seen | {id(value)}
-                collect = self.items if mode == "item" else self.dict_values
-                held = collect(value, own or chain, inner, column)
-                found += held or self._unread(value, own or chain)
+            taken = self._taken(value, own or chain, seen, column, mode)
+            circular = circular or taken is None
+            found += taken or []
+        # A name that only leads back to itself holds nothing that can be read.
+        return found or ([(ast.Constant(None), chain)] if circular else [])
+
+    def _taken(
+        self,
+        value: object,
+        chain: Chain,
+        seen: frozenset[int],
+        column: int | None,
+        mode: str,
+    ) -> list[Bound] | None:
+        """What ``_named`` takes from one value its name holds: nothing only
+        from a collection known to be empty, and ``None`` from a value that is
+        already being read (a name bound through itself)."""
+        unread: list[Bound] = [(ast.Constant(None), chain)]
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            match = MARKER.fullmatch(value.value)
+            if not match:
+                return unread  # a string's characters
+            function, param, _ = self.params[int(match.group(1))]
+            marker = self.marker(function, param, Mode(mode, column))
+            return [(ast.Constant(marker), chain)]
+        if not isinstance(value, (ast.expr, Each)):
+            return unread  # a function, a class or a module
+        if id(value) in seen:
+            return None
+        inner = seen | {id(value)}
+        collect = self.items if mode == "item" else self.dict_values
+        # A loop variable looped over in turn: the items of each value it takes.
+        elements = (
+            self.each(value, chain, inner)
+            if isinstance(value, Each)
+            else [(value, chain)]
+        )
+        found: list[Bound] = []
+        for element, own in elements:
+            scopes = own or chain
+            held = collect(element, scopes, inner, column)
+            found += held or self._unread(element, scopes)
         return found
 
     @staticmethod

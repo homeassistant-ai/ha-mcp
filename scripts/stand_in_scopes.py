@@ -205,12 +205,19 @@ def bind_parametrized(
 
 
 def column_of(found: Sequence[Bound], column: int | None) -> list[Bound]:
-    """``found``, or element ``column`` of each of its tuples."""
+    """``found``, or element ``column`` of each of its rows. A row that is not
+    a tuple or list written out, is too short or holds a ``*`` gives a value
+    only known at runtime: no row is left out."""
     if column is None:
         return list(found)
-    return [
-        (element.elts[column], own)
-        for element, own in found
-        if isinstance(element, (ast.Tuple, ast.List))
-        and -len(element.elts) <= column < len(element.elts)
-    ]
+    taken: list[Bound] = []
+    for row, own in found:
+        element: ast.expr = ast.Constant(None)
+        if (
+            isinstance(row, (ast.Tuple, ast.List))
+            and -len(row.elts) <= column < len(row.elts)
+            and not any(isinstance(each, ast.Starred) for each in row.elts)
+        ):
+            element = row.elts[column]
+        taken.append((element, own))
+    return taken

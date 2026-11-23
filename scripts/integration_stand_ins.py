@@ -115,6 +115,7 @@ class Checker(Resolver):
         self.checking = True  # off while the scopes are first read
         # Where a helper's name stands as a callee, an alias or a base class.
         self.direct: set[int] = set()
+        self.read_outside: set[int] = set()  # iterables visited ahead of their turn
 
     # --- the scan ------------------------------------------------------------
 
@@ -165,11 +166,18 @@ class Checker(Resolver):
                 self._judge(names, site, "", sink, follow=False)
 
     def visit(self, module: Module, node: ast.AST, chain: Chain) -> None:
+        if id(node) in self.read_outside:
+            self.read_outside.discard(id(node))
+            return
         if isinstance(node, DEFINITIONS):
             self.visit_definition(module, node, chain)
             return
         if isinstance(node, COMPREHENSIONS):
-            # Its targets are its own: nothing after it sees them.
+            # Its first iterable is read in the scopes around it. Its targets
+            # are its own: nothing after it sees them.
+            first = node.generators[0].iter
+            self.visit(module, first, chain)
+            self.read_outside.add(id(first))
             chain = [*chain, self.scope_of(module, node, chain)]
         if self.checking:
             self.note_reference(module, node, chain)

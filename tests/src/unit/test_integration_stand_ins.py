@@ -345,6 +345,37 @@ REFUSED = {
         "    from homeassistant.components.hassio.const import DOMAIN as name\n"
         "    MockModule(name)\n"
     ),
+    "loop-over-a-loops-variable": (
+        "for names in [['hassio']]:\n    for name in names:\n        MockModule(name)\n"
+    ),
+    "loop-over-a-column-of-a-loops-rows": (
+        "for label, names in [('a', ['hassio'])]:\n    for name in names:\n"
+        "        MockModule(name)\n"
+    ),
+    "loop-over-a-dicts-lists": (
+        "for key, names in {'a': ['hassio']}.items():\n    for name in names:\n"
+        "        MockModule(name)\n"
+    ),
+    "loop-over-a-parametrized-list": (
+        "@pytest.mark.parametrize('names', [['hassio']])\n"
+        "def test_it(hass, names):\n    for name in names:\n"
+        "        MockModule(name)\n"
+    ),
+    "comprehension-over-a-loops-variable": (
+        "for names in [['hassio']]:\n    made = [MockModule(n) for n in names]\n"
+    ),
+    "second-iterable-of-a-comprehension": (
+        "rows = [MockModule(name) for names in [['hassio']] for name in names]\n"
+    ),
+    "row-given-by-a-name": (
+        "ROW = ('a', 'hassio')\nfor label, name in [ROW]:\n    MockModule(name)\n"
+    ),
+    "first-iterable-of-a-comprehension-read-outside-it": (
+        "name = 'hassio'\nrows = [None for name in [MockModule(name)]]\n"
+    ),
+    "comprehension-target-named-like-its-iterable": (
+        "names = ['hassio']\nrows = [MockModule(names) for names in names]\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -694,6 +725,19 @@ UNREAD = {
         "        return 'made_up_probe'\n"
         "for name in [pytest.param('hassio')]:\n    MockModule(name)\n"
     ),
+    "string-looped-over": "NAME = 'hassio'\nfor ch in NAME:\n    MockModule(ch)\n",
+    "helper-parameter-looped-over-twice": (
+        "def register(groups):\n    for names in groups:\n"
+        "        for name in names:\n            MockModule(name)\n"
+        "register([['hassio']])\n"
+    ),
+    "row-too-short-for-its-targets": (
+        "for a, b, name in [('x', 'y')]:\n    MockModule(name)\n"
+    ),
+    "row-that-is-a-call": "for label, name in [pick()]:\n    MockModule(name)\n",
+    "loop-over-a-function": (
+        "def rows():\n    return ['hassio']\nfor name in rows:\n    MockModule(name)\n"
+    ),
     "parametrize-names-that-cannot-be-read": (
         "@pytest.mark.parametrize([pick(), 'name'], [('a', 'hassio')])\n"
         "def test_it(hass, label, name):\n    MockModule(name)\n"
@@ -711,6 +755,20 @@ def test_a_name_the_check_cannot_read_is_refused(guard, tmp_path, capsys, source
 
 
 ALLOWED = {
+    "first-iterable-of-a-comprehension-read-outside-it": (
+        "name = 'made_up_probe'\nrows = [None for name in [MockModule(name)]]\n"
+    ),
+    "loop-over-a-loops-variable": (
+        "for names in [['made_up_probe']]:\n    for name in names:\n"
+        "        MockModule(name)\n"
+    ),
+    "loop-over-an-empty-inner-list": (
+        "for names in [[]]:\n    for name in names:\n        MockModule(name)\n"
+    ),
+    "row-given-by-a-name": (
+        "ROW = ('a', 'made_up_probe')\nfor label, name in [ROW]:\n"
+        "    MockModule(name)\n"
+    ),
     "argument-after-a-named-one-in-a-names-list": (
         "FIRST = 'label'\n@pytest.mark.parametrize("
         "[FIRST, 'other', 'name'], [('a', 'hassio', 'made_up_probe')])\n"
