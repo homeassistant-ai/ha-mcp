@@ -50,7 +50,7 @@ from stand_in_allowlist import (  # type: ignore[import-not-found]
     ALLOWLIST,
     load_allowlist,
 )
-from stand_in_resolver import (  # type: ignore[import-not-found]
+from stand_in_reader import (  # type: ignore[import-not-found]
     COMPREHENSIONS,
     DEFINITIONS,
     ENDLESS,
@@ -68,9 +68,9 @@ from stand_in_resolver import (  # type: ignore[import-not-found]
     Mode,
     Module,
     Param,
-    Resolver,
     Site,
 )
+from stand_in_resolver import Resolver  # type: ignore[import-not-found]
 from stand_in_scopes import (  # type: ignore[import-not-found]
     AsOf,
     Bound,
