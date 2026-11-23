@@ -100,16 +100,11 @@ def name_parts(node: object) -> list[ast.expr] | None:
     return _interleave(["", *[text] * (len(joined.elts) - 1), ""], joined.elts)
 
 
-def param_row(element: ast.expr, column: int | None) -> ast.expr:
-    """The values of a ``pytest.param(...)`` row; any other element as it is.
-    A bare ``param(...)`` is pytest's only where the caller knows it is."""
-    if not (
-        isinstance(element, ast.Call) and ast.unparse(element.func) == "pytest.param"
-    ):
-        return element
+def param_row(row: ast.Call, column: int | None) -> ast.expr:
+    """The values of a ``pytest.param(...)`` row."""
     if column is None:
-        return element.args[0] if element.args else element
-    return ast.Tuple(element.args)
+        return row.args[0] if row.args else row
+    return ast.Tuple(row.args)
 
 
 def call_argument(call: ast.Call, index: int, keyword: str | None) -> ast.expr | None:
@@ -132,8 +127,12 @@ def bound_argument(
     when Python passes the first parameter itself."""
     positional = [a.arg for a in (*function.args.posonlyargs, *function.args.args)]
     positional = positional[1:] if bound else positional
+    # A positional-only parameter takes no keyword: that one goes to ``**``.
+    by_name = param not in {a.arg for a in function.args.posonlyargs}
     if param in positional:
-        found = call_argument(call, positional.index(param), param)
+        found = call_argument(call, positional.index(param), param if by_name else None)
         if found is not None:
             return found
+    if not by_name:
+        return None
     return next((k.value for k in call.keywords if k.arg == param), None)

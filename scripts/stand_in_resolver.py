@@ -23,6 +23,7 @@ from stand_in_scopes import (  # type: ignore[import-not-found]
     Each,
     Imported,
     ModuleRef,
+    Names,
     Scope,
     bind,
     bind_import,
@@ -210,7 +211,9 @@ class Resolver:
             ]
             # A default applies where a call leaves the argument out (G1).
             for arg, default in defaults:
-                self.defaults[(key, arg.arg)] = (default, outer or [module.top])
+                # Read as its scope stood where the function is defined.
+                here = AsOf(outer or [module.top], (node.lineno, node.col_offset))
+                self.defaults[(key, arg.arg)] = (default, here)
         if isinstance(node, FUNCTIONS):
             bind_parametrized(
                 node, scope, lambda e: self._one_text(e, outer or [module.top])
@@ -321,18 +324,24 @@ class Resolver:
         return []
 
     def _latest(self, bound: list[Bound], at: tuple[int, int]) -> list[Bound]:
-        """Of a name's parameter value and plain assignments in a function body,
-        the last one before ``at``; every binding when any of them may not
-        run in order."""
-        if not all(value in self.straight for value, _ in bound):
+        """What can still hold at ``at``: the last binding the function always
+        makes before it (a plain assignment in its body, a parameter's value),
+        and every binding that may run after that one. Without such a binding,
+        every one."""
+        placed = [
+            (self.assigned.get(value), value in self.straight) for value, _ in bound
+        ]
+        always = [
+            place for place, straight in placed if straight and place and place < at
+        ]
+        if not always:
             return bound
-        places = [self.assigned[value] for value, _ in bound]
-        before = [place for place in places if place < at]
-        if not before:
-            return bound
-        # A parameter's default and its argument share the definition's place.
+        cutoff = max(always)
         return [
-            b for b, place in zip(bound, places, strict=True) if place == max(before)
+            b
+            for b, (place, straight) in zip(bound, placed, strict=True)
+            # One the function always makes after ``at`` has not run yet.
+            if place is None or (place >= cutoff and (place < at or not straight))
         ]
 
     def resolve(self, value: object, chain: Chain, seen: frozenset[int]) -> list[Bound]:
@@ -403,6 +412,8 @@ class Resolver:
         if id(node) in seen:
             return {UNKNOWN}
         seen |= {id(node)}
+        if isinstance(node, Names):
+            return set(node.names)
         if isinstance(node, ast.Constant):
             return {node.value} if isinstance(node.value, str) else {UNKNOWN}
         if isinstance(node, (ast.Name, ast.Attribute)):
@@ -473,13 +484,55 @@ class Resolver:
         parts = name_parts(node)
         if parts is None:
             return {UNKNOWN}
-        alternatives = [sorted(self.values(part, chain, seen)) for part in parts]
-        # A part already over the limit makes the whole expression over it.
-        if any(TOO_MANY in a for a in alternatives) or (
-            math.prod(len(a) for a in alternatives) > MAX_ALTERNATIVES
+        return self._join([(part, chain) for part in parts], seen)
+
+    def _join(self, parts: list[Bound], seen: frozenset[int]) -> set[str]:
+        """Every string the parts give joined in order. Parts taken from one
+        loop row stay together: no string mixes two rows."""
+        joined: set[str] = set()
+        count = 0
+        for row in self._rows(parts, seen):
+            alternatives = [sorted(self.values(v, c or [], seen)) for v, c in row]
+            count += math.prod(len(a) for a in alternatives)
+            # A part already over the limit makes the whole expression over it.
+            if any(TOO_MANY in a for a in alternatives) or count > MAX_ALTERNATIVES:
+                return {TOO_MANY}
+            joined |= {"".join(combo) for combo in itertools.product(*alternatives)}
+        return joined
+
+    def _rows(self, parts: list[Bound], seen: frozenset[int]) -> list[list[Bound]]:
+        """``parts`` once for each row of a loop that binds two or more of them
+        (``for a, b in rows``), with those parts replaced by the row's elements;
+        ``parts`` as they are when no loop does or its rows cannot be read."""
+        loops: dict[int, list[tuple[int, Each, Chain]]] = {}
+        for index, (node, chain) in enumerate(parts):
+            if isinstance(node, ast.Name) and chain:
+                bound = self.lookup(node.id, chain)
+                if len(bound) == 1 and isinstance(bound[0][0], Each):
+                    each, own = bound[0]
+                    if each.column is not None:
+                        loops.setdefault(id(each.iterable), []).append(
+                            (index, each, own or chain)
+                        )
+        shared = next((uses for uses in loops.values() if len(uses) > 1), None)
+        if shared is None:
+            return [parts]
+        _, first, scopes = shared[0]
+        rows = self.items(first.iterable, scopes, seen)
+        width = max(each.column or 0 for _, each, _ in shared)
+        if not all(
+            isinstance(r, (ast.Tuple, ast.List)) and len(r.elts) > width
+            for r, _ in rows
         ):
-            return {TOO_MANY}
-        return {"".join(combo) for combo in itertools.product(*alternatives)}
+            return [parts]
+        columns = {index: each.column or 0 for index, each, _ in shared}
+        return [
+            [
+                (row.elts[columns[index]], own or scopes) if index in columns else part
+                for index, part in enumerate(parts)
+            ]
+            for row, own in rows
+        ]
 
     def each(self, node: Each, chain: Chain, seen: frozenset[int]) -> list[Bound]:
         return self.items(node.iterable, chain, seen, node.column)
@@ -500,7 +553,13 @@ class Resolver:
             return self._named(node, chain, seen, column, "item")
         if isinstance(node, SEQUENCES):
             rows: list[Bound] = [
-                (param_row(self._pytest_param(element, chain), column), chain)
+                (
+                    param_row(element, column)
+                    if isinstance(element, ast.Call)
+                    and self._pytest_param(element, chain)
+                    else element,
+                    chain,
+                )
                 for element in node.elts
             ]
             return self._column(rows, column)
@@ -514,23 +573,28 @@ class Resolver:
             return self._column(keys, column)
         return []
 
-    def _pytest_param(self, element: ast.expr, chain: Chain) -> ast.expr:
-        """``element`` with a bare ``param(...)`` imported from pytest written as
-        ``pytest.param(...)``; anything else unchanged."""
-        if not (
-            isinstance(element, ast.Call)
-            and isinstance(element.func, ast.Name)
-            and any(
+    def _pytest_param(self, call: ast.Call, chain: Chain) -> bool:
+        """Whether ``call`` calls pytest's own ``param``: ``pytest.param`` where
+        ``pytest`` is the imported module (or is not bound at all), or a bare
+        ``param`` imported from pytest."""
+        func = call.func
+        if isinstance(func, ast.Name):
+            return any(
                 isinstance(value, Imported)
                 and (value.module, value.name) == ("pytest", "param")
-                for value, _ in self.lookup(element.func.id, chain)
+                for value, _ in self.lookup(func.id, chain)
             )
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr == "param"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "pytest"
         ):
-            return element
-        pytest_param = ast.Attribute(
-            ast.Name("pytest", ast.Load()), "param", ast.Load()
+            return False
+        return all(
+            isinstance(value, ModuleRef) and value.module == "pytest"
+            for value, _ in self.lookup("pytest", chain)
         )
-        return ast.Call(pytest_param, element.args, element.keywords)
 
     @staticmethod
     def _column(found: list[Bound], column: int | None) -> list[Bound]:

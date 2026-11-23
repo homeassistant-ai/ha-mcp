@@ -208,6 +208,21 @@ REFUSED = {
         "@pytest.mark.parametrize('name', ROWS)\n"
         "def test_it(hass, name):\n    MockModule(name)\n"
     ),
+    "alias-of-a-local-helper": (
+        "def register(hass, name):\n    MockModule(name)\n"
+        "install = register\ninstall(hass, 'hassio')\n"
+    ),
+    "parametrize-by-keyword": (
+        "@pytest.mark.parametrize(argnames='name', argvalues=['hassio'])\n"
+        "def test_it(hass, name):\n    MockModule(name)\n"
+    ),
+    "loop-row-that-is-real": (
+        "for a, b in [('has', 'sio'), ('made_up_', '_probe')]:\n    MockModule(a + b)\n"
+    ),
+    "positional-only-parameter": (
+        "def register(name='made_up_probe', /, **options):\n    MockModule(name)\n"
+        "register('hassio')\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -442,6 +457,44 @@ ALLOWED = {
     "function-named-param": (
         "def param(_):\n    return 'made_up_probe'\n"
         "for name in [param('hassio')]:\n    MockModule(name)\n"
+    ),
+    "function-named-like-a-core-helper": (
+        "def mock_component(hass, component):\n    return component\n"
+        "mock_component(hass, 'hassio')\n"
+    ),
+    "spread-call-with-a-default": (
+        "def register(hass, name='hassio'):\n    MockModule(name)\n"
+        "register(hass, **{'name': 'made_up_probe'})\n"
+    ),
+    "starred-call-with-a-default": (
+        "def register(a, b='sio'):\n    MockModule(a + b)\n"
+        "register('has', *('_probe',))\n"
+    ),
+    "helper-called-per-loop-row": (
+        "def register(hass, a, b):\n    MockModule(a + b)\n"
+        "for a, b in [('has', '_probe'), ('made_up_', 'sio')]:\n    register(hass, a, b)\n"
+    ),
+    "loop-row-columns-joined": (
+        "for a, b in [('has', '_probe'), ('made_up_', 'sio')]:\n    MockModule(a + b)\n"
+    ),
+    "default-named-before-a-reassignment": (
+        "def test_it(hass):\n    domain = 'made_up_probe'\n"
+        "    def register(name=domain):\n        MockModule(name)\n"
+        "    domain = 'hassio'\n    register()\n"
+    ),
+    "branch-then-unconditional-assignment": (
+        "def test_it(hass, flag):\n    name = 'hassio'\n    if flag:\n"
+        "        name = 'other_probe'\n    name = 'made_up_probe'\n"
+        "    MockModule(name)\n"
+    ),
+    "keyword-for-a-positional-only-parameter": (
+        "def register(name='made_up_probe', /, **options):\n    MockModule(name)\n"
+        "register(name='hassio')\n"
+    ),
+    "class-named-pytest": (
+        "class pytest:\n    @staticmethod\n    def param(_):\n"
+        "        return 'made_up_probe'\n"
+        "for name in [pytest.param('hassio')]:\n    MockModule(name)\n"
     ),
     "helper-many-suffixes": (
         "def register(hass, base):\n"

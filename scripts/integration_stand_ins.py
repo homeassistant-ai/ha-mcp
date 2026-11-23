@@ -36,8 +36,6 @@ from __future__ import annotations
 import argparse
 import ast
 import importlib.util
-import itertools
-import math
 import re
 import sys
 from collections.abc import Callable
@@ -70,9 +68,11 @@ from stand_in_resolver import (  # type: ignore[import-not-found]
 )
 from stand_in_scopes import (  # type: ignore[import-not-found]
     AsOf,
+    Bound,
     Chain,
     Imported,
     ModuleRef,
+    Names,
 )
 from stand_in_syntax import (  # type: ignore[import-not-found]
     bound_argument,
@@ -136,16 +136,17 @@ class Checker(Resolver):
                 if (sink.function, sink.name) not in self.given:
                     self.unresolved |= sites
                 continue
-            names = self._names(default[0], default[1], sink.mode)
-            names = self._wrapped(names, sink, self._default_names)
+            scopes = default[1]
+
+            def part(param: Param, scopes: Chain = scopes) -> Bound:
+                found = self.defaults.get((param.function, param.name))
+                if found is None:
+                    return (ast.Constant(None), scopes)
+                return self._part(found[0], found[1], param.mode)
+
+            names = self._wrapped(sink, part(sink), part, scopes)
             for site in sites:
                 self._judge(names, site, "", sink, follow=False)
-
-    def _default_names(self, param: Param) -> set[str]:
-        default = self.defaults.get((param.function, param.name))
-        if default is None:
-            return {UNKNOWN}
-        return self._names(default[0], default[1], param.mode)
 
     def visit(self, module: Module, node: ast.AST, chain: Chain) -> None:
         if isinstance(node, DEFINITIONS):
@@ -179,8 +180,8 @@ class Checker(Resolver):
             self.visit(module, statement, chain if method else inner)
 
     def check_call(self, module: Module, call: ast.Call, chain: Chain) -> None:
-        name = self.callee_name(call, chain)
-        if name in SINKS:
+        name, core = self.callee_name(call, chain)
+        if core and name in SINKS:
             position, keyword = SINKS[name]
             self.record(module, call, call_argument(call, position, keyword), chain, "")
         # Resolve the callee when a helper passes names on: under its own name,
@@ -190,9 +191,9 @@ class Checker(Resolver):
             and not self._imported(call.func, chain)
         ):
             return
-        for target, _ in self.objects(call.func, chain, frozenset()):
+        for target in self._targets(call.func, chain):
             key = self.functions.get(id(target))
-            if key is None or not isinstance(target, FUNCTIONS):
+            if key is None:
                 continue
             self.called.add(key)
             bound = self.fills_first_parameter(call, target)
@@ -243,27 +244,45 @@ class Checker(Resolver):
             and func.value.id in ("self", "cls")
         )
 
-    def callee_name(self, call: ast.Call, chain: Chain) -> str | None:
+    def _targets(
+        self, func: ast.expr, chain: Chain, depth: int = 0
+    ) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+        """The functions the callee can be, also through local aliases."""
+        found: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+        for target, own in self.objects(func, chain, frozenset()):
+            if isinstance(target, FUNCTIONS):
+                found.append(target)
+            elif isinstance(target, ast.Name) and depth < 5:
+                found += self._targets(target, own or chain, depth + 1)
+        return found
+
+    def callee_name(self, call: ast.Call, chain: Chain) -> tuple[str | None, bool]:
+        """The callee's name, read through imports and local aliases, and whether
+        it can be one of Core's helpers: a function or class the trees define
+        under a helper's name is not."""
         func = call.func
         if isinstance(func, ast.Attribute):
             owner = ast.unparse(func.value).split(".")
             if func.attr == "add" and owner[-2:] == ["config", "components"]:
-                return "config.components.add"
-            return func.attr
+                return "config.components.add", True
+            return func.attr, True
         if not isinstance(func, ast.Name):
-            return None
+            return None, True
         name, scopes = func.id, chain
         for _ in range(5):  # a local alias of a helper, a few names deep at most
             bound = self.lookup(name, scopes)
             imported = [value for value, _ in bound if isinstance(value, Imported)]
             if imported:
                 helper: str = imported[0].name
-                return helper
+                return helper, True
             aliases = [(v, own) for v, own in bound if isinstance(v, ast.Name)]
             if not aliases:
-                break
+                defined = any(
+                    isinstance(v, (*FUNCTIONS, ast.ClassDef)) for v, _ in bound
+                )
+                return name, not defined
             name, scopes = aliases[0][0].id, aliases[0][1] or scopes
-        return name
+        return name, True
 
     def record(
         self,
@@ -280,33 +299,49 @@ class Checker(Resolver):
         function, and whether Python passes its first parameter)."""
         site = Site(module.path, call.lineno, ast.unparse(call.func))
         here = AsOf(chain, (call.lineno, call.col_offset))
+        # ``*`` or ``**`` may carry an argument where it cannot be read.
+        spread = any(isinstance(a, ast.Starred) for a in call.args) or any(
+            keyword.arg is None for keyword in call.keywords
+        )
 
-        def passed(param: Param) -> set[str] | None:
-            """The names the call gives ``param``: its argument, or the
-            parameter's default where the call leaves it out."""
+        def part(param: Param) -> Bound | None:
+            """What the call gives ``param``: its argument, or the parameter's
+            default where the call leaves it out and no spread can fill it."""
             assert helper is not None
             given = bound_argument(call, helper[0], param.name, bound=helper[1])
             if given is not None:
-                return self._names(given, here, param.mode)
-            default = self.defaults.get((param.function, param.name))
-            if default is None:
-                return None
-            return self._names(default[0], default[1], param.mode)
+                return self._part(given, here, param.mode)
+            default = (
+                None if spread else self.defaults.get((param.function, param.name))
+            )
+            return (
+                None
+                if default is None
+                else self._part(default[0], default[1], param.mode)
+            )
 
+        names: set[str] | None = None
         if sink and helper:
-            names = passed(sink)
-        else:
-            names = None if argument is None else self._names(argument, here, Mode())
+            own = part(sink)
+            if own is not None:
+                unread: Bound = (ast.Constant(None), here)
+                names = self._wrapped(
+                    sink, own, lambda param: part(param) or unread, here
+                )
+        elif argument is not None:
+            names = self.values(argument, here)
         if names is None:
-            # ``*`` or ``**`` may carry the name where it cannot be read.
-            if any(isinstance(a, ast.Starred) for a in call.args) or any(
-                keyword.arg is None for keyword in call.keywords
-            ):
+            if spread:
                 self.unresolved.add(site)
             return
-        if sink:
-            names = self._wrapped(names, sink, lambda param: passed(param) or {UNKNOWN})
         self._judge(names, site, via, sink)
+
+    def _part(self, node: ast.expr, chain: Chain, mode: Mode) -> Bound:
+        """``node`` as a part of a name: itself when it is the name, the names
+        ``mode`` takes from it when it is a collection of them."""
+        if mode.kind == "value":
+            return (node, chain)
+        return (Names(frozenset(self._names(node, chain, mode))), chain)
 
     def _judge(
         self,
@@ -330,32 +365,33 @@ class Checker(Resolver):
                 self.unresolved.add(site)
 
     def _wrapped(
-        self, names: set[str], sink: Param, names_of: Callable[[Param], set[str]]
+        self,
+        sink: Param,
+        own: Bound,
+        part_of: Callable[[Param], Bound],
+        chain: Chain,
     ) -> set[str]:
-        """``names`` inside the text ``sink``'s helper puts around them, with the
-        helper's other parameters in that text filled in by ``names_of``: from
-        the same call, so the parts of one name never come from two calls."""
-        if not sink.mode.around:
-            return names
-        before, after = sink.mode.around
-        choices: list[list[str]] = [sorted(names)]
+        """The names ``own`` gives ``sink``, inside the text its helper puts
+        around them. The helper's other parameters in that text are filled in
+        by ``part_of``: from the same call, and from the same loop row, so the
+        parts of one name never come from two of either."""
+        before, after = sink.mode.around or ("", "")
+        parts: list[Bound] = []
         # ``split`` gives text, parameter number, text, ... in turn.
-        for index, part in enumerate(MARKER.split(f"{before}{NAME_HERE}{after}")):
-            param = self.params[int(part)] if index % 2 else None
-            if param is None or param.function != sink.function:
-                choices.append([f"\x02{part}\x03" if param else part])
-            else:
-                choices.append(sorted(names_of(param)))
-        if any(TOO_MANY in choice for choice in choices) or (
-            math.prod(len(choice) for choice in choices) > MAX_ALTERNATIVES
-        ):
-            return {TOO_MANY}
-        return {
-            name
-            if name in (UNKNOWN, TOO_MANY)
-            else name.join("".join(text).split(NAME_HERE))
-            for name, *text in itertools.product(*choices)
-        }
+        for index, piece in enumerate(MARKER.split(f"{before}{NAME_HERE}{after}")):
+            if index % 2:
+                param = self.params[int(piece)]
+                other = (ast.Constant(f"\x02{piece}\x03"), chain)
+                parts.append(
+                    part_of(param) if param.function == sink.function else other
+                )
+                continue
+            text, name_here, rest = piece.partition(NAME_HERE)
+            parts.append((ast.Constant(text), chain))
+            if name_here:
+                parts += [own, (ast.Constant(rest), chain)]
+        joined: set[str] = self._join(parts, frozenset())
+        return joined
 
     def _follow(
         self, match: re.Match[str], site: Site, sink: Param | None, endless: Finding

@@ -47,6 +47,12 @@ class Each(NamedTuple):
     column: int | None
 
 
+class Names(NamedTuple):
+    """Strings already worked out, standing where an expression would."""
+
+    names: frozenset[str]
+
+
 def bind(scope: Scope, target: ast.expr, value: object, new: list[object]) -> None:
     """Bind ``target`` to ``value``; ``new`` collects each value bound."""
     if isinstance(target, ast.Name):
@@ -96,6 +102,40 @@ def bind_import(scope: Scope, node: ast.Import | ast.ImportFrom, package: str) -
         )
 
 
+def _parametrized(
+    decorator: ast.expr, text_of: Callable[[ast.expr], str | None]
+) -> tuple[list[str], ast.expr] | None:
+    """The argument names a ``pytest.mark.parametrize`` decorator gives rows to
+    (an empty name for one whose rows go to a fixture), and the rows."""
+    if not (
+        isinstance(decorator, ast.Call)
+        and ast.unparse(decorator.func).endswith("parametrize")
+    ):
+        return None
+    # pytest takes the names and the rows by position or by keyword.
+    keywords = {k.arg: k.value for k in decorator.keywords}
+    names = decorator.args[0] if decorator.args else keywords.get("argnames")
+    rows = decorator.args[1] if len(decorator.args) > 1 else keywords.get("argvalues")
+    if names is None or rows is None:
+        return None
+    if isinstance(names, ast.Constant) and isinstance(names.value, str):
+        fields = [name.strip() for name in names.value.split(",")]
+    elif isinstance(names, _SEQUENCES):
+        fields = [str(e.value) for e in names.elts if isinstance(e, ast.Constant)]
+    elif (text := text_of(names)) is not None:
+        fields = [name.strip() for name in text.split(",")]
+    else:
+        return None
+    # ``indirect`` hands rows to fixtures: what the test then gets is theirs.
+    indirect = keywords.get("indirect")
+    if isinstance(indirect, (ast.List, ast.Tuple)):
+        fixtures = {e.value for e in indirect.elts if isinstance(e, ast.Constant)}
+        fields = ["" if name in fixtures else name for name in fields]
+    elif indirect is not None and getattr(indirect, "value", True) is not False:
+        return None
+    return fields, rows
+
+
 def bind_parametrized(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     scope: Scope,
@@ -104,35 +144,13 @@ def bind_parametrized(
     """Bind the values ``pytest.mark.parametrize`` gives each argument;
     ``text_of`` reads argument names given through a name."""
     for decorator in node.decorator_list:
-        if not (
-            isinstance(decorator, ast.Call)
-            and ast.unparse(decorator.func).endswith("parametrize")
-            and len(decorator.args) >= 2
-        ):
+        found = _parametrized(decorator, text_of)
+        if found is None:
             continue
-        names, rows = decorator.args[:2]
-        # ``indirect`` hands the rows to fixtures: what the test gets is theirs.
-        indirect = next(
-            (k.value for k in decorator.keywords if k.arg == "indirect"), None
-        )
-        to_fixtures: set[object] = set()
-        if isinstance(indirect, (ast.List, ast.Tuple)):
-            to_fixtures = {
-                e.value for e in indirect.elts if isinstance(e, ast.Constant)
-            }
-        elif indirect is not None and getattr(indirect, "value", True) is not False:
-            continue
-        if isinstance(names, ast.Constant) and isinstance(names.value, str):
-            fields = [name.strip() for name in names.value.split(",")]
-        elif isinstance(names, _SEQUENCES):
-            fields = [str(e.value) for e in names.elts if isinstance(e, ast.Constant)]
-        elif (text := text_of(names)) is not None:
-            fields = [name.strip() for name in text.split(",")]
-        else:
-            continue
+        fields, rows = found
         for index, name in enumerate(fields):
             column = index if len(fields) > 1 else None
-            if name not in to_fixtures:
+            if name:
                 scope.setdefault(name, []).append((Each(rows, column), None))
 
 

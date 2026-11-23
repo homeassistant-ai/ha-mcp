@@ -25,9 +25,11 @@ Two rules decide every added entry:
 
 The allowlist of ``scripts/integration_stand_ins.py`` lists a file with each
 real integration it keeps a stand-in for, and gets the same two rules for every
-added file and integration; that check is wider when the code of one of its
-scripts (``INTEGRATION_CHECK``) changed. It is read with the check's own
-reader, so an entry the check refuses fails here too. A file taken off it is taken off every list, as below. Its entries are
+added file and integration. That check counts as wider when the code of one
+of its scripts (``INTEGRATION_CHECK``) changed: an edit cannot be told to
+widen or narrow it, and the check itself still fails an entry that matches no
+stand-in it finds. The list is read with the check's own reader, so an entry
+the check refuses fails here too. A file taken off it is taken off every list, as below. Its entries are
 kept stand-ins with a reason, not files waiting for conversion, so an edit to
 a listed file does not take it off, and a file converted off the other lists
 may stay on it.
