@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import importlib.util
 import re
 import sys
@@ -256,33 +257,51 @@ class Checker(Resolver):
                 found += self._targets(target, own or chain, depth + 1)
         return found
 
+    @functools.cached_property
+    def _tree_definitions(self) -> set[int]:
+        """The functions and classes the test trees define."""
+        return {
+            id(node)
+            for module in self.local
+            for node in ast.walk(module.tree)
+            if isinstance(node, (*FUNCTIONS, ast.ClassDef))
+        }
+
+    def _in_trees(self, func: ast.expr, chain: Chain, depth: int = 0) -> bool:
+        """Whether the callee is a function or class the test trees define."""
+        for target, own in self.objects(func, chain, frozenset()):
+            if id(target) in self._tree_definitions:
+                return True
+            if isinstance(target, ast.Name) and depth < 5:
+                if self._in_trees(target, own or chain, depth + 1):
+                    return True
+        return False
+
     def callee_name(self, call: ast.Call, chain: Chain) -> tuple[str | None, bool]:
         """The callee's name, read through imports and local aliases, and whether
-        it can be one of Core's helpers: a function or class the trees define
-        under a helper's name is not."""
+        it can be one of Core's helpers: a function, method or class the trees
+        define under a helper's name is not."""
         func = call.func
+        core = not self._in_trees(func, chain)
         if isinstance(func, ast.Attribute):
             owner = ast.unparse(func.value).split(".")
             if func.attr == "add" and owner[-2:] == ["config", "components"]:
-                return "config.components.add", True
-            return func.attr, True
+                return "config.components.add", core
+            return func.attr, core
         if not isinstance(func, ast.Name):
-            return None, True
+            return None, core
         name, scopes = func.id, chain
         for _ in range(5):  # a local alias of a helper, a few names deep at most
             bound = self.lookup(name, scopes)
             imported = [value for value, _ in bound if isinstance(value, Imported)]
             if imported:
                 helper: str = imported[0].name
-                return helper, True
+                return helper, core
             aliases = [(v, own) for v, own in bound if isinstance(v, ast.Name)]
             if not aliases:
-                defined = any(
-                    isinstance(v, (*FUNCTIONS, ast.ClassDef)) for v, _ in bound
-                )
-                return name, not defined
+                break
             name, scopes = aliases[0][0].id, aliases[0][1] or scopes
-        return name, True
+        return name, core
 
     def record(
         self,

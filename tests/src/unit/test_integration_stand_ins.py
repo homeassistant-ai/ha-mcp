@@ -223,6 +223,10 @@ REFUSED = {
         "def register(name='made_up_probe', /, **options):\n    MockModule(name)\n"
         "register('hassio')\n"
     ),
+    "core-helper-through-its-module": (
+        "from pytest_homeassistant import common\n"
+        "common.mock_component(hass, 'hassio')\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -461,6 +465,11 @@ ALLOWED = {
     "function-named-like-a-core-helper": (
         "def mock_component(hass, component):\n    return component\n"
         "mock_component(hass, 'hassio')\n"
+    ),
+    "method-named-like-a-core-helper": (
+        "class Helpers:\n    @staticmethod\n"
+        "    def mock_component(hass, component):\n        return component\n"
+        "Helpers.mock_component(None, 'hassio')\n"
     ),
     "spread-call-with-a-default": (
         "def register(hass, name='hassio'):\n    MockModule(name)\n"
