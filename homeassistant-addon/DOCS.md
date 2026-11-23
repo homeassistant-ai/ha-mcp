@@ -854,7 +854,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.
 - `ha_manage_security_policy` — Manage the tool security policy that gates high-stakes tool calls behind user approval.
 - `ha_manage_theme` — Manage Home Assistant frontend themes.
-- `ha_manage_updates` — Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore).
+- `ha_manage_updates` — Manage Home Assistant updates (list, get, refresh, install, skip, clear_skipped, set_channel) and Repairs issues (ignore, unignore, fix).
 - `ha_reload_core` — Execute a Home Assistant configuration reload without a full restart.
 - `ha_restart` — Execute a Home Assistant restart.
 
