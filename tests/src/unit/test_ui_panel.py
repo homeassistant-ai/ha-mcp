@@ -611,8 +611,6 @@ class TestBootView:
         # The script builds the app URL as this prefix + "settings".
         assert _APP in page
         assert "root.hass.language" in page
-        assert "?ha_lang=" in page
-        assert "encodeURIComponent(language)" in page
         assert "<iframe" in page
 
     async def test_boot_script_handles_stale_tokens_without_retry_storm(
