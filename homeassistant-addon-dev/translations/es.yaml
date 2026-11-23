@@ -297,15 +297,17 @@ configuration:
       persona realiza en la interfaz de usuario de configuración web siguen estando
       disponibles.
   enable_settings_transfer_actions:
-    name: Allow ha_manage_backup to export and import settings
-    description: Allow AI assistants to download this server's settings file and import
-      one through ha_manage_backup, as the Export and Import buttons on the Server
-      Settings tab do. An import keeps the human-only settings, and changing the security
-      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
-      security policy access. An import can also turn on developer mode, tools and
-      features, and turn off protections such as secret redaction, SSL verification
-      and the IPv6 allowlist, as the file says, so check your settings after an AI
-      assistant imports one.
+    name: Permitir que ha_manage_backup exporte e importe ajustes
+    description: Permite que los asistentes de IA descarguen el archivo de ajustes
+      de este servidor e importen uno mediante ha_manage_backup, al igual que hacen
+      los botones Exportar e Importar de la pestaña Ajustes del servidor. Una importación
+      conserva los ajustes exclusivos para humanos, y cambiar la directiva de seguridad,
+      la visibilidad de entidades o los permisos de File & YAML Tools también requiere
+      acceso a la directiva de seguridad de las herramientas de desarrollo. Una importación
+      también puede activar el modo de desarrollador, herramientas y características,
+      y desactivar protecciones como la ocultación de secretos, la verificación SSL
+      y la lista blanca de IPv6, tal como indica el archivo, así que comprueba tus
+      ajustes después de que un asistente de IA importe uno.
   enable_snapshot_delete:
     name: Permitir la eliminación de instantáneas
     description: Permitir que ha_manage_backup elimine copias de seguridad completas

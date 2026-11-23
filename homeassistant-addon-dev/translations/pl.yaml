@@ -284,15 +284,16 @@ configuration:
       są nadal tworzone. Działania na kopiach zapasowych wykonywane przez użytkownika
       w interfejsie ustawień webowych pozostają dostępne.
   enable_settings_transfer_actions:
-    name: Allow ha_manage_backup to export and import settings
-    description: Allow AI assistants to download this server's settings file and import
-      one through ha_manage_backup, as the Export and Import buttons on the Server
-      Settings tab do. An import keeps the human-only settings, and changing the security
-      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
-      security policy access. An import can also turn on developer mode, tools and
-      features, and turn off protections such as secret redaction, SSL verification
-      and the IPv6 allowlist, as the file says, so check your settings after an AI
-      assistant imports one.
+    name: Zezwalaj narzędziu ha_manage_backup na eksport i import ustawień
+    description: Zezwalaj asystentom AI na pobieranie pliku ustawień tego serwera
+      i importowanie go za pomocą ha_manage_backup, tak jak robią to przyciski Eksport
+      i Import na karcie Ustawienia serwera. Import zachowuje ustawienia przeznaczone
+      wyłącznie dla ludzi, a zmiana zasad bezpieczeństwa, widoczności encji lub uprawnień
+      narzędzi File & YAML Tools wymaga również dostępu do zasad bezpieczeństwa narzędzi
+      deweloperskich. Import może również włączyć tryb deweloperski, narzędzia i funkcje
+      oraz wyłączyć zabezpieczenia, takie jak maskowanie sekretów, weryfikacja SSL
+      i biała lista IPv6, zgodnie z opisem w pliku, dlatego sprawdź swoje ustawienia
+      po tym, jak asystent AI dokona importu.
   enable_snapshot_delete:
     name: Zezwól na usuwanie migawek
     description: Pozwala ha_manage_backup usuwać pełne migawki Home Assistant. Migawka
