@@ -1,6 +1,7 @@
 """Refusals of the scene tools: the write checks return their problems,
 ``raise_problems`` reports all of a call's problems in one response, and the
-``raise_*`` refusals refuse at once."""
+``raise_*`` refusals refuse at once. ``not_queryable_warning`` words a scene
+write's wait warning."""
 
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    HomeAssistantError,
 )
 from ..errors import ErrorCode, create_error_response
 from .config_helpers.registry import validate_registry_ids
@@ -180,6 +182,27 @@ def raise_bare_id_of_another_key(scene_id: str, storage_key: str) -> NoReturn:
 
 def _lead(core: str) -> str:
     return f"{core.rstrip('.')}. " if core else ""
+
+
+async def not_queryable_warning(client: Any, entity_id: str, verb: str) -> str:
+    """The warning for a written scene whose entity got no state within the
+    wait. Core never adds a disabled entry's entity, and for 30 days after a
+    scene's removal it gives a scene created again under that id the removed
+    entry's ``disabled_by`` back."""
+    try:
+        entry = await client._registry_entry("scene", entity_id)
+    except HomeAssistantError:
+        entry = None  # it only picks the warning; the write stands
+    if entry and entry.get("disabled_by"):
+        return (
+            f"Scene {verb} but {entity_id} is disabled in the entity registry, "
+            "so it has no state; enable it with "
+            f"ha_set_entity(entity_id='{entity_id}', enabled=True)"
+        )
+    return (
+        f"Scene {verb} but {entity_id} not yet queryable. "
+        "It may take a moment to become available."
+    )
 
 
 def leftover_step(entity_id: str) -> str:

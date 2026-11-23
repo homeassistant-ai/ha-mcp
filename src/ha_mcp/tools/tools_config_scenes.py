@@ -67,6 +67,7 @@ from .scene_capture import merge_captures, read_captures
 from .scene_checks import (
     category_problems,
     entity_form_create_problems,
+    not_queryable_warning,
     raise_bare_id_of_another_key,
     raise_problems,
     raise_scene_id_refusal,
@@ -906,8 +907,7 @@ class ConfigSceneTools:
                 registered = await wait_for_entity_registered(self._client, entity_id)
                 if not registered:
                     result.setdefault("warnings", []).append(
-                        f"Scene {verb} but {entity_id} not yet queryable. "
-                        "It may take a moment to become available."
+                        await not_queryable_warning(self._client, entity_id, verb)
                     )
             except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
                 result.setdefault("warnings", []).append(

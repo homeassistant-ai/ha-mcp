@@ -9,6 +9,7 @@ API's answer) has run.
 from __future__ import annotations
 
 import asyncio
+import functools
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -28,9 +29,11 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.config import get_global_settings, reset_global_settings
+from ha_mcp.tools import tools_config_scenes, ws_waiters
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 from ._config_dir_yaml import remove_yaml_only_scenes, setup_scenes, write_config_files
+from ._receipt_faults import at_entity_wait
 from ._tool_errors import error_body, error_of
 
 _WRITE_MODES = ("config", "python_transform")
@@ -44,6 +47,15 @@ async def _scene(hass: HomeAssistant, entities: dict[str, Any]) -> None:
     await setup_scenes(
         hass, [{"id": "movie_night", "name": "Film Night", "entities": entities}]
     )
+
+
+async def _disabled_scene(hass: HomeAssistant, entities: dict[str, Any]) -> None:
+    """``_scene``, with ``scene.film_night`` disabled by the user."""
+    await _scene(hass, entities)
+    er.async_get(hass).async_update_entity(
+        "scene.film_night", disabled_by=er.RegistryEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
 
 
 def _tv(hass: HomeAssistant) -> str:
@@ -454,11 +466,7 @@ async def test_write_does_not_activate_a_disabled_scene(
     """``scene.film_night`` is disabled, so it has no state and Core's
     ``scene.turn_on`` would skip it: the write stands, without an activation,
     and its plain-text warning names the step to enable the scene."""
-    await _scene(hass, {"input_boolean.tv": {"state": "off"}})
-    er.async_get(hass).async_update_entity(
-        "scene.film_night", disabled_by=er.RegistryEntryDisabler.USER
-    )
-    await hass.async_block_till_done()
+    await _disabled_scene(hass, {"input_boolean.tv": {"state": "off"}})
 
     with patch.object(
         core_client, "call_service", wraps=core_client.call_service
@@ -474,6 +482,74 @@ async def test_write_does_not_activate_a_disabled_scene(
     assert any("could not be activated" in w and step in w for w in result["warnings"])
     assert not any('"error"' in w for w in result["warnings"])
     assert _tv(hass) == "off"
+
+
+def _short_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scene tool's entity wait gives up after 0.1 s."""
+    monkeypatch.setattr(
+        tools_config_scenes,
+        "wait_for_entity_registered",
+        functools.partial(ws_waiters.wait_for_entity_registered, timeout=0.1),
+    )
+
+
+async def test_a_scene_created_again_under_a_disabled_ones_id_is_named_disabled(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core gives a scene created again under a removed scene's id the removed
+    entry's ``disabled_by`` back and never adds a disabled entry's entity: the
+    wait's warning names the step to enable it, not a moment to wait."""
+    await _disabled_scene(hass, {"input_boolean.tv": {"state": "off"}})
+    tools = ConfigSceneTools(core_client)
+    await tools.ha_config_remove_scene(scene_id="movie_night")
+    _short_wait(monkeypatch)
+
+    result = await tools.ha_config_set_scene(
+        scene_id="movie_night",
+        config={"name": "Film Night", "entities": {"input_boolean.tv": "on"}},
+        MandatoryBPS=False,
+    )
+
+    assert result["success"] is True
+    step = "ha_set_entity(entity_id='scene.film_night', enabled=True)"
+    assert any("is disabled" in w and step in w for w in result["warnings"])
+    assert not any("not yet queryable" in w for w in result["warnings"])
+
+
+@pytest.mark.parametrize("registry_answers", [True, False], ids=["read", "no-read"])
+async def test_an_enabled_scene_late_to_get_a_state_is_not_named_disabled(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    registry_answers: bool,
+) -> None:
+    """An enabled scene whose state is not there within the wait keeps the
+    plain wait warning, also when its registry entry cannot be read: the write
+    stands and nothing points it at a step it does not need."""
+    await _scene(hass, {"input_boolean.tv": {"state": "off"}})
+    _short_wait(monkeypatch)
+
+    def lose_the_state() -> None:
+        hass.states.async_remove("scene.film_night")
+        if not registry_answers:
+            monkeypatch.setattr(
+                core_client,
+                "send_websocket_message",
+                AsyncMock(side_effect=HomeAssistantConnectionError("network down")),
+            )
+
+    with at_entity_wait(hass, lose_the_state):
+        result = await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="movie_night",
+            config={"name": "Film Night", "entities": {"input_boolean.tv": "on"}},
+            MandatoryBPS=False,
+        )
+
+    assert result["success"] is True
+    assert any("not yet queryable" in w for w in result["warnings"]), result
+    assert not any("is disabled" in w for w in result["warnings"])
 
 
 @pytest.mark.parametrize("mode", _WRITE_MODES)
