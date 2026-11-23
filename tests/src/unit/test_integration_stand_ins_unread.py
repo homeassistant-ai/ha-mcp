@@ -255,6 +255,10 @@ UNREAD = {
         "names = {'a': 'made_up_probe'}\nnames.update(b='hassio')\n"
         "for name in names.values():\n    MockModule(name)\n"
     ),
+    "set-updated-with-a-list-and-a-keyword": (
+        "names = {'made_up_probe'}\nnames.update(['x_probe'], more='hassio')\n"
+        "for name in names:\n    MockModule(name)\n"
+    ),
     "parametrize-names-that-cannot-be-read": (
         "@pytest.mark.parametrize([pick(), 'name'], [('a', 'hassio')])\n"
         "def test_it(hass, label, name):\n    MockModule(name)\n"

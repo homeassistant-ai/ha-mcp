@@ -29,6 +29,7 @@ from stand_in_scopes import (  # type: ignore[import-not-found]
     bind_loop,
     bind_parametrized,
     bind_unread,
+    fixed_length,
 )
 
 TREES = ("tests/src/unit", "tests/addon")
@@ -103,6 +104,16 @@ def function_key(module: str, node: ast.AST) -> tuple[str, str, int, int]:
     """A function's module, name and position."""
     name = node.name if isinstance(node, FUNCTIONS) else "<lambda>"
     return (module, name, getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+
+
+def _only_names(target: ast.expr) -> bool:
+    """Whether an assignment to ``target`` binds names and nothing else: a
+    name, or names unpacked into (``a, *b = row``), not ``rows[0]``."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return all(_only_names(element) for element in target.elts)
+    if isinstance(target, ast.Starred):
+        return _only_names(target.value)
+    return isinstance(target, ast.Name)
 
 
 def _scope_nodes(scope: ast.AST) -> Iterator[ast.AST]:
@@ -257,9 +268,10 @@ class Reader:
         package = module.name
         if not module.path.endswith("__init__.py"):
             package = module.name.rpartition(".")[0]
+        # The statements that always run, in order: a function's or a module's own.
         body = (
             frozenset(id(statement) for statement in getattr(node, "body", []))
-            if isinstance(node, FUNCTIONS)
+            if isinstance(node, (*FUNCTIONS, ast.Module))
             else frozenset()
         )
         for child in _scope_nodes(node):
@@ -288,11 +300,14 @@ class Reader:
         into what it is an alias of. A name a scope only writes into is not
         its own: the write is bound where the name lives, at no fixed point
         there."""
+        loops = self.loops.get(id(scope), [])
         for bounds in list(scope.values()):
-            writes = [(v, own) for v, own in bounds if isinstance(v, Added)]
-            aliased = [v.id for v, _ in bounds if isinstance(v, ast.Name)]
-            for other in aliased if writes else []:
-                for written, own in writes:
+            held = [(v, own) for v, own in bounds if not isinstance(v, Added)]
+            for written, own in [b for b in bounds if isinstance(b[0], Added)]:
+                # What the name can hold where the write is made.
+                place = self.assigned.get(id(written))
+                there = self._latest(held, place, loops) if place and held else held
+                for other in [v.id for v, _ in there if isinstance(v, ast.Name)]:
                     again = Added(
                         ast.Name(id=other, ctx=ast.Load()), ast.Add(), written.right
                     )
@@ -453,6 +468,9 @@ class Reader:
             bind(scope, node.target, ast.BinOp(earlier, node.op, node.value), new)
         elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
             bind_loop(scope, node.target, node.iter, new)
+            # A loop over a list written out, with something in it, runs.
+            ran = isinstance(node, ast.For) and bool(fixed_length(node.iter))
+            targets = [node.target] if ran else []
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             bind_import(scope, node, package, new)
         elif isinstance(node, (*FUNCTIONS, ast.ClassDef)):
@@ -460,9 +478,10 @@ class Reader:
         else:
             targets = bind_unread(scope, node, new)
         if isinstance(node, (ast.stmt, ast.expr, ast.ExceptHandler, ast.pattern)):
-            # A plain assignment, an import or a ``with`` in the function's own
-            # body always runs, in order.
-            named = bool(targets) and all(isinstance(t, ast.Name) for t in targets)
+            # A plain assignment (also one that unpacks into names), an import,
+            # a ``with`` or a loop that runs, among the statements that always
+            # run, binds its names every time.
+            named = bool(targets) and all(_only_names(t) for t in targets)
             imported = isinstance(node, (ast.Import, ast.ImportFrom))
             straight = id(node) in body and (named or imported)
             for value in new:
@@ -541,8 +560,8 @@ class Reader:
             if straight and cutoff is not None:
                 return False  # the function has not got there yet
             return place == at or any(
-                again <= at <= body_end and start <= place <= end
-                for start, end, again, body_end in loops
+                again <= at <= body_end and start <= place <= body_end
+                for start, _, again, body_end in loops
             )
 
         kept = [

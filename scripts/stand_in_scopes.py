@@ -105,6 +105,20 @@ def bind(scope: Scope, target: ast.expr, value: object, new: list[object]) -> No
             bind(scope, element, values[column] if taken else ast.Constant(None), new)
 
 
+def _added_items(call: ast.Call) -> ast.expr:
+    """What ``names.append(value)`` or ``names.update(more, others)`` adds: the
+    one item, or every collection given. A call with a keyword, or with no
+    argument, adds what the check cannot read."""
+    if not call.args or call.keywords:
+        return ast.Constant(None)
+    if call.func.attr not in ADDS_MANY:  # type: ignore[attr-defined]
+        return ast.List([call.args[-1]], ast.Load())
+    items = call.args[0]
+    for more in call.args[1:]:
+        items = ast.BinOp(items, ast.Add(), more)
+    return items
+
+
 def bind_unread(scope: Scope, node: ast.AST, new: list[object]) -> list[ast.expr]:
     """Bind what ``with``, ``except`` and ``match`` name to a value only known
     at runtime, and a collection a method call adds to; the targets of a
@@ -125,12 +139,7 @@ def bind_unread(scope: Scope, node: ast.AST, new: list[object]) -> list[ast.expr
         and isinstance(node.func.value, ast.Name)
         and node.func.attr in (*ADDS_ONE, *ADDS_MANY)
     ):
-        # ``names.append(value)``: an argument the check cannot read (a keyword,
-        # none at all) leaves the collection unread.
-        last: ast.expr = node.args[-1] if node.args else ast.Constant(None)
-        many = node.func.attr in ADDS_MANY
-        items = last if many else ast.List([last], ast.Load())
-        bind_added(scope, node.func.value.id, items, new)
+        bind_added(scope, node.func.value.id, _added_items(node), new)
     for name in filter(None, names):
         value = ast.Constant(None)
         scope.setdefault(name, []).append((value, None))

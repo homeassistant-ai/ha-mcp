@@ -386,9 +386,38 @@ REFUSED = {
         "except ImportError:\n    def mock_component(hass, name):\n        pass\n"
         "mock_component(None, 'hassio')\n"
     ),
-    "earlier-value-after-a-loop-over-its-name": (
+    "earlier-value-after-a-loop-over-nothing": (
         "def test_it(hass):\n    name = 'hassio'\n"
-        "    for name in ['made_up_probe']:\n        pass\n    MockModule(name)\n"
+        "    for name in []:\n        pass\n    MockModule(name)\n"
+    ),
+    "earlier-value-after-a-loop-over-a-name": (
+        "def test_it(hass, names):\n    name = 'hassio'\n"
+        "    for name in names:\n        pass\n    MockModule(name)\n"
+    ),
+    "earlier-value-after-a-loop-on-one-branch": (
+        "def test_it(hass, flag):\n    name = 'hassio'\n    if flag:\n"
+        "        for name in ['made_up_probe']:\n            pass\n"
+        "    MockModule(name)\n"
+    ),
+    "unpacking-on-one-branch": (
+        "def test_it(hass, flag):\n    name = 'hassio'\n    if flag:\n"
+        "        name, label = ('made_up_probe', 'case')\n    MockModule(name)\n"
+    ),
+    "module-name-rebound-on-one-branch": (
+        "name = 'hassio'\nif flag:\n    name = 'made_up_probe'\nMockModule(name)\n"
+    ),
+    "module-name-a-function-reads": (
+        "name = 'hassio'\ndef test_it(hass):\n    MockModule(name)\n"
+        "name = 'made_up_probe'\n"
+    ),
+    "set-updated-with-two-lists": (
+        "names = {'made_up_probe'}\nnames.update(['hassio'], ['x_probe'])\n"
+        "for name in names:\n    MockModule(name)\n"
+    ),
+    "list-appended-to-through-an-alias-rebound-afterwards": (
+        "def test_it(hass):\n    names = ['made_up_probe']\n    alias = names\n"
+        "    alias.append('hassio')\n    alias = []\n"
+        "    for name in names:\n        MockModule(name)\n"
     ),
     "nested-loop-target": (
         "for (name, _), label in [(('hassio', 0), 'case')]:\n    MockModule(name)\n"
@@ -601,6 +630,26 @@ def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
 
 
 ALLOWED = {
+    "name-after-a-loop-over-a-written-out-list": (
+        "def test_it(hass):\n    name = 'hassio'\n"
+        "    for name in ['made_up_probe']:\n        pass\n    MockModule(name)\n"
+    ),
+    "unpacking-replaces-the-name": (
+        "def test_it(hass):\n    name = 'hassio'\n"
+        "    name, *rest = ('made_up_probe', 'case')\n    MockModule(name)\n"
+    ),
+    "module-name-replaced-before-it-is-read": (
+        "name = 'hassio'\nname = 'made_up_probe'\nMockModule(name)\n"
+    ),
+    "loops-else-assigns-after-its-bodys-calls": (
+        "def test_it(hass):\n    name = 'made_up_probe'\n"
+        "    for _ in range(2):\n        MockModule(name)\n"
+        "    else:\n        name = 'hassio'\n"
+    ),
+    "alias-rebound-before-the-write": (
+        "names = ['made_up_probe']\nalias = names\nalias = []\n"
+        "alias.append('hassio')\nfor name in names:\n    MockModule(name)\n"
+    ),
     "for-iterable-read-before-its-body-runs": (
         "def test_it(hass):\n    name = 'made_up_probe'\n"
         "    for _ in [MockModule(name)]:\n        name = 'hassio'\n"
