@@ -4,7 +4,8 @@ The scan needs both the flattened text (exact hidden-id and embedded-term
 matching) and the structured values (trace ``domain`` + ``item_id`` records that
 name no entity_id). ``serialize_result`` builds the text the regexes match;
 ``result_payloads`` returns the whole structured content plus each text block,
-JSON-parsed when it parses, for the shape-aware checks.
+JSON-parsed when it parses, for the shape-aware checks. ``serialize_error``
+builds the text for a tool error's payload.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from __future__ import annotations
 import json
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
+
+from ..tools.helpers import BP_WARNINGS_SUGGESTION_PREFIX
 
 if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp.tools import ToolResult
@@ -52,6 +55,39 @@ def serialize_result(result: ToolResult, without: Collection[str] = ()) -> str:
         except TypeError, ValueError:
             parts.append(str(structured))
     return "\n".join(parts)
+
+
+def serialize_error(exc: Exception, without: Collection[str] = ()) -> str:
+    """Flatten a tool error's payload args for scanning.
+
+    ``without`` names top-level keys of a JSON payload to leave out; the
+    checker's warnings, which an error carries as one of its suggestions, are
+    left out with them.
+    """
+    parts = [str(arg) for arg in exc.args]
+    if without:
+        parts = [_error_without(part, without) for part in parts]
+    return "\n".join(parts)
+
+
+def _error_without(text: str, keys: Collection[str]) -> str:
+    """A JSON error payload without its top-level ``keys`` and the checker's
+    entry in ``error.suggestions``; any other text as it is."""
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return text
+    payload = _without(payload, keys)
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict) and isinstance(error.get("suggestions"), list):
+        error["suggestions"] = [
+            hint
+            for hint in error["suggestions"]
+            if not (
+                isinstance(hint, str) and hint.startswith(BP_WARNINGS_SUGGESTION_PREFIX)
+            )
+        ]
+    return json.dumps(payload, default=str)
 
 
 def result_payloads(result: ToolResult) -> list[Any]:

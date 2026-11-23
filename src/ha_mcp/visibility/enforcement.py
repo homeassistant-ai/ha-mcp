@@ -91,7 +91,7 @@ from .resolver import (
     core_device_list_reply,
     load_hidden_set,
 )
-from .result_payloads import result_payloads, serialize_result
+from .result_payloads import result_payloads, serialize_error, serialize_result
 
 if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp.tools import ToolResult
@@ -382,11 +382,6 @@ def _scrub_state_result(result: ToolResult, matcher: HiddenMatcher) -> _ScrubTal
         mutated_representations,
         unwarnable_representations,
     )
-
-
-def _tool_error_text(exc: ToolError) -> str:
-    """The scannable text of a tool-raised error (its JSON payload args)."""
-    return "\n".join(str(arg) for arg in (getattr(exc, "args", None) or ()))
 
 
 def _unscannable_reason(name: str, args: dict[str, Any]) -> str | None:
@@ -707,19 +702,21 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
     ) -> Any:
         """Run the tool; refuse if its output (or a tool error) names a hidden id."""
         args = context.message.arguments or {}
+        # A gated write tool attaches the server's own best-practices text to its
+        # result, and can attach it to its errors: the bundled guide, which
+        # ``ha_get_skill_guide`` serves ungated, and the checker's warnings. Their
+        # fixed examples name entities (``light.bedroom``) that are not this
+        # install's; the variables-order warning also repeats key names from the
+        # config being written.
+        guide = _GUIDE_KEYS if name in STRICT_BPS_GATED_TOOLS else ()
         try:
             result = await call_next(context)
         except ToolError as exc:
-            text = _tool_error_text(exc)
+            text = serialize_error(exc, guide)
             if (await self._settled(config, matcher, args, text)).embeds(text):
                 logger.info("visibility enforce: refused tool error from %s", name)
                 _raise_enforced(name, _outbound_reason(name))
             raise
-        # A gated write tool attaches the server's own best-practices text: the
-        # bundled guide, which ``ha_get_skill_guide`` serves ungated, and the
-        # checker's warnings. Their examples name entities (``light.bedroom``)
-        # that are not this install's, and the write has already happened.
-        guide = _GUIDE_KEYS if name in STRICT_BPS_GATED_TOOLS else ()
         text = serialize_result(result, guide)
         matcher = await self._settled(config, matcher, args, text)
         scrub_tally = _ScrubTally(0, 0, 0)

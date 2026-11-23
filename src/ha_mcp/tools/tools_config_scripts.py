@@ -57,6 +57,7 @@ from .entity_registration import (
     script_entity_or_warning,
 )
 from .helpers import (
+    bp_warnings_suggestion,
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
@@ -740,10 +741,7 @@ class ConfigScriptTools:
                 "Use ha_get_skill_guide for help",
             ]
             if bp_warnings:
-                suggestions.append(
-                    "Config had best-practice issues that may be related: "
-                    + "; ".join(bp_warnings)
-                )
+                suggestions.append(bp_warnings_suggestion(bp_warnings))
             # 404 during update only — the create path raises on its own when
             # the upsert hits an unknown identifier server-side.
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
