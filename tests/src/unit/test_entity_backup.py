@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import errno
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -41,6 +39,7 @@ from ha_mcp.tools.tools_entities import EntityTools
 
 from ._backup_core import backup_settings as backup_settings
 from ._backup_core import break_backup_dir, place_snapshot
+from ._backup_restore_consumers_core import fill_the_disk
 from ._command_faults import unanswered
 from ._entity_backup_core import (
     AREA_READS,
@@ -572,6 +571,7 @@ async def test_each_backup_a_bulk_call_could_not_take_is_named(
     entity_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
     backup_settings: config.Settings,
+    entity_manager: bm.BackupManager,
     desk: Desk,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -585,15 +585,7 @@ async def test_each_backup_a_bulk_call_could_not_take_is_named(
     tools = EntityTools(entity_client)
     ids = ["light.desk", "light.lamp"]
     if fault == "write":
-        operation = "rename" if os.name == "nt" else "link"
-        native_publish = getattr(os, operation)
-
-        def publish(src: Any, dst: Any, *args: Any, **kwargs: Any) -> None:
-            if Path(os.fsdecode(dst)).parent == backup_dir(backup_settings):
-                raise OSError(errno.ENOSPC, "No space left on device")
-            native_publish(src, dst, *args, **kwargs)
-
-        monkeypatch.setattr(os, operation, publish)
+        fill_the_disk(entity_manager, monkeypatch)
     elif fault == "vanished":
         native_is_file = Path.is_file
 
@@ -606,11 +598,12 @@ async def test_each_backup_a_bulk_call_could_not_take_is_named(
     elif fault == "directory":
         break_backup_dir(backup_settings, monkeypatch, tmp_path)
 
-    with contextlib.ExitStack() as stack:
-        if fault == "read":
-            stack.enter_context(
-                crashing_on(hass, "config/entity_registry/get", lambda msg: True)
-            )
+    unreadable = (
+        crashing_on(hass, "config/entity_registry/get", lambda msg: True)
+        if fault == "read"
+        else contextlib.nullcontext()
+    )
+    with unreadable:
         result = await tools.ha_set_entity(entity_id=ids, hidden=True)
         single = await tools.ha_set_entity(entity_id="light.desk", icon="mdi:lamp")
 
@@ -653,4 +646,18 @@ async def test_removing_a_list_backs_up_every_entity_once(
     ]
     assert [name.split(".20")[0] for name in after_one if name not in after_list] == [
         "entity.light.porch"
+    ]
+
+
+async def test_a_backup_a_list_removal_could_not_take_is_named(
+    entity_client: HomeAssistantClient, backup_settings: config.Settings, desk: Desk
+) -> None:
+    """The removal goes ahead without it, so the reply says which entity has none."""
+    tools = EntityTools(entity_client)
+
+    result = await tools.ha_remove_entity(entity_id=["light.desk", "not an entity id"])
+
+    assert result["removed"] == ["light.desk"]
+    assert [w.split(" was taken")[0] for w in result["warnings"]] == [
+        "No pre-write backup of entity:not an entity id"
     ]

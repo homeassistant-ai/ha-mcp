@@ -339,8 +339,8 @@ def _flow_failure_reason(step: str, error: BaseException) -> str:
     return "upstream_error"
 
 
-def _skipped(domain: str, entity_id: str, cause: str) -> str:
-    return f"No pre-write backup of {domain}:{entity_id} was taken: {cause}"
+def _skipped(key: str, cause: str) -> str:
+    return f"No pre-write backup of {key} was taken: {cause}"
 
 
 def _flow_safe_failure_detail(step: str, error: BaseException) -> str | None:
@@ -817,7 +817,9 @@ class BackupManager:
         )
         if handler is None:
             if self._init_dir_error is not None and skip_reasons is not None:
-                skip_reasons.append(_skipped(domain, entity_id, "directory unusable"))
+                skip_reasons.append(
+                    _skipped(f"{domain}:{entity_id}", "directory unusable")
+                )
             return None
 
         if _is_flow_helper_domain(domain) and "." in entity_id:
@@ -861,9 +863,8 @@ class BackupManager:
                 domain, entity_id, key, config, tool_name, now, mandatory=mandatory
             )
             if path is None and skip_reasons is not None:
-                skip_reasons.append(
-                    _skipped(domain, entity_id, "snapshot write failed")
-                )
+                # A failed write, or a snapshot that vanished before capture completed.
+                skip_reasons.append(_skipped(key, "snapshot not saved"))
             return path
 
     def _resolve_snapshot_handler(
@@ -873,8 +874,9 @@ class BackupManager:
 
         Raises ``MandatoryBackupError`` for the fail-closed cases (an unusable
         backup dir, an unregistered domain) under ``mandatory``. A None return
-        is a legitimate skip (feature disabled, no entity id, no handler) — the
-        caller returns None and lets the wrapped write proceed.
+        is a skip (feature disabled, no entity id, no handler, or an unusable
+        backup dir outside ``mandatory``, which ``maybe_snapshot`` reports) —
+        the caller returns None and lets the wrapped write proceed.
         """
         if self._init_dir_error is not None and not force:
             if mandatory:
@@ -949,10 +951,7 @@ class BackupManager:
             if skip_reasons is not None:
                 # Only locally authored detail: a remote error may carry values.
                 detail = _flow_safe_failure_detail("capture", err)
-                skip_reasons.append(
-                    f"No pre-write backup of {key} was taken: "
-                    + (detail or type(err).__name__)
-                )
+                skip_reasons.append(_skipped(key, detail or type(err).__name__))
             return _SNAPSHOT_SKIP
         if config is None:
             # Entity didn't exist at fetch time (create operation, or
