@@ -227,6 +227,37 @@ REFUSED = {
         "from pytest_homeassistant import common\n"
         "common.mock_component(hass, 'hassio')\n"
     ),
+    "helper-of-cores-in-a-test-method": (
+        "class TestIt:\n    async def test_it(self, hass, supervised):\n"
+        "        if supervised:\n            mock_component(hass, 'hassio')\n"
+    ),
+    "wrapper-named-like-a-core-helper": (
+        "def mock_component(hass, component):\n"
+        "    hass.config.components.add(component)\n"
+        "mock_component(hass, 'hassio')\n"
+    ),
+    "wrapper-of-the-core-helper-it-is-named-after": (
+        "from pytest_homeassistant.common import mock_component as core_mock\n"
+        "def mock_component(hass, component):\n    core_mock(hass, component)\n"
+        "mock_component(hass, 'hassio')\n"
+    ),
+    "method-wrapping-a-core-helper": (
+        "from pytest_homeassistant.common import mock_component as core_mock\n"
+        "class Helpers:\n    @staticmethod\n"
+        "    def mock_component(hass, component):\n"
+        "        core_mock(hass, component)\n"
+        "Helpers.mock_component(None, 'hassio')\n"
+    ),
+    "subclass-named-like-the-core-helper": (
+        "from pytest_homeassistant.common import MockModule as CoreModule\n"
+        "class MockModule(CoreModule):\n    pass\n"
+        "mock_integration(hass, MockModule('hassio'))\n"
+    ),
+    "subclass-of-a-core-helper": (
+        "class Module(MockModule):\n    pass\n"
+        "class Mine(Module):\n    pass\n"
+        "mock_integration(hass, Mine('hassio'))\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -470,6 +501,10 @@ ALLOWED = {
         "class Helpers:\n    @staticmethod\n"
         "    def mock_component(hass, component):\n        return component\n"
         "Helpers.mock_component(None, 'hassio')\n"
+    ),
+    "subclass-of-a-core-helper-with-a-made-up-domain": (
+        "class Module(MockModule):\n    pass\n"
+        "mock_integration(hass, Module('made_up_probe'))\n"
     ),
     "spread-call-with-a-default": (
         "def register(hass, name='hassio'):\n    MockModule(name)\n"

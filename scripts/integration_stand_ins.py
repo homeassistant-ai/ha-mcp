@@ -182,8 +182,9 @@ class Checker(Resolver):
 
     def check_call(self, module: Module, call: ast.Call, chain: Chain) -> None:
         name, core = self.callee_name(call, chain)
-        if core and name in SINKS:
-            position, keyword = SINKS[name]
+        helper = name if core and name in SINKS else self._subclassed(call.func, chain)
+        if helper:
+            position, keyword = SINKS[helper]
             self.record(module, call, call_argument(call, position, keyword), chain, "")
         # Resolve the callee when a helper passes names on: under its own name,
         # or under any name an import gives it (a re-export can rename it).
@@ -276,6 +277,26 @@ class Checker(Resolver):
                 if self._in_trees(target, own or chain, depth + 1):
                     return True
         return False
+
+    def _subclassed(self, func: ast.expr, chain: Chain, depth: int = 0) -> str | None:
+        """The helper of Core's a class the trees define is built on, when the
+        callee is such a class (``class Module(MockModule)``)."""
+        for target, own in self.objects(func, chain, frozenset()):
+            scopes = own or chain
+            bases: list[ast.expr]
+            if isinstance(target, ast.Name) and depth < 5:
+                bases = [target]
+            elif isinstance(target, ast.ClassDef) and depth < 5:
+                bases = target.bases
+            else:
+                continue
+            for base in bases:
+                name, core = self.callee_name(ast.Call(base, [], []), scopes)
+                if core and name in SINKS:
+                    return name
+                if found := self._subclassed(base, scopes, depth + 1):
+                    return found
+        return None
 
     def callee_name(self, call: ast.Call, chain: Chain) -> tuple[str | None, bool]:
         """The callee's name, read through imports and local aliases, and whether
