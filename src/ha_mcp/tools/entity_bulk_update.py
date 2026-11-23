@@ -3,9 +3,10 @@
 Core's ``config/entity_registry/update`` takes one entity, so labels,
 categories, enabled and hidden go out once per entity; expose_to goes out as
 one ``homeassistant/expose_entity`` call for the assistants turned on and one
-for those turned off, each for every id still in the run. Each succeeded row
-keeps what Core answered for its entity besides the entry, such as
-``require_restart`` or ``reload_delay`` after an enable. With auto-backup on,
+for those turned off, each for every id whose registry update succeeded. Each
+row whose registry update landed keeps what Core answered for its entity
+besides the entry, such as ``require_restart`` or ``reload_delay`` after an
+enable, also when its exposure then failed. With auto-backup on,
 each entity gets its own pre-write snapshot, as a single-entity call does.
 """
 
@@ -75,7 +76,7 @@ async def _registry_phase(
             logger.warning("Bulk update of %s failed", eid, exc_info=result)
             failed.append({"entity_id": eid, "error": str(result)})
         else:
-            # update_one returns success-shape or raises ToolError (caught above).
+            # update_one returned its success shape.
             entry_by_id[eid] = result.get("entity_entry")
             updates_by_id[eid] = list(result.get("updates") or [])
             extras_by_id[eid] = {k: v for k, v in result.items() if k not in _ROW_KEYS}

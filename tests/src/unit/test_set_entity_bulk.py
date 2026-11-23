@@ -163,7 +163,8 @@ class TestBulk:
         field: str,
         value: object,
     ) -> None:
-        """One tool call hides or disables every entity of a list."""
+        """hidden or enabled as the only change must not be dropped from the
+        registry work of a list."""
         ids = ["light.a", "light.b"]
         for entity_id in ids:
             registry_entity(entity_registry, entity_id)

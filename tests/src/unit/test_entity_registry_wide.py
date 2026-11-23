@@ -875,13 +875,17 @@ class TestEntityWriteFailure:
         fault: str,
         error: str,
     ) -> None:
-        """Each entity was already hidden when the exposure failed: a reply
-        saying nothing changed would make an agent retry or misreport. Only a
-        write that provably never left is reported as failed for sure."""
+        """Each entity was enabled and hidden before the exposure failed: a reply
+        hiding that, or Core's restart notice for an entry without a config
+        entry, makes an agent retry or misreport. Only an unsent write failed."""
         registry = er.async_get(hass)
         ids = [
             registry.async_get_or_create(
-                "light", "demo", object_id, suggested_object_id=object_id
+                "light",
+                "demo",
+                object_id,
+                suggested_object_id=object_id,
+                disabled_by=er.RegistryEntryDisabler.USER,
             ).entity_id
             for object_id in ("desk", "lamp")
         ]
@@ -890,7 +894,10 @@ class TestEntityWriteFailure:
         )
         with fault_injected:
             result = await tools.ha_set_entity(
-                entity_id=ids, hidden=True, expose_to={"conversation": True}
+                entity_id=ids,
+                enabled=True,
+                hidden=True,
+                expose_to={"conversation": True},
             )
 
         assert (result["success"], result["partial"]) == (False, True)
@@ -898,7 +905,8 @@ class TestEntityWriteFailure:
         for row in result["failed"]:
             assert row["error"].startswith(error)
             assert row["partial"] is True
-            assert row["updates"] == ["hidden"]
+            assert row["updates"] == ["enabled", "hidden"]
+            assert row["require_restart"] is True
         for entity_id in ids:
             entry = registry.async_get(entity_id)
             assert entry is not None
