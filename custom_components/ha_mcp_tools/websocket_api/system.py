@@ -13,6 +13,7 @@ from .. import template_diagnose
 from ..const import (
     COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
+    DATA_LAST_PIP_SPEC,
     DATA_WEBHOOK,
     DEFAULT_PIP_SPEC,
     DOMAIN,
@@ -22,6 +23,7 @@ from ..const import (
     OPT_WEBHOOK_AUTH,
     WEBHOOK_AUTH_NONE,
 )
+from ..spec_dist import async_effective_pip_spec
 from .constants import (
     CAPABILITIES,
     LIMITS,
@@ -215,8 +217,9 @@ def _find_server_config_entry(hass: HomeAssistant) -> Any | None:
     """Return the component's OWN server config entry, or ``None`` if absent.
 
     Picks the single ``DOMAIN`` entry stamped with
-    ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` (the one ``entry.data``
-    key the component reads — the documented data-minimization exception). Shared
+    ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` (one of the two
+    ``entry.data`` keys this module reads, the documented data-minimization
+    exception; :func:`_server_entry_prep` reads the other). Shared
     by the ``server_entry`` READ cap (:func:`_do_server_entry`) and the
     ``server_entry_update`` WRITE cap (:func:`_server_entry_update_prep`), so both
     discriminate the entry identically.
@@ -230,23 +233,48 @@ def _find_server_config_entry(hass: HomeAssistant) -> Any | None:
     return None
 
 
-def _do_server_entry(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+async def _server_entry_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Whether the server entry's configured spec is still to be installed.
+
+    Compares the spec bring-up would install now (the override, else the
+    manifest pin, read async) with the one the component recorded as installed
+    (``entry.data[DATA_LAST_PIP_SPEC]``, its own bookkeeping, reported only as
+    this boolean). True while a changed spec waits for its install, after a
+    deferred install, after a failed one, and before the first bring-up; it
+    cannot see a deferred reinstall of an unchanged URL spec. ``None`` when
+    there is no server entry, or when Home Assistant runs with ``skip_pip``,
+    where the component installs nothing and records nothing.
+    """
+    entry = _find_server_config_entry(hass)
+    if entry is None or hass.config.skip_pip:
+        return {"install_pending": None}
+    spec = await async_effective_pip_spec(hass, entry.options)
+    return {"install_pending": spec != entry.data.get(DATA_LAST_PIP_SPEC)}
+
+
+def _do_server_entry(
+    hass: HomeAssistant, params: dict[str, Any], *, install_pending: bool | None
+) -> dict[str, Any]:
     """Locate the component's OWN server config entry and return its identity.
 
     Discriminates the server-type entry via :func:`_find_server_config_entry`
     (the ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` marker). ``pip_spec``
     comes from ``entry.options`` (``None`` when absent); ``entry_id`` is ``None``
-    when no server entry exists. The retired ``channel`` option is not reported:
+    when no server entry exists. ``install_pending`` comes from
+    :func:`_server_entry_prep`. The retired ``channel`` option is not reported:
     an entry saved before paired releases may still carry it, but nothing reads it.
     """
     entry = _find_server_config_entry(hass)
     if entry is None:
-        return {"entry_id": None, "pip_spec": None}
+        return {"entry_id": None, "pip_spec": None, "install_pending": None}
     options = getattr(entry, "options", None)
     opts = options if isinstance(options, Mapping) else {}
     return {
         "entry_id": getattr(entry, "entry_id", None),
         "pip_spec": opts.get(OPT_PIP_SPEC),
+        "install_pending": install_pending,
     }
 
 

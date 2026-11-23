@@ -38,6 +38,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .component_server_entry import fetch_server_entry_via_component, install_pending
 from .config_entry_flow import COMPONENT_DOMAIN
 from .config_entry_flow_form import MISSING, shown_value
 from .config_entry_flow_introspect import abort_probe_flow
@@ -61,11 +62,6 @@ logger = logging.getLogger(__name__)
 # Feature flag - disabled by default; the toggle lives in the Developer
 # section of the web settings UI (Server Settings tab, bottom).
 FEATURE_FLAG = "HAMCP_ENABLE_DEV_MODE"
-
-# The component's own in-process command for locating its "server" config
-# entry (see ``_fetch_server_entry_via_component``) — replaces probing every
-# ha_mcp_tools-domain entry's options-flow schema from the outside.
-WS_SERVER_ENTRY = "ha_mcp_tools/server_entry"
 
 # The WRITE counterpart: applies a pip_spec delta to the server entry via
 # ``async_update_entry`` directly (embedded mode only — see
@@ -287,55 +283,6 @@ def _field_prefill(item: dict[str, Any]) -> Any:
     return item.get("default", item.get("value"))
 
 
-async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | None:
-    """One ``ha_mcp_tools/server_entry`` read; ``None`` ⇒ use the legacy probe.
-
-    Returns the component's ``{entry_id, pip_spec}`` payload —
-    ``entry_id`` is ``None`` when no server entry exists, an AUTHORITATIVE
-    verdict the component reaches in-process (its own ``DOMAIN`` entries),
-    not a "try the legacy path" signal. Returns ``None`` (⇒ legacy probe) on
-    capability miss, downgrade (``unknown_command`` → invalidate the cached
-    caps), command error/timeout (logged), or an empty-string ``entry_id``
-    (a malformed reply shape — not the component's real "no entry" signal,
-    which is ``None`` — so it is not trusted as authoritative either) — same
-    taxonomy as ``component_devices.fetch_device_via_component``. A
-    ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
-    (re)connect — is caught here and mapped to ``None``: the legacy probe
-    (``find_server_config_entry``) rides the ``send_websocket_message`` bridge,
-    which answers a component-side fault rather than dying with it — so a
-    transport failure must fall back rather than escape.
-    """
-    caps = await get_component_caps(client)
-    if not component_supports(caps, "server_entry"):
-        return None
-    try:
-        ws = await get_websocket_client(
-            url=client.base_url,
-            token=client.token,
-            verify_ssl=getattr(client, "verify_ssl", None),
-        )
-        raw = await ws.send_command(WS_SERVER_ENTRY)
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-        if is_unknown_command(exc):
-            invalidate_caps(client)
-        else:
-            logger.warning("%s failed; fell back to legacy: %r", WS_SERVER_ENTRY, exc)
-        return None
-    except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError or any other error → legacy probe
-        # (which rides the send_websocket_message bridge).
-        logger.warning(
-            "%s connection error; falling back to legacy: %r", WS_SERVER_ENTRY, exc
-        )
-        return None
-    result = raw.get("result")
-    if not isinstance(result, dict) or "entry_id" not in result:
-        return None
-    if result.get("entry_id") == "":
-        return None
-    return result
-
-
 def _fields_from_flow_schema(flow: dict[str, Any]) -> dict[str, Any]:
     """Map an options-flow's ``data_schema`` field names to their current values.
 
@@ -385,7 +332,7 @@ async def _open_server_entry_flow(
 
     Builds ``current_options`` from the freshly-opened flow's own schema (via
     ``_fields_from_flow_schema``) rather than the component's narrower
-    ``{entry_id, pip_spec}`` shape, so callers like ``_update_source`` — whose
+    ``server_entry`` payload, so callers like ``_update_source`` — whose
     preserved-overrides resend harvests the flow schema itself (``server_url``
     / ``external_url`` / ``webhook_id_override`` / ``secret_path_override`` —
     fields the ``server_entry`` capability does not carry) — still see them.
@@ -430,7 +377,7 @@ async def find_server_config_entry(
     Module-level (not a DevTools method) so the settings UI's embedded
     restart handler can share it.
     """
-    via_component = await _fetch_server_entry_via_component(client)
+    via_component = await fetch_server_entry_via_component(client)
     if via_component is not None:
         entry_id = via_component.get("entry_id")
         if entry_id is None:
@@ -1811,7 +1758,10 @@ class DevTools:
         untouched and keeps its current version. Success means the
         entry's options were applied — the component then reinstalls in
         the background, which can take minutes and can still fail
-        (check HA logs). update_source requires the component's
+        (check HA logs). info's component_server_entry.install_pending
+        stays true until that install is done, and after a deferred or
+        failed one; it cannot see a deferred reinstall of an unchanged
+        URL spec. update_source requires the component's
         in-process server entry to exist. restart interrupts this MCP
         connection in embedded and app deployments (the reply
         arrives just before the server goes down) and supports those
@@ -1884,6 +1834,7 @@ class DevTools:
                 data["component_server_entry"] = {
                     "entry_id": entry_id,
                     "pip_spec": options.get(_OPT_PIP_SPEC),
+                    "install_pending": await install_pending(self._client, warnings),
                     "role": (
                         "this server (embedded)"
                         if mode == "embedded"

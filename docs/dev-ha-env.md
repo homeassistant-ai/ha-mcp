@@ -107,22 +107,31 @@ Run it **from your fork only**. The job refuses to run in
    gap in them goes unnoticed.
 5. Iterate the way you would update ha-mcp on any Home Assistant. The run
    stays on the commit it started from; the standalone and embedded servers
-   run in developer mode:
-   - Embedded server: push, then call
-     `ha_dev_manage_server(action="update_source",
-     pip_spec="ha-mcp @ git+https://github.com/<you>/ha-mcp@<commit>")`.
-     The server reinstalls and comes back within a few minutes;
-     `ha_dev_manage_server(action="info")` shows the spec it runs. The run
-     starts from a wheel built from your branch's checkout.
-   - Component: add your fork to the Marketplace once with
-     `ha_manage_hacs(action="add_repository", repository="<you>/ha-mcp",
-     category="integration")`, redownload your branch with
-     `ha_manage_hacs(action="download", repository_id=<id>, version="<branch>")`,
-     then restart Core with `ha_restart`. Right after a push, the Marketplace can still
-     fetch the previous commit: wait a minute and read a changed `.py` file
-     with `ha_read_file` before restarting. The component keeps its pending
-     version number across dev builds, so the Marketplace's installed version
-     (the branch) is what names the build.
+   run in developer mode, and the run starts from a wheel built from your
+   branch's checkout.
+   - Component and embedded server: push, then load the new commit in this
+     order:
+     1. Download your branch through the Marketplace. Add your fork once with
+        `ha_manage_hacs(action="add_repository", repository="<you>/ha-mcp",
+        category="integration")`, then redownload the branch with
+        `ha_manage_hacs(action="download", repository_id=<id>, version="<branch>")`.
+        Right after a push, the Marketplace can still fetch the previous
+        commit: wait a minute and read a changed `.py` file with
+        `ha_read_file` before going on. The component keeps its pending
+        version number across dev builds, so the Marketplace's installed
+        version (the branch) is what names the build.
+     2. Restart Core with `ha_restart`, then wait until
+        `ha_dev_manage_server(action="info")` answers.
+     3. Point the embedded server at the same commit with
+        `ha_dev_manage_server(action="update_source",
+        pip_spec="ha-mcp @ git+https://github.com/<you>/ha-mcp@<commit>")`.
+        The download replaces only the component; the embedded server keeps
+        the spec it was installed from until this step.
+     4. Confirm the install took: once the server answers again, which takes
+        up to a few minutes, `info` shows
+        `component_server_entry.install_pending: false`. If it stays `true`,
+        the install was deferred or failed and the new build is not running;
+        `info` warns how to apply it.
    - App: install your branch's build as a second app and update it like
      any app. Stage the checkout as an app repository and push it to a
      branch of your fork:

@@ -23,7 +23,8 @@ from homeassistant.helpers.http import current_request
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry, async_capture_events
 
-from custom_components.ha_mcp_tools.const import DOMAIN
+from custom_components.ha_mcp_tools.const import DATA_LAST_PIP_SPEC, DOMAIN
+from custom_components.ha_mcp_tools.websocket_api import system
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
@@ -123,6 +124,44 @@ class TestInfo:
         role = result["data"]["component_server_entry"]["role"]
         assert "separate" in role
         assert "update_source" in role
+
+    @pytest.mark.parametrize("pending", [True, False])
+    async def test_info_says_when_the_entry_spec_is_not_installed_yet(
+        self,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+        pending: bool,
+    ) -> None:
+        """A deferred install shows the new pip_spec while the old build
+        serves; info must not read as a finished switch."""
+        monkeypatch.setattr(hass.config, "skip_pip", False)
+        add_server_entry(
+            hass,
+            data={DATA_LAST_PIP_SPEC: OLD_PIN if pending else PIP_SPEC},
+            options={"pip_spec": PIP_SPEC},
+        )
+        result = await DevTools(client).ha_dev_manage_server(action="info")
+        assert result["data"]["component_server_entry"]["install_pending"] is pending
+        assert bool(result.get("warnings")) is pending
+
+    async def test_info_asks_for_a_component_that_can_tell(
+        self,
+        hass: HomeAssistant,
+        client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A component without the flag cannot say whether the spec is
+        installed; info says unknown and how to get the answer."""
+        monkeypatch.setattr(
+            system,
+            "CAPABILITIES",
+            [c for c in system.CAPABILITIES if c != "server_entry_install_pending"],
+        )
+        server_entry(hass, pip_spec=PIP_SPEC)
+        result = await DevTools(client).ha_dev_manage_server(action="info")
+        assert result["data"]["component_server_entry"]["install_pending"] is None
+        assert result.get("warnings")
 
     async def test_info_warns_when_home_assistant_does_not_answer(
         self,
