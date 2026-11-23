@@ -225,6 +225,22 @@ def _files(tmp_path: Path, files: dict[str, str]) -> Path:
         ),
         pytest.param(
             {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": 'MESSAGE = "probe(%s) skipped"\n',
+            },
+            True,
+            id="mentioned-in-a-sentence",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "lefthook.yml": "# probe runs here\n",
+            },
+            True,
+            id="named-only-in-a-comment-of-a-file-production-reads",
+        ),
+        pytest.param(
+            {
                 "src/ha_mcp/a.py": "class Tool(Base):\n    def probe(self):\n        pass\n"
             },
             False,

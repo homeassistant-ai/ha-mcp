@@ -969,8 +969,8 @@ class HomeAssistantWebSocketClient:
         Returns:
             (subscription_id, queue) — ``await queue.get()`` yields each
             incoming ``{"id": N, "type": "event", "event": ...}`` payload.
-            Cancel the subscription via :meth:`unsubscribe_command`, or
-            :meth:`release_subscription` from a ``finally``.
+            Cancel the subscription via :meth:`release_subscription`, from
+            a ``finally``.
         """
         if not self._state.is_ready:
             raise HomeAssistantConnectionError("WebSocket not authenticated")
@@ -1033,8 +1033,7 @@ class HomeAssistantWebSocketClient:
     async def release_subscription(self, subscription_id: int) -> None:
         """Release a :meth:`subscribe_command` subscription from a ``finally``.
 
-        Unlike :meth:`unsubscribe_command` this never raises and survives the
-        caller's cancellation: a failed or timed-out release must not replace
+        This never raises and survives the caller's cancellation: a failed or timed-out release must not replace
         the result the caller already has, and a cancelled caller must still
         release, or Home Assistant keeps the subscription for the life of the
         socket.
@@ -1088,45 +1087,6 @@ class HomeAssistantWebSocketClient:
         if self.websocket is not socket:
             return
         await self._release_abandoned_subscription(subscription_id)
-
-    async def unsubscribe_command(
-        self,
-        subscription_id: int,
-        *,
-        unsubscribe_type: str = "unsubscribe_events",
-    ) -> None:
-        """Tear down a subscription opened via :meth:`subscribe_command`.
-
-        The Marketplace's ``marketplace/subscribe`` slots into HA's standard
-        ``connection.subscriptions`` map, so ``unsubscribe_events`` cancels
-        it the same way it cancels a native ``subscribe_events`` stream
-        — ``unsubscribe_type`` is exposed only for the rare case a
-        protocol introduces its own teardown command.
-        """
-        # Always drop the local queue first so any in-flight ``get()``
-        # call wakes immediately, even if the HA-side teardown errors.
-        self._state.unregister_subscription_queue(subscription_id)
-
-        if not self._state.is_ready:
-            logger.debug(
-                "unsubscribe_command(%s) skipped: WebSocket not ready",
-                subscription_id,
-            )
-            return
-        try:
-            await self.send_command(unsubscribe_type, subscription=subscription_id)
-        except (OSError, ConnectionClosed, HomeAssistantConnectionError) as e:
-            logger.debug(
-                "unsubscribe_command(%s): transport lost during cleanup: %s",
-                subscription_id,
-                e,
-            )
-        except HomeAssistantCommandError as e:
-            logger.warning(
-                "unsubscribe_command(%s) rejected by HA: %s",
-                subscription_id,
-                e,
-            )
 
     def add_event_handler(
         self,

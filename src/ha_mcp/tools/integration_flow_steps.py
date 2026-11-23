@@ -25,7 +25,6 @@ reauth flow.
 from __future__ import annotations
 
 import contextlib
-import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -65,8 +64,6 @@ from .config_entry_reload_watch import watch_entry_reload
 from .config_helpers.describe import describe_form
 from .helpers import raise_tool_error, validate_identifier_not_empty
 from .ignored_entries import refuse_ignored_entry
-
-logger = logging.getLogger(__name__)
 
 # Flows known to belong to a target, flow_id -> FlowTarget.anchor: a flow_id
 # continues or ends only with the kind and anchor it was opened with. Home

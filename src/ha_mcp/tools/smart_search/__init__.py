@@ -35,8 +35,6 @@ from ._entities import EntitySearchMixin
 from ._overview import SystemOverviewMixin
 from .fetch import record_first_failure, summarize_fetch_error
 
-logger = logging.getLogger(__name__)
-
 
 class SmartSearchTools(DeepSearchMixin, SystemOverviewMixin, EntitySearchMixin):
     """Smart search tools with fuzzy matching and AI optimization."""

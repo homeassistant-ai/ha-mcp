@@ -12,10 +12,11 @@ Python (``homeassistant-addon*``), uses it when:
 - production Python names it (a name, an attribute, an import), its own
   definition aside, or reads it as an attribute of a receiver no import names
   in a module that hands its module on as a value;
-- production Python holds it in a string (``getattr``, a registry), an
-  ``__all__`` entry or a docstring aside;
+- a string in production Python is the name or a path to it (``getattr``, a
+  registry, a patch target); a sentence that mentions it, an ``__all__``
+  entry and a docstring are not uses;
 - a file production reads names it (pyproject, workflows, manifests, YAML,
-  shell);
+  shell), its comment lines aside;
 - the framework calls it by convention: a decorated function or method, a Home
   Assistant hook (``async_setup*``, ``async_step_*``, ...), a config flow class,
   a method of a class with a base (it may override one), a tool module's
@@ -57,6 +58,9 @@ HA_HOOK = re.compile(
     r"async_get_.*_flow|async_create_fix_flow|register_.*_tools|main|setup|run)$"
 )
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# A string that is a name or a path to one (``getattr``, a registry key, a patch
+# target, ``module:function``); a sentence that mentions a name is not a use.
+NAMING = re.compile(r"[A-Za-z_][\w.:]*")
 # Module state the tests reset between tests, and the cleanup of a server
 # process a test started; production needs neither.
 EXEMPT = frozenset(
@@ -126,7 +130,8 @@ class _Uses(NamedTuple):
     qualified: set[tuple[str, str]]
     # Every attribute read: a method's receiver cannot be resolved statically.
     attributes: set[str]
-    # Words in strings (``getattr``, registries), ``__all__`` entries aside.
+    # Words of the strings that are a name or a path to one (``NAMING``),
+    # ``__all__`` entries aside, and of the non-Python files' lines.
     strings: set[str]
 
 
@@ -189,6 +194,7 @@ def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
                 and id(node) not in exported
+                and NAMING.fullmatch(node.value)
             ):
                 uses.strings.update(WORD.findall(node.value))
 
@@ -276,13 +282,19 @@ def _bindings(nodes: list[ast.AST], package: str) -> dict[str, str]:
     return bound
 
 
-def _words(paths: list[Path]) -> set[str]:
+def _words(paths: list[Path], *, comments: bool = True) -> set[str]:
+    """The words in ``paths``; without ``comments``, lines that are a ``#``
+    comment are left out."""
     words: set[str] = set()
     for path in paths:
         try:
-            words |= set(WORD.findall(path.read_text(encoding="utf-8")))
+            text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError, IsADirectoryError:
             continue
+        if not comments:
+            lines = text.splitlines()
+            text = "\n".join(ln for ln in lines if not ln.lstrip().startswith("#"))
+        words |= set(WORD.findall(text))
     return words
 
 
@@ -308,7 +320,8 @@ def test_only_names(repo: Path) -> list[str]:
                 for pattern in NON_PYTHON
                 for path in repo.glob(pattern)
                 if ".venv" not in path.parts and "node_modules" not in path.parts
-            ]
+            ],
+            comments=False,
         )
     )
     tested = _words(sorted((repo / "tests").rglob("*.py")))
