@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import json
+import secrets
 import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -41,6 +43,7 @@ from custom_components.ha_mcp_tools.mcp_webhook import (
 )
 
 from ._garbled_upstream import garbled_upstream
+from ._js_harness import HarnessResult, run_script
 
 # The HTTP surface the boot page, the session endpoint and the proxy share.
 _BASE = "/api/ha_mcp_tools/ui"
@@ -617,6 +620,76 @@ def _boot_script(page: str) -> str:
     return script
 
 
+# The boot page's own DOM: the status element it writes to and the iframe it
+# fills. The script runs as soon as it is parsed, so both must exist.
+_BOOT_DOM = """<!DOCTYPE html><html><body>
+<div class="msg"></div><iframe></iframe>
+</body></html>"""
+
+# What the boot script fetches: the session it mints, then the app URL it
+# probes before pointing the iframe at it.
+_BOOT_FETCHES = {
+    "/api/ha_mcp_tools/ui/session": {"status": 200, "json": {}},
+    "/api/ha_mcp_tools/ui/app/settings": {"status": 200, "body": "<!doctype html>"},
+}
+
+
+class _IframeSrc(HTMLParser):
+    """The ``src`` the boot page's iframe was pointed at."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.src: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "iframe" and self.src is None:
+            self.src = dict(attrs).get("src")
+
+
+def _parent_prelude(search: str, language: str = "en") -> str:
+    """Replace the boot script's parent frame with a fake frontend window."""
+    return (
+        "window.__parent = {"
+        f"  location: {{ search: {json.dumps(search)} }},"
+        "  document: { querySelector: (sel) => sel === 'home-assistant'"
+        f"    ? {{ hass: {{ language: {json.dumps(language)},"
+        "      auth: { accessToken: 'bearer' } } } : null },"
+        "  addEventListener: (type, fn) => { window.__parentHandlers[type] = fn; },"
+        "};"
+        "window.__parentHandlers = {};"
+        "Object.defineProperty(window, 'parent', {"
+        "  configurable: true, get: () => window.__parent });"
+    )
+
+
+def _boot_iframe(
+    script: str, *, search: str, invoke: str = "", language: str = "en"
+) -> tuple[str, HarnessResult]:
+    """Run the boot script against ``search`` and return the iframe's target."""
+    result = run_script(
+        script,
+        initial_html=_BOOT_DOM,
+        prelude=_parent_prelude(search, language),
+        fetch_map=_BOOT_FETCHES,
+        invoke=invoke,
+        settle_ms=2000,
+        timeout_s=30,
+    )
+    parser = _IframeSrc()
+    parser.feed(result.dom)
+    return parser.src or "", result
+
+
+@pytest.fixture
+async def boot_script(
+    panel_views: None, hass_client_no_auth: ClientSessionGenerator
+) -> str:
+    """The script of the served boot page, as a browser would run it."""
+    client = await hass_client_no_auth()
+    page = await (await client.get(_BOOT)).text()
+    return _boot_script(page)
+
+
 class TestBootView:
     async def test_page_is_public_and_embeds_script_and_session_url(
         self, panel_views: None, hass_client_no_auth: ClientSessionGenerator
@@ -634,9 +707,6 @@ class TestBootView:
         # The script builds the app URL as this prefix + "settings".
         assert _APP in page
         assert "root.hass.language" in page
-        # The frontend language is carried in the URL built by buildAppUrl().
-        assert "buildAppUrl" in page
-        assert 'params.set("ha_lang", language)' in page
         assert "<iframe" in page
 
     async def test_boot_script_handles_stale_tokens_without_retry_storm(
@@ -674,6 +744,87 @@ class TestBootView:
         _, errors = await check.communicate()
 
         assert check.returncode == 0, errors.decode()
+
+
+class TestBootLink:
+    """#3104: a notification link opens its tab and approval card.
+
+    On an embedded install the panel route is the only deep-linkable target
+    that needs no secret path, so the iframe's ``src`` is the URL the settings
+    app actually loads.
+    """
+
+    async def test_a_link_opens_its_tab_and_approval_card(
+        self, boot_script: str
+    ) -> None:
+        token = secrets.token_urlsafe(24)
+
+        src, result = _boot_iframe(
+            boot_script, search=f"?tab=tool-security-policies&token={token}"
+        )
+
+        assert src == (
+            "/api/ha_mcp_tools/ui/app/settings"
+            f"?tab=tool-security-policies&token={token}&ha_lang=en"
+        ), result.errors
+
+    async def test_foreign_parameters_never_reach_the_app(
+        self, boot_script: str
+    ) -> None:
+        token = secrets.token_urlsafe(24)
+
+        src, result = _boot_iframe(
+            boot_script,
+            search=f"?tab=tools&drop=me&approve=1&action=approve&token={token}",
+        )
+
+        assert src == (
+            f"/api/ha_mcp_tools/ui/app/settings?tab=tools&token={token}&ha_lang=en"
+        ), result.errors
+
+    async def test_a_crafted_token_never_reaches_the_app(
+        self, boot_script: str
+    ) -> None:
+        src, result = _boot_iframe(
+            boot_script,
+            search='?tab=tool-security-policies&token=x"],[data-pending-token^="As2-',
+        )
+
+        assert src == (
+            "/api/ha_mcp_tools/ui/app/settings?tab=tool-security-policies&ha_lang=en"
+        ), result.errors
+
+    async def test_a_crafted_tab_never_reaches_the_app(self, boot_script: str) -> None:
+        src, result = _boot_iframe(
+            boot_script, search='?tab=x"],[data-panel=tool-security-policies'
+        )
+
+        assert src == "/api/ha_mcp_tools/ui/app/settings?ha_lang=en", result.errors
+
+    async def test_a_link_followed_while_the_panel_is_open_updates_the_app(
+        self, boot_script: str
+    ) -> None:
+        token = secrets.token_urlsafe(24)
+
+        # The initial load settles first (100 ms of virtual time), then the
+        # parent navigates, as it does when a notification link is opened with
+        # the panel already showing.
+        src, result = _boot_iframe(
+            boot_script,
+            search="?tab=tools",
+            invoke=(
+                "setTimeout(() => {"
+                "  window.__parent.location.search ="
+                f" '?tab=tool-security-policies&token={token}';"
+                "  window.__parentHandlers['location-changed']();"
+                "}, 100);"
+            ),
+        )
+
+        assert src == (
+            "/api/ha_mcp_tools/ui/app/settings"
+            f"?tab=tool-security-policies&token={token}&ha_lang=en"
+        ), (result.errors, src)
 
 
 class TestPanelRegistration:
