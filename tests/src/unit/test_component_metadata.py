@@ -30,7 +30,7 @@ def test_hacs_requires_supported_home_assistant_version() -> None:
 
     # The runtime floor the config flow enforces for the in-process server
     # entry must not admit a Core the integration cannot load on. const.py is
-    # loaded by path: importing the package would pull in homeassistant.
+    # loaded by path, without the component package.
     const_path = _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "const.py"
     spec = importlib.util.spec_from_file_location("ha_mcp_tools_const", const_path)
     assert spec is not None and spec.loader is not None

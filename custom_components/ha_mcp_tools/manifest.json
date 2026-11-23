@@ -3,6 +3,7 @@
     "name": "HA-MCP — Manage Home Assistant with AI",
     "after_dependencies": [
         "backup",
+        "blueprint",
         "cloud",
         "config",
         "energy",

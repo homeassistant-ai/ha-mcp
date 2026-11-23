@@ -303,8 +303,9 @@ async def test_edits_cannot_probe_a_file_that_defines_a_hidden_item(
     file ha_read_file refuses to show."""
     # The hidden set is read from Core's entity registry.
     assert await async_setup_component(hass, "config", {})
-    package = "script:\n  secret_door:\n    sequence: []\n# 30000\n"
-    await _write(hass, "www/a.yaml", package)
+    await _write(hass, "configuration.yaml", "script: !include www/a.yaml\n")
+    scripts = "secret_door:\n  sequence: []\n# 30000\n"
+    await _write(hass, "www/a.yaml", scripts)
     save_visibility_config(
         get_data_dir(),
         VisibilityConfig(
@@ -320,10 +321,9 @@ async def test_edits_cannot_probe_a_file_that_defines_a_hidden_item(
     error = json.loads(str(excinfo.value))["error"]
     assert error["code"] == "ENTITY_VISIBILITY_ENFORCED"
     assert not WRITE_SERVICES & set(_services(service))
-    assert await _read(hass, "www/a.yaml") == package
-    # A file that defines no hidden item is edited under the same settings.
-    await _write(
-        hass, "www/b.yaml", "script:\n  front_door:\n    sequence: []\n# 30000\n"
-    )
+    assert await _read(hass, "www/a.yaml") == scripts
+    # A copy Core does not load defines nothing and is edited under the same
+    # settings.
+    await _write(hass, "www/b.yaml", scripts)
     await FilesystemTools(tools_client).ha_write_file(path="www/b.yaml", edits=EDITS)
     assert "10000" in await _read(hass, "www/b.yaml")

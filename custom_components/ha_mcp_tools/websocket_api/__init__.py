@@ -143,6 +143,9 @@ the info handshake carries no capability entry:
   included, with its integration, the names of its ``UpdateEntityFeature``
   flags and, for a loaded hassio entity, the kind its Core class gives it,
   which no state or REST answer carries. See ``update_entities.py``.
+* ``ha_mcp_tools/config_file_items`` — the scripts, scenes and automations
+  whose definition draws on a given config file, from the configuration loaded
+  the way Core loads it. See ``config_file_items.py``.
 * ``ha_mcp_tools/recorder_status`` — the recorder's purge settings and oldest
   state, and whether it records an entity, which Core's API does not serve;
   with ``wait``, held until the recorder has finished its work. See
@@ -370,6 +373,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .. import (
     automation_config,
+    config_file_items,
     config_references,
     core_contract,
     dashboard_cards_ws,
@@ -571,6 +575,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *scene_editor.command_specs(vol),
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
+        *config_file_items.command_specs(vol),
         *recorder_status.command_specs(vol),
         *dashboard_cards_ws.command_specs(vol),
         *_oauth_callback_specs(),
