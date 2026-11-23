@@ -111,7 +111,12 @@ Run it **from your fork only**. The job refuses to run in
    branch's checkout.
    - Component and embedded server: push, then load the new commit in this
      order:
-     1. Download your branch through the Marketplace. Add your fork once with
+     1. Download your branch through the Marketplace. On a new run, the
+        Marketplace refuses this until its first-run warning is accepted for
+        the user the server connects as: read the warning in Settings >
+        Marketplace, and if you accept it, call
+        `ha_manage_hacs(action="accept_warning", confirm=True)`. Add your fork
+        once with
         `ha_manage_hacs(action="add_repository", repository="<you>/ha-mcp",
         category="integration")`, then redownload the branch with
         `ha_manage_hacs(action="download", repository_id=<id>, version="<branch>")`.
