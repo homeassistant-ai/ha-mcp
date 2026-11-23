@@ -5,7 +5,6 @@ This module provides tools for managing entity lifecycle and properties
 via the Home Assistant entity registry API.
 """
 
-import asyncio
 import logging
 from typing import Annotated, Any, Literal
 
@@ -42,10 +41,10 @@ from .component_api import (
     is_unknown_command,
 )
 from .config_helpers.registry import validate_registry_ids
+from .entity_bulk_update import bulk_update_entities
 from .entity_expose_batch import (
-    apply_bulk_expose,
     changed_entity_ids,
-    expose_targets,
+    expose_update,
     refresh_warning,
     reject_unknown_assistants,
 )
@@ -65,7 +64,6 @@ from .entity_registry_reads import (
     GET_ENTRIES_CHUNK_SIZE,
     NotInRegistry,
     _extract_ws_error,
-    get_entries_raw,
     resolve_by_unique_id,
 )
 from .entity_registry_wide import (
@@ -84,7 +82,6 @@ from .helpers import (
     WHITESPACE_CLEARS_NOTE,
     clearable_value,
     exception_to_structured_error,
-    extract_tool_error_message,
     log_tool_usage,
     raise_core_refusal,
     raise_entity_refusal,
@@ -192,13 +189,6 @@ def _single_entity_target(kw: dict[str, Any]) -> str:
     if isinstance(entity_id, list):
         return str(entity_id[0]) if len(entity_id) == 1 else ""
     return str(entity_id or "")
-
-
-def _expose_update(parsed_expose_to: dict[str, bool], unchanged: bool) -> str:
-    """The updates entry for expose_to, saying so when Core changed nothing."""
-    if unchanged:
-        return f"expose_to={parsed_expose_to} (already set, nothing changed)"
-    return f"expose_to={parsed_expose_to}"
 
 
 def _parse_set_entity_ids(
@@ -649,7 +639,7 @@ class EntityTools:
             return None, entity_entry, None
         target, entry = await self._resolve_target(entity_id, entity_entry)
         if not parsed_expose_to:
-            updates_made.append(_expose_update(parsed_expose_to, True))
+            updates_made.append(expose_update(parsed_expose_to, True))
             return None, entry, None
 
         # Group by should_expose value for efficient API calls
@@ -701,7 +691,7 @@ class EntityTools:
 
         exposure_result: dict[str, bool] | None = succeeded if succeeded else None
         unchanged = target not in changed
-        updates_made.append(_expose_update(parsed_expose_to, unchanged))
+        updates_made.append(expose_update(parsed_expose_to, unchanged))
         if entry is None:
             return exposure_result, None, None
 
@@ -954,195 +944,6 @@ class EntityTools:
             [w for w in (device_name_warning, exposure_warning) if w],
             core_result,
         )
-
-    async def _bulk_registry_phase(
-        self,
-        entity_ids: list[str],
-        parsed_categories: dict[str, str | None] | None,
-        parsed_labels: list[str] | None,
-        label_operation: str,
-    ) -> tuple[
-        dict[str, dict[str, Any] | None],
-        dict[str, list[str]],
-        list[dict[str, Any]],
-        list[str],
-    ]:
-        """Per-entity label/category updates (no expose).
-
-        HA's entity_registry/update is single-entity, so this stays a
-        per-entity fan-out. Returns (entry_by_id, updates_by_id, failed,
-        eligible_ids); eligible_ids are the ids whose registry update
-        succeeded (all ids when there is no registry work — expose-only bulk).
-        """
-        entry_by_id: dict[str, dict[str, Any] | None] = {}
-        updates_by_id: dict[str, list[str]] = {}
-        failed: list[dict[str, Any]] = []
-
-        if parsed_labels is None and parsed_categories is None:
-            for eid in entity_ids:
-                updates_by_id[eid] = []
-            return entry_by_id, updates_by_id, failed, list(entity_ids)
-
-        eligible_ids: list[str] = []
-        results = await asyncio.gather(
-            *[
-                self._update_single_entity(
-                    eid,
-                    None,  # area_id not supported in bulk
-                    None,  # name not supported in bulk
-                    None,  # icon not supported in bulk
-                    None,  # enabled not supported in bulk
-                    None,  # hidden not supported in bulk
-                    None,  # aliases not supported in bulk
-                    parsed_categories,
-                    parsed_labels,
-                    label_operation,
-                    None,  # expose_to batched separately below
-                )
-                for eid in entity_ids
-            ],
-            return_exceptions=True,
-        )
-        for eid, result in zip(entity_ids, results, strict=True):
-            if isinstance(result, BaseException) and not isinstance(result, Exception):
-                # Never swallow cancellation/shutdown into per-entity errors.
-                raise result
-            if isinstance(result, BaseException):
-                error_msg = (
-                    extract_tool_error_message(result)
-                    if isinstance(result, ToolError)
-                    else str(result)
-                )
-                failed.append({"entity_id": eid, "error": error_msg})
-            else:
-                # _update_single_entity returns success-shape or raises
-                # ToolError (caught above as BaseException).
-                entry_by_id[eid] = result.get("entity_entry")
-                updates_by_id[eid] = list(result.get("updates") or [])
-                eligible_ids.append(eid)
-        return entry_by_id, updates_by_id, failed, eligible_ids
-
-    async def _bulk_expose_phase(
-        self,
-        eligible_ids: list[str],
-        parsed_expose_to: dict[str, bool],
-        entry_by_id: dict[str, dict[str, Any] | None],
-        updates_by_id: dict[str, list[str]],
-    ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
-        """Batch-expose eligible_ids, then refetch the registry entries among them.
-
-        Returns (still_eligible_ids, newly_failed, warnings). An id that
-        ``expose_targets`` cannot resolve fails before the write. A failed
-        expose call is reported against every id it was sent for (each call
-        acts on the whole list) and clears eligibility. On success, options
-        mutate, so one get_entries refetch refreshes each registry entry; a
-        refetch failure keeps the pre-exposure entry, since the exposure
-        already committed, and adds a warning.
-        """
-        targets, failed = await expose_targets(self._client, eligible_ids, entry_by_id)
-        eligible_ids = [eid for eid in eligible_ids if eid in targets]
-        if not eligible_ids:
-            return [], failed, []
-        expose_error, changed = await apply_bulk_expose(
-            self._client,
-            [targets[eid] for eid in eligible_ids],
-            parsed_expose_to,
-            _extract_ws_error,
-        )
-        if expose_error is not None:
-            failed.extend(
-                {"entity_id": eid, "error": f"Exposure failed: {expose_error}"}
-                for eid in eligible_ids
-            )
-            return [], failed, []
-
-        for eid in eligible_ids:
-            unchanged = targets[eid] not in changed
-            updates_by_id[eid].append(_expose_update(parsed_expose_to, unchanged))
-        registered = [eid for eid in eligible_ids if entry_by_id.get(eid) is not None]
-        refetched, refetch_errors = await get_entries_raw(
-            self._client, [targets[eid] for eid in registered]
-        )
-        warnings: list[str] = []
-        for eid in registered:
-            if targets[eid] in refetched:
-                entry_by_id[eid] = refetched[targets[eid]]
-            else:
-                warnings.append(refresh_warning(eid, refetch_errors[targets[eid]]))
-        if warnings:
-            logger.warning("Bulk exposure applied; %s", " ".join(warnings))
-        return eligible_ids, failed, warnings
-
-    async def _bulk_update_entities(
-        self,
-        entity_ids: list[str],
-        parsed_categories: dict[str, str | None] | None,
-        parsed_labels: list[str] | None,
-        label_operation: str,
-        parsed_expose_to: dict[str, bool] | None,
-    ) -> dict[str, Any]:
-        """Apply bulk label/category/expose updates across many entities.
-
-        Registry work runs per-entity (_bulk_registry_phase); only the
-        expose_to phase is batched into one homeassistant/expose_entity call
-        per assistant-set (_bulk_expose_phase).
-        """
-        logger.info(f"Bulk updating {len(entity_ids)} entities")
-        if (
-            parsed_labels is None
-            and parsed_categories is None
-            and parsed_expose_to is None
-        ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "No updates specified",
-                    suggestions=[
-                        "Provide at least one of: labels, categories, or expose_to"
-                    ],
-                )
-            )
-
-        (
-            entry_by_id,
-            updates_by_id,
-            failed,
-            eligible_ids,
-        ) = await self._bulk_registry_phase(
-            entity_ids, parsed_categories, parsed_labels, label_operation
-        )
-
-        warnings: list[str] = []
-        if parsed_expose_to is not None and eligible_ids:
-            eligible_ids, expose_failed, warnings = await self._bulk_expose_phase(
-                eligible_ids, parsed_expose_to, entry_by_id, updates_by_id
-            )
-            failed.extend(expose_failed)
-
-        succeeded_ids = set(eligible_ids)
-        succeeded_list = [
-            {
-                "entity_id": eid,
-                "entity_entry": entry_by_id.get(eid),
-                "updates": updates_by_id.get(eid, []),
-            }
-            for eid in entity_ids
-            if eid in succeeded_ids
-        ]
-
-        response: dict[str, Any] = {
-            "success": len(failed) == 0,
-            "total": len(entity_ids),
-            "succeeded_count": len(succeeded_list),
-            "failed_count": len(failed),
-            "succeeded": succeeded_list,
-        }
-        if failed:
-            response["failed"] = failed
-            response["partial"] = len(succeeded_list) > 0
-        if warnings:
-            response["warnings"] = warnings
-        return response
 
     async def _fetch_entity(self, eid: str) -> dict[str, Any]:
         """Fetch a single entity from the registry."""
@@ -1405,6 +1206,17 @@ class EntityTools:
                 default=None,
             ),
         ] = None,
+        include_entity_entry: Annotated[
+            bool,
+            Field(
+                description=(
+                    "False leaves each entity's entity_entry (its full registry "
+                    "entry) out of the reply, which keeps a large bulk reply small; "
+                    "ha_get_entity reads the entries."
+                ),
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """Update entity registry entries, or without entity_id the registry-wide settings.
 
@@ -1414,8 +1226,8 @@ class EntityTools:
         exposure, and entity_id rename in a single call.
 
         BULK OPERATIONS:
-        When entity_id is a list, only labels, expose_to, and categories parameters are supported.
-        Other parameters (area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
+        When entity_id is a list, only labels, categories, enabled, hidden, and expose_to are supported.
+        Other parameters (area_id, name, use_device_name, icon, device_class, options, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
 
         SHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload
         needed.
@@ -1466,8 +1278,6 @@ class EntityTools:
                 "icon": icon,
                 "device_class": device_class,
                 "options": options,
-                "enabled": enabled,
-                "hidden": hidden,
                 "aliases": aliases,
                 "use_entity_name_alias": use_entity_name_alias,
                 "new_entity_id": new_entity_id,
@@ -1481,6 +1291,8 @@ class EntityTools:
                 },
                 {
                     **single_entity_params,
+                    "enabled": enabled,
+                    "hidden": hidden,
                     "categories": categories,
                     "labels": labels,
                     "expose_to": expose_to,
@@ -1498,7 +1310,7 @@ class EntityTools:
             for eid in entity_ids:
                 validate_identifier_not_empty(eid, "entity_id")
 
-            # Validate: bulk operations only support categories, labels, and expose_to
+            # Validate: bulk operations only support categories, labels, enabled, hidden and expose_to
             non_null_single_params = [
                 k for k, v in single_entity_params.items() if v is not None
             ]
@@ -1506,11 +1318,11 @@ class EntityTools:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Bulk operations (multiple entity_ids) only support categories, labels, and expose_to. "
+                        f"Bulk operations (multiple entity_ids) only support categories, labels, enabled, hidden, and expose_to. "
                         f"Single-entity parameters provided: {non_null_single_params}",
                         suggestions=[
-                            "Use a single entity_id for area_id, name, use_device_name, icon, device_class, options, enabled, hidden, aliases, or use_entity_name_alias",
-                            "Or remove single-entity parameters to use bulk categories/labels/expose_to",
+                            "Use a single entity_id for area_id, name, use_device_name, icon, device_class, options, aliases, or use_entity_name_alias",
+                            "Or remove single-entity parameters to use bulk categories/labels/enabled/hidden/expose_to",
                         ],
                     )
                 )
@@ -1538,7 +1350,7 @@ class EntityTools:
 
             # Single entity case
             if not is_bulk:
-                return await self._update_single_entity(
+                result = await self._update_single_entity(
                     entity_ids[0],
                     area_id,
                     name,
@@ -1557,14 +1369,37 @@ class EntityTools:
                     use_entity_name_alias=use_entity_name_alias,
                     use_device_name=use_device_name,
                 )
+                if not include_entity_entry:
+                    del result["entity_entry"]
+                return result
 
             # Bulk case
-            return await self._bulk_update_entities(
+            registry_work = any(
+                v is not None
+                for v in (parsed_categories, parsed_labels, enabled, hidden)
+            )
+            return await bulk_update_entities(
+                self._client,
                 entity_ids,
-                parsed_categories,
-                parsed_labels,
-                label_operation,
+                (
+                    lambda eid: self._update_single_entity(
+                        eid,
+                        None,
+                        None,
+                        None,
+                        enabled,
+                        hidden,
+                        None,
+                        parsed_categories,
+                        parsed_labels,
+                        label_operation,
+                        None,  # expose_to is batched across the list
+                    )
+                )
+                if registry_work
+                else None,
                 parsed_expose_to,
+                include_entity_entry,
             )
 
         except ToolError:

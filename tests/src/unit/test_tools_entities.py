@@ -507,6 +507,84 @@ class TestBulk:
                 "automation": category.category_id
             }
 
+    @pytest.mark.parametrize(
+        ("change", "field", "value"),
+        [
+            ({"hidden": True}, "hidden_by", er.RegistryEntryHider.USER),
+            ({"enabled": False}, "disabled_by", er.RegistryEntryDisabler.USER),
+        ],
+        ids=["hidden", "enabled"],
+    )
+    async def test_hidden_or_enabled_alone_reaches_every_entity(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        change: dict[str, bool],
+        field: str,
+        value: object,
+    ) -> None:
+        """A list of entities is hidden or disabled in one call, not one per entity."""
+        ids = ["light.a", "light.b"]
+        for entity_id in ids:
+            _entity(entity_registry, entity_id)
+
+        result = await tools.ha_set_entity(entity_id=ids, **change)
+
+        assert result["succeeded_count"] == 2
+        for entity_id in ids:
+            assert getattr(_stored(entity_registry, entity_id), field) is value
+
+    async def test_each_enabled_row_keeps_cores_restart_answer(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
+    ) -> None:
+        """A bulk enable must not drop what Core says the enable still needs."""
+        ids = ["light.a", "light.b"]
+        for entity_id in ids:
+            _entity(
+                entity_registry, entity_id, disabled_by=er.RegistryEntryDisabler.USER
+            )
+
+        result = await tools.ha_set_entity(entity_id=ids, enabled=True)
+
+        # Entries without a config entry: Core asks for a restart.
+        assert [row.get("require_restart") for row in result["succeeded"]] == [
+            True,
+            True,
+        ]
+
+    async def test_a_compact_bulk_reply_leaves_out_every_entry(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        """A large bulk reply must fit the client: the full entries stay out."""
+        ids = ["light.a", "light.b"]
+        for entity_id in ids:
+            _entity(entity_registry, entity_id)
+
+        result = await tools.ha_set_entity(
+            entity_id=ids, labels=["outdoor"], include_entity_entry=False
+        )
+
+        assert [row["entity_id"] for row in result["succeeded"]] == ids
+        assert not any("entity_entry" in row for row in result["succeeded"])
+        assert all(row["updates"] for row in result["succeeded"])
+        for entity_id in ids:
+            assert _stored(entity_registry, entity_id).labels == {"outdoor"}
+
+    async def test_a_compact_single_reply_leaves_out_the_entry(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry
+    ) -> None:
+        _entity(entity_registry, "light.a")
+
+        result = await tools.ha_set_entity(
+            entity_id="light.a", hidden=True, include_entity_entry=False
+        )
+
+        assert "entity_entry" not in result
+        assert _stored(entity_registry, "light.a").hidden_by is not None
+
     async def test_an_unknown_label_is_refused_before_any_entity_is_touched(
         self,
         tools: EntityTools,

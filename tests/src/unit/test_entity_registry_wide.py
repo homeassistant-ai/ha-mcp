@@ -759,6 +759,22 @@ class TestEntityWriteFailure:
         [warning] = result["warnings"]
         assert "connection lost" in warning
 
+    async def test_a_compact_bulk_exposure_reads_nothing_after_the_write(
+        self, hass: HomeAssistant, tools: EntityTools, sent: AsyncMock
+    ) -> None:
+        """Without entries in the reply there is nothing to re-read."""
+        er.async_get(hass).async_get_or_create(
+            "light", "demo", "desk", suggested_object_id="desk"
+        )
+        result = await tools.ha_set_entity(
+            entity_id=["light.kitchen", "light.desk"],
+            expose_to={"conversation": True},
+            include_entity_entry=False,
+        )
+
+        assert result["succeeded_count"] == 2
+        assert _types(sent)[-1] == _EXPOSE
+
     async def test_a_failed_bulk_exposure_fails_every_id_and_reads_nothing_after(
         self,
         hass: HomeAssistant,

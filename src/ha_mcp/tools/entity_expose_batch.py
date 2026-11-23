@@ -127,6 +127,13 @@ async def expose_targets(
     return targets, failed
 
 
+def expose_update(parsed_expose_to: dict[str, bool], unchanged: bool) -> str:
+    """The updates entry for expose_to, saying so when Core changed nothing."""
+    if unchanged:
+        return f"expose_to={parsed_expose_to} (already set, nothing changed)"
+    return f"expose_to={parsed_expose_to}"
+
+
 def refresh_warning(entity_id: str, error: str) -> str:
     """The warning for an entry that could not be re-read after its exposure."""
     return (
