@@ -1033,10 +1033,11 @@ class HomeAssistantWebSocketClient:
     async def release_subscription(self, subscription_id: int) -> None:
         """Release a :meth:`subscribe_command` subscription from a ``finally``.
 
-        This never raises and survives the caller's cancellation: a failed or timed-out release must not replace
-        the result the caller already has, and a cancelled caller must still
-        release, or Home Assistant keeps the subscription for the life of the
-        socket.
+        This never raises: a failed or timed-out release must not replace the
+        result the caller already has. It also outlives a cancellation that
+        reaches the caller through an anyio cancel scope, the shape this is
+        called under (:meth:`_run_cleanup`), since otherwise Home Assistant
+        keeps the subscription for the life of the socket.
         """
         self._state.unregister_subscription_queue(subscription_id)
         socket = self.websocket

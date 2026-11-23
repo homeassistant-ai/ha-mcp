@@ -185,6 +185,15 @@ REFUSED = {
         "        mock_component(hass, f'{base}{s}')\n"
         "register(hass, 'hass')\n"
     ),
+    "assigned-on-the-calls-line": (
+        "def test_it(hass):\n    name = 'made_up_probe'\n"
+        "    name = 'hassio'; MockModule(name)\n"
+    ),
+    "dict-spread-other-key": (
+        "base = {'slot': 'hassio'}\n"
+        "for name in {**base, 'other': 'made_up_probe'}.values():\n"
+        "    MockModule(name)\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -370,6 +379,22 @@ ALLOWED = {
         "def test_it(hass):\n    domain = 'made_up_probe'\n    saved = domain\n"
         "    domain = 'hassio'\n    mock_component(hass, saved)\n"
     ),
+    "reassigned-on-the-calls-line": (
+        "def test_it(hass):\n    name = 'hassio'\n"
+        "    name = 'made_up_probe'; MockModule(name)\n"
+    ),
+    "dict-key-overwritten-after-a-spread": (
+        "base = {'slot': 'hassio'}\n"
+        "for name in {**base, 'slot': 'made_up_probe'}.values():\n"
+        "    MockModule(name)\n"
+    ),
+    "helper-parts-from-different-calls": (
+        "def register(hass, a, b):\n    MockModule(f'{a}{b}')\n"
+        "register(hass, 'hass', '_probe')\nregister(hass, 'made_up_', 'io')\n"
+    ),
+    "call-named-like-param": (
+        "for name in [make_param('hassio')]:\n    MockModule(name)\n"
+    ),
     "helper-many-suffixes": (
         "def register(hass, base):\n"
         "    for s in ('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'):\n"
@@ -447,7 +472,7 @@ def test_an_entry_allows_only_its_own_file(guard, tmp_path, capsys):
         f"- file: {_SAMPLE}\n  integration: hassio\n",
         f"- file: {_SAMPLE}\n  integration: hassio\n  reason: ''\n",
         _LISTED + "  extra: 1\n",
-        f"- file: {_SAMPLE}\n  integration: hassio\n  1: x\n",
+        _LISTED + "  1: x\n",
     ],
     ids=["no-reason", "empty-reason", "unknown-key", "non-string-key"],
 )
@@ -472,15 +497,39 @@ def test_a_key_repeated_in_an_entry_fails(guard, tmp_path, capsys):
     assert "integration_stand_in_allowlist.yml:4: repeats the key 'reason'" in out
 
 
-def test_an_entry_for_the_checks_own_failures_fails(guard, tmp_path, capsys):
-    """Too many names, or endless wrapping, cannot be allowlisted away."""
+def test_an_entry_cannot_silence_the_checks_own_failures(guard, tmp_path, capsys):
+    """More names than are checked stays a failure with its marker allowlisted."""
+    names = ", ".join(f"'{letter}'" for letter in "abcdefghijklmnopq")
+    source = (
+        f"A = [{names}]\nB = [{names}]\n"
+        "for a in A:\n    for b in B:\n        MockModule(f'{a}{b}')\n"
+    )
     allowlist = _LISTED.replace("integration: hassio", 'integration: "\\x01"')
-    repo = _repo(tmp_path, {_SAMPLE: "mock_component(hass, 'hassio')\n"}, allowlist)
+    repo = _repo(tmp_path, {_SAMPLE: source}, allowlist)
 
     status, out = run_guard(guard, repo, capsys)
 
     assert status == 1
     assert "entry 1 names no integration: '\\x01'" in out
+    assert f"{_SAMPLE}:5: more than 256 possible names to check" in out
+
+
+@pytest.mark.parametrize(
+    ("allowlist", "problem"),
+    [
+        pytest.param("{}\n", "must be a list of entries", id="mapping"),
+        pytest.param("&rows [*rows]\n", "cannot be read", id="holds-itself"),
+    ],
+)
+def test_an_allowlist_that_is_not_a_list_of_entries_fails(
+    guard, tmp_path, capsys, allowlist, problem
+):
+    repo = _repo(tmp_path, {_SAMPLE: "MockModule('made_up_probe')\n"}, allowlist)
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert problem in out
 
 
 def test_a_refused_entry_still_names_its_file(guard, tmp_path):

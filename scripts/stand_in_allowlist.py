@@ -27,9 +27,15 @@ def load_allowlist(path: Path, problems: list[str]) -> dict[tuple[str, str], str
     return parse_allowlist(text, problems)
 
 
-def _repeated_key(node: yaml.Node | None) -> yaml.ScalarNode | None:
+def _repeated_key(
+    node: yaml.Node | None, above: frozenset[int] = frozenset()
+) -> yaml.ScalarNode | None:
     """A key repeated in one mapping, which loading would settle silently by
-    keeping the last value."""
+    keeping the last value. A node that holds itself through an alias is not
+    a list of entries."""
+    if id(node) in above:
+        raise yaml.YAMLError("an alias makes the list hold itself")
+    above |= {id(node)}
     if isinstance(node, yaml.MappingNode):
         keys = [key.value for key, _ in node.value if isinstance(key, yaml.ScalarNode)]
         for index, (key, _) in enumerate(node.value):
@@ -40,7 +46,8 @@ def _repeated_key(node: yaml.Node | None) -> yaml.ScalarNode | None:
         children = list(node.value)
     else:
         return None
-    return next((k for c in children if (k := _repeated_key(c)) is not None), None)
+    found = (_repeated_key(child, above) for child in children)
+    return next((key for key in found if key is not None), None)
 
 
 def parse_allowlist(text: str, problems: list[str]) -> dict[tuple[str, str], str]:
@@ -49,13 +56,15 @@ def parse_allowlist(text: str, problems: list[str]) -> dict[tuple[str, str], str
     the list sees every file on each."""
     try:
         repeated = _repeated_key(yaml.compose(text, Loader=yaml.SafeLoader))
-        entries = yaml.safe_load(text) or []
+        entries = yaml.safe_load(text)
     except yaml.YAMLError as err:
         problems.append(f"{ALLOWLIST}: cannot be read: {err}")
         return {}
     if repeated is not None:
         line = repeated.start_mark.line + 1
         problems.append(f"{ALLOWLIST}:{line}: repeats the key {repeated.value!r}")
+    if entries is None:  # an empty file lists nothing
+        entries = []
     if not isinstance(entries, list):
         problems.append(f"{ALLOWLIST}: must be a list of entries")
         return {}

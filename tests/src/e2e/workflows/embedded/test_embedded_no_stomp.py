@@ -125,24 +125,32 @@ def _parse_requirement_specs(text: str) -> dict[str, SpecifierSet]:
     return specs
 
 
+# Seconds between fetch attempts, and the longest a ``Retry-After`` is obeyed.
+_FETCH_WAITS = (5, 15, 30, 60)
+_FETCH_WAIT_CAP = 120
+
+
 def _fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
     """Fetch the HA release's direct integration requirements (fail-closed).
 
-    Three attempts against raw.githubusercontent; a total failure FAILS the
-    test rather than silently weakening the governed set — a guard that
-    can quietly shrink its protection is worse than a loud fetch error.
+    Five attempts against raw.githubusercontent, waiting as long as GitHub's
+    ``Retry-After`` asks when it throttles the runner (429); a total failure
+    FAILS the test rather than silently weakening the governed set — a guard
+    that can quietly shrink its protection is worse than a loud fetch error.
     """
     url = _REQUIREMENTS_ALL_URL.format(version=ha_version)
     last_error: Exception | None = None
-    for attempt in range(3):
+    for wait in (*_FETCH_WAITS, None):
         try:
             response = requests.get(url, timeout=30)
             response.raise_for_status()
             return _parse_requirement_specs(response.text)
         except requests.exceptions.RequestException as err:
             last_error = err
-            if attempt < 2:  # no pointless backoff after the final attempt
-                time.sleep(5 * (attempt + 1))
+            if wait is None:  # no pointless backoff after the final attempt
+                break
+            asked = getattr(err.response, "headers", {}).get("Retry-After", "")
+            time.sleep(min(int(asked), _FETCH_WAIT_CAP) if asked.isdigit() else wait)
     raise AssertionError(
         f"could not fetch {url} to build the governed-package set "
         f"(last error: {last_error}); the no-stomp guard cannot run "

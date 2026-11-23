@@ -103,7 +103,8 @@ def name_parts(node: object) -> list[ast.expr] | None:
 def param_row(element: ast.expr, column: int | None) -> ast.expr:
     """A ``pytest.param(...)`` row as its values; any other element as it is."""
     if not (
-        isinstance(element, ast.Call) and ast.unparse(element.func).endswith("param")
+        isinstance(element, ast.Call)
+        and ast.unparse(element.func) in ("pytest.param", "param")
     ):
         return element
     if column is None:

@@ -40,7 +40,7 @@ import itertools
 import math
 import re
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -50,6 +50,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stand_in_allowlist import (  # type: ignore[import-not-found]
     ALLOWLIST,
     load_allowlist,
+)
+from stand_in_scopes import (  # type: ignore[import-not-found]
+    AsOf,
+    Bound,
+    Chain,
+    Each,
+    Imported,
+    ModuleRef,
+    Scope,
+    bind,
+    bind_import,
+    bind_loop,
+    bind_parametrized,
+    column_of,
+    fixed_length,
 )
 from stand_in_syntax import (  # type: ignore[import-not-found]
     bound_argument,
@@ -75,23 +90,13 @@ MAX_WRAPS = 8
 MAX_ALTERNATIVES = 256
 # The calls a ``for`` over takes the same elements from as from their argument.
 _SAME_ITEMS = ("sorted", "list", "tuple", "set", "frozenset")
+_NAME = "\x04"  # where the name goes in the text a helper puts around it
 _MARKER = re.compile("\x02([0-9]+)\x03")
 _FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _DEFINITIONS = (*_FUNCTIONS, ast.Lambda, ast.ClassDef)
 _SEQUENCES = (ast.Tuple, ast.List, ast.Set)
 
-Chain = list["Scope"]
-Bound = tuple[object, "Chain | None"]  # a value, and the scopes it resolves in
-Scope = dict[str, list[Bound]]
 FunctionKey = tuple[str, str, int, int]
-
-
-class _AsOf(list["Scope"]):
-    """Scopes whose innermost one is read as it stood at ``line``."""
-
-    def __init__(self, scopes: Chain, line: int) -> None:
-        super().__init__(scopes)
-        self.line = line
 
 
 class Mode(NamedTuple):
@@ -112,22 +117,6 @@ class Site(NamedTuple):
     path: str
     line: int
     callee: str
-
-
-class _Imported(NamedTuple):
-    module: str
-    name: str
-
-
-class _ModuleRef(NamedTuple):
-    module: str
-
-
-class _Each(NamedTuple):
-    """What a ``for`` takes from ``iterable``, or element ``column`` of it."""
-
-    iterable: ast.expr
-    column: int | None
 
 
 class _Module:
@@ -178,94 +167,6 @@ def _scope_nodes(scope: ast.AST) -> Iterator[ast.AST]:
             pending += ast.iter_child_nodes(node)
 
 
-def _bind(scope: Scope, target: ast.expr, value: object, new: list[object]) -> None:
-    """Bind ``target`` to ``value``; ``new`` collects each value bound."""
-    if isinstance(target, ast.Name):
-        scope.setdefault(target.id, []).append((value, None))
-        new.append(value)
-    elif isinstance(target, (ast.Tuple, ast.List)):
-        values = value.elts if isinstance(value, (ast.Tuple, ast.List)) else []
-        same_shape = len(values) == len(target.elts)
-        for index, element in enumerate(target.elts):
-            part = values[index] if same_shape else ast.Constant(None)
-            _bind(scope, element, part, new)
-
-
-def _bind_loop(
-    scope: Scope, target: ast.expr, iterable: ast.expr, new: list[object]
-) -> None:
-    if isinstance(target, (ast.Tuple, ast.List)):
-        for index, element in enumerate(target.elts):
-            _bind(scope, element, _Each(iterable, index), new)
-    else:
-        _bind(scope, target, _Each(iterable, None), new)
-
-
-def _fixed_length(node: object) -> int | None:
-    """How many elements a list or tuple literal has; a set's order and size,
-    and a starred element's size, are only known at runtime."""
-    if isinstance(node, (ast.Tuple, ast.List)) and not any(
-        isinstance(element, ast.Starred) for element in node.elts
-    ):
-        return len(node.elts)
-    return None
-
-
-def _bind_import(scope: Scope, node: ast.Import | ast.ImportFrom, package: str) -> None:
-    if isinstance(node, ast.Import):
-        for alias in node.names:
-            name = alias.name if alias.asname else alias.name.split(".")[0]
-            scope.setdefault(alias.asname or name, []).append((_ModuleRef(name), None))
-        return
-    base = node.module or ""
-    if node.level:
-        parent = package.split(".")[: len(package.split(".")) - node.level + 1]
-        base = ".".join([*parent, *([base] if base else [])])
-    for alias in node.names:
-        scope.setdefault(alias.asname or alias.name, []).append(
-            (_Imported(base, alias.name), None)
-        )
-
-
-def _parametrized(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-    scope: Scope,
-    text_of: Callable[[ast.expr], str | None],
-) -> None:
-    """Bind the values ``pytest.mark.parametrize`` gives each argument;
-    ``text_of`` reads argument names given through a name."""
-    for decorator in node.decorator_list:
-        if not (
-            isinstance(decorator, ast.Call)
-            and ast.unparse(decorator.func).endswith("parametrize")
-            and len(decorator.args) >= 2
-        ):
-            continue
-        names, rows = decorator.args[:2]
-        if isinstance(names, ast.Constant) and isinstance(names.value, str):
-            fields = [name.strip() for name in names.value.split(",")]
-        elif isinstance(names, _SEQUENCES):
-            fields = [str(e.value) for e in names.elts if isinstance(e, ast.Constant)]
-        elif (text := text_of(names)) is not None:
-            fields = [name.strip() for name in text.split(",")]
-        else:
-            continue
-        for index, name in enumerate(fields):
-            column = index if len(fields) > 1 else None
-            scope.setdefault(name, []).append((_Each(rows, column), None))
-
-
-def _column(found: Sequence[Bound], column: int | None) -> list[Bound]:
-    """``found``, or element ``column`` of each of its tuples."""
-    if column is None:
-        return list(found)
-    return [
-        (element.elts[column], own)
-        for element, own in found
-        if isinstance(element, (ast.Tuple, ast.List)) and len(element.elts) > column
-    ]
-
-
 class Checker:
     def __init__(self, repo: Path, real: frozenset[str]) -> None:
         self.repo = repo
@@ -284,7 +185,8 @@ class Checker:
         self.called: set[FunctionKey] = set()  # functions a call in the trees fills
         # Parameters with values of their own: a default or ``parametrize``.
         self.given: set[tuple[FunctionKey, str]] = set()
-        self.assigned: dict[object, int] = {}  # the line each value is bound at
+        # Where each value is bound: its statement's line and column.
+        self.assigned: dict[object, tuple[int, int]] = {}
         self.straight: set[object] = set()  # values a function always binds
         self.findings: set[Finding] = set()
         self.unresolved: set[Site] = set()
@@ -365,7 +267,7 @@ class Checker:
             for arg, default in defaults:
                 scope[arg.arg].append((default, outer))
         if isinstance(node, _FUNCTIONS):
-            _parametrized(
+            bind_parametrized(
                 node, scope, lambda e: self._one_text(e, outer or [module.top])
             )
             key = _key(module.name, node)
@@ -376,7 +278,7 @@ class Checker:
             # A parameter holds its value from the definition's line on.
             for bound in scope.values():
                 for value, _ in bound:
-                    self._bound_at(value, node.lineno, straight=True)
+                    self._bound_at(value, (node.lineno, node.col_offset), straight=True)
         package = module.name
         if not module.path.endswith("__init__.py"):
             package = module.name.rpartition(".")[0]
@@ -409,23 +311,22 @@ class Checker:
         if isinstance(node, ast.Assign):
             targets = node.targets
             for target in targets:
-                _bind(scope, target, node.value, new)
+                bind(scope, target, node.value, new)
         elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value:
             targets = [node.target]
-            _bind(scope, node.target, node.value, new)
+            bind(scope, node.target, node.value, new)
         elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
             # ``name += text``: the name's earlier value with the text added.
             targets = [node.target]
             earlier = ast.Name(id=node.target.id, ctx=ast.Load())
-            _bind(scope, node.target, ast.BinOp(earlier, node.op, node.value), new)
+            bind(scope, node.target, ast.BinOp(earlier, node.op, node.value), new)
         elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
-            _bind_loop(scope, node.target, node.iter, new)
+            bind_loop(scope, node.target, node.iter, new)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            _bind_import(scope, node, package)
+            bind_import(scope, node, package)
         elif isinstance(node, (*_FUNCTIONS, ast.ClassDef)):
             scope.setdefault(node.name, []).append((node, None))
-        line = getattr(node, "lineno", None)
-        if line is not None:
+        if isinstance(node, (ast.stmt, ast.expr)):
             # A plain assignment in the function's own body always runs, in order.
             straight = (
                 id(node) in body
@@ -433,10 +334,10 @@ class Checker:
                 and all(isinstance(target, ast.Name) for target in targets)
             )
             for value in new:
-                self._bound_at(value, line, straight=straight)
+                self._bound_at(value, (node.lineno, node.col_offset), straight=straight)
 
-    def _bound_at(self, value: object, line: int, *, straight: bool) -> None:
-        self.assigned[value] = line
+    def _bound_at(self, value: object, at: tuple[int, int], *, straight: bool) -> None:
+        self.assigned[value] = at
         if straight:
             self.straight.add(value)
 
@@ -457,39 +358,41 @@ class Checker:
     # --- what an expression can be --------------------------------------------
 
     def lookup(self, name: str, chain: Chain) -> list[Bound]:
-        """What ``name`` is bound to. In scopes read as of a line, the innermost
-        scope gives what the name held at that line, and each value goes on
-        being read as of the line it was bound at."""
-        line = chain.line if isinstance(chain, _AsOf) else None
+        """What ``name`` is bound to. In scopes read as of a position, the
+        innermost scope gives what the name held there, and each value goes on
+        being read as of where it was bound."""
+        at = chain.at if isinstance(chain, AsOf) else None
         for depth in range(len(chain) - 1, -1, -1):
             if name not in chain[depth]:
                 continue
             inner = chain[: depth + 1]
             bound = chain[depth][name]
-            if line is None or depth != len(chain) - 1:
+            if at is None or depth != len(chain) - 1:
                 return [(v, own if own is not None else inner) for v, own in bound]
             return [
-                (v, _AsOf(inner, self.assigned.get(v, line)) if own is None else own)
-                for v, own in self._latest(bound, line)
+                (v, AsOf(inner, self.assigned.get(v, at)) if own is None else own)
+                for v, own in self._latest(bound, at)
             ]
         return []
 
-    def _latest(self, bound: list[Bound], line: int) -> list[Bound]:
+    def _latest(self, bound: list[Bound], at: tuple[int, int]) -> list[Bound]:
         """Of a name's parameter value and plain assignments in a function body,
-        the last one before ``line``; every binding when any of them may not
+        the last one before ``at``; every binding when any of them may not
         run in order."""
         if not all(value in self.straight for value, _ in bound):
             return bound
-        lines = [self.assigned[value] for value, _ in bound]
-        before = [at for at in lines if at < line]
+        places = [self.assigned[value] for value, _ in bound]
+        before = [place for place in places if place < at]
         if not before:
             return bound
-        # A parameter's default and its argument share the definition's line.
-        return [b for b, at in zip(bound, lines, strict=True) if at == max(before)]
+        # A parameter's default and its argument share the definition's place.
+        return [
+            b for b, place in zip(bound, places, strict=True) if place == max(before)
+        ]
 
     def resolve(self, value: object, chain: Chain, seen: frozenset[int]) -> list[Bound]:
         """What an import names: a value in another module, or a module."""
-        if not isinstance(value, _Imported):
+        if not isinstance(value, Imported):
             return [(value, chain)]
         if id(value) in seen:
             return []
@@ -502,7 +405,7 @@ class Checker:
                 for bound in self.resolve(inner, own or [module.top], seen)
             ]
         if self.module(f"{value.module}.{value.name}") is not None:
-            return [(_ModuleRef(f"{value.module}.{value.name}"), None)]
+            return [(ModuleRef(f"{value.module}.{value.name}"), None)]
         return []
 
     def objects(
@@ -544,8 +447,8 @@ class Checker:
                 for base, base_chain in self.objects(base_node, chain or [], seen)
                 for found in self.member(base, base_chain, attr, seen)
             ]
-        if isinstance(owner, _ModuleRef):
-            return [(_Imported(owner.module, attr), None)]
+        if isinstance(owner, ModuleRef):
+            return [(Imported(owner.module, attr), None)]
         return []
 
     def values(
@@ -562,7 +465,7 @@ class Checker:
             return set().union(
                 *(self.values(v, c or chain, seen) for v, c in found)
             ) or {UNKNOWN}
-        if isinstance(node, _Each):
+        if isinstance(node, Each):
             return set().union(
                 *(
                     self.values(v, c or chain, seen)
@@ -611,7 +514,7 @@ class Checker:
             return {TOO_MANY}
         return {"".join(combo) for combo in itertools.product(*alternatives)}
 
-    def each(self, node: _Each, chain: Chain, seen: frozenset[int]) -> list[Bound]:
+    def each(self, node: Each, chain: Chain, seen: frozenset[int]) -> list[Bound]:
         return self.items(node.iterable, chain, seen, node.column)
 
     def items(
@@ -628,8 +531,10 @@ class Checker:
         if isinstance(node, (ast.Name, ast.Attribute)):
             return self._named(node, chain, seen, column, "item")
         if isinstance(node, _SEQUENCES):
-            rows = [(param_row(element, column), chain) for element in node.elts]
-            return _column(rows, column)
+            rows: list[Bound] = [
+                (param_row(element, column), chain) for element in node.elts
+            ]
+            return self._column(rows, column)
         if isinstance(node, ast.Dict):
             keys: list[Bound] = []
             for key, value in zip(node.keys, node.values, strict=True):
@@ -637,8 +542,35 @@ class Checker:
                     keys += self._spread(self.items(value, chain, seen), chain)
                 else:
                     keys.append((key, chain))
-            return _column(keys, column)
+            return self._column(keys, column)
         return []
+
+    @staticmethod
+    def _column(found: list[Bound], column: int | None) -> list[Bound]:
+        taken: list[Bound] = column_of(found, column)
+        return taken
+
+    def _held(
+        self, node: ast.Dict, chain: Chain, seen: frozenset[int]
+    ) -> dict[object, Bound]:
+        """What a dict literal ends up holding, by key: a later entry replaces
+        an earlier one of the same constant key, also one a ``**`` brought in."""
+        held: dict[object, Bound] = {}
+        for key, value in zip(node.keys, node.values, strict=True):
+            if isinstance(key, ast.Constant):
+                held[key.value] = (value, chain)
+            elif key is not None:
+                held[("expression", id(key))] = (value, chain)
+            else:
+                spread = self.objects(value, chain, seen)
+                other = spread[0][0] if len(spread) == 1 else None
+                if isinstance(other, ast.Dict) and id(other) not in seen:
+                    own = spread[0][1] or chain
+                    held.update(self._held(other, own, seen | {id(other)}))
+                    continue
+                unread = self._spread(self.dict_values(value, chain, seen), chain)
+                held.update((("spread", id(v)), (v, own)) for v, own in unread)
+        return held
 
     @staticmethod
     def _spread(found: list[Bound], chain: Chain) -> list[Bound]:
@@ -654,13 +586,8 @@ class Checker:
     ) -> list[Bound]:
         """The values of the dict ``node`` is, or element ``column`` of each."""
         if isinstance(node, ast.Dict):
-            held: list[Bound] = []
-            for key, value in zip(node.keys, node.values, strict=True):
-                if key is None:
-                    held += self._spread(self.dict_values(value, chain, seen), chain)
-                else:
-                    held.append((value, chain))
-            return _column(held, column)
+            held = list(self._held(node, chain, seen).values())
+            return self._column(held, column)
         if isinstance(node, (ast.Name, ast.Attribute)):
             return self._named(node, chain, seen, column, "dict_value")
         return []
@@ -715,8 +642,11 @@ class Checker:
         """How many elements a list or tuple literal, or a name holding one, has."""
         if isinstance(node, (ast.Name, ast.Attribute)):
             found = self.objects(node, chain, seen)
-            return _fixed_length(found[0][0]) if len(found) == 1 else None
-        return _fixed_length(node)
+            held = found[0][0] if len(found) == 1 else None
+        else:
+            held = node
+        length: int | None = fixed_length(held)
+        return length
 
     def _view_items(
         self,
@@ -812,14 +742,22 @@ class Checker:
             for sink in tuple(self.sinks):
                 if sink.function == key:
                     argument = bound_argument(call, target, sink.name, bound=bound)
-                    self.record(module, call, argument, chain, target.name, sink)
+                    self.record(
+                        module,
+                        call,
+                        argument,
+                        chain,
+                        target.name,
+                        sink,
+                        (target, bound),
+                    )
 
     def _imported(self, func: ast.expr, chain: Chain) -> bool:
         """Whether the callee's name, or the module it is read off, is imported."""
         while isinstance(func, ast.Attribute):
             func = func.value
         return isinstance(func, ast.Name) and any(
-            isinstance(value, (_Imported, _ModuleRef))
+            isinstance(value, (Imported, ModuleRef))
             for value, _ in self.lookup(func.id, chain)
         )
 
@@ -864,8 +802,9 @@ class Checker:
         if not isinstance(func, ast.Name):
             return None
         for value, _ in self.lookup(func.id, chain):
-            if isinstance(value, _Imported):
-                return value.name
+            if isinstance(value, Imported):
+                name: str = value.name
+                return name
         return func.id
 
     def record(
@@ -876,9 +815,11 @@ class Checker:
         chain: Chain,
         via: str,
         sink: Param | None = None,
+        helper: tuple[ast.FunctionDef | ast.AsyncFunctionDef, bool] | None = None,
     ) -> None:
         """Check the names ``call`` gives a stand-in, directly or as the argument
-        of the helper parameter ``sink``."""
+        of the parameter ``sink`` of ``helper`` (the function, and whether
+        Python passes its first parameter)."""
         site = Site(module.path, call.lineno, ast.unparse(call.func))
         if argument is None:
             # ``*`` or ``**`` may carry the name where it cannot be read.
@@ -888,11 +829,13 @@ class Checker:
                 self.unresolved.add(site)
             return
         mode = sink.mode if sink else Mode()
-        names = self._names(argument, _AsOf(chain, call.lineno), mode)
-        if mode.around:
-            before, after = mode.around
+        here = AsOf(chain, (call.lineno, call.col_offset))
+        names = self._names(argument, here, mode)
+        if mode.around and sink and helper:
             names = {
-                n if n in (UNKNOWN, TOO_MANY) else f"{before}{n}{after}" for n in names
+                n if n in (UNKNOWN, TOO_MANY) else n.join(text.split(_NAME))
+                for text in self._around(sink, call, helper, here)
+                for n in ([TOO_MANY] if text == TOO_MANY else names)
             }
         endless = Finding(module.path, call.lineno, ENDLESS, via)
         for name in names:
@@ -903,6 +846,37 @@ class Checker:
                 self.findings.add(Finding(module.path, call.lineno, domain, via))
             elif UNKNOWN in domain:
                 self.unresolved.add(site)
+
+    def _around(
+        self,
+        sink: Param,
+        call: ast.Call,
+        helper: tuple[ast.FunctionDef | ast.AsyncFunctionDef, bool],
+        chain: Chain,
+    ) -> set[str]:
+        """The text ``sink``'s helper puts around a name, ``_NAME`` standing for
+        the name, with the helper's other parameters filled in from this same
+        call: the parts of one name never come from two calls."""
+        function, bound = helper
+        before, after = sink.mode.around or ("", "")
+        choices: list[list[str]] = []
+        # ``split`` gives text, parameter number, text, ... in turn.
+        for index, part in enumerate(_MARKER.split(f"{before}{_NAME}{after}")):
+            param = self.params[int(part)] if index % 2 else None
+            if param is None or param.function != sink.function:
+                choices.append([f"\x02{part}\x03" if param else part])
+                continue
+            argument = bound_argument(call, function, param.name, bound=bound)
+            choices.append(
+                [UNKNOWN]
+                if argument is None
+                else sorted(self._names(argument, chain, param.mode))
+            )
+        if any(TOO_MANY in choice for choice in choices) or (
+            math.prod(len(choice) for choice in choices) > MAX_ALTERNATIVES
+        ):
+            return {TOO_MANY}
+        return {"".join(combo) for combo in itertools.product(*choices)}
 
     def _follow(
         self, match: re.Match[str], site: Site, sink: Param | None, endless: Finding
@@ -958,6 +932,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     problems: list[str] = []
     allowed = load_allowlist(args.repo / ALLOWLIST, problems)
+    # A list with a bad entry exempts nothing until it is fixed.
+    exempt = {} if problems else allowed
     try:
         checker = Checker(args.repo, real_integrations())
         findings = checker.run()
@@ -972,7 +948,7 @@ def main(argv: list[str] | None = None) -> int:
         if listed:
             print("\n".join(listed))
     problems += [
-        _describe(f) for f in findings if (f.path, f.integration) not in allowed
+        _describe(f) for f in findings if (f.path, f.integration) not in exempt
     ]
     matched = {(f.path, f.integration) for f in findings}
     problems += [
