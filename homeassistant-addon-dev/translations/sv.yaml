@@ -265,15 +265,16 @@ configuration:
       fortsätter. De säkerhetskopieringsåtgärder som en person utför i webbinställningarnas
       gränssnitt förblir tillgängliga.
   enable_settings_transfer_actions:
-    name: Allow ha_manage_backup to export and import settings
-    description: Allow AI assistants to download this server's settings file and import
-      one through ha_manage_backup, as the Export and Import buttons on the Server
-      Settings tab do. An import keeps the human-only settings, and changing the security
-      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
-      security policy access. An import can also turn on developer mode, tools and
-      features, and turn off protections such as secret redaction, SSL verification
-      and the IPv6 allowlist, as the file says, so check your settings after an AI
-      assistant imports one.
+    name: Tillåt ha_manage_backup att exportera och importera inställningar
+    description: Tillåt AI-assistenter att ladda ner denna servers inställningsfil
+      och importera en via ha_manage_backup, precis som knapparna Exportera och Importera
+      på fliken Serverinställningar gör. En import behåller de inställningar som endast
+      är till för människor, och att ändra säkerhetspolicyn, entitetssynligheten eller
+      behörigheterna för File & YAML Tools kräver dessutom åtkomst till utvecklarverktyg
+      för säkerhetspolicy. En import kan också aktivera utvecklarläge, verktyg och
+      funktioner samt inaktivera skydd som hemlig maskering, SSL-verifiering och IPv6-tillåtningslistan,
+      enligt filen, så kontrollera dina inställningar efter att en AI-assistent har
+      importerat en.
   enable_snapshot_delete:
     name: Tillåt borttagning av ögonblicksbilder
     description: Tillåt ha_manage_backup att ta bort fullständiga Home Assistant-ögonblicksbilder.
