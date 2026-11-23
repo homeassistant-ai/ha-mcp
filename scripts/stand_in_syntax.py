@@ -1,8 +1,9 @@
-"""The pieces a string expression joins, read off its syntax.
+"""Syntax ``scripts/integration_stand_ins.py`` reads without resolving names.
 
-``scripts/integration_stand_ins.py`` resolves each piece to the names it can
-be: a concatenation, an f-string, ``%``, ``str.format`` or ``str.join`` of
-string literals and other expressions.
+The pieces a string expression joins (a concatenation, an f-string, ``%``,
+``str.format`` or ``str.join`` of string literals and other expressions), the
+values of a ``pytest.param`` row, and the argument a call passes for a
+parameter.
 """
 
 from __future__ import annotations
@@ -97,3 +98,41 @@ def name_parts(node: object) -> list[ast.expr] | None:
     ):
         return None
     return _interleave(["", *[text] * (len(joined.elts) - 1), ""], joined.elts)
+
+
+def param_row(element: ast.expr, column: int | None) -> ast.expr:
+    """A ``pytest.param(...)`` row as its values; any other element as it is."""
+    if not (
+        isinstance(element, ast.Call) and ast.unparse(element.func).endswith("param")
+    ):
+        return element
+    if column is None:
+        return element.args[0] if element.args else element
+    return ast.Tuple(element.args)
+
+
+def call_argument(call: ast.Call, index: int, keyword: str | None) -> ast.expr | None:
+    leading = call.args[: index + 1]
+    if len(leading) > index and not any(isinstance(a, ast.Starred) for a in leading):
+        return call.args[index]
+    if keyword is None:
+        return None
+    return next((k.value for k in call.keywords if k.arg == keyword), None)
+
+
+def bound_argument(
+    call: ast.Call,
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    param: str,
+    *,
+    bound: bool,
+) -> ast.expr | None:
+    """The argument ``call`` passes for ``param`` of ``function``; ``bound``
+    when Python passes the first parameter itself."""
+    positional = [a.arg for a in (*function.args.posonlyargs, *function.args.args)]
+    positional = positional[1:] if bound else positional
+    if param in positional:
+        found = call_argument(call, positional.index(param), param)
+        if found is not None:
+            return found
+    return next((k.value for k in call.keywords if k.arg == param), None)

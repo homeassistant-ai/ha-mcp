@@ -44,8 +44,11 @@ import yaml  # type: ignore[import-untyped]
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from stand_in_name_parts import (  # type: ignore[import-not-found]
+from stand_in_syntax import (  # type: ignore[import-not-found]
+    bound_argument,
+    call_argument,
     name_parts,
+    param_row,
 )
 
 REPO = Path(__file__).resolve().parent.parent
@@ -62,6 +65,8 @@ SINKS: dict[str, tuple[int, str | None]] = {
 }
 UNKNOWN = "\0"
 TOO_MANY = "\1"  # more alternatives than are checked: reported, never dropped
+ENDLESS = "\5"  # a helper wrapping its own name again on every call: reported
+MAX_WRAPS = 8  # names one parameter may be wrapped into before that is ENDLESS
 MAX_ALTERNATIVES = 256
 # The calls a ``for`` over takes the same elements from as from their argument.
 _SAME_ITEMS = ("sorted", "list", "tuple", "set", "frozenset")
@@ -219,17 +224,6 @@ def _column(found: Sequence[Bound], column: int | None) -> list[Bound]:
     ]
 
 
-def _row(element: ast.expr, column: int | None) -> ast.expr:
-    """A ``pytest.param(...)`` row as its values; any other element as it is."""
-    if not (
-        isinstance(element, ast.Call) and ast.unparse(element.func).endswith("param")
-    ):
-        return element
-    if column is None:
-        return element.args[0] if element.args else element
-    return ast.Tuple(element.args)
-
-
 class Checker:
     def __init__(self, repo: Path, real: frozenset[str]) -> None:
         self.repo = repo
@@ -248,7 +242,8 @@ class Checker:
         self.called: set[FunctionKey] = set()  # functions a call in the trees fills
         # Parameters with values of their own: a default or ``parametrize``.
         self.given: set[tuple[FunctionKey, str]] = set()
-        self.straight: dict[int, int] = {}  # straight-line assignment value -> line
+        self.assigned: dict[int, int] = {}  # each assigned value's line
+        self.straight: set[int] = set()  # values a function body always assigns
         # The line and scope of the call being recorded.
         self.at: tuple[int, int] | None = None
         self.findings: set[Finding] = set()
@@ -365,9 +360,10 @@ class Checker:
         body: frozenset[int] = frozenset(),
     ) -> None:
         if isinstance(node, ast.Assign):
+            self.assigned[id(node.value)] = node.lineno
             if id(node) in body and all(isinstance(t, ast.Name) for t in node.targets):
                 # A statement of the function's own body runs every time, in order.
-                self.straight[id(node.value)] = node.lineno
+                self.straight.add(id(node.value))
             for target in node.targets:
                 _bind(scope, target, node.value)
         elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value:
@@ -412,10 +408,10 @@ class Checker:
         ``line``; every binding when any of them may not run in order."""
         if not all(id(value) in self.straight for value, _ in bound):
             return bound
-        before = [b for b in bound if self.straight[id(b[0])] < line]
+        before = [b for b in bound if self.assigned[id(b[0])] < line]
         if not before:
             return bound
-        return [max(before, key=lambda b: self.straight[id(b[0])])]
+        return [max(before, key=lambda b: self.assigned[id(b[0])])]
 
     def resolve(self, value: object, chain: Chain, seen: frozenset[int]) -> list[Bound]:
         """What an import names: a value in another module, or a module."""
@@ -490,7 +486,7 @@ class Checker:
         if isinstance(node, (ast.Name, ast.Attribute)):
             found = self.objects(node, chain, seen)
             return set().union(
-                *(self.values(v, c or chain, seen) for v, c in found)
+                *(self._value_where_assigned(v, c or chain, seen) for v, c in found)
             ) or {UNKNOWN}
         if isinstance(node, _Each):
             return set().union(
@@ -506,6 +502,20 @@ class Checker:
         if (joined := self._named_join(node, chain, seen)) is not None:
             return joined
         return self._joined(node, chain, seen)
+
+    def _value_where_assigned(
+        self, value: object, chain: Chain, seen: frozenset[int]
+    ) -> set[str]:
+        """``value``'s strings, its own names read as they were at its assignment
+        when it is assigned in the scope of the call being recorded."""
+        line = self.assigned.get(id(value))
+        if line is None or self.at is None or id(chain[-1]) != self.at[1]:
+            return self.values(value, chain, seen)
+        at, self.at = self.at, (line, self.at[1])
+        try:
+            return self.values(value, chain, seen)
+        finally:
+            self.at = at
 
     def _named_join(
         self, node: object, chain: Chain, seen: frozenset[int]
@@ -557,7 +567,7 @@ class Checker:
         if isinstance(node, (ast.Name, ast.Attribute)):
             return self._named(node, chain, seen, column, "item")
         if isinstance(node, _SEQUENCES):
-            rows = [(_row(element, column), chain) for element in node.elts]
+            rows = [(param_row(element, column), chain) for element in node.elts]
             return _column(rows, column)
         if isinstance(node, ast.Dict):
             keys = [(key, chain) for key in node.keys if key is not None]
@@ -714,7 +724,7 @@ class Checker:
         if name in SINKS:
             position, keyword = SINKS[name]
             self.record(
-                module, call, _argument(call, position, keyword), chain, "value", ""
+                module, call, call_argument(call, position, keyword), chain, "value", ""
             )
         # Resolve the callee when a helper passes names on: under its own name,
         # or under any name an import gives it (a re-export can rename it).
@@ -731,7 +741,7 @@ class Checker:
             bound = self.fills_first_parameter(call, target)
             for function, param, mode in sorted(self.sinks):
                 if function == key:
-                    argument = _bound_argument(call, target, param, bound=bound)
+                    argument = bound_argument(call, target, param, bound=bound)
                     self.record(module, call, argument, chain, mode, target.name)
 
     def _imported(self, func: ast.expr, chain: Chain) -> bool:
@@ -829,39 +839,16 @@ class Checker:
                     self.unresolved.add(site)
                     continue
                 param = (function, param_name, f"{taken}|{wrap}")
+                wraps = {p for p in self.sinks if p[:2] == param[:2] and "|" in p[2]}
+                if param not in wraps and len(wraps) >= MAX_WRAPS:
+                    self.findings.add(Finding(module.path, call.lineno, ENDLESS, via))
+                    continue
                 self.sinks.add(param)
                 self.sink_sites.setdefault(param, set()).add(site)
             elif domain == TOO_MANY or domain in self.real:
                 self.findings.add(Finding(module.path, call.lineno, domain, via))
             elif UNKNOWN in domain:
                 self.unresolved.add((module.path, call.lineno, ast.unparse(call.func)))
-
-
-def _argument(call: ast.Call, index: int, keyword: str | None) -> ast.expr | None:
-    leading = call.args[: index + 1]
-    if len(leading) > index and not any(isinstance(a, ast.Starred) for a in leading):
-        return call.args[index]
-    if keyword is None:
-        return None
-    return next((k.value for k in call.keywords if k.arg == keyword), None)
-
-
-def _bound_argument(
-    call: ast.Call,
-    function: ast.FunctionDef | ast.AsyncFunctionDef,
-    param: str,
-    *,
-    bound: bool,
-) -> ast.expr | None:
-    """The argument ``call`` passes for ``param`` of ``function``; ``bound``
-    when Python passes the first parameter itself."""
-    positional = [a.arg for a in (*function.args.posonlyargs, *function.args.args)]
-    positional = positional[1:] if bound else positional
-    if param in positional:
-        found = _argument(call, positional.index(param), param)
-        if found is not None:
-            return found
-    return next((k.value for k in call.keywords if k.arg == param), None)
 
 
 # --- the allowlist ------------------------------------------------------------
@@ -928,6 +915,11 @@ def parse_allowlist(text: str, problems: list[str]) -> dict[tuple[str, str], str
 
 def _describe(finding: Finding) -> str:
     through = f" through {finding.via}()" if finding.via else ""
+    if finding.integration == ENDLESS:
+        return (
+            f"{finding.path}:{finding.line}: a helper builds the name on itself "
+            f"without end{through}; name the integration directly"
+        )
     if finding.integration == TOO_MANY:
         return (
             f"{finding.path}:{finding.line}: more than {MAX_ALTERNATIVES} possible "

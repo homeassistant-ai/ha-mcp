@@ -149,6 +149,14 @@ REFUSED = {
         "def test_it(hass):\n    domain = 'made_up_probe'\n    domain = 'hassio'\n"
         "    mock_component(hass, domain)\n"
     ),
+    "saved-before-reassignment": (
+        "def test_it(hass):\n    domain = 'hassio'\n    saved = domain\n"
+        "    domain = 'made_up_probe'\n    MockModule(saved)\n"
+    ),
+    "saved-on-a-branch": (
+        "def test_it(hass, flag):\n    domain = 'hassio'\n    if flag:\n"
+        "        saved = domain\n    domain = 'made_up_probe'\n    MockModule(saved)\n"
+    ),
     "reassigned-on-a-branch": (
         "def test_it(hass, flag):\n    domain = 'hassio'\n    if flag:\n"
         "        domain = 'made_up_probe'\n    mock_component(hass, domain)\n"
@@ -235,6 +243,20 @@ def test_too_many_alternatives_fail_instead_of_passing_unchecked(
     assert out.startswith(f"{_SAMPLE}:3: more than ")
 
 
+def test_a_helper_wrapping_its_own_name_without_end_fails(guard, tmp_path, capsys):
+    source = (
+        "def register(hass, prefix):\n    if len(prefix) < 6:\n"
+        "        return register(hass, prefix + 'x')\n"
+        "    mock_component(hass, f'{prefix}sio')\n"
+        "register(hass, 'demo_')\n"
+    )
+
+    status, out = run_guard(guard, _repo(tmp_path, {_SAMPLE: source}), capsys)
+
+    assert status == 1
+    assert f"{_SAMPLE}:3: a helper builds the name on itself without end" in out
+
+
 def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
     repo = _repo(tmp_path, {_SAMPLE: "x = 1\ndef broken(:\n"})
 
@@ -275,6 +297,10 @@ ALLOWED = {
     "reassigned-to-made-up": (
         "def test_it(hass):\n    domain = 'hassio'\n    domain = 'made_up_probe'\n"
         "    mock_component(hass, domain)\n"
+    ),
+    "saved-before-reassignment-to-real": (
+        "def test_it(hass):\n    domain = 'made_up_probe'\n    saved = domain\n"
+        "    domain = 'hassio'\n    mock_component(hass, saved)\n"
     ),
     "zip-stops-short": (
         "for n, name in zip((0,), ('made_up_probe', 'hassio')):\n    MockModule(name)\n"
