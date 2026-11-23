@@ -706,3 +706,26 @@ test("the sweep accepts a report in the body and human closures stay closed", as
   earlier.data.events.push({ id: 50, event: "closed", actor: user("maintainer"), created_at: "2026-09-24T00:00:00Z" });
   assert.equal(await gate(earlier, "test/repo", 1, bot, edited, true), null);
 });
+
+test("a report accepted while the sweep closes the issue keeps it open", async () => {
+  const api = new FakeGitHub(requireReport());
+  await gate(api, "test/repo", 1, bot, { action: "labeled" }, true);
+  const request = api.request.bind(api);
+  api.request = async (path, options = {}) => {
+    if (options.data?.state === "closed") {
+      // The reporter's event finishes clearing the override after the sweep
+      // decided to close but before GitHub applies its issue-state write.
+      api.data.comments.push(comment(12, "reporter", report));
+      assert.equal(await gate(api, "test/repo", 1, bot, edited, true), "clear");
+      api.data.events.push({
+        id: 50, event: "closed", actor: { login: bot, type: "Bot" },
+        created_at: "2026-09-24T00:00:00Z",
+      });
+    }
+    if (options.data?.state) api.data.issue.state = options.data.state;
+    return request(path, options);
+  };
+  await expire(api, "test/repo", bot, Date.parse(overrideAt) + 24 * hour, true);
+  assert.equal(api.data.issue.state, "open");
+  assert.deepEqual(api.data.issue.labels, []);
+});

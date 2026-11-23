@@ -113,12 +113,15 @@ const gateNotice = (snapshot, bot) =>
     .at(-1);
 
 // Tie each notice to the label event so reapplying it starts a fresh request.
-function requiredApplication({ issue, events }) {
-  if (!issue.labels.some((l) => l.name === requiredLabel)) return null;
+function latestApplication(events) {
   return latestEvent(
     events,
     (e) => e.event === "labeled" && e.label?.name === requiredLabel,
   );
+}
+
+function requiredApplication({ issue, events }) {
+  return issue.labels.some((l) => l.name === requiredLabel) ? latestApplication(events) : null;
 }
 
 function authorizedApplication(snapshot) {
@@ -316,12 +319,13 @@ async function gateSnapshot(api, repository, number) {
   return snapshot;
 }
 
-async function applyGate(api, repository, number, bot, snapshot, action) {
+async function applyGate(
+  api, repository, number, bot, snapshot, action, required = authorizedApplication(snapshot),
+) {
   const base = `repos/${repository}/issues`;
   // The sweep also closes issues gateAction() never reopens, such as one
   // without a user; their close notice promises no reopen.
   const login = authorLogin(snapshot.issue);
-  const required = authorizedApplication(snapshot);
   const body = required
     ? requiredComment(required, action, login)
     : gateComment(action, login, gateHint(reporterTexts(snapshot)), reopenable(snapshot));
@@ -389,6 +393,19 @@ export async function gate(api, repository, number, bot, event, write) {
   return action;
 }
 
+// A concurrent report edit can clear the override between the sweep's read
+// and its close. Reconcile even when that edit already removed the label.
+async function reconcileRequiredClose(api, repository, number, bot, applied) {
+  const fresh = await gateSnapshot(api, repository, number);
+  if (fresh.issue.state !== "closed" || latestApplication(fresh.events)?.id !== applied.id)
+    return false;
+  const closed = latestEvent(fresh.events, (e) => e.event === "closed");
+  if (closed?.actor?.login !== bot || !reporterTexts(fresh).some(hasReport))
+    return false;
+  await applyGate(api, repository, number, bot, fresh, "reopen", applied);
+  return true;
+}
+
 // One pass of the scheduled sweep over every open labeled issue.
 export async function expire(api, repository, bot, now, write) {
   // The GitHub issues API intersects comma-separated labels. Query each
@@ -410,10 +427,17 @@ export async function expire(api, repository, bot, now, write) {
     // One failing issue must not stop the sweep for the others.
     try {
       const snapshot = await gateSnapshot(api, repository, number);
-      const action = expireAction(snapshot, now, bot);
+      let action = expireAction(snapshot, now, bot);
       if (!action) continue;
-      if (write)
-        await applyGate(api, repository, number, bot, snapshot, action);
+      if (write) {
+        const required = authorizedApplication(snapshot);
+        await applyGate(api, repository, number, bot, snapshot, action, required);
+        if (
+          action === "close" && required &&
+          await reconcileRequiredClose(api, repository, number, bot, required)
+        )
+          action = "reopen";
+      }
       acted.push(`${number}:${action}`);
     } catch (error) {
       failed.push(`#${number}: ${error.message}`);
