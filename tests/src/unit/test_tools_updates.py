@@ -27,6 +27,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant.common import async_fire_time_changed
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp import update_check
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -34,6 +35,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
 from ha_mcp.tools.helpers import core_error_message
 
+from ._hacs_marketplace import set_up_marketplace, stored
 from ._hassio_updates_core import (
     OTHER_APP,
     OTHER_SLUG,
@@ -177,7 +179,6 @@ class TestCategories:
     @pytest.mark.parametrize(
         ("integration", "title", "device_class", "category"),
         [
-            pytest.param("marketplace", "Some card", None, "hacs", id="store"),
             pytest.param(
                 "test", "Bulb", UpdateDeviceClass.FIRMWARE, "devices", id="firmware"
             ),
@@ -200,6 +201,25 @@ class TestCategories:
         entry = await listed(hass, core_client, update, integration)
 
         assert (entry["platform"], entry["category"]) == (integration, category)
+
+    async def test_a_store_repository_update_lands_under_the_store(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+    ) -> None:
+        """An installed repository Core's Marketplace offers a newer release of."""
+        card = stored(
+            "someone/some-card", "plugin", installed="v1.0.0", last_version="v1.1.0"
+        )
+        await set_up_marketplace(hass, aioclient_mock, hass_storage, {"1": card})
+        assert await async_setup_component(hass, "config", {})
+
+        result = await manage_updates(core_client)
+
+        [entry] = result["updates"]
+        assert (entry["platform"], entry["category"]) == ("marketplace", "hacs")
 
     @pytest.mark.parametrize(
         ("kind", "title", "category"),
@@ -545,15 +565,3 @@ class TestReleaseChannel:
 
         # The channel the fixture's Supervisor reports.
         assert result["channel"] == UpdateChannel.STABLE.value
-
-    async def test_without_a_supervisor_list_has_no_channel_and_no_warning(
-        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
-    ) -> None:
-        """Core's hassio integration always brings Supervisor's API with it, so
-        a hassio row without one is the stand-in's."""
-        await set_up_updates(hass, SoftwareUpdate("update.thing"), integration="hassio")
-
-        result = await manage_updates(component_core_client)
-
-        assert "channel" not in result
-        assert "warnings" not in result

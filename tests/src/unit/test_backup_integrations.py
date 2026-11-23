@@ -80,8 +80,10 @@ class _PlanesOptionsFlow(OptionsFlow):
         if scenario == "refuses":
             return self.async_abort(reason="not_now")
         if user_input is None:
+            # An "unmarked" form leaves ``last_step`` at Core's default, None.
+            last_step = None if scenario == "unmarked" else True
             return self.async_show_form(
-                step_id="init", data_schema=_FORM, last_step=True
+                step_id="init", data_schema=_FORM, last_step=last_step
             )
         planes: _Planes = self.hass.data[_DOMAIN]
         planes.log.append({"type": "options_flow", "options": user_input})
@@ -526,6 +528,24 @@ async def test_restore_whose_options_cannot_be_verified_reports_it(
     assert exc_info.value.outcome["verification_status"] == verification
     assert entry.options == stored
     assert _DISABLE not in _types(received)
+
+
+async def test_a_form_left_unmarked_is_submitted_and_judged_by_its_readback(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient, planes: _Planes
+) -> None:
+    """A form Core shows without ``last_step`` may be the last one: the restore
+    goes through it, and an option no form offers is reported as not matching
+    instead of refusing the whole restore."""
+    entry = _entry(hass, options={"int": 42, "region": "eu"}, scenario="unmarked")
+
+    with pytest.raises(bm.BackupRestoreError) as exc_info:
+        await _restore(
+            component_core_client, entry, options={"int": 11, "region": "us"}
+        )
+
+    assert exc_info.value.outcome["apply_status"] == "applied"
+    assert exc_info.value.outcome["verification_status"] == "mismatched"
+    assert entry.options == {"int": 11, "region": "eu"}
 
 
 async def test_snapshot_options_are_not_restored_over_options_it_cannot_read(

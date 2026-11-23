@@ -3,8 +3,9 @@
 ``backup_install`` sets the integration up as an install has it. ``core()``
 is a Core install: Core's local agent (``backup.local``) writes real backups
 into the test's config directory. ``supervisor()`` is a Supervisor install:
-Core's own ``hassio`` agents and reader-writer talk to a Supervisor that
-``aioclient_mock`` answers (``Supervisor``), as Core's hassio tests answer it.
+Core's own ``hassio`` integration, whose agents and reader-writer talk to a
+Supervisor that ``aioclient_mock`` answers (``Supervisor``), as Core's hassio
+tests answer it.
 Either can add another integration's agent, ``remote_storage.remote``
 (``RemoteAgent``), set up through Core's ``mock_integration``.
 
@@ -64,12 +65,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant.common import (
-    MockModule,
-    mock_component,
-    mock_integration,
-    mock_platform,
-)
+from pytest_homeassistant.common import MockModule, mock_integration, mock_platform
 from pytest_homeassistant.test_util.aiohttp import (
     AiohttpClientMocker,
     AiohttpClientMockResponse,
@@ -87,8 +83,9 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.tools import backup_snapshot, backup_snapshot_restore
 
-from ._supervisor_core import SUPERVISOR, load_supervisor_api
-from ._tools_addons_core import installed_apps
+from ._hassio_core import set_up_hassio, supervisor_error, supervisor_ok
+from ._supervisor_core import SUPERVISOR
+from ._tools_addons_core import app_info, installed_apps
 from ._ws_transport import abort_transport
 
 PASSWORD = "pw"
@@ -206,7 +203,8 @@ class Supervisor:
     A backup or restore job finishes at once, unless ``hold`` is set: it then
     runs until ``release()``. ``job_error`` fails the next backup job;
     ``failed_apps`` / ``failed_folders`` are left out of a backup that still
-    finishes, as Supervisor reports them in the job's child jobs.
+    finishes, as Supervisor reports them in the job's child jobs. The rest of
+    Supervisor's API answers its ``default`` (``_hassio_core``).
     """
 
     def __init__(
@@ -231,11 +229,29 @@ class Supervisor:
         self.operations: list[str] = []
         self._passwords: dict[str, str | None] = {}
         self._pending: dict[str, dict[str, Any] | None] = {}
+        self.url = SUPERVISOR
+        self._other: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
+        self._mock: AiohttpClientMocker | None = None
 
     def register(self, aioclient_mock: AiohttpClientMocker) -> None:
+        self._mock = aioclient_mock
         address = re.compile(rf"^http://{re.escape(SUPERVISOR)}/")
         for method in ("get", "post", "delete"):
             aioclient_mock.request(method, address, side_effect=self._answer)
+
+    def default(self, method: str, path: str, data: Any = None) -> None:
+        """Supervisor answers ``method path`` with ``data`` (``{}`` if none)."""
+        self._other[method.lower(), path] = (200, supervisor_ok(data))
+
+    def default_refusal(
+        self, method: str, path: str, message: str, status: int = 400
+    ) -> None:
+        """Supervisor refuses ``method path`` with ``message``."""
+        self._other[method.lower(), path] = (status, supervisor_error(message))
+
+    def forget_requests(self) -> None:
+        assert self._mock is not None
+        self._mock.mock_calls.clear()
 
     def add_backup(
         self,
@@ -303,10 +319,20 @@ class Supervisor:
             case "delete", ["backups", slug] if slug in self.backups:
                 del self.backups[slug]
                 return self._ok(verb, url, {})
-            case "get", ["jobs", job_id] if job := self.jobs.get(
-                str(uuid.UUID(job_id))
-            ):
+            case "get", ["jobs", job_id] if job := self._job_by_id(job_id):
                 return self._ok(verb, url, job)
+        return self._default(verb, url)
+
+    def _job_by_id(self, job_id: str) -> dict[str, Any] | None:
+        """The job ``job_id`` names; none for another ``/jobs/`` path."""
+        try:
+            return self.jobs.get(str(uuid.UUID(job_id)))
+        except ValueError:
+            return None
+
+    def _default(self, verb: str, url: URL) -> AiohttpClientMockResponse:
+        if (verb, url.path) in self._other:
+            return _reply(verb, url, *self._other[verb, url.path])
         return self._error(verb, url, 404, f"{url.path} does not exist")
 
     def _new_backup(
@@ -498,13 +524,13 @@ class Supervisor:
 
     @staticmethod
     def _ok(verb: str, url: URL, data: dict[str, Any]) -> AiohttpClientMockResponse:
-        return _reply(verb, url, 200, {"result": "ok", "data": data})
+        return _reply(verb, url, 200, supervisor_ok(data))
 
     @staticmethod
     def _error(
         verb: str, url: URL, status: int, message: str
     ) -> AiohttpClientMockResponse:
-        return _reply(verb, url, status, {"result": "error", "message": message})
+        return _reply(verb, url, status, supervisor_error(message))
 
 
 class BackupInstall:
@@ -539,13 +565,10 @@ class BackupInstall:
         remote: bool = False,
     ) -> Supervisor:
         """A Supervisor install whose backup mounts are ``mounts``."""
-        mock_component(self.hass, "hassio")
-        # load_supervisor_api sets SUPERVISOR_TOKEN, which alone sends the
-        # server to the Supervisor directly; off the app it goes through Core.
-        self._monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-        load_supervisor_api(self.hass, self._aioclient_mock, self._monkeypatch, {})
         supervisor = Supervisor(self.hass, mounts, default_mount)
         supervisor.register(self._aioclient_mock)
+        apps = [app_info(slug) for slug in APPS]
+        await set_up_hassio(self.hass, supervisor, self._monkeypatch, apps=apps)
         await self._set_up(remote)
         return supervisor
 

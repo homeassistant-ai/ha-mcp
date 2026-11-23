@@ -90,7 +90,7 @@ async def backup_core(
     """Core's backup integration and Core's own ``supervisor/api``, in front of
     a Supervisor that lists no backups (``_supervisor_core``)."""
     assert await async_setup_component(hass, "backup", {})
-    load_supervisor_api(
+    await load_supervisor_api(
         hass,
         aioclient_mock,
         monkeypatch,

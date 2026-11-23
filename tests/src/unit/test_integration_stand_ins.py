@@ -1,0 +1,293 @@
+"""No test stands in for a real integration with Core's test helpers.
+
+``scripts/integration_stand_ins.py`` runs here on a small repository written
+for each test, against the installed Home Assistant's integrations, and once
+on this checkout.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+
+from ._guard_run import run_guard
+
+_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "integration_stand_ins.py"
+_SAMPLE = "tests/src/unit/test_sample.py"
+_LISTED = f"- file: {_SAMPLE}\n  integration: hassio\n  reason: hassio only loads it\n"
+
+
+@pytest.fixture(scope="module")
+def guard() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("integration_stand_ins", _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _repo(tmp_path: Path, files: dict[str, str], allowlist: str = "[]\n") -> Path:
+    for tree in ("tests/src/unit", "tests/addon"):
+        (tmp_path / tree).mkdir(parents=True, exist_ok=True)
+    for name, source in files.items():
+        (tmp_path / name).write_text(source, encoding="utf-8")
+    (tmp_path / "tests/src/unit/integration_stand_in_allowlist.yml").write_text(
+        allowlist, encoding="utf-8"
+    )
+    return tmp_path
+
+
+REFUSED = {
+    "mock-component": "mock_component(hass, 'hassio')\n",
+    "mock-module": "mock_integration(hass, MockModule('hassio'))\n",
+    "mock-module-keyword": "MockModule(domain='hassio')\n",
+    "mock-platform": "mock_platform(hass, 'hassio.update')\n",
+    "constant-f-string": "NAME = 'hassio'\nmock_platform(hass, f'{NAME}.config_flow')\n",
+    "core-constant": (
+        "from homeassistant.components.hassio.const import DOMAIN\nMockModule(DOMAIN)\n"
+    ),
+    "class-attribute": "class Agent:\n    domain = 'hassio'\nMockModule(Agent.domain)\n",
+    "loop": "for name in ('made_up', 'hassio'):\n    MockModule(name)\n",
+    "dict-keys": "FLOWS = {'hassio': 1}\nfor name in FLOWS:\n    MockModule(name)\n",
+    "parametrize": (
+        "@pytest.mark.parametrize('name', ['made_up', pytest.param('hassio')])\n"
+        "def test_it(name):\n    MockModule(name)\n"
+    ),
+    "helper-parameter": (
+        "def register(hass, name):\n    mock_component(hass, name)\n"
+        "def test_it(hass):\n    register(hass, 'hassio')\n"
+    ),
+    "helper-keyword-through-helper": (
+        "def inner(hass, *, integration='test'):\n"
+        "    mock_platform(hass, f'{integration}.update')\n"
+        "def outer(hass, name):\n    inner(hass, integration=name)\n"
+        "outer(hass, 'hassio')\n"
+    ),
+    "helper-dict-keys": (
+        "def platforms(hass, found):\n"
+        "    for name, updates in found.items():\n"
+        "        mock_platform(hass, f'{name}.update')\n"
+        "def test_it(hass):\n    platforms(hass, {'hassio': []})\n"
+    ),
+    "helper-default": "def register(hass, name='hassio'):\n    MockModule(name)\n",
+    "aliased-helper": (
+        "from pytest_homeassistant.common import mock_component as mc\n"
+        "mc(hass, 'hassio')\n"
+    ),
+    "module-constant": (
+        "from homeassistant.components import hassio\nMockModule(hassio.DOMAIN)\n"
+    ),
+    "mock-component-keyword": "mock_component(hass, component='hassio')\n",
+    "mock-platform-keyword": "mock_platform(hass, platform_path='hassio.update')\n",
+    "mock-config-flow": "with mock_config_flow('hassio', Flow):\n    pass\n",
+    "mock-config-flow-keyword": "mock_config_flow(domain='hassio', config_flow=Flow)\n",
+    "components-add": "hass.config.components.add('hassio')\n",
+    "dict-values": "FLOWS = {'made_up': 'hassio'}\nfor name in FLOWS.values():\n    MockModule(name)\n",
+    "dict-items-value": (
+        "FLOWS = {'made_up': 'hassio'}\n"
+        "for key, name in FLOWS.items():\n    MockModule(name)\n"
+    ),
+    "parametrize-dict-values": (
+        "FLOWS = {'made_up': 'hassio'}\n"
+        "@pytest.mark.parametrize('name', FLOWS.values())\n"
+        "def test_it(name):\n    MockModule(name)\n"
+    ),
+    "helper-dict-values": (
+        "def register(found):\n"
+        "    for name in found.values():\n        MockModule(name)\n"
+        "register({'made_up': 'hassio'})\n"
+    ),
+    "enumerate": (
+        "for index, name in enumerate(('made_up', 'hassio')):\n    MockModule(name)\n"
+    ),
+    "zip": "for number, name in zip((1, 2), ('made_up', 'hassio')):\n    MockModule(name)\n",
+    "self-method": (
+        "class TestIt:\n"
+        "    def register(self, hass, name):\n        mock_component(hass, name)\n"
+        "    def test_it(self, hass):\n        self.register(hass, 'hassio')\n"
+    ),
+    "self-static-method": (
+        "class TestIt:\n"
+        "    @staticmethod\n"
+        "    def register(hass, name):\n        mock_component(hass, name)\n"
+        "    def test_it(self, hass):\n        self.register(hass, 'hassio')\n"
+    ),
+    "cls-method-of-a-base": (
+        "class Base:\n"
+        "    @classmethod\n"
+        "    def register(cls, name):\n        MockModule(name)\n"
+        "class TestIt(Base):\n"
+        "    @classmethod\n"
+        "    def setup_class(cls):\n        cls.register('hassio')\n"
+    ),
+    "percent-format": "NAME = 'hassio'\nmock_platform(hass, '%s.update' % NAME)\n",
+    "str-format": "NAME = 'hassio'\nmock_platform(hass, '{}.update'.format(NAME))\n",
+    "str-join": "NAME = 'hassio'\nmock_platform(hass, '.'.join([NAME, 'update']))\n",
+}
+
+
+@pytest.mark.parametrize("source", REFUSED.values(), ids=REFUSED.keys())
+def test_a_real_integrations_name_is_refused(guard, tmp_path, capsys, source):
+    status, out = run_guard(guard, _repo(tmp_path, {_SAMPLE: source}), capsys)
+
+    assert status == 1
+    assert out.startswith(f"{_SAMPLE}:")
+    assert "'hassio' integration" in out.splitlines()[0]
+
+
+def test_a_name_passed_to_a_helper_in_another_module_is_refused_at_the_call(
+    guard, tmp_path, capsys
+):
+    helper = (
+        "def register(hass, domain):\n    mock_integration(hass, MockModule(domain))\n"
+    )
+    test = "from ._helpers import register\n\n\nregister(hass, 'frontend')\n"
+    repo = _repo(tmp_path, {"tests/src/unit/_helpers.py": helper, _SAMPLE: test})
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert out.splitlines()[0] == (
+        f"{_SAMPLE}:4: a stand-in registered under Home Assistant's 'frontend' "
+        "integration through register()"
+    )
+
+
+def test_a_constant_from_a_local_helper_module_is_refused(guard, tmp_path, capsys):
+    test = "from ._names import NAME\n\n\nMockModule(NAME)\n"
+    repo = _repo(
+        tmp_path, {"tests/src/unit/_names.py": "NAME = 'hassio'\n", _SAMPLE: test}
+    )
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert out.startswith(f"{_SAMPLE}:4: ")
+
+
+def test_too_many_alternatives_fail_instead_of_passing_unchecked(
+    guard, tmp_path, capsys
+):
+    """One of 289 combinations is ``hassio``; none may be dropped unchecked."""
+    prefixes = ", ".join(repr(p) for p in ["has", *"ABCDEFGHIJKLMNOP"])
+    suffixes = ", ".join(repr(s) for s in ["sio", *"abcdefghijklmnop"])
+    source = (
+        f"for prefix in ({prefixes}):\n"
+        f"    for suffix in ({suffixes}):\n"
+        "        MockModule(f'{prefix}{suffix}')\n"
+    )
+
+    status, out = run_guard(guard, _repo(tmp_path, {_SAMPLE: source}), capsys)
+
+    assert status == 1
+    assert out.startswith(f"{_SAMPLE}:3: more than ")
+
+
+def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
+    repo = _repo(tmp_path, {_SAMPLE: "x = 1\ndef broken(:\n"})
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert out.startswith(f"{_SAMPLE}:2: ")
+
+
+def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, capsys):
+    source = "MockModule('made_up_probe')\nMockModule(pick())\n"
+    repo = _repo(tmp_path, {_SAMPLE: source})
+
+    status = guard.main(["--repo", str(repo), "--all"])
+
+    assert (status, capsys.readouterr().out.splitlines()[0]) == (
+        0,
+        f"{_SAMPLE}:2: MockModule() gets a name only known at runtime",
+    )
+
+
+ALLOWED = {
+    "made-up-domain": "mock_integration(hass, MockModule('made_up_probe'))\n",
+    "made-up-platform": "mock_platform(hass, 'made_up_probe.config_flow')\n",
+    "runtime-name": "def test_it(hass, name):\n    mock_component(hass, name)\n",
+    "helper-made-up": (
+        "def register(hass, name):\n    mock_component(hass, name)\n"
+        "register(hass, 'made_up_probe')\n"
+    ),
+    "real-setup": "async_setup_component(hass, 'hassio', {})\n",
+    "other-helpers-arguments": (
+        "def register(hass, name):\n    mock_component(hass, name)\n"
+        "def unrelated(name):\n    pass\n"
+        "register(hass, 'made_up_probe')\nunrelated('hassio')\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("source", ALLOWED.values(), ids=ALLOWED.keys())
+def test_a_made_up_domain_or_a_real_setup_passes(guard, tmp_path, capsys, source):
+    status, out = run_guard(guard, _repo(tmp_path, {_SAMPLE: source}), capsys)
+
+    assert (status, out) == (
+        0,
+        "No unlisted stand-in for a real integration; 0 allowlisted.\n",
+    )
+
+
+def test_an_allowlisted_case_passes(guard, tmp_path, capsys):
+    repo = _repo(tmp_path, {_SAMPLE: "mock_component(hass, 'hassio')\n"}, _LISTED)
+
+    assert run_guard(guard, repo, capsys) == (
+        0,
+        "No unlisted stand-in for a real integration; 1 allowlisted.\n",
+    )
+
+
+def test_an_allowlist_entry_that_matches_nothing_fails(guard, tmp_path, capsys):
+    repo = _repo(tmp_path, {_SAMPLE: "MockModule('made_up_probe')\n"}, _LISTED)
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert out.splitlines()[0] == (
+        "tests/src/unit/integration_stand_in_allowlist.yml: "
+        f"{_SAMPLE} no longer registers 'hassio'; remove the entry"
+    )
+
+
+def test_an_entry_allows_only_its_own_file(guard, tmp_path, capsys):
+    other = "tests/addon/test_other.py"
+    repo = _repo(
+        tmp_path,
+        {_SAMPLE: "mock_component(hass, 'hassio')\n", other: "MockModule('hassio')\n"},
+        _LISTED,
+    )
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert out.startswith(f"{other}:1: ")
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    [
+        f"- file: {_SAMPLE}\n  integration: hassio\n",
+        f"- file: {_SAMPLE}\n  integration: hassio\n  reason: ''\n",
+        _LISTED + "  extra: 1\n",
+    ],
+    ids=["no-reason", "empty-reason", "unknown-key"],
+)
+def test_an_entry_without_exactly_a_file_integration_and_reason_fails(
+    guard, tmp_path, capsys, allowlist
+):
+    repo = _repo(tmp_path, {_SAMPLE: "mock_component(hass, 'hassio')\n"}, allowlist)
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert "entry 1 needs exactly a non-empty file, integration, reason" in out
+
+
+def test_no_test_stands_in_for_a_real_integration_unlisted(guard, capsys):
+    assert guard.main([]) == 0, capsys.readouterr().out

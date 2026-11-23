@@ -1,10 +1,9 @@
-"""Core's own ``supervisor/api`` in front of a Supervisor that ``aioclient_mock`` answers.
+"""Core's own ``hassio`` integration in front of a Supervisor that ``aioclient_mock`` answers.
 
-A unit test has no Supervisor. ``hassio``'s client and WebSocket API are set up
-as ``hassio``'s ``async_setup`` sets them up (``HassIO`` in ``hass.data``, then
-``async_load_websocket_api``), so Core validates every command and builds every
-reply. Only the Supervisor's HTTP API at its address is replaced, answered by
-``aioclient_mock`` as Core's own hassio tests answer it.
+A unit test has no Supervisor. Core's ``hassio`` integration is set up as on
+Home Assistant OS (``_hassio_core``), so Core validates every command and
+builds every reply. Only the Supervisor's HTTP API at its address is replaced,
+answered by ``aioclient_mock`` as Core's own hassio tests answer it.
 """
 
 from __future__ import annotations
@@ -12,34 +11,71 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from homeassistant.components.hassio import const as hassio_const
-from homeassistant.components.hassio import websocket_api as hassio_websocket_api
-from homeassistant.components.hassio.handler import HassIO
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
+
+from ._hassio_core import set_up_hassio, supervisor_error, supervisor_ok
 
 # The Supervisor's address, as Core's hassio tests give it.
 SUPERVISOR = "127.0.0.1"
 
 
-def load_supervisor_api(
+def _answer(
+    aioclient_mock: AiohttpClientMocker,
+    method: str,
+    path: str,
+    body: dict[str, Any],
+    status: int = 200,
+) -> None:
+    aioclient_mock.request(
+        method.lower(),
+        f"http://{SUPERVISOR}{path}",
+        status=status,
+        json=body,
+        headers={"Content-Type": "application/json"},
+    )
+
+
+class _MockedSupervisor:
+    """What Core's hassio integration reads while it sets up, through
+    ``aioclient_mock``. ``aioclient_mock`` serves the first registration that
+    matches a request, so a later one for the same request is never served."""
+
+    url = SUPERVISOR
+
+    def __init__(self, aioclient_mock: AiohttpClientMocker) -> None:
+        self._mock = aioclient_mock
+
+    def default(self, method: str, path: str, data: Any = None) -> None:
+        _answer(self._mock, method, path, supervisor_ok(data))
+
+    def default_refusal(
+        self, method: str, path: str, message: str, status: int = 400
+    ) -> None:
+        _answer(self._mock, method, path, supervisor_error(message), status)
+
+    def forget_requests(self) -> None:
+        self._mock.mock_calls.clear()
+
+
+async def load_supervisor_api(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
     monkeypatch: pytest.MonkeyPatch,
     answers: dict[tuple[str, str], Any],
 ) -> None:
-    """Register Core's ``supervisor/api``; the Supervisor answers each
-    ``(method, path)`` in ``answers`` with ``{"result": "ok", "data": ...}``."""
+    """Set up Core's ``hassio``, which registers ``supervisor/api``. Once
+    ``hassio`` is set up, every earlier ``aioclient_mock`` registration is
+    cleared, so the stand-in's defaults answer only setup. The Supervisor then
+    answers only each ``(method, path)`` in ``answers``, with
+    ``{"result": "ok", "data": ...}``, and what the test registers on
+    ``aioclient_mock`` afterwards. ``SUPERVISOR_TOKEN`` is left set, as in
+    Core's container."""
+    await set_up_hassio(hass, _MockedSupervisor(aioclient_mock), monkeypatch)
+    aioclient_mock.clear_requests()
     monkeypatch.setenv("SUPERVISOR_TOKEN", "abcdefgh")
-    hass.data[hassio_const.DATA_COMPONENT] = HassIO(
-        hass.loop, async_get_clientsession(hass), SUPERVISOR
-    )
-    hassio_websocket_api.async_load_websocket_api(hass)
     for (method, path), data in answers.items():
-        aioclient_mock.request(
-            method, f"http://{SUPERVISOR}{path}", json={"result": "ok", "data": data}
-        )
+        _answer(aioclient_mock, method, path, supervisor_ok(data))
 
 
 def supervisor_requests(aioclient_mock: AiohttpClientMocker) -> list[tuple[str, str]]:

@@ -62,6 +62,23 @@ def _workflow(old: str, new: str) -> dict[str, str | None]:
     return {".github/workflows/pr.yml": _WORKFLOW.replace(old, new)}
 
 
+_NEW = "tests/src/unit/test_new.py"
+_OLD = "tests/src/unit/test_old.py"
+_CLEAN = "tests/src/unit/test_clean.py"
+# An older file whose stand-in is kept on the integration allowlist only.
+_KEPT = "tests/src/unit/test_kept.py"
+_ALLOWLIST_PATH = "tests/src/unit/integration_stand_in_allowlist.yml"
+_CHECK_PATH = "scripts/integration_stand_ins.py"
+_CHECK = '"""The check."""\nSINKS = {"MockModule": (0, "domain")}\n'
+
+
+def _allowlist(*entries: tuple[str, str]) -> str:
+    return "".join(
+        f"- file: {path}\n  integration: {name}\n  reason: kept\n"
+        for path, name in entries
+    )
+
+
 _BASE = {
     _RULE_PATH: _RULE,
     _GUARD_PATH: _GUARD,
@@ -69,13 +86,13 @@ _BASE = {
     "tests/addon/ruff.toml": _ADDON_RUFF,
     "pyproject.toml": _PYPROJECT,
     ".github/workflows/pr.yml": _WORKFLOW,
-    "tests/src/unit/test_old.py": "",
+    _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio")),
+    _CHECK_PATH: _CHECK,
+    _OLD: "",
+    _KEPT: "",
     # An older file that is on no list.
-    "tests/src/unit/test_clean.py": "",
+    _CLEAN: "",
 }
-_NEW = "tests/src/unit/test_new.py"
-_OLD = "tests/src/unit/test_old.py"
-_CLEAN = "tests/src/unit/test_clean.py"
 
 
 @pytest.fixture(scope="module")
@@ -381,6 +398,48 @@ def _listed(rule: str, entry: str) -> str:
             f"{_OLD} came off {_RUFF_PATH} but is still on",
             id="private-access-removed-but-still-on-the-rule-list",
         ),
+        pytest.param(
+            {_ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_NEW, "hassio"))},
+            f"{_ALLOWLIST_PATH}: lists the new file {_NEW}",
+            id="new-test-on-the-integration-allowlist",
+        ),
+        pytest.param(
+            {
+                _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_NEW, "hassio")),
+                _CHECK_PATH: _CHECK.replace("MockModule", "mock_component"),
+            },
+            f"{_ALLOWLIST_PATH}: lists the new file {_NEW}",
+            id="new-test-allowlisted-while-the-check-is-widened",
+        ),
+        pytest.param(
+            {_ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_CLEAN, "hassio"))},
+            f"{_CLEAN} was added to the list for 'hassio'",
+            id="older-file-on-the-integration-allowlist",
+        ),
+        pytest.param(
+            {_ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_KEPT, "frontend"))},
+            f"{_KEPT} was added to the list for 'frontend'",
+            id="another-integration-for-an-allowlisted-file",
+        ),
+        pytest.param(
+            {
+                _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_CLEAN, "hassio")),
+                _CHECK_PATH: _CHECK.replace("The check.", "The check, reworded.")
+                + "# a comment\n",
+            },
+            f"{_CLEAN} was added to the list for 'hassio'",
+            id="older-file-allowlisted-behind-a-docstring-edit",
+        ),
+        pytest.param(
+            {_ALLOWLIST_PATH: f"- file: {_KEPT}\n  reason: kept\n"},
+            f"{_ALLOWLIST_PATH}: entry 1 needs exactly a non-empty file, integration",
+            id="allowlist-entry-without-its-integration",
+        ),
+        pytest.param(
+            {_ALLOWLIST_PATH: "- file: [unclosed\n"},
+            f"{_ALLOWLIST_PATH}: cannot be read",
+            id="allowlist-that-is-not-yaml",
+        ),
     ],
 )
 def test_an_exempted_test_is_reported(
@@ -432,6 +491,14 @@ def test_an_exempted_test_is_reported(
             },
             id="widened-rule-lists-an-older-file-it-now-matches",
         ),
+        pytest.param(
+            {
+                _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_CLEAN, "frontend")),
+                _CHECK_PATH: _CHECK.replace("MockModule", "mock_component"),
+            },
+            id="widened-check-allowlists-an-older-file-it-now-finds",
+        ),
+        pytest.param({_ALLOWLIST_PATH: "[]\n"}, id="allowlisted-stand-in-converted"),
     ],
 )
 def test_converting_a_file_or_widening_a_rule_passes(
@@ -498,6 +565,75 @@ def test_a_check_that_is_new_lists_older_files_but_no_new_one(
     _write(repo, {_RULE_PATH: _listed(older, _NEW)})
     assert ratchet.problems_since(repo, "HEAD") == [
         f"rules: no-hand-made-core-replies lists the new file {_NEW}"
+    ]
+
+
+def test_a_new_integration_check_allowlists_older_files_but_no_new_one(
+    ratchet: ModuleType, tmp_path: Path
+) -> None:
+    """The pull request that adds the integration check may list what predates
+    it, and nothing else."""
+    base = {
+        name: text
+        for name, text in _BASE.items()
+        if name not in (_ALLOWLIST_PATH, _CHECK_PATH)
+    }
+    older = _allowlist((_KEPT, "hassio"), (_CLEAN, "frontend"))
+    repo = _pull_request(tmp_path, {_ALLOWLIST_PATH: older, _CHECK_PATH: _CHECK}, base)
+    assert ratchet.problems_since(repo, "HEAD") == []
+
+    _write(repo, {_ALLOWLIST_PATH: older + _allowlist((_NEW, "hassio"))})
+    assert ratchet.problems_since(repo, "HEAD") == [
+        f"{_ALLOWLIST_PATH}: lists the new file {_NEW}"
+    ]
+
+
+def test_an_allowlisted_file_may_change_and_stay_listed(
+    ratchet: ModuleType, tmp_path: Path
+) -> None:
+    """An allowlist entry is a stand-in kept for a reason, not a file waiting
+    to be converted: editing the file does not take it off."""
+    repo = _pull_request(tmp_path, {_KEPT: "print()\n"})
+
+    assert ratchet.problems_since(repo, "HEAD") == []
+
+
+def test_a_file_converted_off_the_other_lists_may_keep_its_allowlisted_stand_in(
+    ratchet: ModuleType, tmp_path: Path
+) -> None:
+    """An allowlist entry is a stand-in kept for a reason, so it does not hold
+    back the conversion of its file off every other list."""
+    base = {**_BASE, _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_OLD, "hassio"))}
+
+    repo = _pull_request(
+        tmp_path,
+        {
+            _RULE_PATH: _RULE.replace('  - "tests/src/unit/test_old.py"\n', ""),
+            _GUARD_PATH: "_GRANDFATHERED = frozenset()\n",
+            _RUFF_PATH: _ADDON_RUFF,
+            "pyproject.toml": _PYPROJECT.split("\n\n", maxsplit=1)[0] + "\n",
+        },
+        base,
+    )
+
+    assert ratchet.problems_since(repo, "HEAD") == []
+
+
+def test_a_file_taken_off_the_allowlist_comes_off_every_list(
+    ratchet: ModuleType, tmp_path: Path
+) -> None:
+    """A stand-in converted off the allowlist is converted: the file leaves
+    the other lists too."""
+    base = {**_BASE, _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_OLD, "hassio"))}
+
+    repo = _pull_request(
+        tmp_path, {_ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"))}, base
+    )
+
+    assert ratchet.problems_since(repo, "HEAD") == [
+        f"{_OLD} came off {_ALLOWLIST_PATH} but is still on "
+        f"no-hand-made-core-replies, pyproject.toml (mypy), {_GUARD_PATH}, "
+        f"{_RUFF_PATH}; a converted file comes off every list"
     ]
 
 
