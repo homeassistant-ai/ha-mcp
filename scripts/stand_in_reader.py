@@ -351,8 +351,9 @@ class Reader:
         self, scope: Scope, name: str, place: Place | None, loops: list[Loop]
     ) -> list[str]:
         """The names that hold, at ``place``, the collection ``name`` holds:
-        the one ``name`` is an alias of, and each one that is an alias of
-        ``name``. An assignment whose value holds ``place`` is not made yet."""
+        the one ``name`` is an alias of, each one that is an alias of
+        ``name``, and each one bound to the same value (``a = b = []``). An
+        assignment whose value holds ``place`` is not made yet."""
 
         def held(of: str, at: Place | None) -> list[Bound]:
             bounds = [
@@ -368,6 +369,9 @@ class Reader:
             if other == name:
                 continue
             for value, _ in held(other, place):
+                if id(value) in now:
+                    found.append(other)  # one assignment bound both
+                    break
                 if not (isinstance(value, ast.Name) and value.id == name):
                     continue
                 # Still the same collection: ``name`` not rebound since then.

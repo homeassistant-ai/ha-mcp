@@ -427,6 +427,10 @@ REFUSED = {
         "    names = names.append('hassio')\n"
         "    for name in keep:\n        MockModule(name)\n"
     ),
+    "list-written-through-one-name-of-a-chained-assignment": (
+        "names = keep = ['made_up_probe']\nnames.append('hassio')\n"
+        "for name in keep:\n    MockModule(name)\n"
+    ),
     "list-appended-to-through-an-alias-rebound-afterwards": (
         "def test_it(hass):\n    names = ['made_up_probe']\n    alias = names\n"
         "    alias.append('hassio')\n    alias = []\n"
@@ -658,6 +662,10 @@ ALLOWED = {
         "def test_it(hass):\n    name = 'made_up_probe'\n"
         "    for _ in range(2):\n        MockModule(name)\n"
         "    else:\n        name = 'hassio'\n"
+    ),
+    "two-lists-made-apart": (
+        "names = ['made_up_probe']\nkeep = ['made_up_probe']\n"
+        "names.append('hassio')\nfor name in keep:\n    MockModule(name)\n"
     ),
     "original-rebound-before-the-write": (
         "names = ['made_up_probe']\nkeep = names\nnames = []\n"
