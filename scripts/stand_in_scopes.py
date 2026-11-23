@@ -103,14 +103,13 @@ def bind_import(scope: Scope, node: ast.Import | ast.ImportFrom, package: str) -
 
 
 def _parametrized(
-    decorator: ast.expr, text_of: Callable[[ast.expr], str | None]
+    decorator: ast.expr,
+    text_of: Callable[[ast.expr], str | None],
+    is_parametrize: Callable[[ast.expr], bool],
 ) -> tuple[list[str], ast.expr] | None:
     """The argument names a ``pytest.mark.parametrize`` decorator gives rows to
     (an empty name for one whose rows go to a fixture), and the rows."""
-    if not (
-        isinstance(decorator, ast.Call)
-        and ast.unparse(decorator.func).endswith("parametrize")
-    ):
+    if not (isinstance(decorator, ast.Call) and is_parametrize(decorator.func)):
         return None
     # pytest takes the names and the rows by position or by keyword.
     keywords = {k.arg: k.value for k in decorator.keywords}
@@ -140,11 +139,13 @@ def bind_parametrized(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     scope: Scope,
     text_of: Callable[[ast.expr], str | None],
+    is_parametrize: Callable[[ast.expr], bool],
 ) -> None:
     """Bind the values ``pytest.mark.parametrize`` gives each argument;
-    ``text_of`` reads argument names given through a name."""
+    ``text_of`` reads argument names given through a name, and
+    ``is_parametrize`` says whether a decorator is pytest's own."""
     for decorator in node.decorator_list:
-        found = _parametrized(decorator, text_of)
+        found = _parametrized(decorator, text_of, is_parametrize)
         if found is None:
             continue
         fields, rows = found

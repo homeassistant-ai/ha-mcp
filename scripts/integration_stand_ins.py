@@ -55,6 +55,7 @@ from stand_in_resolver import (  # type: ignore[import-not-found]
     FUNCTIONS,
     MARKER,
     MAX_ALTERNATIVES,
+    MAX_STEPS,
     MAX_WRAPS,
     NAME_HERE,
     SEQUENCES,
@@ -181,8 +182,10 @@ class Checker(Resolver):
             self.visit(module, statement, chain if method else inner)
 
     def check_call(self, module: Module, call: ast.Call, chain: Chain) -> None:
-        name, core = self.callee_name(call, chain)
-        helper = name if core and name in SINKS else self._subclassed(call.func, chain)
+        # What the callee's name holds where the call is made.
+        here = AsOf(chain, (call.lineno, call.col_offset))
+        name, core = self.callee_name(call, here)
+        helper = name if core and name in SINKS else self._subclassed(call.func, here)
         if helper:
             position, keyword = SINKS[helper]
             self.record(module, call, call_argument(call, position, keyword), chain, "")
@@ -190,10 +193,10 @@ class Checker(Resolver):
         # or under any name an import gives it (a re-export can rename it).
         if not self.sinks or (
             name not in {sink.function[1] for sink in self.sinks}
-            and not self._imported(call.func, chain)
+            and not self._imported(call.func, here)
         ):
             return
-        for target in self._targets(call.func, chain):
+        for target in self._targets(call.func, here):
             key = self.functions.get(id(target))
             if key is None:
                 continue
@@ -468,7 +471,8 @@ def _describe(finding: Finding) -> str:
     if finding.integration == TOO_MANY:
         return (
             f"{finding.path}:{finding.line}: more than {MAX_ALTERNATIVES} possible "
-            f"names to check{through}; name the integration directly"
+            f"names to check, or a name more than {MAX_STEPS} names from its value"
+            f"{through}; name the integration directly"
         )
     return (
         f"{finding.path}:{finding.line}: a stand-in registered under Home "

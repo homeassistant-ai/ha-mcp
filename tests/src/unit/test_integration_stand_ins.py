@@ -258,6 +258,25 @@ REFUSED = {
         "class Mine(Module):\n    pass\n"
         "mock_integration(hass, Mine('hassio'))\n"
     ),
+    "alias-reassigned-after-the-call": (
+        "def unrelated(*args):\n    pass\n"
+        "def test_it(hass):\n    register = mock_component\n"
+        "    register(hass, 'hassio')\n    register = unrelated\n"
+    ),
+    "variadic-helper-parameter": (
+        "def register(*names):\n    for name in names:\n        MockModule(name)\n"
+        "register('made_up_probe', 'hassio')\n"
+    ),
+    "keywords-a-helper-collects": (
+        "def register(**domains):\n    for name in domains.values():\n"
+        "        MockModule(name)\n"
+        "register(first='hassio')\n"
+    ),
+    "branch-assignment-a-loop-brings-round": (
+        "def test_it(hass, flag):\n    name = 'made_up_probe'\n"
+        "    for _ in range(2):\n        MockModule(name)\n"
+        "        if flag:\n            name = 'hassio'\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -400,6 +419,17 @@ def test_too_many_names_through_a_helper_fail(guard, tmp_path, capsys):
     assert f"{_SAMPLE}:5: more than 256 possible names to check" in out
 
 
+def test_a_name_too_many_names_from_its_value_fails(guard, tmp_path, capsys):
+    """Without a bound the chain ends the check in a recursion error."""
+    chain = "".join(f"domain_{n} = domain_{n - 1}\n" for n in range(1, 600))
+    source = f"domain_0 = 'hassio'\n{chain}MockModule(domain_599)\n"
+
+    status, out = run_guard(guard, _repo(tmp_path, {_SAMPLE: source}), capsys)
+
+    assert status == 1
+    assert f"{_SAMPLE}:601: more than 256 possible names to check, or a name" in out
+
+
 def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
     repo = _repo(tmp_path, {_SAMPLE: "x = 1\ndef broken(:\n"})
 
@@ -506,6 +536,21 @@ ALLOWED = {
         "class Module(MockModule):\n    pass\n"
         "mock_integration(hass, Module('made_up_probe'))\n"
     ),
+    "alias-reassigned-before-the-call": (
+        "def unrelated(*args):\n    pass\n"
+        "def test_it(hass):\n    register = mock_component\n"
+        "    register = unrelated\n    register(hass, 'hassio')\n"
+    ),
+    "branch-assignment-after-the-call": (
+        "def test_it(hass, flag):\n    name = 'made_up_probe'\n"
+        "    MockModule(name)\n    if flag:\n        name = 'hassio'\n"
+    ),
+    "decorator-named-like-parametrize": (
+        "def no_parametrize(names, rows):\n    return lambda function: function\n"
+        "@no_parametrize('name', ['hassio'])\n"
+        "def test_it(hass, name):\n    MockModule(name)\n"
+    ),
+    "format-field-that-is-not-a-number": "MockModule('{\u00b2}'.format())\n",
     "spread-call-with-a-default": (
         "def register(hass, name='hassio'):\n    MockModule(name)\n"
         "register(hass, **{'name': 'made_up_probe'})\n"

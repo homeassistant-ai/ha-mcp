@@ -43,6 +43,7 @@ TOO_MANY = "\1"  # more alternatives than are checked: reported, never dropped
 ENDLESS = "\5"  # text added by more than MAX_WRAPS helpers: reported
 MAX_WRAPS = 8
 MAX_ALTERNATIVES = 256
+MAX_STEPS = 100  # names followed one into the next before a value: reported past it
 # The calls a ``for`` over takes the same elements from as from their argument.
 _SAME_ITEMS = ("sorted", "list", "tuple", "set", "frozenset")
 NAME_HERE = "\x04"  # where the name goes in the text a helper puts around it
@@ -91,7 +92,9 @@ class Finding(NamedTuple):
 
 def _parameters(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> list[str]:
     args = node.args
-    return [a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+    named = [a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+    # ``*names`` and ``**options`` hold what a call passes beyond the named ones.
+    return named + [a.arg for a in (args.vararg, args.kwarg) if a]
 
 
 def function_key(module: str, node: ast.AST) -> tuple[str, str, int, int]:
@@ -124,6 +127,9 @@ class Resolver:
         self.methods: dict[int, ast.ClassDef] = {}  # each method's class
         # Each parameter's default, and the scopes it is read in.
         self.defaults: dict[tuple[FunctionKey, str], tuple[ast.expr, Chain]] = {}
+        # Where each scope's loops begin and end: a later binding reaches an
+        # earlier read only round a loop.
+        self.loops: dict[int, list[tuple[tuple[int, int], tuple[int, int]]]] = {}
         self.sinks: set[Param] = set()
         self.sink_sites: dict[Param, set[Site]] = {}
         self.depths: dict[Param, int] = {}  # helpers adding text to each name
@@ -215,8 +221,12 @@ class Resolver:
                 here = AsOf(outer or [module.top], (node.lineno, node.col_offset))
                 self.defaults[(key, arg.arg)] = (default, here)
         if isinstance(node, FUNCTIONS):
+            around = outer or [module.top]
             bind_parametrized(
-                node, scope, lambda e: self._one_text(e, outer or [module.top])
+                node,
+                scope,
+                lambda e: self._one_text(e, around),
+                lambda f: self._pytest_parametrize(f, around),
             )
             key = function_key(module.name, node)
             self.given |= {
@@ -237,7 +247,33 @@ class Resolver:
         )
         for child in _scope_nodes(node):
             self._bind_node(scope, child, package, body)
+            self._note_loop(scope, child)
         return scope
+
+    def _note_loop(self, scope: Scope, node: ast.AST) -> None:
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+            end = (node.end_lineno or node.lineno, node.end_col_offset or 0)
+            spans = self.loops.setdefault(id(scope), [])
+            spans.append(((node.lineno, node.col_offset), end))
+
+    def _pytest_parametrize(self, func: ast.expr, chain: Chain) -> bool:
+        """Whether ``func`` is pytest's own ``mark.parametrize``: read off the
+        imported ``pytest`` or ``mark`` (or a ``pytest`` nothing binds), not a
+        decorator the tests define under a similar name."""
+        dotted = ast.unparse(func).split(".")
+        if dotted[-2:] != ["mark", "parametrize"] or len(dotted) > 3:
+            return False
+        bound = self.lookup(dotted[0], chain)
+        if len(dotted) == 3:
+            return dotted[0] == "pytest" and all(
+                isinstance(value, ModuleRef) and value.module == "pytest"
+                for value, _ in bound
+            )
+        return any(
+            isinstance(value, Imported)
+            and (value.module, value.name) == ("pytest", "mark")
+            for value, _ in bound
+        )
 
     def _one_text(self, node: ast.expr, chain: Chain) -> str | None:
         """The one string ``node`` can be, if it can be only one."""
@@ -317,32 +353,48 @@ class Resolver:
             bound = chain[depth][name]
             if at is None or depth != len(chain) - 1:
                 return [(v, own if own is not None else inner) for v, own in bound]
+            loops = self.loops.get(id(chain[depth]), [])
             return [
                 (v, AsOf(inner, self.assigned.get(v, at)) if own is None else own)
-                for v, own in self._latest(bound, at)
+                for v, own in self._latest(bound, at, loops)
             ]
         return []
 
-    def _latest(self, bound: list[Bound], at: tuple[int, int]) -> list[Bound]:
-        """What can still hold at ``at``: the last binding the function always
-        makes before it (a plain assignment in its body, a parameter's value),
-        and every binding that may run after that one. Without such a binding,
-        every one."""
+    def _latest(
+        self,
+        bound: list[Bound],
+        at: tuple[int, int],
+        loops: list[tuple[tuple[int, int], tuple[int, int]]],
+    ) -> list[Bound]:
+        """What can hold at ``at``. Not what came before the last binding the
+        function always makes before it (a plain assignment in its body, a
+        parameter's value), and not a later binding, unless a loop holding
+        both brings it round again."""
         placed = [
             (self.assigned.get(value), value in self.straight) for value, _ in bound
         ]
         always = [
             place for place, straight in placed if straight and place and place < at
         ]
-        if not always:
-            return bound
-        cutoff = max(always)
-        return [
+        cutoff = max(always, default=None)
+
+        def holds(place: tuple[int, int] | None, straight: bool) -> bool:
+            if place is None:
+                return True
+            if place < at:
+                return cutoff is None or place >= cutoff
+            if straight and cutoff is not None:
+                return False  # the function has not got there yet
+            return place == at or any(
+                start <= at <= end and start <= place <= end for start, end in loops
+            )
+
+        kept = [
             b
             for b, (place, straight) in zip(bound, placed, strict=True)
-            # One the function always makes after ``at`` has not run yet.
-            if place is None or (place >= cutoff and (place < at or not straight))
+            if holds(place, straight)
         ]
+        return kept or bound
 
     def resolve(self, value: object, chain: Chain, seen: frozenset[int]) -> list[Bound]:
         """What an import names: a value in another module, or a module."""
@@ -411,11 +463,11 @@ class Resolver:
         """Every string ``node`` can be, with ``UNKNOWN`` for runtime parts."""
         if id(node) in seen:
             return {UNKNOWN}
+        if len(seen) > MAX_STEPS:
+            return {TOO_MANY}  # a chain of names too long to follow: reported
         seen |= {id(node)}
-        if isinstance(node, Names):
-            return set(node.names)
-        if isinstance(node, ast.Constant):
-            return {node.value} if isinstance(node.value, str) else {UNKNOWN}
+        if isinstance(node, (Names, ast.Constant)):
+            return self._written(node)
         if isinstance(node, (ast.Name, ast.Attribute)):
             found = self.objects(node, chain, seen)
             if not found:
@@ -437,6 +489,13 @@ class Resolver:
             if (inlined := inline(node, chain, seen)) is not None:
                 return inlined
         return self._joined(node, chain, seen)
+
+    @staticmethod
+    def _written(node: Names | ast.Constant) -> set[str]:
+        """The strings a literal is, or a set of names already worked out."""
+        if isinstance(node, Names):
+            return set(node.names)
+        return {node.value} if isinstance(node.value, str) else {UNKNOWN}
 
     def _named_format(
         self, node: object, chain: Chain, seen: frozenset[int]

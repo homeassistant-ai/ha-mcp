@@ -49,7 +49,7 @@ def _format_parts(text: str, call: ast.Call) -> list[ast.expr] | None:
         key = field
         if not key:
             key, automatic = str(automatic), automatic + 1
-        if key.isdigit() and int(key) < len(call.args):
+        if key.isascii() and key.isdecimal() and int(key) < len(call.args):
             parts.append(call.args[int(key)])
         elif key in keywords:
             parts.append(keywords[key])
@@ -127,6 +127,19 @@ def bound_argument(
     when Python passes the first parameter itself."""
     positional = [a.arg for a in (*function.args.posonlyargs, *function.args.args)]
     positional = positional[1:] if bound else positional
+    spread = any(isinstance(a, ast.Starred) for a in call.args) or any(
+        k.arg is None for k in call.keywords
+    )
+    if function.args.vararg and param == function.args.vararg.arg:
+        # ``*names`` holds the positional arguments past the named ones.
+        return None if spread else ast.Tuple(call.args[len(positional) :], ast.Load())
+    if function.args.kwarg and param == function.args.kwarg.arg:
+        # ``**options`` holds the keywords no parameter takes.
+        named = {*positional, *(a.arg for a in function.args.kwonlyargs)}
+        extra = [k for k in call.keywords if k.arg not in named]
+        if spread:
+            return None
+        return ast.Dict([ast.Constant(k.arg) for k in extra], [k.value for k in extra])
     # A positional-only parameter takes no keyword: that one goes to ``**``.
     by_name = param not in {a.arg for a in function.args.posonlyargs}
     if param in positional:
