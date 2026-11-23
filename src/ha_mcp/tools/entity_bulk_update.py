@@ -2,7 +2,8 @@
 
 Core's ``config/entity_registry/update`` takes one entity, so labels,
 categories, enabled and hidden go out once per entity; expose_to goes out as
-one ``homeassistant/expose_entity`` call per assistant set. Each succeeded row
+one ``homeassistant/expose_entity`` call for the assistants turned on and one
+for those turned off, each for the whole list. Each succeeded row
 keeps what Core answered for its entity besides the entry, such as
 ``require_restart`` or ``reload_delay`` after an enable. With auto-backup on,
 each entity gets its own pre-write snapshot, as a single-entity call does.
@@ -28,7 +29,7 @@ from .helpers import extract_tool_error_message, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
-# Keys of the single-entity reply that a bulk row carries in its own fields.
+# Keys of the single-entity reply that a bulk row sets itself or drops.
 _ROW_KEYS = frozenset({"success", "entity_id", "entity_entry", "updates"})
 
 
@@ -72,6 +73,8 @@ async def _registry_phase(
                 if isinstance(result, ToolError)
                 else str(result)
             )
+            if not isinstance(result, ToolError):
+                logger.warning("Bulk update of %s failed", eid, exc_info=result)
             failed.append({"entity_id": eid, "error": error_msg})
         else:
             # update_one returns success-shape or raises ToolError (caught above).
@@ -178,6 +181,12 @@ async def bulk_update_entities(
             updates_by_id,
             refetch=include_entity_entry,
         )
+        for row in expose_failed:
+            # The registry update already landed: say what it changed.
+            if applied := updates_by_id.get(row["entity_id"]):
+                row.update(
+                    extras_by_id[row["entity_id"]], partial=True, updates=applied
+                )
         failed.extend(expose_failed)
         warnings += refresh_warnings
 
@@ -202,7 +211,9 @@ async def bulk_update_entities(
     }
     if failed:
         response["failed"] = failed
-        response["partial"] = len(succeeded_list) > 0
+        response["partial"] = len(succeeded_list) > 0 or any(
+            row.get("partial") for row in failed
+        )
     if warnings:
         response["warnings"] = warnings
     return response

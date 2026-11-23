@@ -762,7 +762,7 @@ class TestEntityWriteFailure:
     async def test_a_compact_bulk_exposure_reads_nothing_after_the_write(
         self, hass: HomeAssistant, tools: EntityTools, sent: AsyncMock
     ) -> None:
-        """Without entries in the reply there is nothing to re-read."""
+        """A compact reply must not pay for a registry re-read it would not show."""
         er.async_get(hass).async_get_or_create(
             "light", "demo", "desk", suggested_object_id="desk"
         )
@@ -801,6 +801,66 @@ class TestEntityWriteFailure:
         assert all("boom" in f["error"] for f in result["failed"])
         assert _types(sent).count(_EXPOSE) == 1
         assert _types(sent)[-1] == _EXPOSE
+
+    @pytest.mark.parametrize("fault", ["refused", "dropped"])
+    async def test_a_failed_bulk_exposure_still_reports_the_registry_write(
+        self,
+        hass: HomeAssistant,
+        monkeypatch: pytest.MonkeyPatch,
+        core_client: HomeAssistantClient,
+        tools: EntityTools,
+        fault: str,
+    ) -> None:
+        """Each entity was already hidden when the exposure failed: a reply
+        saying nothing changed would make an agent retry or misreport."""
+        registry = er.async_get(hass)
+        ids = [
+            registry.async_get_or_create(
+                "light", "demo", object_id, suggested_object_id=object_id
+            ).entity_id
+            for object_id in ("desk", "lamp")
+        ]
+        if fault == "refused":
+            _expose_raises(monkeypatch)
+        else:
+            # Core hides both entities, then the connection drops before the
+            # exposure write gets an answer.
+            update = er.EntityRegistry.async_update_entity
+            hidden: list[str] = []
+
+            def hide_then_drop(
+                registry: er.EntityRegistry, entity_id: str, **changes: Any
+            ) -> Any:
+                result = update(registry, entity_id, **changes)
+                hidden.append(entity_id)
+                if len(hidden) == len(ids):
+                    monkeypatch.setattr(
+                        core_client,
+                        "send_websocket_message",
+                        AsyncMock(
+                            side_effect=HomeAssistantConnectionError("connection lost")
+                        ),
+                    )
+                return result
+
+            monkeypatch.setattr(
+                er.EntityRegistry, "async_update_entity", hide_then_drop
+            )
+
+        result = await tools.ha_set_entity(
+            entity_id=ids, hidden=True, expose_to={"conversation": True}
+        )
+
+        assert (result["success"], result["partial"]) == (False, True)
+        assert [row["entity_id"] for row in result["failed"]] == ids
+        for row in result["failed"]:
+            assert row["error"].startswith("Exposure failed")
+            assert row["partial"] is True
+            assert row["updates"] == ["hidden"]
+        for entity_id in ids:
+            entry = registry.async_get(entity_id)
+            assert entry is not None
+            assert entry.hidden_by is er.RegistryEntryHider.USER
 
     async def test_a_refused_read_before_a_device_rename_ends_the_call(
         self, tools: EntityTools, sent: AsyncMock

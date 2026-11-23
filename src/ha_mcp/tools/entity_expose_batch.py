@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from ..client.exceptions import HomeAssistantError
 from .entity_exposure import get_entries_or_unregistered
 from .helpers import raise_core_refusal
 
@@ -60,7 +61,8 @@ async def apply_bulk_expose(
     needs at most two WS calls (one for the assistants being turned on, one
     for those being turned off) regardless of entity count — not one per
     entity. Returns (error, changed): error is None on success, or the message
-    of the first failing set, which applies to every id in the list. changed
+    of the first failing set (a refusal or a lost connection), which applies
+    to every id in the list. changed
     holds the ids Core reports it changed, and is empty on error.
     """
     expose_true = [a for a, v in parsed_expose_to.items() if v]
@@ -74,14 +76,17 @@ async def apply_bulk_expose(
             f"{'Exposing' if should_expose else 'Hiding'} {len(entity_ids)} "
             f"entities {'to' if should_expose else 'from'} {assistants}"
         )
-        result = await client.send_websocket_message(
-            {
-                "type": "homeassistant/expose_entity",
-                "assistants": assistants,
-                "entity_ids": entity_ids,
-                "should_expose": should_expose,
-            }
-        )
+        try:
+            result = await client.send_websocket_message(
+                {
+                    "type": "homeassistant/expose_entity",
+                    "assistants": assistants,
+                    "entity_ids": entity_ids,
+                    "should_expose": should_expose,
+                }
+            )
+        except HomeAssistantError as exc:
+            result = {"success": False, "error": str(exc)}
         if not result.get("success"):
             error = extract_error(result)
             if applied:
@@ -138,5 +143,5 @@ def refresh_warning(entity_id: str, error: str) -> str:
     """The warning for an entry that could not be re-read after its exposure."""
     return (
         f"{entity_id}: the exposure was applied, but re-reading the registry "
-        f"entry failed ({error}); entity_entry shows it as before."
+        f"entry failed ({error}); an entity_entry in this reply shows it as before."
     )
