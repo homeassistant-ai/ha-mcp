@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import functools
+from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -32,6 +34,7 @@ from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools import tools_config_scenes, ws_waiters
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
+from ._command_faults import registry_lookup_failing
 from ._config_dir_yaml import remove_yaml_only_scenes, setup_scenes, write_config_files
 from ._receipt_faults import at_entity_wait
 from ._tool_errors import error_body, error_of
@@ -518,33 +521,56 @@ async def test_a_scene_created_again_under_a_disabled_ones_id_is_named_disabled(
     assert not any("not yet queryable" in w for w in result["warnings"])
 
 
-@pytest.mark.parametrize("registry_answers", [True, False], ids=["read", "no-read"])
+async def _write_losing_the_state(
+    hass: HomeAssistant, core_client: HomeAssistantClient, also: Callable[[], object]
+) -> dict[str, Any]:
+    """Write the enabled ``movie_night`` while its state is gone when the wait
+    starts; ``also`` runs at that moment too."""
+
+    def lose_the_state() -> None:
+        hass.states.async_remove("scene.film_night")
+        also()
+
+    with at_entity_wait(hass, lose_the_state):
+        return await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="movie_night",
+            config={"name": "Film Night", "entities": {"input_boolean.tv": "on"}},
+            MandatoryBPS=False,
+        )
+
+
 async def test_an_enabled_scene_late_to_get_a_state_is_not_named_disabled(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
-    registry_answers: bool,
 ) -> None:
     """An enabled scene whose state is not there within the wait keeps the
-    plain wait warning, also when its registry entry cannot be read: the write
-    stands and nothing points it at a step it does not need."""
+    plain wait warning: nothing points it at a step it does not need."""
     await _scene(hass, {"input_boolean.tv": {"state": "off"}})
     _short_wait(monkeypatch)
 
-    def lose_the_state() -> None:
-        hass.states.async_remove("scene.film_night")
-        if not registry_answers:
-            monkeypatch.setattr(
-                core_client,
-                "send_websocket_message",
-                AsyncMock(side_effect=HomeAssistantConnectionError("network down")),
-            )
+    result = await _write_losing_the_state(hass, core_client, lambda: None)
 
-    with at_entity_wait(hass, lose_the_state):
-        result = await ConfigSceneTools(core_client).ha_config_set_scene(
-            scene_id="movie_night",
-            config={"name": "Film Night", "entities": {"input_boolean.tv": "on"}},
-            MandatoryBPS=False,
+    assert result["success"] is True
+    assert any("not yet queryable" in w for w in result["warnings"]), result
+    assert not any("is disabled" in w for w in result["warnings"])
+
+
+async def test_a_registry_error_after_the_wait_keeps_the_write_and_its_warning(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core answers the registry read that picks the warning with an error:
+    the write that landed still succeeds, with the plain wait warning."""
+    await _scene(hass, {"input_boolean.tv": {"state": "off"}})
+    _short_wait(monkeypatch)
+
+    with ExitStack() as stack:
+        result = await _write_losing_the_state(
+            hass,
+            core_client,
+            lambda: stack.enter_context(registry_lookup_failing(hass)),
         )
 
     assert result["success"] is True

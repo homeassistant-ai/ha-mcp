@@ -186,9 +186,10 @@ def _lead(core: str) -> str:
 
 async def not_queryable_warning(client: Any, entity_id: str, verb: str) -> str:
     """The warning for a written scene whose entity got no state within the
-    wait. Core never adds a disabled entry's entity, and for 30 days after a
-    scene's removal it gives a scene created again under that id the removed
-    entry's ``disabled_by`` back."""
+    wait. Core never adds a disabled entry's entity, and a scene created again
+    under a removed scene's id takes that id's ``disabled_by``: from the entry
+    a YAML scene's removal leaves in the registry, or, for 30 days after a
+    removal through the config API, from the deleted entry Core keeps."""
     try:
         entry = await client._registry_entry("scene", entity_id)
     except HomeAssistantError:
