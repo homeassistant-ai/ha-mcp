@@ -42,6 +42,8 @@ MAX_STEPS = 100
 NAME_HERE = "\x04"  # where the name goes in the text a helper puts around it
 MARKER = re.compile("\x02([0-9]+)\x03")
 FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+# The decorators that make a function a fixture: (module, name).
+FIXTURES = (("pytest", "fixture"), ("pytest_asyncio", "fixture"))
 DEFINITIONS = (*FUNCTIONS, ast.Lambda, ast.ClassDef)
 COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 SEQUENCES = (ast.Tuple, ast.List, ast.Set)
@@ -166,9 +168,7 @@ class Reader:
         for node in ast.walk(tree):
             if isinstance(node, FUNCTIONS):
                 self.functions[id(node)] = function_key(name, node)
-                if node.name.startswith("test") or any(
-                    "fixture" in ast.unparse(d) for d in node.decorator_list
-                ):
+                if node.name.startswith("test"):
                     self.collected.add(function_key(name, node))
             elif isinstance(node, ast.ClassDef):
                 self.methods.update(
@@ -243,6 +243,7 @@ class Reader:
                 lambda f: self._pytest_parametrize(f, here),
                 here,
             )
+            self._note_fixture(module, node, here)
             key = function_key(module.name, node)
             self.given |= {
                 (key, name) for name, bound in scope.items() if len(bound) > 1
@@ -318,11 +319,46 @@ class Reader:
     def _is_pytest(self, name: str, chain: Chain) -> bool:
         """Whether ``name`` is the pytest module: imported under that name
         (``import pytest as pt``), or ``pytest`` where nothing binds it."""
+        return self._is_module(name, "pytest", chain)
+
+    def _note_fixture(
+        self,
+        module: Module,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        chain: Chain,
+    ) -> None:
+        """Count ``node`` among what pytest calls when a decorator of it is
+        pytest's ``fixture`` (or pytest-asyncio's), read off the module under
+        whatever name or imported by name, with or without arguments."""
+        for decorator in node.decorator_list:
+            func = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if isinstance(func, ast.Name):
+                found = any(
+                    isinstance(value, Imported)
+                    and (value.module, value.name) in FIXTURES
+                    for value, _ in self.lookup(func.id, chain)
+                )
+            else:
+                found = (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "fixture"
+                    and isinstance(func.value, ast.Name)
+                    and any(
+                        self._is_module(func.value.id, name, chain)
+                        for name, _ in FIXTURES
+                    )
+                )
+            if found:
+                self.collected.add(function_key(module.name, node))
+
+    def _is_module(self, name: str, module: str, chain: Chain) -> bool:
+        """Whether ``name`` is the module ``module``: imported under that name,
+        or its own name where nothing binds it."""
         bound = self.lookup(name, chain)
         if not bound:
-            return name == "pytest"
+            return name == module
         return all(
-            isinstance(value, ModuleRef) and value.module == "pytest"
+            isinstance(value, ModuleRef) and value.module == module
             for value, _ in bound
         )
 

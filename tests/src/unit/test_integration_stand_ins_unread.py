@@ -238,6 +238,15 @@ UNREAD = {
     "nested-loop-target-in-a-row-not-written-out": (
         "for (name, _), label in [(pick(), 'case')]:\n    MockModule(name)\n"
     ),
+    "fixture-imported-by-name-also-called-directly": (
+        "from pytest import fixture\n@fixture\ndef made(name):\n"
+        "    MockModule(name)\ndef test_other():\n    made('made_up_probe')\n"
+    ),
+    "fixture-of-pytest-asyncio-also-called-directly": (
+        "import pytest_asyncio\n@pytest_asyncio.fixture(scope='module')\n"
+        "async def made(name):\n    MockModule(name)\n"
+        "async def test_other():\n    await made('made_up_probe')\n"
+    ),
     "parametrize-names-that-cannot-be-read": (
         "@pytest.mark.parametrize([pick(), 'name'], [('a', 'hassio')])\n"
         "def test_it(hass, label, name):\n    MockModule(name)\n"

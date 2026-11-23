@@ -400,6 +400,10 @@ REFUSED = {
         "for key, (label, name) in {'a': ('x', 'hassio')}.items():\n"
         "    MockModule(name)\n"
     ),
+    "fixtures-default-with-a-direct-call-too": (
+        "@pytest.fixture\ndef made(name='hassio'):\n    MockModule(name)\n"
+        "def test_other():\n    made('made_up_probe')\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -568,6 +572,17 @@ def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
 
 
 ALLOWED = {
+    "decorator-named-like-a-fixture": (
+        "def fixture_label(function):\n    return function\n"
+        "@fixture_label\ndef register(name='hassio'):\n    MockModule(name)\n"
+        "register('made_up_probe')\n"
+    ),
+    "fixture-attribute-of-an-object-of-the-tests": (
+        "class Tools:\n    @staticmethod\n    def fixture(function):\n"
+        "        return function\ntools = Tools()\n"
+        "@tools.fixture\ndef register(name='hassio'):\n    MockModule(name)\n"
+        "register('made_up_probe')\n"
+    ),
     "loop-target-inside-its-loop": (
         "def test_it(hass):\n    name = 'hassio'\n"
         "    for name in ['made_up_probe']:\n        MockModule(name)\n"
