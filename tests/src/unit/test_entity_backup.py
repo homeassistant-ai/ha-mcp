@@ -556,3 +556,33 @@ async def test_a_bulk_call_backs_up_every_entity(
     assert [
         name.split(".20")[0] for name in after_single if name not in after_bulk
     ] == ["entity.light.desk"]
+
+
+async def test_removing_a_list_backs_up_every_entity_once(
+    entity_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    backup_settings: config.Settings,
+    desk: Desk,
+) -> None:
+    """A removal is what a backup is for: a list must not remove un-backed-up,
+    and a list of one, which the decorator already backs up, gets no second."""
+    for object_id in ("lamp", "porch"):
+        entity_registry.async_get_or_create(
+            "light", "hue", object_id, suggested_object_id=object_id
+        )
+    tools = EntityTools(entity_client)
+    directory = backup_dir(backup_settings)
+
+    result = await tools.ha_remove_entity(entity_id=["light.desk", "light.lamp"])
+    after_list = await asyncio.to_thread(backup_files, directory)
+    await tools.ha_remove_entity(entity_id=["light.porch"])
+    after_one = await asyncio.to_thread(backup_files, directory)
+
+    assert result["removed"] == ["light.desk", "light.lamp"]
+    assert [name.split(".20")[0] for name in after_list] == [
+        "entity.light.desk",
+        "entity.light.lamp",
+    ]
+    assert [name.split(".20")[0] for name in after_one if name not in after_list] == [
+        "entity.light.porch"
+    ]

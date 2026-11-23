@@ -15,9 +15,8 @@ from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..backup_manager import _CAPTURE_TRANSIENT_ERRORS, get_backup_manager
-from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import back_up_entities
 from .entity_expose_batch import (
     apply_bulk_expose,
     expose_targets,
@@ -31,25 +30,6 @@ logger = logging.getLogger(__name__)
 
 # Keys of the single-entity reply that a bulk row carries in its own fields.
 _ROW_KEYS = frozenset({"success", "entity_id", "entity_entry", "updates"})
-
-
-async def _back_up_entities(client: Any, entity_ids: list[str]) -> list[str]:
-    """Snapshot each entity before the write; returns why a due backup was not taken."""
-    settings = get_global_settings()
-    if not getattr(settings, "enable_auto_backup", False):
-        return []
-    skipped: list[str] = []
-    try:
-        mgr = get_backup_manager(client, settings)
-        for eid in entity_ids:
-            await mgr.maybe_snapshot(
-                "entity", eid, tool_name="ha_set_entity", skip_reasons=skipped
-            )
-    except _CAPTURE_TRANSIENT_ERRORS as err:
-        logger.warning("Bulk entity backup failed: %s", err)
-        skipped.append(f"No pre-write backup was taken: {type(err).__name__}")
-    # One reason per cause, not one per entity: a bulk reply stays small.
-    return list(dict.fromkeys(skipped))
 
 
 async def _registry_phase(
@@ -180,7 +160,7 @@ async def bulk_update_entities(
             )
         )
 
-    warnings = await _back_up_entities(client, entity_ids)
+    warnings = await back_up_entities(client, entity_ids, "ha_set_entity")
     (
         entry_by_id,
         updates_by_id,

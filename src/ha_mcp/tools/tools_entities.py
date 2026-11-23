@@ -25,7 +25,7 @@ from ..errors import (
     create_error_response,
 )
 from ..utils.registry_update_lock import registry_update_locks
-from .auto_backup import with_auto_backup
+from .auto_backup import back_up_entities, with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .component_api import (
     COMPONENT_VIA_MARKETPLACE,
@@ -180,10 +180,11 @@ def _merge_entity_enrichment(
 
 
 def _single_entity_target(kw: dict[str, Any]) -> str:
-    """The entity a call backs up; a bulk call (a longer list) backs up none.
+    """The entity the decorator backs up; for a longer list, none.
 
     Snapshotting only the first entity of a list would leave the rest without
-    a backup while looking covered. The capture treats "" as "no entity".
+    a backup while looking covered, so a list path backs up each entity itself
+    (``back_up_entities``). The capture treats "" as "no entity".
     """
     entity_id = kw.get("entity_id")
     if isinstance(entity_id, list):
@@ -1744,9 +1745,16 @@ class EntityTools:
             )
 
         logger.info(f"Bulk removing {len(entity_ids)} entities")
-        return await remove_registry_entries(
+        # The decorator backs up a list of one.
+        warnings = (
+            await back_up_entities(self._client, entity_ids, "ha_remove_entity")
+            if len(entity_ids) > 1
+            else []
+        )
+        result = await remove_registry_entries(
             self._client, entity_ids, _extract_ws_error
         )
+        return result | ({"warnings": warnings} if warnings else {})
 
     @tool(
         name="ha_remove_entity",
@@ -1789,7 +1797,7 @@ class EntityTools:
           {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}
         where skipped = ids already absent (not-found is idempotent). A lost connection
         stops the run; not_attempted lists the ids never sent (the failing one too if
-        it never left), safe to retry. Only single-id removal is auto-backed-up.
+        it never left), safe to retry.
 
         EXAMPLES:
         - Remove orphaned sensor: ha_remove_entity("sensor.old_temperature")
