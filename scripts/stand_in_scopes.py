@@ -45,10 +45,12 @@ class ModuleRef(NamedTuple):
 
 class Each(NamedTuple):
     """What a ``for`` takes from ``iterable``, or element ``column`` of it
-    (from the end when negative)."""
+    (from the end when negative), and from there the element each column of
+    ``inner`` names in turn (``for (a, b), c in rows``)."""
 
     iterable: ast.expr
     column: int | None
+    inner: tuple[int, ...] = ()
 
 
 class Names(NamedTuple):
@@ -102,16 +104,22 @@ def bind_unread(scope: Scope, node: ast.AST, new: list[object]) -> list[ast.expr
 
 
 def bind_loop(
-    scope: Scope, target: ast.expr, iterable: ast.expr, new: list[object]
+    scope: Scope,
+    target: ast.expr,
+    iterable: ast.expr,
+    new: list[object],
+    path: tuple[int, ...] = (),
 ) -> None:
+    """Bind a loop's target; ``path`` is the columns that lead to it."""
     if isinstance(target, (ast.Tuple, ast.List)):
         stars = [isinstance(element, ast.Starred) for element in target.elts]
         for index, element in enumerate(target.elts):
             # A target after ``*rest`` is counted from the end of each row.
             column = index - len(stars) if any(stars[:index]) else index
-            bind(scope, element, Each(iterable, column), new)
+            bind_loop(scope, element, iterable, new, (*path, column))
     else:
-        bind(scope, target, Each(iterable, None), new)
+        first = path[0] if path else None
+        bind(scope, target, Each(iterable, first, path[1:]), new)
 
 
 def fixed_length(node: object) -> int | None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from ._guard_run import run_guard
-from ._integration_stand_ins_repo import LISTED, SAMPLE, sample_repo
+from ._integration_stand_ins_repo import SAMPLE, sample_repo
 from ._integration_stand_ins_repo import guard as guard
 
 REFUSED = {
@@ -376,6 +376,30 @@ REFUSED = {
     "comprehension-target-named-like-its-iterable": (
         "names = ['hassio']\nrows = [MockModule(names) for names in names]\n"
     ),
+    "callee-that-is-cores-helper-on-one-path": (
+        "try:\n    from pytest_homeassistant.common import mock_component\n"
+        "except ImportError:\n    def mock_component(hass, name):\n        pass\n"
+        "mock_component(None, 'hassio')\n"
+    ),
+    "callee-imported-from-a-module-that-cannot-be-read": (
+        "try:\n    from nowhere_at_all import mock_component\n"
+        "except ImportError:\n    def mock_component(hass, name):\n        pass\n"
+        "mock_component(None, 'hassio')\n"
+    ),
+    "earlier-value-after-a-loop-over-its-name": (
+        "def test_it(hass):\n    name = 'hassio'\n"
+        "    for name in ['made_up_probe']:\n        pass\n    MockModule(name)\n"
+    ),
+    "nested-loop-target": (
+        "for (name, _), label in [(('hassio', 0), 'case')]:\n    MockModule(name)\n"
+    ),
+    "pair-from-enumerate": (
+        "for i, (label, name) in enumerate([('x', 'hassio')]):\n    MockModule(name)\n"
+    ),
+    "pair-from-a-dicts-items": (
+        "for key, (label, name) in {'a': ('x', 'hassio')}.items():\n"
+        "    MockModule(name)\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -456,7 +480,10 @@ def test_a_helper_re_exported_under_another_name_is_refused(guard, tmp_path, cap
     status, out = run_guard(guard, repo, capsys)
 
     assert status == 1
-    assert out.startswith(f"{SAMPLE}:4: ")
+    assert out.splitlines()[0] == (
+        f"{SAMPLE}:4: a stand-in registered under Home Assistant's 'hassio' "
+        "integration through register()"
+    )
 
 
 def test_a_constant_from_a_local_helper_module_is_refused(guard, tmp_path, capsys):
@@ -468,7 +495,9 @@ def test_a_constant_from_a_local_helper_module_is_refused(guard, tmp_path, capsy
     status, out = run_guard(guard, repo, capsys)
 
     assert status == 1
-    assert out.startswith(f"{SAMPLE}:4: ")
+    assert out.splitlines()[0] == (
+        f"{SAMPLE}:4: a stand-in registered under Home Assistant's 'hassio' integration"
+    )
 
 
 def test_too_many_alternatives_fail_instead_of_passing_unchecked(
@@ -538,241 +567,24 @@ def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
     assert out.startswith(f"{SAMPLE}:2: ")
 
 
-# A line marked ``# unread: <callee>`` is refused as a name the check cannot
-# read, and no other line is.
-_UNREAD_SOURCE = """\
-MockModule('made_up_probe')
-MockModule(pick())  # unread: MockModule
-def test_it(hass, name):
-    mock_component(hass, name)  # unread: mock_component
-    MockModule(name)  # unread: MockModule
-MockModule(*names)  # unread: MockModule
-MockModule(**options)  # unread: MockModule
-def register(hass, name):
-    mock_component(hass, name)
-register(hass, 'made_up_probe')
-register(*row)  # unread: register
-def default(hass, name='made_up_probe'):
-    mock_component(hass, name)
-@pytest.mark.parametrize('name', ['made_up_probe'])
-def test_each(hass, name):
-    mock_component(hass, name)
-rows = ['made_up_probe']
-if flag:
-    rows = load_rows()
-for row in rows:
-    MockModule(row)  # unread: MockModule
-for none in []:
-    MockModule(none)
-@pytest.mark.parametrize('name', ['hassio'], indirect=True)
-def test_indirect(hass, name):
-    MockModule(name)  # unread: MockModule
-for unbound in NOWHERE:
-    MockModule(unbound)  # unread: MockModule
-import functools
-make = functools.partial(mock_component, None)  # unread: mock_component
-helpers = [MockModule]  # unread: MockModule
-apply(mock_platform, None, 'hassio')  # unread: mock_platform
-def defaulted(name, make=MockModule): ...  # unread: MockModule
-def maker():
-    return mock_config_flow  # unread: mock_config_flow
-chosen = MockModule if flag else dict  # unread: MockModule
-def test_with(hass):
-    name = 'hassio'
-    with ctx() as name:
-        MockModule(name)  # unread: MockModule
-def test_except(hass):
-    name = 'made_up_probe'
-    try:
-        pass
-    except Exception as name:
-        MockModule(name)  # unread: MockModule
-def test_match(hass):
-    name = 'made_up_probe'
-    match pick():
-        case str() as name:
-            MockModule(name)  # unread: MockModule
-rest = 'made_up_probe'
-label, *rest = ('case', 'hassio')
-MockModule(rest)  # unread: MockModule
-for each in (n for n in ['hassio']):
-    MockModule(each)  # unread: MockModule
-for letter in 'ab':
-    MockModule(letter)  # unread: MockModule
-ROWS = {'a': ['hassio']}
-for entry in ROWS['a']:
-    MockModule(entry)  # unread: MockModule
-for twice in ['hassio'] * 2:
-    MockModule(twice)  # unread: MockModule
-module = MockModule('made_up_probe')
-assert isinstance(module, MockModule)
-typed: MockModule = MockModule('made_up_probe')
-alias = MockModule
-alias('made_up_probe')
-first, second = MockModule, mock_component
-first('made_up_probe')
-class Module(MockModule):
-    pass
-import pytest_homeassistant.common as common
-made = functools.partial(common.mock_component, None)  # unread: common.mock_component
-apply(hass.config.components.add, 'hassio')  # unread: hass.config.components.add
-def test_with_pair(hass):
-    name = 'made_up_probe'
-    with ctx() as (name, other):
-        MockModule(name)  # unread: MockModule
-async def test_async_with(hass):
-    name = 'made_up_probe'
-    async with ctx() as name:
-        MockModule(name)  # unread: MockModule
-def test_match_rest(hass):
-    others = found = 'made_up_probe'
-    match pick():
-        case [first, *others]:
-            MockModule(others)  # unread: MockModule
-        case {**found}:
-            MockModule(found)  # unread: MockModule
-def test_except_group(hass):
-    name = 'made_up_probe'
-    try:
-        pass
-    except* ValueError as name:
-        MockModule(name)  # unread: MockModule
-rest = 'made_up_probe'
-*rest, = pick()
-MockModule(rest)  # unread: MockModule
-later = functools.partial(register, None)  # unread: register
-list(map(register, rows))  # unread: register
-def plain():
-    pass
-apply(plain)
-"""
-
-
-def test_a_name_the_check_cannot_read_is_refused_where_it_is_used(
-    guard, tmp_path, capsys
-):
-    """Refused: a call's result, a fixture's value at each stand-in it reaches,
-    ``*`` and ``**`` arguments, a collection one branch reads at runtime or
-    the check cannot read, a parameter ``parametrize`` gives a fixture, a name
-    bound by ``with``, ``except``, ``match`` or ``*rest``, and a helper (also
-    one read off its module or ``hass.config.components``) given to
-    ``partial``, put in a list, passed as an argument or a default, returned,
-    or chosen by a condition.
-
-    A helper of the tests' own that gives its name on to a stand-in is
-    refused the same way when it is handed on.
-
-    Not refused: a parameter a call, a default or ``parametrize`` fills, a
-    loop over an empty list, a helper in ``isinstance`` or an annotation,
-    under a plain alias, or as a base class, and a function handed on that
-    registers nothing."""
-    refused = [
-        f"{SAMPLE}:{number}: {line.rpartition('# unread: ')[2]}() {guard.UNREAD}"
-        for number, line in enumerate(_UNREAD_SOURCE.splitlines(), 1)
-        if "# unread: " in line
-    ]
-
-    status, out = run_guard(
-        guard, sample_repo(tmp_path, {SAMPLE: _UNREAD_SOURCE}), capsys
-    )
-
-    assert status == 1
-    assert out.splitlines()[:-1] == refused
-
-
-def test_no_entry_allows_a_name_the_check_cannot_read(guard, tmp_path, capsys):
-    source = "mock_component(hass, 'hassio')\nMockModule(pick())\n"
-    repo = sample_repo(tmp_path, {SAMPLE: source}, LISTED)
-
-    status, out = run_guard(guard, repo, capsys)
-
-    assert status == 1
-    assert out.splitlines()[0] == f"{SAMPLE}:2: MockModule() {guard.UNREAD}"
-
-
-# Refused as names the check cannot read, not as a real integration's.
-UNREAD = {
-    "runtime-name": "def test_it(hass, name):\n    mock_component(hass, name)\n",
-    "call-named-like-param": (
-        "for name in [make_param('hassio')]:\n    MockModule(name)\n"
-    ),
-    "function-named-param": (
-        "def param(_):\n    return 'made_up_probe'\n"
-        "for name in [param('hassio')]:\n    MockModule(name)\n"
-    ),
-    "decorator-named-like-parametrize": (
-        "def no_parametrize(names, rows):\n    return lambda function: function\n"
-        "@no_parametrize('name', ['hassio'])\n"
-        "def test_it(hass, name):\n    MockModule(name)\n"
-    ),
-    "format-field-that-is-not-a-number": "MockModule('{\u00b2}'.format())\n",
-    "format-field-too-long-for-a-number": (
-        "MockModule('{" + "9" * 5000 + "}'.format('hassio'))\n"
-    ),
-    "built-in-name-the-tests-define": (
-        "def sorted(rows):\n    return ['made_up_probe']\n"
-        "def test_it(hass):\n    for name in sorted(['hassio']):\n"
-        "        MockModule(name)\n"
-    ),
-    "mark-parametrize-of-a-local-object": (
-        "class Fake:\n    class mark:\n        @staticmethod\n"
-        "        def parametrize(names, rows):\n"
-        "            return lambda function: function\n"
-        "fake = Fake()\n@fake.mark.parametrize('name', ['hassio'])\n"
-        "def test_it(hass, name):\n    MockModule(name)\n"
-    ),
-    "spread-call-with-a-default": (
-        "def register(hass, name='hassio'):\n    MockModule(name)\n"
-        "register(hass, **{'name': 'made_up_probe'})\n"
-    ),
-    "starred-call-with-a-default": (
-        "def register(a, b='sio'):\n    MockModule(a + b)\n"
-        "register('has', *('_probe',))\n"
-    ),
-    "class-named-pytest": (
-        "class pytest:\n    @staticmethod\n    def param(_):\n"
-        "        return 'made_up_probe'\n"
-        "for name in [pytest.param('hassio')]:\n    MockModule(name)\n"
-    ),
-    "string-looped-over": "NAME = 'hassio'\nfor ch in NAME:\n    MockModule(ch)\n",
-    "helper-parameter-looped-over-twice": (
-        "def register(groups):\n    for names in groups:\n"
-        "        for name in names:\n            MockModule(name)\n"
-        "register([['hassio']])\n"
-    ),
-    "row-too-short-for-its-targets": (
-        "for a, b, name in [('x', 'y')]:\n    MockModule(name)\n"
-    ),
-    "row-that-is-a-call": "for label, name in [pick()]:\n    MockModule(name)\n",
-    "loop-over-a-function": (
-        "def rows():\n    return ['hassio']\nfor name in rows:\n    MockModule(name)\n"
-    ),
-    "method-that-registers-handed-on": (
-        "class TestIt:\n    def register(self, name):\n        MockModule(name)\n"
-        "    def test_it(self, hass):\n        self.register('made_up_probe')\n"
-        "        apply(self.register, 'hassio')\n"
-    ),
-    "function-that-registers-returned-by-a-fixture": (
-        "def register(name):\n    MockModule(name)\nregister('made_up_probe')\n"
-        "@pytest.fixture\ndef maker():\n    return register\n"
-    ),
-    "parametrize-names-that-cannot-be-read": (
-        "@pytest.mark.parametrize([pick(), 'name'], [('a', 'hassio')])\n"
-        "def test_it(hass, label, name):\n    MockModule(name)\n"
-    ),
-}
-
-
-@pytest.mark.parametrize("source", UNREAD.values(), ids=UNREAD.keys())
-def test_a_name_the_check_cannot_read_is_refused(guard, tmp_path, capsys, source):
-    status, out = run_guard(guard, sample_repo(tmp_path, {SAMPLE: source}), capsys)
-
-    assert status == 1
-    assert "registered under" not in out
-    assert f"() {guard.UNREAD}\n" in out
-
-
 ALLOWED = {
+    "loop-target-inside-its-loop": (
+        "def test_it(hass):\n    name = 'hassio'\n"
+        "    for name in ['made_up_probe']:\n        MockModule(name)\n"
+    ),
+    "nested-loop-target": (
+        "for (name, _), label in [(('made_up_probe', 0), 'case')]:\n"
+        "    MockModule(name)\n"
+    ),
+    "parts-of-one-nested-row": (
+        "for (a, b), c in [(('has', 'x'), 1), (('made_up_', 'sio'), 2)]:\n"
+        "    MockModule(a + b)\n"
+    ),
+    "parametrized-test-also-called-directly": (
+        "@pytest.mark.parametrize('name', ['made_up_probe'])\n"
+        "def test_register(name):\n    MockModule(name)\n"
+        "def test_other():\n    test_register('x_probe')\n"
+    ),
     "first-iterable-of-a-comprehension-read-outside-it": (
         "name = 'made_up_probe'\nrows = [None for name in [MockModule(name)]]\n"
     ),

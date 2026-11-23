@@ -147,11 +147,13 @@ class Checker(Resolver):
                 )
 
     def _uncalled(self) -> None:
-        """A function no call in the trees reaches (pytest calls a test or a
-        fixture) runs on its parameters' defaults; a parameter without one,
-        and without ``parametrize`` values, holds a runtime name."""
+        """A function pytest calls (a test, a fixture), or one no call in the
+        trees reaches, runs on its parameters' defaults; a parameter without
+        one, and without ``parametrize`` values, holds a runtime name. A call
+        in the trees to a test or a fixture does not change what pytest gives
+        it."""
         for sink, sites in self.sink_sites.items():
-            if sink.function in self.called:
+            if sink.function in self.called - self.collected:
                 continue
             default = self.defaults.get((sink.function, sink.name))
             if default is None:
@@ -350,14 +352,24 @@ class Checker(Resolver):
         }
 
     def _in_trees(self, func: ast.expr, chain: Chain, depth: int = 0) -> bool:
-        """Whether the callee is a function or class the test trees define."""
-        for target, own in self.objects(func, chain, frozenset()):
-            if id(target) in self._tree_definitions:
-                return True
-            if isinstance(target, (ast.Name, ast.Attribute)) and depth < 5:
-                if self._in_trees(target, own or chain, depth + 1):
-                    return True
-        return False
+        """Whether the callee can only be a function or class the test trees
+        define: one that is Core's helper on any path is not."""
+        if isinstance(func, ast.Name) and any(
+            isinstance(value, Imported)
+            and not self.resolve(value, own or chain, frozenset())
+            for value, own in self.lookup(func.id, chain)
+        ):
+            return False  # an import the check cannot read may be Core's
+        targets = self.objects(func, chain, frozenset())
+        return bool(targets) and all(
+            id(target) in self._tree_definitions
+            or (
+                isinstance(target, (ast.Name, ast.Attribute))
+                and depth < 5
+                and self._in_trees(target, own or chain, depth + 1)
+            )
+            for target, own in targets
+        )
 
     def _subclassed(self, func: ast.expr, chain: Chain, depth: int = 0) -> str | None:
         """The helper of Core's a class the trees define is built on, when the
@@ -399,8 +411,8 @@ class Checker(Resolver):
         bound = self.lookup(func.id, chain)
         imported = [value for value, _ in bound if isinstance(value, Imported)]
         if imported:
-            helper: str = imported[0].name
-            return helper
+            given: list[str] = [value.name for value in imported]
+            return next((name for name in given if name in SINKS), given[0])
         names = [
             self._spelled(value, own or chain, depth + 1)
             for value, own in bound

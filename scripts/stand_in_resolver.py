@@ -58,6 +58,9 @@ COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 SEQUENCES = (ast.Tuple, ast.List, ast.Set)
 
 FunctionKey = tuple[str, str, int, int]
+Place = tuple[int, int]  # a line and a column
+# Where a loop begins and ends, and where its body does.
+Loop = tuple[Place, Place, Place, Place]
 
 
 class Mode(NamedTuple):
@@ -146,7 +149,9 @@ class Resolver:
         self.defaults: dict[tuple[FunctionKey, str], tuple[ast.expr, Chain]] = {}
         # Where each scope's loops begin and end: a later binding reaches an
         # earlier read only round a loop.
-        self.loops: dict[int, list[tuple[tuple[int, int], tuple[int, int]]]] = {}
+        self.loops: dict[int, list[Loop]] = {}
+        # What pytest calls itself, with fixtures for parameters: tests, fixtures.
+        self.collected: set[FunctionKey] = set()
         self.sinks: set[Param] = set()
         self.sink_sites: dict[Param, set[Site]] = {}
         self.depths: dict[Param, int] = {}  # helpers adding text to each name
@@ -177,6 +182,10 @@ class Resolver:
         for node in ast.walk(tree):
             if isinstance(node, FUNCTIONS):
                 self.functions[id(node)] = function_key(name, node)
+                if node.name.startswith("test") or any(
+                    "fixture" in ast.unparse(d) for d in node.decorator_list
+                ):
+                    self.collected.add(function_key(name, node))
             elif isinstance(node, ast.ClassDef):
                 self.methods.update(
                     (id(s), node) for s in node.body if isinstance(s, FUNCTIONS)
@@ -308,8 +317,12 @@ class Resolver:
     def _note_loop(self, scope: Scope, node: ast.AST) -> None:
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
             end = (node.end_lineno or node.lineno, node.end_col_offset or 0)
+            first, last = node.body[0], node.body[-1]
+            body_end = (last.end_lineno or last.lineno, last.end_col_offset or 0)
             spans = self.loops.setdefault(id(scope), [])
-            spans.append(((node.lineno, node.col_offset), end))
+            spans.append(
+                ((node.lineno, node.col_offset), end, (first.lineno, 0), body_end)
+            )
 
     def header_scopes(self, node: ast.AST, outer: Chain) -> Chain:
         """The scopes a definition's decorators and defaults are read in: for
@@ -441,26 +454,26 @@ class Resolver:
             ]
         return []
 
-    def _latest(
-        self,
-        bound: list[Bound],
-        at: tuple[int, int],
-        loops: list[tuple[tuple[int, int], tuple[int, int]]],
-    ) -> list[Bound]:
-        """What can hold at ``at``. Not what came before the last binding the
-        function always makes before it (a plain assignment in its body, a
-        parameter's value), and not a later binding, unless a loop holding
-        both brings it round again."""
+    def _latest(self, bound: list[Bound], at: Place, loops: list[Loop]) -> list[Bound]:
+        """What can hold at ``at``. Not what came before the last binding
+        always made before it (a plain assignment in the function's body, a
+        parameter's value, the target of the loop whose body ``at`` is in),
+        and not a later binding, unless a loop holding both brings it round
+        again."""
         placed = [
             (self.assigned.get(id(value)), id(value) in self.straight)
             for value, _ in bound
         ]
         always = [
-            place for place, straight in placed if straight and place and place < at
+            place
+            for (value, _), (place, straight) in zip(bound, placed, strict=True)
+            if place
+            and place < at
+            and (straight or self._its_loops_body(value, place, at, loops))
         ]
         cutoff = max(always, default=None)
 
-        def holds(place: tuple[int, int] | None, straight: bool) -> bool:
+        def holds(place: Place | None, straight: bool) -> bool:
             if place is None:
                 return True
             if place < at:
@@ -468,7 +481,7 @@ class Resolver:
             if straight and cutoff is not None:
                 return False  # the function has not got there yet
             return place == at or any(
-                start <= at <= end and start <= place <= end for start, end in loops
+                start <= at <= end and start <= place <= end for start, end, *_ in loops
             )
 
         kept = [
@@ -477,6 +490,17 @@ class Resolver:
             if holds(place, straight)
         ]
         return kept or bound
+
+    @staticmethod
+    def _its_loops_body(
+        value: object, place: Place, at: Place, loops: list[Loop]
+    ) -> bool:
+        """Whether ``value`` is the target of a loop (bound at ``place``, anew
+        before each run of the body) and ``at`` is in that loop's body."""
+        return isinstance(value, Each) and any(
+            start == place and body <= at <= body_end
+            for start, _, body, body_end in loops
+        )
 
     def resolve(self, value: object, chain: Chain, seen: frozenset[int]) -> list[Bound]:
         """What an import names (a value in another module, or a module); any
@@ -662,24 +686,36 @@ class Resolver:
         if shared is None:
             return [parts]
         _, first, scopes = shared[0]
-        rows = self.items(first.iterable, scopes, seen)
-        columns = {index: each.column or 0 for index, each, _ in shared}
-        if not all(
-            isinstance(r, (ast.Tuple, ast.List))
-            and all(-len(r.elts) <= c < len(r.elts) for c in columns.values())
-            for r, _ in rows
-        ):
-            return [parts]
-        return [
-            [
-                (row.elts[columns[index]], own or scopes) if index in columns else part
-                for index, part in enumerate(parts)
-            ]
-            for row, own in rows
-        ]
+        aligned: list[list[Bound]] = []
+        for row, own in self.items(first.iterable, scopes, seen):
+            cells = {
+                index: self._cell((row, own or scopes), each, seen)
+                for index, each, _ in shared
+            }
+            if None in cells.values():
+                return [parts]
+            aligned.append(
+                [cells.get(index) or part for index, part in enumerate(parts)]
+            )
+        return aligned
+
+    def _cell(self, row: Bound, each: Each, seen: frozenset[int]) -> Bound | None:
+        """The element of ``row`` that ``each`` names, when it can be read."""
+        found = [row]
+        for column in (each.column, *each.inner):
+            found = self._column(found, column, seen)
+        if len(found) != 1:
+            return None
+        value = found[0][0]
+        unread = isinstance(value, ast.Constant) and value.value is None
+        return None if unread else found[0]
 
     def each(self, node: Each, chain: Chain, seen: frozenset[int]) -> list[Bound]:
-        return self.items(node.iterable, chain, seen, node.column)
+        found = self.items(node.iterable, chain, seen, node.column)
+        for column in node.inner:
+            rows: list[Bound] = [(row, own or chain) for row, own in found]
+            found = self._column(rows, column, seen)
+        return found
 
     def items(
         self,
