@@ -573,6 +573,17 @@ class TestBulk:
         for entity_id in ids:
             assert _stored(entity_registry, entity_id).labels == {"outdoor"}
 
+    async def test_disabling_an_automation_in_a_list_is_refused(
+        self, tools: EntityTools, sent: AsyncMock
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id=["light.a", "automation.night"], enabled=False
+            )
+
+        assert "ha_config_set_automation" in error_of(exc_info)["message"]
+        sent.assert_not_called()
+
     async def test_a_compact_single_reply_leaves_out_the_entry(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:

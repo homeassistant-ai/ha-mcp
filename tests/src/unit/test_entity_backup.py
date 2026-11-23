@@ -527,15 +527,15 @@ class TestStateSnapshotFile:
             await entity_manager.snapshot_comparison(legacy)
 
 
-async def test_a_bulk_call_backs_up_no_entity(
+async def test_a_bulk_call_backs_up_every_entity(
     entity_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
     backup_settings: config.Settings,
     desk: Desk,
 ) -> None:
-    """Snapshotting the first entity of a list would leave the rest without a
-    backup while looking covered, so a list names no entity. A list of one is
-    a single edit to ha_set_entity."""
+    """Snapshotting only the first entity of a list would leave the rest without
+    a backup while looking covered, so each entity of a list gets its own. A
+    list of one is a single edit to ha_set_entity."""
     entity_registry.async_get_or_create(
         "light", "hue", "lamp", suggested_object_id="lamp"
     )
@@ -549,5 +549,10 @@ async def test_a_bulk_call_backs_up_no_entity(
     await tools.ha_set_entity(entity_id=["light.desk"], labels=[desk.work])
     after_single = await asyncio.to_thread(backup_files, directory)
 
-    assert after_bulk == []
-    assert [name.split(".20")[0] for name in after_single] == ["entity.light.desk"]
+    assert [name.split(".20")[0] for name in after_bulk] == [
+        "entity.light.desk",
+        "entity.light.lamp",
+    ]
+    assert [
+        name.split(".20")[0] for name in after_single if name not in after_bulk
+    ] == ["entity.light.desk"]

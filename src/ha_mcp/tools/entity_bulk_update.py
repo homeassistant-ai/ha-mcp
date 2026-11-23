@@ -4,7 +4,8 @@ Core's ``config/entity_registry/update`` takes one entity, so labels,
 categories, enabled and hidden go out once per entity; expose_to goes out as
 one ``homeassistant/expose_entity`` call per assistant set. Each succeeded row
 keeps what Core answered for its entity besides the entry, such as
-``require_restart`` or ``reload_delay`` after an enable.
+``require_restart`` or ``reload_delay`` after an enable. With auto-backup on,
+each entity gets its own pre-write snapshot, as a single-entity call does.
 """
 
 import asyncio
@@ -14,6 +15,8 @@ from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..backup_manager import _CAPTURE_TRANSIENT_ERRORS, get_backup_manager
+from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .entity_expose_batch import (
     apply_bulk_expose,
@@ -28,6 +31,25 @@ logger = logging.getLogger(__name__)
 
 # Keys of the single-entity reply that a bulk row carries in its own fields.
 _ROW_KEYS = frozenset({"success", "entity_id", "entity_entry", "updates"})
+
+
+async def _back_up_entities(client: Any, entity_ids: list[str]) -> list[str]:
+    """Snapshot each entity before the write; returns why a due backup was not taken."""
+    settings = get_global_settings()
+    if not getattr(settings, "enable_auto_backup", False):
+        return []
+    skipped: list[str] = []
+    try:
+        mgr = get_backup_manager(client, settings)
+        for eid in entity_ids:
+            await mgr.maybe_snapshot(
+                "entity", eid, tool_name="ha_set_entity", skip_reasons=skipped
+            )
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        logger.warning("Bulk entity backup failed: %s", err)
+        skipped.append(f"No pre-write backup was taken: {type(err).__name__}")
+    # One reason per cause, not one per entity: a bulk reply stays small.
+    return list(dict.fromkeys(skipped))
 
 
 async def _registry_phase(
@@ -158,6 +180,7 @@ async def bulk_update_entities(
             )
         )
 
+    warnings = await _back_up_entities(client, entity_ids)
     (
         entry_by_id,
         updates_by_id,
@@ -166,9 +189,8 @@ async def bulk_update_entities(
         eligible_ids,
     ) = await _registry_phase(entity_ids, update_one)
 
-    warnings: list[str] = []
     if parsed_expose_to is not None and eligible_ids:
-        eligible_ids, expose_failed, warnings = await _expose_phase(
+        eligible_ids, expose_failed, refresh_warnings = await _expose_phase(
             client,
             eligible_ids,
             parsed_expose_to,
@@ -177,6 +199,7 @@ async def bulk_update_entities(
             refetch=include_entity_entry,
         )
         failed.extend(expose_failed)
+        warnings += refresh_warnings
 
     succeeded_ids = set(eligible_ids)
     succeeded_list = [
