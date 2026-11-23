@@ -179,6 +179,12 @@ REFUSED = {
         "def test_it(hass):\n    domain = 'has'\n    domain += 'sio'\n"
         "    mock_component(hass, domain)\n"
     ),
+    "helper-many-suffixes-one-real": (
+        "def register(hass, base):\n"
+        "    for s in ('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'io'):\n"
+        "        mock_component(hass, f'{base}{s}')\n"
+        "register(hass, 'hass')\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
