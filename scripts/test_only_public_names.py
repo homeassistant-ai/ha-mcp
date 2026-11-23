@@ -23,7 +23,8 @@ Python (``homeassistant-addon*``), uses it when:
 
 A name production does not use and a test names is refused, unless it is one
 of ``EXEMPT``: the module state the tests reset between tests, and the
-cleanup of a server process a test started.
+cleanup of a server process a test started. An entry of ``EXEMPT`` naming
+nothing the check would refuse fails too.
 """
 
 from __future__ import annotations
@@ -286,7 +287,7 @@ def _words(paths: list[Path]) -> set[str]:
 
 
 def test_only_names(repo: Path) -> list[str]:
-    """``path:name`` of every public name only the tests use, EXEMPT aside."""
+    """``path:name`` of every public name only the tests use, EXEMPT included."""
     trees = {
         path.relative_to(repo).as_posix(): ast.parse(path.read_text(encoding="utf-8"))
         for path in _python(repo, CALLERS)
@@ -297,7 +298,9 @@ def test_only_names(repo: Path) -> list[str]:
         mod = _uses(tree, _module_name(relative), relative.endswith("/__init__.py"))
         uses.qualified.update(mod.qualified)
         uses.attributes.update(mod.attributes)
-        uses.strings.update(mod.strings)
+        # This script's own strings are EXEMPT's entries, not uses of the names.
+        if repo / relative != Path(__file__).resolve():
+            uses.strings.update(mod.strings)
     uses.strings.update(
         _words(
             [
@@ -319,7 +322,7 @@ def test_only_names(repo: Path) -> list[str]:
             reached = {(module, name), (loaded, name)}
             if reached & uses.qualified or (is_method and name in uses.attributes):
                 continue
-            if name in tested and f"{relative}:{name}" not in EXEMPT:
+            if name in tested:
                 found.append(f"{relative}:{name}")
     return sorted(found)
 
@@ -328,10 +331,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--repo", type=Path, default=REPO, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    found = test_only_names(args.repo)
+    names = test_only_names(args.repo)
+    found = [name for name in names if name not in EXEMPT]
+    # EXEMPT names this repository's files, so only here can an entry be idle.
+    idle = sorted(EXEMPT - set(names)) if args.repo.resolve() == REPO else []
+    for name in idle:
+        print(f"EXEMPT lists {name}, which the check would not refuse; remove it.")
     if not found:
-        print("No public name is used only by the tests.")
-        return 0
+        if not idle:
+            print("No public name is used only by the tests.")
+        return 1 if idle else 0
     print("\n".join(found))
     print(
         "\nOnly the tests use these public names. A test reaches the code through "

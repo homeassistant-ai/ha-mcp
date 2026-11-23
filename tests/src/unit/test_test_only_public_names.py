@@ -240,6 +240,18 @@ def test_only_a_use_of_the_definition_itself_counts(
     assert guard.main(["--repo", str(repo)]) == (1 if refused else 0)
 
 
+def test_an_exempt_entry_that_exempts_nothing_fails(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    idle = "src/ha_mcp/config.py:a_name_that_is_not_there"
+    monkeypatch.setattr(guard, "EXEMPT", guard.EXEMPT | {idle})
+
+    assert guard.main([]) == 1
+    assert f"EXEMPT lists {idle}" in capsys.readouterr().out
+
+
 def test_this_checkout_has_no_public_name_only_the_tests_use(
     guard: ModuleType,
 ) -> None:
