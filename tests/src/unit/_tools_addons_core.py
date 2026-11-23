@@ -368,7 +368,7 @@ def app_info(slug: str = SLUG, **changes: Any) -> dict[str, Any]:
         system_managed=False,
         system_managed_config_entry=None,
     )
-    return replace(info, **changes).to_dict()
+    return replace(info, **changes).to_dict(by_alias=True)
 
 
 def installed_apps(*slugs: str) -> dict[str, Any]:

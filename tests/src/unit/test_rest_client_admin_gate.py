@@ -134,6 +134,9 @@ async def _demote(hass: HomeAssistant, user: MockUser) -> None:
         ("POST", "/config/config_entries/flow/f1"),
         ("POST", "/config/config_entries/options/flow"),
         ("POST", "/config/config_entries/options/flow/f1"),
+        ("POST", "/repairs/issues/fix"),
+        ("GET", "/repairs/issues/fix/f1"),
+        ("POST", "/repairs/issues/fix/f1"),
         ("POST", "/config/config_entries/subentries/flow"),
         ("GET", "/config/config_entries/subentries/flow/f1"),
         # Open to every user, or refused before the admin gate.
@@ -142,6 +145,7 @@ async def _demote(hass: HomeAssistant, user: MockUser) -> None:
         ("GET", "/config/config_entries/entry"),
         ("DELETE", "/config/config_entries/flow/f1"),
         ("DELETE", "/config/config_entries/options/flow/f1"),
+        ("DELETE", "/repairs/issues/fix/f1"),
         ("GET", "/config/config_entries/flow"),
     ],
 )
@@ -156,7 +160,7 @@ async def test_the_admin_route_table_is_what_core_counts_as_a_failed_login(
 ) -> None:
     """A route missing from the table gets a non-admin host banned; a route
     wrongly in it refuses a non-admin what Core would give."""
-    for domain in ("api", "config", "diagnostics"):
+    for domain in ("api", "config", "diagnostics", "repairs"):
         assert await async_setup_component(hass, domain, {})
     client = await hass_client(hass_read_only_access_token)
 

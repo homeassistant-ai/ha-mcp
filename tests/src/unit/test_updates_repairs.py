@@ -81,14 +81,21 @@ async def test_sets_ignored_flag_on_listed_issue(
 
 
 @pytest.mark.unit
-async def test_unknown_issue_is_reported_per_item(
-    hass: HomeAssistant, core_client: HomeAssistantClient, repairs_loaded: None
+@pytest.mark.parametrize("action", ["ignore_repair", "unignore_repair"])
+async def test_an_issue_home_assistant_does_not_hold_is_not_found_per_item(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    repairs_loaded: None,
+    action: str,
 ) -> None:
+    """Home Assistant itself says which issue it does not hold: each item is
+    sent, the unknown one comes back not found with Core's code, and the
+    others still apply."""
     _raise(hass, "sun", "abc")
 
     with sent_messages(core_client) as sent:
         result = await UpdateTools(core_client).ha_manage_updates(
-            action="ignore_repair",
+            action=action,
             repairs=[
                 {"domain": "sun", "issue_id": "missing"},
                 {"domain": "sun", "issue_id": "abc"},
@@ -98,34 +105,20 @@ async def test_unknown_issue_is_reported_per_item(
     assert result["success"] is False
     assert result["succeeded"] == 1
     assert result["failed"] == 1
-    assert result["results"][0]["error"]["code"] == "RESOURCE_NOT_FOUND"
+    error = result["results"][0]
+    assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert error["ha_error_code"] == "unknown_issue"
     assert ir.async_get(hass).async_get_issue("sun", "missing") is None
-    assert _dismissed(hass, "sun", "abc") is True
-    # The Repairs list plus the one known issue; the unknown one is never sent.
+    assert _dismissed(hass, "sun", "abc") is (action == "ignore_repair")
     assert sent.await_count == 2
-
-
-@pytest.mark.unit
-async def test_home_assistant_rejection_is_reported_per_item(
-    hass: HomeAssistant, core_client: HomeAssistantClient, repairs_loaded: None
-) -> None:
-    """Core refuses to un-ignore an issue its registry no longer holds."""
-    result = await UpdateTools(core_client).ha_manage_updates(
-        action="unignore_repair", repairs=[{"domain": "sun", "issue_id": "gone"}]
-    )
-
-    assert result["success"] is False
-    assert result["results"][0]["error"]["code"] == "SERVICE_CALL_FAILED"
-    assert "'gone' not found" in result["results"][0]["error"]["message"]
-    assert ir.async_get(hass).async_get_issue("sun", "gone") is None
 
 
 @pytest.mark.unit
 async def test_ignore_without_repairs_integration_is_rejected_by_core(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    """With no repairs integration Core has no Repairs commands, so the
-    issue list and the ignore are both refused and the refusal is reported."""
+    """With no repairs integration Core has no Repairs commands, and its
+    refusal is reported with its code."""
     _raise(hass, "sun", "abc")
 
     result = await UpdateTools(core_client).ha_manage_updates(
@@ -134,7 +127,7 @@ async def test_ignore_without_repairs_integration_is_rejected_by_core(
 
     assert result["success"] is False
     assert result["results"][0]["error"]["code"] == "SERVICE_CALL_FAILED"
-    assert "Unknown command" in result["results"][0]["error"]["message"]
+    assert result["results"][0]["ha_error_code"] == "unknown_command"
     assert _dismissed(hass, "sun", "abc") is False
 
 
@@ -156,19 +149,30 @@ async def test_malformed_repairs_are_rejected(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("action", ["ignore_repair", "unignore_repair"])
+@pytest.mark.parametrize("action", ["ignore_repair", "unignore_repair", "fix_repair"])
 def test_repair_actions_are_writes_in_read_only_mode(action: str) -> None:
     exemption = READ_ONLY_EXEMPT_TOOLS["ha_manage_updates"]
     assert exemption.blocked_write({"action": action}) is not None
 
 
 @pytest.mark.unit
-async def test_unignore_reaches_issues_missing_from_the_active_list(
-    hass: HomeAssistant, core_client: HomeAssistantClient, repairs_loaded: None
+@pytest.mark.parametrize(
+    ("action", "start_dismissed", "end_dismissed"),
+    [("ignore_repair", False, True), ("unignore_repair", True, False)],
+)
+async def test_an_issue_missing_from_the_active_list_is_still_set(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    repairs_loaded: None,
+    action: str,
+    start_dismissed: bool,
+    end_dismissed: bool,
 ) -> None:
-    """An inactive issue is absent from list_issues but still un-ignorable."""
+    """An inactive issue is absent from list_issues, but Core holds it and
+    ignores or un-ignores it."""
     _raise(hass, "sun", "inactive")
-    ir.async_ignore_issue(hass, "sun", "inactive", True)
+    if start_dismissed:
+        ir.async_ignore_issue(hass, "sun", "inactive", True)
     # A restart keeps each non-persistent issue as an inactive stub.
     hass.bus.async_fire(EVENT_HOMEASSISTANT_FINAL_WRITE)
     await hass.async_block_till_done()
@@ -178,8 +182,8 @@ async def test_unignore_reaches_issues_missing_from_the_active_list(
     assert stub.active is False
 
     result = await UpdateTools(core_client).ha_manage_updates(
-        action="unignore_repair", repairs=[{"domain": "sun", "issue_id": "inactive"}]
+        action=action, repairs=[{"domain": "sun", "issue_id": "inactive"}]
     )
 
     assert result["success"] is True
-    assert _dismissed(hass, "sun", "inactive") is False
+    assert _dismissed(hass, "sun", "inactive") is end_dismissed

@@ -18,6 +18,7 @@ from .. import (
     recorder_status,
     scene_editor,
     todo_items,
+    update_entities,
 )
 from ..oauth_redirect_allowlist import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
 from . import logbook as _logbook
@@ -242,7 +243,9 @@ CAPABILITIES: list[str] = [
     core_contract.CAPABILITY,
     core_contract.INTEGRATION_CAPABILITY,
     todo_items.CAPABILITY,
+    update_entities.CAPABILITY,
     flow_record.CAPABILITY,
+    flow_record.REPAIRS_CAPABILITY,
     flow_outline.CAPABILITY,
     scene_editor.CAPABILITY,
     automation_config.CAPABILITY,

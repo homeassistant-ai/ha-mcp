@@ -513,6 +513,6 @@ async def test_set_integration_warns_when_the_strings_cannot_be_read(
     resp = await IntegrationTools(core_client).ha_set_integration(domain=_DOMAIN)
 
     assert resp["fields"][0]["name"] == "host"
-    assert any(
-        f"strings for {_DOMAIN} could not be read" in w for w in resp["warnings"]
-    )
+    # One warning, though the step's texts and its fields' help are each read.
+    unread = f"strings for {_DOMAIN} could not be read"
+    assert sum(unread in w for w in resp["warnings"]) == 1

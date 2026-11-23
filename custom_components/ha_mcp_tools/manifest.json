@@ -7,6 +7,7 @@
         "config",
         "energy",
         "frontend",
+        "hassio",
         "http",
         "logbook",
         "lovelace",

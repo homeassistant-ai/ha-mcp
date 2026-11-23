@@ -133,11 +133,16 @@ the info handshake carries no capability entry:
   serializes a form it shows, and the step that follows it, read from the
   loaded flow handler on every call. A form or next step Core computes from
   earlier answers is marked, not evaluated. See ``flow_outline.py``.
-* ``ha_mcp_tools/flow_record`` — what a config, options or subentry flow in
-  progress was started for (its handler, source and entry anchors), read from
-  the flow manager that holds it. Core's flow endpoints do not report it, and
-  the server binds a ``flow_id`` it did not open itself (it restarted) to a
+* ``ha_mcp_tools/flow_record`` — what a config, options, subentry or Repairs
+  fix flow in progress was started for (its handler, source, entry and issue
+  anchors), read from the flow manager that holds it. Core's flow endpoints
+  do not report it, and the server binds a ``flow_id`` it did not open itself
+  (it restarted, or Core opened the flow, as it opens a reauth flow) to a
   call's target with it. See ``flow_record.py``.
+* ``ha_mcp_tools/update_entities`` — every update state, restored ones
+  included, with its integration, the names of its ``UpdateEntityFeature``
+  flags and, for a loaded hassio entity, the kind its Core class gives it,
+  which no state or REST answer carries. See ``update_entities.py``.
 * ``ha_mcp_tools/recorder_status`` — the recorder's purge settings and oldest
   state, and whether it records an entity, which Core's API does not serve;
   with ``wait``, held until the recorder has finished its work. See
@@ -375,6 +380,7 @@ from .. import (
     recorder_status,
     scene_editor,
     todo_items,
+    update_entities,
 )
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
 from .call_event import _do_call_event
@@ -559,6 +565,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *entity_restore.command_specs(vol, er),
         *core_contract.command_specs(vol),
         *todo_items.command_specs(vol),
+        *update_entities.command_specs(vol),
         *flow_record.command_specs(vol),
         *flow_outline.command_specs(vol),
         *scene_editor.command_specs(vol),

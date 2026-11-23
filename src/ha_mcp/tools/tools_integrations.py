@@ -1520,12 +1520,12 @@ class IntegrationTools:
             Field(
                 default=None,
                 description=(
-                    "Continue an open flow: the flow_id a previous call "
-                    "returned, with the same domain or entry_id (and "
-                    "reconfigure=True for a reconfigure flow), until ha-mcp "
-                    "restarts. With config or "
-                    "menu_choice it answers the step; alone it returns the "
-                    "step again."
+                    "Continue an open flow: the flow_id a previous call returned, "
+                    "with the same domain or entry_id (reconfigure=True for a "
+                    "reconfigure flow), until ha-mcp restarts; or a reauth flow's "
+                    "flow_id from a Repairs issue's data (ha_get_system_health), with "
+                    "that entry's entry_id. With config or menu_choice it answers the "
+                    "step; alone it returns the step again."
                 ),
             ),
         ] = None,
@@ -1535,8 +1535,8 @@ class IntegrationTools:
                 default=False,
                 description=(
                     "With flow_id: end the open flow without saving. A flow "
-                    "Home Assistant no longer has, or one ha-mcp did not open "
-                    "(or opened before it restarted), is an error."
+                    "Home Assistant no longer has, or one opened for another "
+                    "target, is an error."
                 ),
             ),
         ] = False,
@@ -1586,18 +1586,18 @@ class IntegrationTools:
           Home Assistant marks none of these commands as read-only, so a read
           such as knx/get_knx_project goes through this tool too.
 
-        Flows, one step per call: a call answers the step the flow is at and
-        returns Home Assistant's next answer. A form comes back with its
-        fields (type, default, current value, Home Assistant's help text) and
-        flow_id; a menu with menu_options. Answer with flow_id and config (a
-        form) or menu_choice (a menu); flow_id alone returns the step again,
-        and flow_id with abort=True ends the flow. Without flow_id a new flow
-        starts: config answers its first form, or returns it when omitted. A
-        config list answers several forms, one object each in order (see a
-        form's later_forms). A form Home Assistant rejects is an error with
-        errors and error_text (Core's text), and the flow stays open to
-        correct it, until Home Assistant finishes it or you abort it; while a
-        setup flow is open, another for the same device is already_in_progress.
+        Flows, one step per call: a call answers the step the flow is at and returns
+        Home Assistant's next answer. A step comes back with flow_id and Core's
+        title and description; a form with its fields (type, default, current value,
+        help text), a menu with menu_options and their labels. Answer with flow_id
+        and config (a form) or menu_choice (a menu); flow_id alone returns the step
+        again, and flow_id with abort=True ends the flow. Without flow_id a new flow
+        starts: config answers its first form, or returns it when omitted. A config
+        list answers several forms, one object each in order (see a form's
+        later_forms). A form Home Assistant rejects is an error with errors and
+        error_text (Core's text), and the flow stays open to correct it, until Home
+        Assistant finishes it or you abort it; while a setup flow is open, another
+        for the same device is already_in_progress.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
