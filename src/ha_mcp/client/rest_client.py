@@ -2106,11 +2106,10 @@ class HomeAssistantClient:
                 return SceneResolution(
                     bare_id, True, "homeassistant", row["entity_id"], disabled
                 )
-        entry = await self._registry_entry("scene", identifier)
-        if entry and entry.get("entity_id") in {row["entity_id"] for row in rows or []}:
-            entry = None
+        own = f"scene.{bare_id}".lower()  # Core keeps entity_ids lowercase
+        leftover = any(row["entity_id"] == own for row in rows or [])
+        entry = None if leftover else await self._registry_entry("scene", identifier)
         unchecked = not qualified and rows is None
-        leftover = any(row["entity_id"] == f"scene.{bare_id}" for row in rows or [])
         fallback = SceneResolution(
             bare_id, False, None, leftover=leftover, id_unchecked=unchecked
         )

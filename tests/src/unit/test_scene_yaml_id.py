@@ -157,7 +157,7 @@ async def test_a_yaml_scene_whose_entity_is_its_id_is_not_written(
     body = error_body(exc)
     assert body["error"]["code"] == "CONFIG_NOT_FOUND"
     assert ("is disabled" in body["error"]["message"]) is disabled
-    first = (body["error"]["suggestions"])[0]
+    first = body["error"]["suggestions"][0]
     assert ("scene.create" in first) is (call == "remove" and not disabled)
     assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
 
@@ -186,25 +186,29 @@ async def test_a_removal_by_the_entity_of_another_disabled_key_says_so(
 
 
 @pytest.mark.parametrize(
-    ("name", "entity_id"), [("Gone Scene", "scene.gone_scene"), ("Gone", "scene.gone")]
+    ("key", "name", "entity_id"),
+    [
+        ("gone", "Gone Scene", "scene.gone_scene"),
+        ("gone", "Gone", "scene.gone"),
+        ("Gone", "Gone", "scene.gone"),
+    ],
 )
 async def test_the_registry_entry_of_a_removed_yaml_scene_blocks_no_create(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
+    key: str,
     name: str,
     entity_id: str,
 ) -> None:
-    """``gone`` was a YAML scene; Core keeps its registry entry after it is
-    removed and writes a ``restored`` state for it. A set by ``gone`` then
-    stores a new scene under that key, also when the entity is ``scene.gone``;
-    before that, a get by ``gone`` finds no scene, while a get by the entity_id
-    still answers for the leftover entry."""
-    await setup_scenes(
-        hass, [], yaml_only=[{"id": "gone", "name": name, "entities": _ON}]
-    )
+    """``key`` was a YAML scene; Core keeps its registry entry after it is
+    removed and writes a ``restored`` state for it. A set by ``key`` then
+    stores a new scene under it, also when the entity is ``scene.<key>``, in
+    any case; before that, a get by ``key`` finds no scene, while a get by the
+    entity_id still answers for the leftover entry."""
+    await setup_scenes(hass, [], yaml_only=[{"id": key, "name": name, "entities": _ON}])
     await remove_yaml_only_scenes(hass)
     registry = er.async_get(hass)
-    assert registry.async_get_entity_id("scene", "homeassistant", "gone") == entity_id
+    assert registry.async_get_entity_id("scene", "homeassistant", key) == entity_id
     state = hass.states.get(entity_id)
     assert state is not None and state.attributes.get("restored") is True
     tools = ConfigSceneTools(component_core_client)
@@ -212,18 +216,18 @@ async def test_the_registry_entry_of_a_removed_yaml_scene_blocks_no_create(
         await tools.ha_config_get_scene(scene_id=entity_id)
     assert error_body(exc)["error"]["code"] == "CONFIG_NOT_FOUND"
     with pytest.raises(ToolError) as exc:
-        await tools.ha_config_get_scene(scene_id="gone")
+        await tools.ha_config_get_scene(scene_id=key)
     assert error_body(exc)["error"]["code"] == "ENTITY_NOT_FOUND"
 
     result = await tools.ha_config_set_scene(
-        scene_id="gone",
+        scene_id=key,
         config={"name": name, "entities": _ON},
         wait=False,
         MandatoryBPS=False,
     )
 
     assert "warnings" not in result
-    stored = await component_core_client.get_scene_config("gone", _resolved=True)
+    stored = await component_core_client.get_scene_config(key, _resolved=True)
     assert stored["config"]["name"] == name
 
 
@@ -263,46 +267,34 @@ async def test_a_removed_yaml_scenes_leftover_entry_is_named_for_removal(
     assert "activate=True" not in " ".join(rest)
 
 
-@pytest.mark.parametrize("call", ["get", "set", "remove"])
 async def test_a_leftover_entry_of_another_entity_hides_no_scene(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient, call: str
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    """``gone`` was the YAML scene "Gone Scene", whose leftover entry is
-    ``scene.gone_scene``; the ``id``-less YAML scene "Gone" holds
-    ``scene.gone``. Each call by ``gone`` names ``scene.gone`` as not editable
-    and leaves ``scenes.yaml`` as it was."""
+    """``yid`` was the YAML scene "Yid Scene", whose leftover entry is
+    ``scene.yid_scene``; the ``id``-less YAML scene "Yid" holds ``scene.yid``.
+    A set by ``yid`` names ``scene.yid`` as not editable and leaves
+    ``scenes.yaml`` as it was."""
     await setup_scenes(
-        hass, [], yaml_only=[{"id": "gone", "name": "Gone Scene", "entities": _ON}]
+        hass, [], yaml_only=[{"id": "yid", "name": "Yid Scene", "entities": _ON}]
     )
     manual = (
-        "scene manual:\n  - name: Gone\n    entities:\n      sun.sun: above_horizon\n"
+        "scene manual:\n  - name: Yid\n    entities:\n      sun.sun: above_horizon\n"
     )
     await write_config_files(
         hass, {"configuration.yaml": "scene: !include scenes.yaml\n" + manual}
     )
     await hass.services.async_call("scene", "reload", blocking=True)
-    state = hass.states.get("scene.gone_scene")
+    state = hass.states.get("scene.yid_scene")
     assert state is not None and state.attributes.get("restored") is True
     scenes_yaml = Path(hass.config.path("scenes.yaml"))
     before = await hass.async_add_executor_job(scenes_yaml.read_text)
-    tools = ConfigSceneTools(component_core_client)
-    calls = {
-        "get": lambda: tools.ha_config_get_scene(scene_id="gone"),
-        "set": lambda: tools.ha_config_set_scene(
-            scene_id="gone",
-            config={"name": "Gone", "entities": _ON},
-            wait=False,
-            MandatoryBPS=False,
-        ),
-        "remove": lambda: tools.ha_config_remove_scene(scene_id="gone"),
-    }
 
     with pytest.raises(ToolError) as exc:
-        await calls[call]()
+        await _CALLS["set"](ConfigSceneTools(component_core_client))
 
     body = error_body(exc)
     assert body["error"]["code"] == "CONFIG_NOT_FOUND"
-    assert "'scene.gone'" in body["error"]["message"]
+    assert "'scene.yid'" in body["error"]["message"]
     assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
 
 

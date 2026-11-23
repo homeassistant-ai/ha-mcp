@@ -1117,7 +1117,7 @@ class ConfigSceneTools:
             # registry unique_id yet still holds a state-machine entity, and
             # shadow-creates just the same. Only a scene missing from both is a
             # real create, at the price of one extra ``/states/`` GET there; a
-            # ``leftover`` (only entries Core no longer loads) skips that GET.
+            # ``leftover`` (Core no longer loads scene.<id>'s own entry) skips it.
             if resolution.registry_hit or (
                 not resolution.leftover
                 and await self._client._scene_state_exists(resolved_id)
