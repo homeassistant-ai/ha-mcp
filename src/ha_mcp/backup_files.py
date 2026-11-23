@@ -50,7 +50,12 @@ async def _fetch_file(
     if code in {"not_found", "not_a_file", "binary_file"}:
         return None
     if code == "path_not_allowed":
-        raise PathNotAllowedError(entity_id, error)
+        raise PathNotAllowedError(
+            entity_id,
+            error,
+            custom_path_allowed=result.get("custom_path_allowed"),
+            volume_roots=result.get("volume_roots"),
+        )
     raise HomeAssistantError(f"read_file failed for {entity_id!r}: {error}")
 
 

@@ -1073,7 +1073,6 @@ def _is_path_allowed_for_dir(
     if rel_path.startswith("/"):
         return _is_volume_path_allowed(rel_path, extra_dirs)
 
-    # Normalize the path
     normalized = os.path.normpath(rel_path)
 
     # Check for path traversal attempts
@@ -1160,11 +1159,9 @@ def _is_path_allowed_for_read(
     if not _resolves_within(config_dir, rel_path):
         return False
 
-    # Check if it's one of the explicitly allowed files in config root
     if normalized in ALLOWED_READ_FILES:
         return True
 
-    # Check if path starts with an allowed directory
     parts = normalized.split(os.sep)
     if parts and parts[0] in ALLOWED_READ_DIRS:
         return True
@@ -2763,6 +2760,9 @@ async def _resolve_read(
         return file_read_error(
             "path_not_allowed",
             f"Path not allowed. Allowed paths: {', '.join(allowed_patterns)}",
+            # Whether the settings UI's Custom filesystem paths would take it.
+            custom_path_allowed=_normalize_extra_dir(rel_path, config_dir) is not None,
+            volume_roots=list(ALLOWED_VOLUME_ROOTS),
         )
     target_file, why = read_target(hass, config_dir, rel_path)
     if target_file is None:

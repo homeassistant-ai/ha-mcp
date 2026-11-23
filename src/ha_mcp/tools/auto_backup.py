@@ -69,7 +69,10 @@ class PathNotAllowedError(ToolError):
     subset of the read gate, so a path the read refuses, the wrapped write or
     delete would refuse too (#2908). The message names no operation and leaves
     out the component's read allowlist, which would mislead a write; the
-    component's own text stays in ``context``.
+    component's own text stays in ``context``. ``custom_path_allowed`` and
+    ``volume_roots`` come with the component's refusal: whether its settings
+    UI would take the path as a custom path (``None`` from a component that
+    predates them).
     """
 
     def __init__(
@@ -77,18 +80,22 @@ class PathNotAllowedError(ToolError):
         path: str,
         component_error: str,
         *,
+        custom_path_allowed: bool | None = None,
+        volume_roots: list[str] | None = None,
         message: str | None = None,
         suggestions: list[str] | None = None,
         context: dict[str, Any] | None = None,
     ) -> None:
         self.path = path
         self.component_error = component_error
+        self.custom_path_allowed = custom_path_allowed
+        self.volume_roots = volume_roots or []
         super().__init__(
             json.dumps(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     message or f"Path not allowed: {path}",
-                    suggestions=suggestions or _custom_path_suggestions(path),
+                    suggestions=suggestions or self.custom_path_suggestions(),
                     context={
                         **(context or {}),
                         "path": path,
@@ -101,31 +108,24 @@ class PathNotAllowedError(ToolError):
             log_level=TOOL_ERROR_LOG_LEVEL,
         )
 
-
-# The component's volume roots and deny floor, which it doesn't publish to the
-# server on a refusal (custom_components/ha_mcp_tools/const.py: ALLOWED_VOLUME_
-# ROOTS, DENY_PATH_SEGMENTS, DENY_READ_BASENAMES). A unit test pins the copies.
-_VOLUME_ROOTS = ("/share", "/media", "/ssl")
-_DENY_SEGMENTS = frozenset({".storage"})
-_DENY_BASENAMES = frozenset({"secrets.yaml", "approval_pin.json"})
-
-
-def _custom_path_suggestions(path: str) -> list[str]:
-    """Suggest a custom path only where the settings UI can accept one."""
-    parts = path.lower().split("/")
-    if _DENY_SEGMENTS.intersection(parts) or parts[-1] in _DENY_BASENAMES:
+    def custom_path_suggestions(self) -> list[str]:
+        """Suggest a custom path only where the settings UI can accept one."""
+        if self.custom_path_allowed is None:
+            return []
+        if self.custom_path_allowed:
+            return [
+                "If it isn't listed already, add it or a folder above it under "
+                "Custom filesystem paths in the ha-mcp settings UI"
+            ]
+        roots = self.volume_roots
+        if self.path.startswith("/") and not any(
+            self.path == root or self.path.startswith(root + "/") for root in roots
+        ):
+            return [
+                "Custom filesystem paths accept absolute paths only under "
+                f"{', '.join(roots)}; this one cannot be allowed"
+            ]
         return ["This path is never available to the file tools"]
-    if path.startswith("/") and not any(
-        path == root or path.startswith(root + "/") for root in _VOLUME_ROOTS
-    ):
-        return [
-            "Custom filesystem paths accept absolute paths only under "
-            f"{', '.join(_VOLUME_ROOTS)}; this one cannot be allowed"
-        ]
-    return [
-        "If it isn't listed already, add it or a folder above it under "
-        "Custom filesystem paths in the ha-mcp settings UI"
-    ]
 
 
 def path_refusal(err: BaseException) -> PathNotAllowedError | None:
@@ -154,6 +154,8 @@ def raise_if_snapshot_path_refused(
     raise PathNotAllowedError(
         refusal.path,
         refusal.component_error,
+        custom_path_allowed=refusal.custom_path_allowed,
+        volume_roots=refusal.volume_roots,
         message=(
             f"Cannot {action} {backup_name!r}: its live file {refusal.path} is "
             "no longer readable through the file tools (the path is not allowed)"
@@ -161,7 +163,7 @@ def raise_if_snapshot_path_refused(
         suggestions=[
             "View the snapshot with ha_manage_backup(scope='edits', "
             f"action='view', backup_name={backup_name!r}) to recover its content",
-            *_custom_path_suggestions(refusal.path),
+            *refusal.custom_path_suggestions(),
         ],
         context={
             "backup_name": backup_name,
