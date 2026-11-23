@@ -101,6 +101,7 @@ from .backup_files import (
     _restore_file,
     file_read_error_code,
 )
+from .backup_groups import fetch_group, restore_group
 from .backup_helper_target import fetch_helper as _fetch_helper
 from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
 from .backup_helper_target import (
@@ -336,6 +337,10 @@ def _flow_failure_reason(step: str, error: BaseException) -> str:
     if isinstance(error, MandatoryBackupError):
         return "backup_capture_failed"
     return "upstream_error"
+
+
+def _skipped(domain: str, entity_id: str, cause: str) -> str:
+    return f"No pre-write backup of {domain}:{entity_id} was taken: {cause}"
 
 
 def _flow_safe_failure_detail(step: str, error: BaseException) -> str | None:
@@ -811,6 +816,8 @@ class BackupManager:
             domain, entity_id, force=force, mandatory=mandatory
         )
         if handler is None:
+            if self._init_dir_error is not None and skip_reasons is not None:
+                skip_reasons.append(_skipped(domain, entity_id, "directory unusable"))
             return None
 
         if _is_flow_helper_domain(domain) and "." in entity_id:
@@ -850,9 +857,14 @@ class BackupManager:
                 return None
             if holds is not None:
                 _require_holds(config, holds, entity_id)
-            return await self._write_and_rotate(
+            path = await self._write_and_rotate(
                 domain, entity_id, key, config, tool_name, now, mandatory=mandatory
             )
+            if path is None and skip_reasons is not None:
+                skip_reasons.append(
+                    _skipped(domain, entity_id, "snapshot write failed")
+                )
+            return path
 
     def _resolve_snapshot_handler(
         self, domain: str, entity_id: str, *, force: bool, mandatory: bool
@@ -2223,35 +2235,6 @@ def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
     return {k: v for k, v in config.items() if k not in drop}
 
 
-# Groups — group.set service. Fetch via state API.
-
-
-async def _fetch_group(client: Any, entity_id: str) -> Any:
-    eid = entity_id if entity_id.startswith("group.") else f"group.{entity_id}"
-    state = await _rest_get_or_none(client, f"states/{eid}")
-    if state is None:
-        return None
-    attrs = state.get("attributes", {}) if isinstance(state, dict) else {}
-    return {
-        "object_id": eid.split(".", 1)[1],
-        "name": attrs.get("friendly_name"),
-        "entities": attrs.get("entity_id", []),
-        "icon": attrs.get("icon"),
-    }
-
-
-async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
-    object_id = config.get("object_id") or entity_id.split(".", 1)[-1]
-    service_data: dict[str, Any] = {"object_id": object_id}
-    for key in ("name", "icon"):
-        if config.get(key):
-            service_data[key] = config[key]
-    if config.get("entities") is not None:
-        service_data["entities"] = config["entities"]
-    group_set = {"type": "call_service", "domain": "group", "service": "set"}
-    return await _ws_send(client, {**group_set, "service_data": service_data})
-
-
 # Devices — config/device_registry/{list,update}. ``ha_set_device`` mutates
 # the user-editable registry fields (name_by_user / area_id / disabled_by /
 # labels); restore re-applies exactly those. A device deleted by
@@ -3345,7 +3328,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     )
     mgr.register(DomainHandler("label", _fetch_label, _restore_label))
     mgr.register(DomainHandler("category", _fetch_category, _restore_category))
-    mgr.register(DomainHandler("group", _fetch_group, _restore_group))
+    mgr.register(DomainHandler("group", fetch_group, restore_group))
     mgr.register(
         DomainHandler("calendar_event", _fetch_calendar_event, _restore_calendar_event)
     )

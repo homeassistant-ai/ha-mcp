@@ -292,8 +292,7 @@ async def back_up_entities(
     except _CAPTURE_TRANSIENT_ERRORS as err:
         logger.warning("Entity backup failed: %s", err)
         skipped.append(f"No pre-write backup was taken: {type(err).__name__}")
-    # One reason per cause, not one per entity: a bulk reply stays small.
-    return list(dict.fromkeys(skipped))
+    return skipped
 
 
 def with_auto_backup(
