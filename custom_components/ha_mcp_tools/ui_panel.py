@@ -573,6 +573,9 @@ let authDead = false;
 // Set once the session is minted and the app URL probed: before that, a
 // navigation must not point the iframe at the app (see applyLink).
 let appReady = false;
+// Set when a probe failed: the iframe may be showing the proxy's error page,
+// and the next successful mint has to reload it even if the src still matches.
+let probeWasDown = false;
 
 function homeAssistantRoot() {{
   try {{
@@ -620,7 +623,15 @@ function appUrl() {{
   return buildAppUrl(parentSearch(window), language);
 }}
 
-function applyLink(force) {{
+function reloadFrame() {{
+  // The settings app reads ?tab=/&token= only when it loads, so following the
+  // same link again has to reload it instead of only re-pointing the iframe.
+  try {{
+    if (frame.contentWindow) frame.contentWindow.location.reload();
+  }} catch (err) {{ /* not same-origin: nothing else to do */ }}
+}}
+
+function applyLink(force, reloadIfSame) {{
   // A link that names nothing is the user leaving the panel: keep the app as
   // it is instead of reloading it behind them. Before the session is minted
   // and the app probed, a navigation must not load the app either: the proxy
@@ -628,7 +639,13 @@ function applyLink(force) {{
   // showApp() applies the parent's current query once the session is ready.
   if (!force && (!appReady || !parentSearch(window))) return;
   const target = appUrl();
-  if (frame.getAttribute("src") !== target) frame.setAttribute("src", target);
+  if (frame.getAttribute("src") !== target) {{
+    frame.setAttribute("src", target);
+    return;
+  }}
+  // reloadIfSame covers a repeat of the link just followed; !force is a fresh
+  // navigation that resolves to the URL already loaded.
+  if (reloadIfSame || !force) reloadFrame();
 }}
 
 function watchParentNavigation() {{
@@ -766,10 +783,12 @@ async function showApp() {{
   try {{
     probe = await fetchWithTimeout(targetUrl, {{ credentials: "same-origin" }});
   }} catch (err) {{
+    probeWasDown = true;
     transientFailure("Could not reach Home Assistant to load the settings UI.");
     return;
   }}
   if (probe.status === 503) {{
+    probeWasDown = true;
     if (!timer) {{
       showMessage(
         "The in-process MCP server is starting or is not running yet. " +
@@ -783,11 +802,16 @@ async function showApp() {{
     return;
   }}
   if (!probe.ok) {{
+    probeWasDown = true;
     transientFailure("The settings UI returned HTTP " + probe.status + ".");
     return;
   }}
+  // A probe that just recovered means the iframe may still be showing the
+  // proxy's error page even though its src already matches: reload it once.
+  const wasDown = probeWasDown;
+  probeWasDown = false;
   appReady = true;
-  applyLink(true);
+  applyLink(true, wasDown);
   msg.classList.add("hidden");
   frame.classList.remove("hidden");
   if (!timer) {{
