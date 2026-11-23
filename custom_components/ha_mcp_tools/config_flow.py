@@ -232,6 +232,12 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):
             return self._create_tools_entry()
         return self.async_show_form(step_id="tools")
 
+    async def async_step_import(self, user_input: dict[str, Any]) -> ConfigFlowResult:
+        """Create the File & YAML Tools entry while restoring a sidebar backup."""
+        if user_input != {CONF_ENTRY_TYPE: ENTRY_TYPE_TOOLS}:
+            raise ValueError("Only the File & YAML Tools entry can be imported")
+        return await self.async_step_tools({})
+
     def _create_tools_entry(self) -> ConfigFlowResult:
         """Create the services (tools) config entry."""
         return self.async_create_entry(
@@ -373,7 +379,8 @@ class HaMcpToolsInfoOptionsFlow(OptionsFlow):
 
     def _tools_form_schema(self) -> vol.Schema:
         """Build the form schema with the current stored values as defaults."""
-        from . import _current_extra_dirs, _current_extra_yaml_keys
+        from . import _current_extra_dirs
+        from .extra_yaml_keys import _current_extra_yaml_keys
 
         current_dirs = _current_extra_dirs(self.hass)
         current_keys = _current_extra_yaml_keys(self.hass)
@@ -414,7 +421,8 @@ class HaMcpToolsInfoOptionsFlow(OptionsFlow):
             return self.async_show_form(
                 step_id="tools_info", data_schema=self._tools_form_schema()
             )
-        from . import _apply_allowed_paths, _apply_extra_yaml_keys
+        from . import _apply_allowed_paths
+        from .extra_yaml_keys import _apply_extra_yaml_keys
 
         await _apply_allowed_paths(self.hass, user_input.get("allowed_dirs", []))
         await _apply_extra_yaml_keys(self.hass, user_input.get("extra_yaml_keys", []))

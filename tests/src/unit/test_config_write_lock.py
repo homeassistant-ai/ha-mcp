@@ -6,7 +6,11 @@ import threading
 import time
 
 from ha_mcp.utils import config_write_lock as cwl
-from ha_mcp.utils.config_write_lock import config_file_lock, config_write_guard
+from ha_mcp.utils.config_write_lock import (
+    config_file_lock,
+    config_write_guard,
+    get_config_write_lock,
+)
 from ha_mcp.utils.data_paths import get_data_dir
 
 
@@ -60,6 +64,25 @@ class TestConfigFileLock:
 
 
 class TestConfigWriteGuard:
+    def test_warm_worker_reload_uses_the_new_event_loop(self):
+        async def contend():
+            lock = get_config_write_lock()
+
+            async def writer():
+                assert get_config_write_lock() is lock
+                async with get_config_write_lock():
+                    return "saved"
+
+            async with lock:
+                waiting = asyncio.create_task(writer())
+                await asyncio.sleep(0)
+            assert await waiting == "saved"
+            return lock
+
+        # A warm embedded reload replaces the worker's loop but keeps modules.
+        previous = asyncio.run(contend())
+        assert asyncio.run(contend()) is not previous
+
     async def test_event_loop_stays_live_while_file_lock_blocks(self, monkeypatch):
         # config_write_guard must take the (blocking) file lock in a worker
         # thread: a slow flock on the event loop would stall every connected

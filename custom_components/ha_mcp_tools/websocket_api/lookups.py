@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import yaml  # type: ignore[import-untyped]
+from homeassistant.components.blueprint.const import BLUEPRINT_FOLDER
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entity_component import DATA_INSTANCES
 
 from .assist import (
     _async_get_assistant_settings,
@@ -130,7 +132,7 @@ def _read_blueprint_file(hass: HomeAssistant, domain: str, path: str) -> _Bluepr
     if not callable(path_fn):
         return _UNREADABLE_BLUEPRINT
     try:
-        base = Path(path_fn("blueprints", domain))
+        base = Path(path_fn(BLUEPRINT_FOLDER, domain))
         candidate = Path(path) if path.startswith("/") else base / path
         real = candidate.resolve()
         base_real = base.resolve()
@@ -526,7 +528,10 @@ def _do_entity_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
     """Return registry entries whose ``unique_id`` matches (domain/platform narrow).
 
     ``{matches: [{entity_id, unique_id, platform, domain, config_entry_id,
-    categories, disabled_by, hidden_by}]}``. Scans the entity registry for every
+    categories, disabled_by, hidden_by, loaded}]}``. ``loaded`` is whether the
+    domain's entity component holds the entity: not for a disabled entry, one
+    Core keeps only a restored placeholder state for (a removed YAML scene), or
+    one a reload is re-adding. Scans the entity registry for every
     entry whose ``unique_id`` equals the requested one, optionally narrowed by
     ``domain`` (the entity's own domain, from its entity_id) and ``platform``
     (the owning integration). Multiple matches across platforms are all returned
@@ -547,6 +552,7 @@ def _do_entity_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
     view = _resolve_registries(hass)
     if view.entity is None:
         raise _substrate_unavailable("entity registry")
+    components = hass.data.get(DATA_INSTANCES, {})
     matches: list[dict[str, Any]] = []
     for entry in _all_entity_entries(view):
         if getattr(entry, "unique_id", None) != unique_id:
@@ -557,6 +563,7 @@ def _do_entity_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
             continue
         if platform and getattr(entry, "platform", None) != platform:
             continue
+        component = components.get(ent_domain)
         matches.append(
             {
                 "entity_id": entity_id,
@@ -567,6 +574,8 @@ def _do_entity_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
                 "categories": _plainify(getattr(entry, "categories", None) or {}),
                 "disabled_by": _enum_value(getattr(entry, "disabled_by", None)),
                 "hidden_by": _enum_value(getattr(entry, "hidden_by", None)),
+                "loaded": component is not None
+                and component.get_entity(entity_id) is not None,
             }
         )
     return {"matches": matches}

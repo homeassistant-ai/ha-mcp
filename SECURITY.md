@@ -149,10 +149,17 @@ surface a hidden entity_id are refused on contact. A hidden script, scene or
 automation addressed by its bare storage key or config `id` (the registry
 `unique_id`) rather than its entity_id is concealed the same way, including
 its traces. A `script.<storage key>` service call is concealed, and a config
-body or result that names one is refused. A config-file read is refused when
-the whole file defines a hidden script, scene or automation (judged on the full
-file, whatever slice was asked for). Those
-enforced paths fail closed when registry data cannot be loaded.
+body or result that names one is refused. A config-file read or edit is
+refused when the file holds part of a hidden script, scene or automation's
+definition as Home Assistant's loader reads the configuration, `!include`,
+`!include_dir_*` and packages included (judged per file, whatever slice was
+asked for). A copy Home Assistant does not load defines nothing and stays
+readable. A file that holds a single value, or no text at all (only numbers,
+booleans or nulls), can stay readable too: `!include` names the included value
+after the including file, and `!include_dir_merge_list` keeps only each file's
+items. Core's log files and `secrets.yaml` are not checked. Those enforced
+paths fail closed when registry data or the configuration cannot be loaded, or
+the component cannot be reached or lacks the check.
 
 One shape-bounded exception preserves an allowed entity's state: JSON
 `ha_get_state` results omit fields, mapping keys, list items, or related records
@@ -407,13 +414,18 @@ sidebar that reverse-proxies the server's web settings UI over Home Assistant's
 own HTTP. Because a browser cannot attach a Bearer token to a panel view, access
 is gated by a short-lived, HttpOnly session cookie that an authenticated
 **administrator** obtains through Home Assistant, and every proxied request
-re-validates that the session still maps to an active admin. The loopback secret
-path is never exposed to the browser and no token or secret is placed in a URL;
-the proxy returns 503 whenever the server is not running. The one value the
-panel does put in a URL is a pending approval token, when a notification link
-names a card (`/ha-mcp?tab=tool-security-policies&token=…`): it authorizes
-nothing by itself — without the administrator session the policy endpoints
-answer 401 — and the same token is already carried by
+re-validates that the session still maps to an active admin. The proxy never
+sends the loopback secret path to the browser and places no token or secret in a
+URL; it returns 503 whenever the server is not running. The one deliberate
+exception is the administrator's settings export: its JSON download carries the
+webhook ID, the secret path and any legacy OAuth credentials, which the panel
+states before the download. The export and import routes accept only
+same-origin requests from that admin session.
+
+One value that does travel in a URL is a pending approval token, when a
+notification link names a card (`/ha-mcp?tab=tool-security-policies&token=…`). It
+is not a credential: without the administrator session the policy endpoints
+answer 401, and the same token is already carried by
 `ha_mcp_approval_requested` and by the `USER_APPROVAL_REQUIRED` error.
 
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)
@@ -562,6 +574,15 @@ and carries a larger attack surface than the standard LLAT setup.
   for direct access, and at the bare root for Home Assistant ingress, where the
   routes admit only the Supervisor peer (`172.30.32.2`) and 403 every other
   caller.
+  The settings page's import is reachable through a tool too: once a person
+  turns on `enable_settings_transfer_actions`, `ha_manage_backup(scope="settings",
+  action="import")` applies a settings file an agent passes, including one it
+  wrote. It keeps the human-only settings and needs
+  `dev_tools_security_policy_access` for the tool-security policy, the
+  `enable_tool_security_policies` switch, entity visibility and File & YAML
+  Tools permissions, but it can turn other feature flags on or off, such as
+  `redact_secrets`, `verify_ssl` and `ipv6_allowed_networks`. Read Only Mode
+  and Backup Read Only still block it. The toggle is off by default.
 
 If you choose to run OAuth mode, restrict the consent endpoint to trusted
 networks and place it behind a TLS-terminating reverse proxy.

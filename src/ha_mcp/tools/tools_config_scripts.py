@@ -52,7 +52,7 @@ from .config_write_helpers import (
 )
 from .entity_registration import (
     LOOKUP_ERRORS,
-    resolve_entity_id_after_write,
+    post_write_entity,
     script_entity_id,
     script_entity_or_warning,
 )
@@ -309,7 +309,7 @@ class ConfigScriptTools:
         ``resolved_id`` is the storage key the REST client resolved the input to
         (from the envelope's ``script_id``). Threading ``resolved_id`` lets the
         upsert call site skip the redundant re-resolve (issue #1813 Phase 0).
-        Used internally by _fetch_and_verify_hash and ha_config_get_script.
+        Used internally by _fetch_and_verify_hash and _take_control_config.
 
         ``resolved_id`` is ``None`` when the envelope omits ``script_id`` — the
         write target must then be re-resolved from the caller's input rather
@@ -930,21 +930,20 @@ class ConfigScriptTools:
         wait: bool,
         category: str | None,
     ) -> None:
-        """Resolve, wait, and apply a category for either script write mode.
-
-        Match the upsert's storage key, which can differ from the caller's
-        entity ID after a registry rename. Keep the caller's ID as fallback.
-        """
+        """Resolve, wait, and apply a category for either script write mode."""
         if not wait and not category:
             return
         storage_key = result.get("script_id") or resolved_key or script_id
-        entity_id = await resolve_entity_id_after_write(
+        entity_id = await post_write_entity(
             self._client,
             storage_key,
             "script",
-            fallback_entity_id=f"script.{script_id.removeprefix('script.')}",
+            result,
+            wait=wait,
+            category=category,
+            caller_id=script_id,
         )
-        if wait:
+        if wait and entity_id:
             try:
                 registered = await wait_for_entity_registered(self._client, entity_id)
                 if not registered:
@@ -956,7 +955,7 @@ class ConfigScriptTools:
                 result.setdefault("warnings", []).append(
                     f"Script saved but verification failed: {e}"
                 )
-        if category:
+        if category and entity_id:
             await apply_entity_category(
                 self._client, entity_id, category, "script", result, "script"
             )
@@ -984,8 +983,9 @@ class ConfigScriptTools:
             transformed_config, script_id, resolved_id=resolved_id
         )
 
-        # Re-fetch to get authoritative hash (HA may normalize after save)
-        _, new_config_hash, _ = await self._get_script_config_internal(script_id)
+        # Re-read the written key for the hash (HA may normalize): no registry read
+        readback = await self._client.get_script_config(script_id, result["script_id"])
+        new_config_hash = compute_config_hash(readback["config"])
 
         await self._finalize_script_write(
             result, script_id, resolved_id, wait, effective_category

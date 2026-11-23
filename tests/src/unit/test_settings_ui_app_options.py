@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
 import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -25,6 +24,7 @@ from ._settings_ui_app import (
     app_server,
     ha_mcp_tasks,
     in_app,
+    post_settings,
     settings_http,
     with_env,
 )
@@ -61,16 +61,6 @@ def app(monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor) -> Supervisor:
     return supervisor
 
 
-async def _post(
-    monkeypatch: pytest.MonkeyPatch,
-    client: HomeAssistantClient,
-    path: str,
-    body: Any,
-) -> httpx.Response:
-    async with settings_http(app_server(monkeypatch, client)) as http:
-        return await http.post(path, json=body)
-
-
 async def _get(
     monkeypatch: pytest.MonkeyPatch, client: HomeAssistantClient, path: str
 ) -> dict[str, Any]:
@@ -104,7 +94,7 @@ class TestBackupConfigSave:
         app.answer(*SELF_OPTIONS)
         tasks_before = ha_mcp_tasks()
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch,
             core_client,
             BACKUP_CONFIG,
@@ -133,7 +123,7 @@ class TestBackupConfigSave:
         """Supervisor's own status and reason reach the page, not a generic 502."""
         app.refuse(*SELF_OPTIONS, "value must be at most 32 for ha_tool_concurrency")
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch, core_client, BACKUP_CONFIG, {"enable_auto_backup": True}
         )
 
@@ -150,7 +140,7 @@ class TestBackupConfigSave:
     ) -> None:
         app.drop(*SELF_OPTIONS)
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch, core_client, BACKUP_CONFIG, {"enable_auto_backup": True}
         )
 
@@ -167,7 +157,7 @@ class TestBackupConfigSave:
         in_app(monkeypatch, supervisor)
         supervisor.reply(*SELF_INFO, status=503, text="Supervisor busy")
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch, core_client, BACKUP_CONFIG, {"enable_auto_backup": True}
         )
 
@@ -186,7 +176,7 @@ class TestBackupConfigSave:
         monkeypatch.setenv("SUPERVISOR_TOKEN", APP_TOKEN)
         monkeypatch.setenv("SUPERVISOR_BASE_URL", refused_url())
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch, core_client, BACKUP_CONFIG, {"enable_auto_backup": True}
         )
 
@@ -204,7 +194,7 @@ class TestFeatureFlagSave:
         app.answer(*SELF_OPTIONS)
         tasks_before = ha_mcp_tasks()
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch, core_client, FEATURES, {"flags": {"enable_tool_search": True}}
         )
 
@@ -223,7 +213,7 @@ class TestFeatureFlagSave:
     ) -> None:
         app.refuse(*SELF_OPTIONS, "unknown option")
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch, core_client, FEATURES, {"flags": {"enable_tool_search": True}}
         )
 
@@ -248,7 +238,7 @@ class TestFeatureFlagSave:
         # The dev app writes the master's variable from its options.
         with_env(monkeypatch, ENABLE_BETA_FEATURES="false")
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch,
             core_client,
             FEATURES,
@@ -284,7 +274,7 @@ class TestAdvancedSave:
         app.answer(*SELF_OPTIONS)
         with_env(monkeypatch, HA_TOOL_CONCURRENCY="0", HA_VERIFY_SSL="true")
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch, core_client, ADVANCED, {"ha_tool_concurrency": 8}
         )
 
@@ -304,7 +294,7 @@ class TestAdvancedSave:
         app.refuse(*SELF_OPTIONS, "bad value")
         with_env(monkeypatch, HA_TOOL_CONCURRENCY="0")
 
-        response = await _post(
+        response = await post_settings(
             monkeypatch, core_client, ADVANCED, {"ha_tool_concurrency": 8}
         )
 

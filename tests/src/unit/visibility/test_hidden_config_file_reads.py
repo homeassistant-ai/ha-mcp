@@ -1,9 +1,11 @@
 """Enforce mode refuses config-file reads of a file that defines a hidden item.
 
 ``scripts.yaml`` is keyed by storage key and ``scenes.yaml`` / ``automations.yaml``
-by config ``id``, so a hidden body never spells out its entity_id. The decision
-is made on the whole file: the component applies ``tail_lines`` and
-``yaml_path`` itself, and a slice can start anywhere inside a hidden block.
+by config ``id``, so a hidden body never spells out its entity_id. Which file
+defines an item is what Core's loader reads it from, ``!include``, ``!secret``
+and packages included. The decision is made on the whole file: the component
+applies ``tail_lines`` and ``yaml_path`` itself, and a slice can start anywhere
+inside a hidden block.
 
 The files sit in Core's config directory and are read by the File & YAML
 Tools entry's own ``read_file`` service; the hidden items are real registry
@@ -21,20 +23,44 @@ from typing import Any
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
+from custom_components.ha_mcp_tools.config_file_items import WS_CONFIG_FILE_ITEMS
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
 from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
+from custom_components.ha_mcp_tools.websocket_api import system
+from custom_components.ha_mcp_tools.websocket_api.constants import WS_INFO
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_filesystem import FilesystemTools
 from ha_mcp.tools.tools_yaml_read import YamlReadTools
 from ha_mcp.visibility.model import VisibilityConfig
 
+from .._command_faults import before_handling, dropped_on, pooled_socket
+from .._symlink_support import symlink_or_skip
+from .._tool_errors import error_body
 from .._visibility_core import enforce_hiding, error_code, register_entity
 from ._chained_enforcement import _ChainedEnforcement, make_context
+
+_CONFIGURATION_YAML = """\
+homeassistant:
+  packages: !include_dir_named packages
+script: !include scripts.yaml
+script named: !include_dir_named scripts
+scene: !include scenes.yaml
+automation split: !include my_autos.yaml
+automation merged: !include_dir_merge_list automations_merged
+automation listed: !include_dir_list automations_listed
+script merged: !include_dir_merge_named scripts_merged
+automation single: !include single.yaml
+automation plain:
+- alias: No id
+  triggers: []
+  actions: []
+"""
 
 _SCRIPTS_YAML = """\
 unlock_house:
@@ -54,8 +80,7 @@ other_key:
 _SCENES_YAML = """\
 - id: 1727266720448
   name: Den
-  entities:
-    light.den: 'on'
+  entities: !include den.yaml
 """
 
 _PRESENCE_YAML = """\
@@ -70,11 +95,41 @@ script:
     sequence: []
 """
 
+# A hidden automation whose actions are in a file of their own.
+_MY_AUTOS_YAML = """\
+- id: "1700000000001"
+  alias: Garage
+  triggers: []
+  actions: !include common.yaml
+"""
+
 _FILES = {
+    "configuration.yaml": _CONFIGURATION_YAML,
     "scripts.yaml": _SCRIPTS_YAML,
+    "scripts/secret_door.yaml": "alias: !secret door_name\nsequence: []\n",
+    "secrets.yaml": "door_name: Secret door\n",
+    # Only keys carry this file's name: ``on`` loads as true.
+    "den.yaml": "light.den: on\n",
+    "home-assistant.log.fault": "Fatal Python error: Segmentation fault\n",
+    "my_autos.yaml": _MY_AUTOS_YAML,
+    "common.yaml": "- action: light.turn_on\n",
+    "automations_merged/garage.yaml": (
+        '- id: "1700000000002"\n  triggers: []\n  actions: []\n'
+    ),
+    "automations_listed/garage.yaml": (
+        'id: "1700000000003"\ntriggers: []\nactions: []\n'
+    ),
+    "scripts_merged/garage.yaml": "lock_garage:\n  sequence: []\n",
+    # A section holding one automation rather than a list.
+    "single.yaml": 'id: "1700000000004"\ntriggers: []\nactions: []\n',
+    # Core loads neither: copies of hidden definitions define nothing.
+    "www/scripts.yaml": _SCRIPTS_YAML,
+    "www/my_autos.yaml": _MY_AUTOS_YAML,
     "scenes.yaml": _SCENES_YAML,
     "www/presence.yaml": _PRESENCE_YAML,
     "packages/presence.yaml": _PRESENCE_YAML,
+    # Sorts before the hidden package, so a glob read targets it first.
+    "packages/aaa.yaml": "input_text:\n  note:\n    name: Note\n",
     "packages/door.yaml": _DOOR_PACKAGE_YAML,
 }
 
@@ -84,6 +139,12 @@ _HIDDEN = [
     ("script.front_door", "come_home", "script"),
     ("script.lobby", "other_key", "script"),
     ("scene.den", "1727266720448", "homeassistant"),
+    ("script.secret_door", "secret_door", "script"),
+    ("automation.garage", "1700000000001", "automation"),
+    ("automation.garage_merged", "1700000000002", "automation"),
+    ("automation.garage_listed", "1700000000003", "automation"),
+    ("script.lock_garage", "lock_garage", "script"),
+    ("automation.garage_single", "1700000000004", "automation"),
 ]
 
 
@@ -190,6 +251,51 @@ async def _call_through_enforcement(
             {"path": "www/../scripts.yaml", "tail_lines": 3},
             id="scripts-yaml-spelled-through-parent-segment",
         ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "my_autos.yaml"},
+            id="automation-in-an-included-file",
+        ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "scripts/secret_door.yaml"},
+            id="script-in-an-include-dir-named-file",
+        ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "common.yaml"},
+            id="actions-included-into-a-hidden-automation",
+        ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "automations_merged/garage.yaml"},
+            id="automation-in-an-include-dir-merge-list-file",
+        ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "automations_listed/garage.yaml"},
+            id="automation-in-an-include-dir-list-file",
+        ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "scripts_merged/garage.yaml"},
+            id="script-in-an-include-dir-merge-named-file",
+        ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "den.yaml"},
+            id="mapping-without-text-included-into-a-hidden-scene",
+        ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "single.yaml"},
+            id="automation-section-of-one-mapping",
+        ),
+        pytest.param(
+            _get_yaml_tool,
+            {"file": "packages/*.yaml", "yaml_path": "script"},
+            id="glob-whose-later-target-defines-a-hidden-script",
+        ),
     ],
 )
 async def test_read_of_a_file_defining_a_hidden_item_is_refused(
@@ -197,6 +303,34 @@ async def test_read_of_a_file_defining_a_hidden_item_is_refused(
 ) -> None:
     with pytest.raises(ToolError) as exc:
         await _call_through_enforcement(client, call, kwargs)
+    assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
+
+async def test_a_link_to_a_file_defining_a_hidden_item_is_refused(
+    client: HomeAssistantClient, tmp_path: Path
+) -> None:
+    symlink_or_skip(tmp_path / "www" / "link.yaml", tmp_path / "scripts.yaml")
+
+    with pytest.raises(ToolError) as exc:
+        await _call_through_enforcement(
+            client, _read_file_tool, {"path": "www/link.yaml"}
+        )
+    assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
+
+async def test_a_config_dir_reached_through_a_link_is_checked(
+    client: HomeAssistantClient, hass: HomeAssistant, tmp_path: Path
+) -> None:
+    """Core's loader names each file through the link, as the config dir
+    was given; both its names and the requested path are compared resolved."""
+    link = tmp_path.parent / f"{tmp_path.name}-link"
+    symlink_or_skip(link, tmp_path)
+    hass.config.config_dir = str(link)
+
+    with pytest.raises(ToolError) as exc:
+        await _call_through_enforcement(
+            client, _read_file_tool, {"path": "scripts.yaml", "tail_lines": 3}
+        )
     assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
 
 
@@ -215,6 +349,25 @@ async def test_read_of_a_file_defining_a_hidden_item_is_refused(
             "Coming home",
             id="package-helper-sharing-a-hidden-script-key",
         ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "www/scripts.yaml"},
+            "Unlock house",
+            id="copy-of-scripts-yaml-core-does-not-load",
+        ),
+        pytest.param(
+            _read_file_tool,
+            {"path": "www/my_autos.yaml"},
+            "Garage",
+            id="copy-of-an-included-file-core-does-not-load",
+        ),
+        # A hidden script's ``!secret`` reads it; its values are masked.
+        pytest.param(
+            _read_file_tool,
+            {"path": "secrets.yaml"},
+            "door_name",
+            id="secrets-yaml-a-hidden-script-takes-a-secret-from",
+        ),
     ],
 )
 async def test_file_that_only_shares_a_hidden_key_stays_readable(
@@ -226,3 +379,69 @@ async def test_file_that_only_shares_a_hidden_key_stays_readable(
     result = await _call_through_enforcement(client, call, kwargs)
     assert result.structured_content["success"] is True
     assert expected in result.content[0].text
+
+
+async def test_a_read_while_the_configuration_does_not_load_is_refused(
+    client: HomeAssistantClient, tmp_path: Path
+) -> None:
+    (tmp_path / "configuration.yaml").write_text("script: !include missing.yaml\n")
+
+    with pytest.raises(ToolError) as exc:
+        await _call_through_enforcement(
+            client, _read_file_tool, {"path": "www/presence.yaml"}
+        )
+    assert error_code(exc) == "CONFIG_INVALID"
+    assert "missing.yaml" in error_body(exc)["error"]["details"]
+
+
+async def test_a_log_stays_readable_while_the_configuration_does_not_load(
+    client: HomeAssistantClient, tmp_path: Path
+) -> None:
+    """Core writes its logs and never loads them, so they need no check."""
+    (tmp_path / "configuration.yaml").write_text("script: !include missing.yaml\n")
+
+    result = await _call_through_enforcement(
+        client, _read_file_tool, {"path": "home-assistant.log.fault"}
+    )
+    assert result.structured_content["success"] is True
+    assert "Segmentation fault" in result.content[0].text
+
+
+async def test_a_component_without_the_check_refuses_the_read(
+    client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    advertised = [c for c in system.CAPABILITIES if c != "config_file_items"]
+    monkeypatch.setattr(system, "CAPABILITIES", advertised)
+
+    with pytest.raises(ToolError) as exc:
+        await _call_through_enforcement(
+            client, _read_file_tool, {"path": "www/presence.yaml"}
+        )
+    assert error_code(exc) == "COMPONENT_NOT_INSTALLED"
+
+
+async def test_a_read_while_the_component_cannot_be_reached_is_refused(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    socket = await pooled_socket(client)
+    with pytest.raises(ToolError) as exc, dropped_on(hass, WS_INFO, socket):
+        await _call_through_enforcement(
+            client, _read_file_tool, {"path": "www/presence.yaml"}
+        )
+    assert error_code(exc) == "CONNECTION_FAILED"
+
+
+async def test_a_read_the_component_cannot_answer_is_refused(
+    hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    def fail(msg: dict[str, Any]) -> None:
+        raise HomeAssistantError("check failed")
+
+    with (
+        pytest.raises(ToolError) as exc,
+        before_handling(hass, WS_CONFIG_FILE_ITEMS, fail),
+    ):
+        await _call_through_enforcement(
+            client, _read_file_tool, {"path": "www/presence.yaml"}
+        )
+    assert error_code(exc) == "SERVICE_CALL_FAILED"

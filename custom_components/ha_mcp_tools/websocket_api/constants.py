@@ -9,6 +9,7 @@ from homeassistant.generated.config_flows import FLOWS
 from .. import (
     automation_config,
     card_definitions,
+    config_file_items,
     config_references,
     core_contract,
     entity_restore,
@@ -175,6 +176,9 @@ CAPABILITIES: list[str] = [
     "registry_lookup",
     "system_snapshot",
     "entity_lookup",
+    # A flag on entity_lookup: each match carries ``loaded``, whether the
+    # domain's entity component holds the entity.
+    "entity_lookup_loaded",
     "registries",
     "registry_fields",
     "dashboards",
@@ -250,6 +254,7 @@ CAPABILITIES: list[str] = [
     scene_editor.CAPABILITY,
     automation_config.CAPABILITY,
     config_references.CAPABILITY,
+    config_file_items.CAPABILITY,
     recorder_status.CAPABILITY,
     *card_definitions.CAPABILITIES,
 ]

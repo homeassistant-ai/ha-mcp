@@ -143,6 +143,9 @@ the info handshake carries no capability entry:
   included, with its integration, the names of its ``UpdateEntityFeature``
   flags and, for a loaded hassio entity, the kind its Core class gives it,
   which no state or REST answer carries. See ``update_entities.py``.
+* ``ha_mcp_tools/config_file_items`` — the scripts, scenes and automations
+  whose definition draws on a given config file, from the configuration loaded
+  the way Core loads it. See ``config_file_items.py``.
 * ``ha_mcp_tools/recorder_status`` — the recorder's purge settings and oldest
   state, and whether it records an entity, which Core's API does not serve;
   with ``wait``, held until the recorder has finished its work. See
@@ -286,8 +289,9 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/entity_lookup`` — registry entries whose ``unique_id`` matches
   (optionally narrowed by ``domain`` / ``platform``), returned as
   ``{matches: [{entity_id, unique_id, platform, domain, config_entry_id,
-  categories, disabled_by, hidden_by}]}``. Multiple matches across platforms are
-  all returned; the server picks. The in-process read is authoritative
+  categories, disabled_by, hidden_by, loaded}]}``, ``loaded`` whether the
+  domain's entity component holds the entity (flag ``entity_lookup_loaded``).
+  Multiple matches across platforms are all returned; the server picks. The in-process read is authoritative
   immediately (no registry-write settle retry).
 * ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
   the rows Core's ``config/<x>_registry/list`` sends (Core's own serializers,
@@ -370,6 +374,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .. import (
     automation_config,
+    config_file_items,
     config_references,
     core_contract,
     dashboard_cards_ws,
@@ -571,6 +576,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *scene_editor.command_specs(vol),
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
+        *config_file_items.command_specs(vol),
         *recorder_status.command_specs(vol),
         *dashboard_cards_ws.command_specs(vol),
         *_oauth_callback_specs(),

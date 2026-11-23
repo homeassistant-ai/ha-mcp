@@ -382,8 +382,8 @@ class TestDevVersionScript:
         assert script_version.group(1) == action_version.group(1)
 
     def test_server_pin_names_match_the_component(self) -> None:
-        # const.py must import nothing (tests load it standalone), so it
-        # repeats the distribution names server_pin.py matches on.
+        # server_pin.py loads without Home Assistant, so it cannot import
+        # const.py and repeats the distribution names.
         def load(name: str) -> Any:
             spec = importlib.util.spec_from_file_location(
                 f"_parity_{name}", _COMPONENT / f"{name}.py"

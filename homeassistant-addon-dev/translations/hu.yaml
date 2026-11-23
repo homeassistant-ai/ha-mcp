@@ -296,6 +296,19 @@ configuration:
       szerkesztés előtti biztonsági mentések továbbra is működnek. A webes beállítási
       felületen egy személy által végzett biztonsági mentési műveletek továbbra is
       elérhetők maradnak.
+  enable_settings_transfer_actions:
+    name: A ha_manage_backup engedélyezése a beállítások exportálásához és importálásához
+    description: Lehetővé teszi a mesterséges intelligencia asszisztensek számára,
+      hogy letöltsék a szerver beállításfájlját, és a ha_manage_backup segítségével
+      importáljanak egyet, ahogyan a Szerverbeállítások fül Exportálás és Importálás
+      gombjai is teszik. Az importálás megőrzi a kizárólag emberi használatra szánt
+      beállításokat, és a biztonsági házirend, az entitások láthatósága vagy a Fájl-
+      és YAML-eszközök engedélyeinek módosításához szintén szükség van a Fejlesztői
+      eszközök biztonsági házirendjének hozzáférésére. Az importálás bekapcsolhatja
+      a fejlesztői módot, az eszközöket és a funkciókat, valamint kikapcsolhatja az
+      olyan védelmeket, mint a titkos adatok elrejtése, az SSL-ellenőrzés és az IPv6
+      engedélyezési lista (a fájl utasításai szerint), ezért ellenőrizze a beállításokat,
+      miután egy mesterséges intelligencia asszisztens importált egyet.
   enable_snapshot_delete:
     name: Pillanatkép törlésének engedélyezése
     description: Lehetővé teszi a ha_manage_backup számára a teljes Home Assistant

@@ -283,6 +283,17 @@ configuration:
       kopii zapasowych w ha_call_service. Automatyczne kopie zapasowe przed edycją
       są nadal tworzone. Działania na kopiach zapasowych wykonywane przez użytkownika
       w interfejsie ustawień webowych pozostają dostępne.
+  enable_settings_transfer_actions:
+    name: Zezwalaj narzędziu ha_manage_backup na eksport i import ustawień
+    description: Zezwalaj asystentom AI na pobieranie pliku ustawień tego serwera
+      i importowanie go za pomocą ha_manage_backup, tak jak robią to przyciski Eksport
+      i Import na karcie Ustawienia serwera. Import zachowuje ustawienia przeznaczone
+      wyłącznie dla ludzi, a zmiana zasad bezpieczeństwa, widoczności encji lub uprawnień
+      narzędzi File & YAML Tools wymaga również dostępu do zasad bezpieczeństwa narzędzi
+      deweloperskich. Import może również włączyć tryb deweloperski, narzędzia i funkcje
+      oraz wyłączyć zabezpieczenia, takie jak maskowanie sekretów, weryfikacja SSL
+      i biała lista IPv6, zgodnie z opisem w pliku, dlatego sprawdź swoje ustawienia
+      po tym, jak asystent AI dokona importu.
   enable_snapshot_delete:
     name: Zezwól na usuwanie migawek
     description: Pozwala ha_manage_backup usuwać pełne migawki Home Assistant. Migawka

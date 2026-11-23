@@ -179,6 +179,18 @@ configuration:
       previas a la edición continúan. Las acciones de copias de seguridad que una
       persona realiza en la interfaz de usuario de configuración web siguen estando
       disponibles.
+  enable_settings_transfer_actions:
+    name: Permitir que ha_manage_backup exporte e importe ajustes
+    description: Permite que los asistentes de IA descarguen el archivo de ajustes
+      de este servidor e importen uno mediante ha_manage_backup, al igual que hacen
+      los botones Exportar e Importar de la pestaña Ajustes del servidor. Una importación
+      conserva los ajustes exclusivos para humanos, y cambiar la directiva de seguridad,
+      la visibilidad de entidades o los permisos de File & YAML Tools también requiere
+      acceso a la directiva de seguridad de las herramientas de desarrollo. Una importación
+      también puede activar el modo de desarrollador, herramientas y características,
+      y desactivar protecciones como la ocultación de secretos, la verificación SSL
+      y la lista blanca de IPv6, tal como indica el archivo, así que comprueba tus
+      ajustes después de que un asistente de IA importe uno.
   enable_snapshot_delete:
     name: Permitir la eliminación de instantáneas
     description: Permitir que ha_manage_backup elimine copias de seguridad completas
