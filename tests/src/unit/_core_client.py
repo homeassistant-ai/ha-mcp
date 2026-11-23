@@ -136,6 +136,14 @@ async def backup_manager(
 
 
 @pytest.fixture
+def routed_client(request: pytest.FixtureRequest) -> HomeAssistantClient:
+    """The client fixture whose name the test passes through the indirect
+    ``routed_client`` parametrization."""
+    client: HomeAssistantClient = request.getfixturevalue(request.param)
+    return client
+
+
+@pytest.fixture
 def sent(core_client: HomeAssistantClient) -> Iterator[AsyncMock]:
     """A spy on ``core_client``'s WebSocket send: it calls through, so Core
     answers, and a test can count or forbid a command."""

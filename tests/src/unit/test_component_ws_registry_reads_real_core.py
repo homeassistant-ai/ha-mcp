@@ -467,7 +467,11 @@ async def test_every_entity_with_the_unique_id_is_returned(
         "disabled_by",
         "hidden_by",
     )
-    assert match == {**{key: core[key] for key in fields}, "domain": entry.domain}
+    assert match == {
+        **{key: core[key] for key in fields},
+        "domain": entry.domain,
+        "loaded": False,
+    }
     assert (match["config_entry_id"], match["categories"]) == (
         "cfg1",
         {"automation": "cat1"},
