@@ -128,6 +128,9 @@ def _parse_requirement_specs(text: str) -> dict[str, SpecifierSet]:
 # Seconds between fetch attempts, and the longest a ``Retry-After`` is obeyed.
 _FETCH_WAITS = (5, 15, 30, 60)
 _FETCH_WAIT_CAP = 120
+# Answers that can change: GitHub throttles with 429 or 403, and 408 is a
+# timeout. Any 5xx can change too.
+_FETCH_AGAIN = (403, 408, 429)
 
 
 def fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
@@ -136,7 +139,8 @@ def fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
     Up to five attempts against raw.githubusercontent, waiting at least as
     long as GitHub's ``Retry-After`` asks when it throttles the runner (429).
     An answer that will not change (a 404 for a release that does not exist)
-    is not asked for again. A total failure FAILS the test rather than
+    is not asked for again; a throttled one (``_FETCH_AGAIN``), a server error
+    and a lost connection are. A total failure FAILS the test rather than
     silently weakening the governed set — a guard that can quietly shrink its
     protection is worse than a loud fetch error.
     """
@@ -150,7 +154,7 @@ def fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
         except requests.exceptions.RequestException as err:
             last_error = err
             status = getattr(err.response, "status_code", None)
-            settled = status is not None and status != 429 and status < 500
+            settled = status is not None and status not in _FETCH_AGAIN and status < 500
             if wait is None or settled:  # no backoff after the final attempt
                 break
             asked = getattr(err.response, "headers", {}).get("Retry-After", "")

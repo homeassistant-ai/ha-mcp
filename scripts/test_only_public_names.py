@@ -61,7 +61,9 @@ WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # A string that is a name or a path to one (``getattr``, a registry key, a patch
 # target, ``module:function``); a sentence that mentions a name is not a use.
 NAMING = re.compile(r"[A-Za-z_][\w.:]*")
-# A ``#`` comment in YAML or TOML: at the line's start or after white space.
+# A ``#`` comment in YAML or TOML: at the line's start or after white space
+# (also inside a quoted value, which then names nothing: the check errs on the
+# side of refusing).
 COMMENT = re.compile(r"(^|\s)#.*")
 # Module state the tests reset between tests, and the cleanup of a server
 # process a test started; production needs neither.

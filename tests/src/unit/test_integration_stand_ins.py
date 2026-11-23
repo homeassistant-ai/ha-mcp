@@ -609,6 +609,33 @@ first, second = MockModule, mock_component
 first('made_up_probe')
 class Module(MockModule):
     pass
+import pytest_homeassistant.common as common
+made = functools.partial(common.mock_component, None)  # unread: common.mock_component
+apply(hass.config.components.add, 'hassio')  # unread: hass.config.components.add
+def test_with_pair(hass):
+    name = 'made_up_probe'
+    with ctx() as (name, other):
+        MockModule(name)  # unread: MockModule
+async def test_async_with(hass):
+    name = 'made_up_probe'
+    async with ctx() as name:
+        MockModule(name)  # unread: MockModule
+def test_match_rest(hass):
+    others = found = 'made_up_probe'
+    match pick():
+        case [first, *others]:
+            MockModule(others)  # unread: MockModule
+        case {**found}:
+            MockModule(found)  # unread: MockModule
+def test_except_group(hass):
+    name = 'made_up_probe'
+    try:
+        pass
+    except* ValueError as name:
+        MockModule(name)  # unread: MockModule
+rest = 'made_up_probe'
+*rest, = pick()
+MockModule(rest)  # unread: MockModule
 """
 
 
@@ -618,9 +645,10 @@ def test_a_name_the_check_cannot_read_is_refused_where_it_is_used(
     """Refused: a call's result, a fixture's value at each stand-in it reaches,
     ``*`` and ``**`` arguments, a collection one branch reads at runtime or
     the check cannot read, a parameter ``parametrize`` gives a fixture, a name
-    bound by ``with``, ``except``, ``match`` or ``*rest``, and a helper given
-    to ``partial``, put in a list, passed as an argument or a default,
-    returned, or chosen by a condition.
+    bound by ``with``, ``except``, ``match`` or ``*rest``, and a helper (also
+    one read off its module or ``hass.config.components``) given to
+    ``partial``, put in a list, passed as an argument or a default, returned,
+    or chosen by a condition.
 
     Not refused: a parameter a call, a default or ``parametrize`` fills, a
     loop over an empty list, and a helper in ``isinstance`` or an annotation,

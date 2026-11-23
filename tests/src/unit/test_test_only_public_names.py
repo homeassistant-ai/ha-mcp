@@ -250,6 +250,14 @@ def _files(tmp_path: Path, files: dict[str, str]) -> Path:
         pytest.param(
             {
                 "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "lefthook.yml": "run: lint ha_mcp/a.py#probe\n",
+            },
+            False,
+            id="named-after-a-hash-that-starts-no-comment",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
                 "src/ha_mcp/b.py": 'TARGET = "ha_mcp.a.probe"\n',
             },
             False,

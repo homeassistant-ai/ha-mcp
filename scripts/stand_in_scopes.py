@@ -76,8 +76,9 @@ def bind(scope: Scope, target: ast.expr, value: object, new: list[object]) -> No
         for index, element in enumerate(target.elts):
             # A target after ``*rest`` is counted from the end.
             column = index - len(stars) if any(stars[:index]) else index
-            part = values[column] if readable else ast.Constant(None)
-            bind(scope, element, part, new)
+            # ``*rest`` takes no element of its own.
+            taken = readable and not stars[index]
+            bind(scope, element, values[column] if taken else ast.Constant(None), new)
 
 
 def bind_unread(scope: Scope, node: ast.AST, new: list[object]) -> list[ast.expr]:

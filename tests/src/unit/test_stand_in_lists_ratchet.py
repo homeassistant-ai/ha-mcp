@@ -509,19 +509,27 @@ def test_converting_a_file_or_widening_a_rule_passes(
     assert ratchet.problems_since(_pull_request(tmp_path, changes), "HEAD") == []
 
 
-def test_a_code_change_in_any_script_of_the_check_widens_it(
+def test_only_a_code_change_in_a_script_of_the_check_widens_it(
     ratchet: ModuleType, tmp_path: Path
 ) -> None:
+    """Each script is at the base, so the change is an edit to it: an edit to
+    its code lets an older file join the allowlist, a comment does not."""
+    base = {**_BASE, **dict.fromkeys(ratchet.INTEGRATION_CHECK, _CHECK)}
+    joined = _allowlist((_KEPT, "hassio"), (_CLEAN, "frontend"))
+    refusal = f"{_CLEAN} was added to the list for 'frontend'"
+    edits = {"code": "CHANGED = ('code',)\n", "comment": f"{_CHECK}# a comment\n"}
     for script in ratchet.INTEGRATION_CHECK:
-        changes: dict[str, str | None] = {
-            _ALLOWLIST_PATH: _allowlist((_KEPT, "hassio"), (_CLEAN, "frontend")),
-            script: "CHANGED = ('code',)\n",
-        }
-        folder = tmp_path / Path(script).stem
-        folder.mkdir()
-        repo = _pull_request(folder, changes)
+        for kind, edit in edits.items():
+            folder = tmp_path / f"{Path(script).stem}-{kind}"
+            folder.mkdir()
+            repo = _pull_request(folder, {_ALLOWLIST_PATH: joined, script: edit}, base)
 
-        assert ratchet.problems_since(repo, "HEAD") == [], script
+            found = ratchet.problems_since(repo, "HEAD")
+
+            if kind == "code":
+                assert found == [], script
+            else:
+                assert refusal in "\n".join(found), script
 
 
 def test_the_check_is_its_script_and_every_script_that_one_imports(
@@ -538,13 +546,18 @@ def test_the_check_is_its_script_and_every_script_that_one_imports(
             continue
         found.add(name)
         tree = ast.parse((scripts / f"{name}.py").read_text(encoding="utf-8"))
-        pending += [
-            node.module
+        imported = [
+            name
             for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
-            and node.module
-            and (scripts / f"{node.module}.py").is_file()
+            for name in (
+                [node.module]
+                if isinstance(node, ast.ImportFrom)
+                else [alias.name for alias in getattr(node, "names", [])]
+                if isinstance(node, ast.Import)
+                else []
+            )
         ]
+        pending += [n for n in imported if n and (scripts / f"{n}.py").is_file()]
 
     assert set(ratchet.INTEGRATION_CHECK) == {f"scripts/{name}.py" for name in found}
 
