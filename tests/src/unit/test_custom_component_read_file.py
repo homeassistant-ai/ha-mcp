@@ -15,7 +15,6 @@ from typing import Any
 import pytest
 from homeassistant.const import KEY_DATA_LOGGING, KEY_DATA_LOGGING_DISABLED_REASON
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant.common import mock_component
 
 import custom_components.ha_mcp_tools as comp
 from custom_components.ha_mcp_tools import SERVICE_READ_FILE
@@ -26,7 +25,11 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._component_filesystem import put
 from ._file_services import FileService, make_file_service
+from ._hassio_core import set_up_hassio
 from ._symlink_support import symlink_or_skip
+from ._tools_addons_core import Supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
 
 ERROR_LOG = "home-assistant.log"
 FAULT_LOG = "home-assistant.log.fault"
@@ -188,20 +191,22 @@ class TestCoreLogFile:
             assert "hint" not in result
 
     # Under Supervisor, HA_DUPLICATE_LOG_FILE keeps Core's file log on.
-    @pytest.mark.parametrize("supervisor", [False, True])
+    @pytest.mark.parametrize("supervised", [False, True])
     async def test_reads_the_log_where_core_writes_it(
         self,
         hass: HomeAssistant,
         files: FileService,
         tmp_path_factory: pytest.TempPathFactory,
-        supervisor: bool,
+        supervisor: Supervisor,
+        monkeypatch: pytest.MonkeyPatch,
+        supervised: bool,
     ) -> None:
         log = tmp_path_factory.mktemp("logs") / "core.log"
         await hass.async_add_executor_job(log.write_text, "moved\n")
         await put(hass, {ERROR_LOG: "stale\n"})
         hass.data[KEY_DATA_LOGGING] = str(log)
-        if supervisor:
-            mock_component(hass, "hassio")
+        if supervised:
+            await set_up_hassio(hass, supervisor, monkeypatch)
 
         result = await _read(files, ERROR_LOG)
 
@@ -233,13 +238,19 @@ class TestCoreLogFile:
         ],
     )
     async def test_without_a_log_file_a_stale_one_is_not_read(
-        self, hass: HomeAssistant, files: FileService, setup: str | None, told: str
+        self,
+        hass: HomeAssistant,
+        files: FileService,
+        supervisor: Supervisor,
+        monkeypatch: pytest.MonkeyPatch,
+        setup: str | None,
+        told: str,
     ) -> None:
         await put(hass, {ERROR_LOG: "stale\n"})
         if setup in ("environment", "both"):
             hass.data[KEY_DATA_LOGGING_DISABLED_REASON] = "environment"
         if setup in ("supervisor", "both"):
-            mock_component(hass, "hassio")
+            await set_up_hassio(hass, supervisor, monkeypatch)
 
         result = await _read(files, ERROR_LOG)
 
