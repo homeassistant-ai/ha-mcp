@@ -350,7 +350,7 @@ async def _open_server_entry_flow(
 
 
 async def find_server_config_entry(
-    client: Any,
+    client: Any, via_component: Any = MISSING
 ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
     """Find the ha_mcp_tools in-process "server" config entry.
 
@@ -374,11 +374,15 @@ async def find_server_config_entry(
     current values (persisted ``suggested_value`` first, else the schema
     ``default`` or ``value``, via ``_field_prefill``).
 
+    ``via_component`` takes a ``fetch_server_entry_via_component`` result the
+    caller already read, so that read is not sent twice.
+
     Module-level (not a DevTools method) so the settings UI's embedded
     restart handler can share it.
     """
-    via_component = await fetch_server_entry_via_component(client)
-    if via_component is not None:
+    if via_component is MISSING:
+        via_component = await fetch_server_entry_via_component(client)
+    if isinstance(via_component, dict):
         entry_id = via_component.get("entry_id")
         if entry_id is None:
             # Authoritative: the component confirmed no server entry exists.
@@ -1760,8 +1764,10 @@ class DevTools:
         the background, which can take minutes and can still fail
         (check HA logs). info's component_server_entry.install_pending
         stays true until that install is done, and after a deferred or
-        failed one; it cannot see a deferred reinstall of an unchanged
-        URL spec. update_source requires the component's
+        failed one; null means it is unknown (skip_pip, a component too
+        old to report it, or a failed read). It compares specs, so a deferred
+        or failed reinstall of an unchanged spec still reads false.
+        update_source requires the component's
         in-process server entry to exist. restart interrupts this MCP
         connection in embedded and app deployments (the reply
         arrives just before the server goes down) and supports those
@@ -1825,7 +1831,8 @@ class DevTools:
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"Could not read HA version: {exc}")
         try:
-            found = await find_server_config_entry(self._client)
+            via_component = await fetch_server_entry_via_component(self._client)
+            found = await find_server_config_entry(self._client, via_component)
             if found is None:
                 data["component_server_entry"] = None
             else:
@@ -1834,7 +1841,9 @@ class DevTools:
                 data["component_server_entry"] = {
                     "entry_id": entry_id,
                     "pip_spec": options.get(_OPT_PIP_SPEC),
-                    "install_pending": await install_pending(self._client, warnings),
+                    "install_pending": await install_pending(
+                        self._client, via_component, warnings
+                    ),
                     "role": (
                         "this server (embedded)"
                         if mode == "embedded"

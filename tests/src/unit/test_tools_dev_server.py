@@ -143,7 +143,19 @@ class TestInfo:
         )
         result = await DevTools(client).ha_dev_manage_server(action="info")
         assert result["data"]["component_server_entry"]["install_pending"] is pending
-        assert bool(result.get("warnings")) is pending
+        warned = any("has not installed" in w for w in result.get("warnings", []))
+        assert warned is pending
+
+    async def test_info_does_not_ask_a_component_that_cannot_tell_to_update(
+        self, hass: HomeAssistant, client: HomeAssistantClient
+    ) -> None:
+        """Under skip_pip the component installs nothing, so it cannot tell;
+        a current component must not be told to update."""
+        server_entry(hass, pip_spec=PIP_SPEC)
+        result = await DevTools(client).ha_dev_manage_server(action="info")
+        assert result["data"]["component_server_entry"]["install_pending"] is None
+        warnings = result.get("warnings", [])
+        assert not any("ha_mcp_tools component" in w for w in warnings)
 
     async def test_info_asks_for_a_component_that_can_tell(
         self,
@@ -161,7 +173,8 @@ class TestInfo:
         server_entry(hass, pip_spec=PIP_SPEC)
         result = await DevTools(client).ha_dev_manage_server(action="info")
         assert result["data"]["component_server_entry"]["install_pending"] is None
-        assert result.get("warnings")
+        warnings = result.get("warnings", [])
+        assert any("Update the ha_mcp_tools component" in w for w in warnings)
 
     async def test_info_warns_when_home_assistant_does_not_answer(
         self,

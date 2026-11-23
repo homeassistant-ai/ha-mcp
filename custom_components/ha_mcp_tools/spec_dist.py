@@ -54,7 +54,12 @@ async def async_paired_server_requirement(hass: HomeAssistant) -> str | None:
 async def async_effective_pip_spec(
     hass: HomeAssistant, options: Mapping[str, Any]
 ) -> str:
-    """Return the spec bring-up installs: the override, else the manifest pin."""
+    """Return the spec bring-up resolves: the override, else the manifest pin.
+
+    Without a pin, bare ``ha-mcp`` (``DEFAULT_PIP_SPEC``). Must match
+    ``EmbeddedServerManager._resolve_pip_spec``: ``server_entry``'s
+    ``install_pending`` compares this string with the one bring-up recorded.
+    """
     return (
         pip_spec_override(options)
         or await async_paired_server_requirement(hass)

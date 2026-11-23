@@ -777,11 +777,9 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         breaking the options form.
         """
         override = pip_spec_override(self.config_entry.options)
-        source = (
-            common["server_source_override"]
-            if override
-            else common["server_source_paired"]
-        )
+        source = common[
+            "server_source_override" if override else "server_source_paired"
+        ]
 
         component_version = common["version_unknown"]
         # The effective spec, as bring-up resolves it: the override, else the pin.

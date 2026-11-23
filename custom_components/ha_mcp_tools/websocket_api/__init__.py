@@ -190,10 +190,13 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/server_entry`` — the component locates its OWN server config
   entry (``entry.data[CONF_ENTRY_TYPE] == server``) and returns
   ``{entry_id, pip_spec, install_pending}`` (pip_spec from ``entry.options``;
-  install_pending compares the spec bring-up would install with the
-  ``entry.data`` record of the last install, ``_server_entry_prep``), so
+  install_pending, gated by ``server_entry_install_pending``, compares the spec
+  bring-up resolves with the one the component recorded after its last
+  completed, non-deferred package step, ``_server_entry_prep``), so
   ``ha_dev_manage_server`` need not probe every ``ha_mcp_tools``-domain entry's
-  options-flow schema from the outside.
+  options-flow schema from the outside. The type marker and that record are
+  the two ``entry.data`` keys this package reads, the data-minimization
+  exception: neither is returned, install_pending is only a boolean.
 * ``ha_mcp_tools/server_entry_update`` — the WRITE counterpart of ``server_entry``:
   applies a ``channel`` / ``pip_spec`` delta to the server entry via
   ``hass.config_entries.async_update_entry`` DIRECTLY (what core's finish-flow

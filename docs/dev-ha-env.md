@@ -129,9 +129,11 @@ Run it **from your fork only**. The job refuses to run in
         the spec it was installed from until this step.
      4. Confirm the install took: once the server answers again, which takes
         up to a few minutes, `info` shows
-        `component_server_entry.install_pending: false`. If it stays `true`,
-        the install was deferred or failed and the new build is not running;
-        `info` warns how to apply it.
+        `component_server_entry.install_pending: false`. If it answers with
+        `true`, the install was deferred or failed and the new build is not
+        running; `info` warns how to apply it. If the embedded server does
+        not answer again, its install or start failed: see the boot-failure
+        note below.
    - App: install your branch's build as a second app and update it like
      any app. Stage the checkout as an app repository and push it to a
      branch of your fork:

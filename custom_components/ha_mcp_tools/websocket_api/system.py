@@ -218,11 +218,10 @@ def _find_server_config_entry(hass: HomeAssistant) -> Any | None:
 
     Picks the single ``DOMAIN`` entry stamped with
     ``entry.data[CONF_ENTRY_TYPE] == ENTRY_TYPE_SERVER`` (one of the two
-    ``entry.data`` keys this module reads, the documented data-minimization
-    exception; :func:`_server_entry_prep` reads the other). Shared
-    by the ``server_entry`` READ cap (:func:`_do_server_entry`) and the
-    ``server_entry_update`` WRITE cap (:func:`_server_entry_update_prep`), so both
-    discriminate the entry identically.
+    ``entry.data`` keys this package reads, the data-minimization exception
+    documented under ``server_entry`` in the package docstring;
+    :func:`_server_entry_prep` reads the other). Shared by every server-entry
+    reader in this package, so all discriminate the entry identically.
     """
     for entry in _iter_config_entries(hass):
         if getattr(entry, "domain", None) != DOMAIN:
@@ -238,14 +237,17 @@ async def _server_entry_prep(
 ) -> dict[str, Any]:
     """Whether the server entry's configured spec is still to be installed.
 
-    Compares the spec bring-up would install now (the override, else the
-    manifest pin, read async) with the one the component recorded as installed
-    (``entry.data[DATA_LAST_PIP_SPEC]``, its own bookkeeping, reported only as
-    this boolean). True while a changed spec waits for its install, after a
-    deferred install, after a failed one, and before the first bring-up; it
-    cannot see a deferred reinstall of an unchanged URL spec. ``None`` when
-    there is no server entry, or when Home Assistant runs with ``skip_pip``,
-    where the component installs nothing and records nothing.
+    Compares the spec bring-up resolves now (the override, else the manifest
+    pin, read async) with the one the component recorded after its last
+    completed package step (``entry.data[DATA_LAST_PIP_SPEC]``, its own
+    bookkeeping, reported only as this boolean). True while a changed spec
+    waits for its install, after a deferred or failed install of it, and
+    before the entry's first bring-up (also while its access is off). It
+    compares spec strings, so a reinstall of an unchanged spec (a URL spec,
+    which reinstalls on every bring-up, or a requested repair) that is
+    deferred or fails still reads False. ``None`` when there is no server
+    entry, or when Home Assistant runs with ``skip_pip``, where the component
+    installs nothing and records nothing.
     """
     entry = _find_server_config_entry(hass)
     if entry is None or hass.config.skip_pip:

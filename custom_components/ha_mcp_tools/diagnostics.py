@@ -146,14 +146,13 @@ async def _async_server_summary(
     from .embedded_server import installed_ha_mcp_version
 
     options = entry.options
-    override = pip_spec_override(options)
     spec = await async_effective_pip_spec(hass, options)
     return {
         # Blocking dist-info read; the spec's distribution first, as bring-up.
         "installed_server_version": await hass.async_add_executor_job(
             installed_ha_mcp_version, version_dist(spec)
         ),
-        "package_override_set": bool(override),
+        "package_override_set": bool(pip_spec_override(options)),
         "access_enabled": access_enabled(entry),
         "running": server_running(hass),
         "bring_up_in_progress": bring_up_in_progress(hass),

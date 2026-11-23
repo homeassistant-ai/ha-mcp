@@ -58,12 +58,10 @@ async def fetch_server_entry_via_component(client: Any) -> dict[str, Any] | None
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_SERVER_ENTRY, exc)
         return None
-    except Exception as exc:  # noqa: BLE001
+    except Exception:
         # HomeAssistantConnectionError or any other error → legacy probe
         # (which rides the send_websocket_message bridge).
-        logger.warning(
-            "%s connection error; falling back to legacy: %r", WS_SERVER_ENTRY, exc
-        )
+        logger.warning("%s failed; fell back to legacy", WS_SERVER_ENTRY, exc_info=True)
         return None
     result = raw.get("result")
     if not isinstance(result, dict) or "entry_id" not in result:
@@ -73,34 +71,38 @@ async def fetch_server_entry_via_component(client: Any) -> dict[str, Any] | None
     return result
 
 
-async def install_pending(client: Any, warnings: list[str]) -> bool | None:
+async def install_pending(
+    client: Any, server_entry: dict[str, Any] | None, warnings: list[str]
+) -> bool | None:
     """Whether the component has yet to install the server entry's configured spec.
 
-    ``None`` when that is unknown: a component without the
-    ``server_entry_install_pending`` flag, or one whose read fails, adds a
+    ``server_entry`` is the ``fetch_server_entry_via_component`` result ``info``
+    already read. ``None`` when that is unknown: a component without the
+    ``server_entry_install_pending`` flag, or one whose read failed, adds a
     warning to update it; one that cannot tell (Home Assistant runs with
     ``skip_pip``) adds none. True adds a warning that the in-process server
     does not run the configured spec, whatever ``pip_spec`` says.
     """
     caps = await get_component_caps(client)
-    found = (
-        await fetch_server_entry_via_component(client)
-        if component_supports(caps, "server_entry_install_pending")
-        else None
-    )
-    if found is None:
+    if server_entry is None or not component_supports(
+        caps, "server_entry_install_pending"
+    ):
         warnings.append(
             "Update the ha_mcp_tools component to see whether the server "
             "entry's pip_spec is installed yet."
         )
         return None
-    pending = found.get("install_pending")
-    if pending is True:
+    pending = server_entry.get("install_pending")
+    if not isinstance(pending, bool):
+        return None
+    if pending:
         warnings.append(
             "The ha_mcp_tools component has not installed the server entry's "
             "pip_spec yet: its install is still running, was deferred or "
-            "failed, so the in-process server does not run that spec. If it "
-            "is still pending after a few minutes, reload the server entry or "
-            "restart Home Assistant, and check the Home Assistant log."
+            "failed, or the entry has not started (for instance with its "
+            "access switched off), so the in-process server does not run that "
+            "spec. If it is still pending after a few minutes, check that "
+            "access is on, reload the server entry or restart Home Assistant, "
+            "and check the Home Assistant log."
         )
-    return pending if isinstance(pending, bool) else None
+    return pending

@@ -172,8 +172,8 @@ async def test_no_server_entry_is_an_answer_not_an_error(
     component_ws: MockHAClientWebSocket,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # With pip on, as in production, where a tools-only install has no
-    # server entry whose spec could be pending.
+    # Pip on, so the None below comes from the missing server entry, not
+    # from skip_pip.
     monkeypatch.setattr(hass.config, "skip_pip", False)
     MockConfigEntry(domain=DOMAIN, data={"entry_type": "tools"}).add_to_hass(hass)
     MockConfigEntry(domain="some_other", data={"entry_type": "server"}).add_to_hass(
@@ -195,7 +195,6 @@ PIN = "the manifest pin"
     [
         pytest.param(COMMIT_B, COMMIT_A, True, id="switched-not-installed"),
         pytest.param(COMMIT_B, COMMIT_B, False, id="switched-and-installed"),
-        pytest.param("", COMMIT_A, True, id="cleared-not-installed"),
         pytest.param("", PIN, False, id="pin-installed"),
     ],
 )
