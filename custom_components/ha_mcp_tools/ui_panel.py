@@ -520,8 +520,9 @@ class _suppress_all:
 # settings app. The script is a separate string so the node syntax test can
 # parse it alone. Deliberately NOT registered in _js_harness._PY_RENDERERS
 # (importing this module needs Home Assistant installed, which would break the
-# harness for every surface); coverage = the node --check syntax test plus the
-# Python-side session/proxy tests in test_ui_panel.py.
+# harness for every surface); coverage = the node --check syntax test, the
+# Python-side session/proxy tests, and the JSDOM boot-link tests in
+# test_ui_panel.py.
 
 _BOOT_JS = f"""
 const SESSION_URL = {_SESSION_URL!r};
@@ -530,14 +531,10 @@ const APP_BASE_URL = {_APP_PREFIX!r} + "settings";
 // The settings page already understands both (activateTabFromQuery): the tab to
 // open, and the pending approval card to scroll to. Anything else in the panel
 // query is dropped -- it is untrusted input and the app has no contract for it.
-const PANEL_TAB_IDS = [
-  "tools",
-  "tool-security-policies",
-  "server",
-  "backups",
-  "entity-visibility",
-  "accessibility",
-];
+// The tab is checked by shape, not against a hand-kept list of ids: the app
+// ignores one it does not know, and a list here would silently drop a tab added
+// later.
+const PANEL_TAB_PATTERN = /^[a-z][a-z-]{{0,40}}$/;
 // Approval tokens are secrets.token_urlsafe(24): 32 URL-safe characters. The
 // length cap and the charset check keep a crafted link from carrying anything
 // else into the app.
@@ -586,7 +583,7 @@ function forwardedQuery(source) {{
   const params = new URLSearchParams();
   const from = new URLSearchParams(source);
   const tab = from.get("tab");
-  if (tab && PANEL_TAB_IDS.indexOf(tab) !== -1) params.set("tab", tab);
+  if (tab && PANEL_TAB_PATTERN.test(tab)) params.set("tab", tab);
   const token = from.get("token");
   if (token && token.length <= APPROVAL_TOKEN_MAX_LENGTH && APPROVAL_TOKEN_PATTERN.test(token)) {{
     params.set("token", token);
@@ -602,11 +599,31 @@ function buildAppUrl(search, language) {{
 }}
 
 function appUrl() {{
-  // The panel URL is the only place a notification link can name a tab and an
-  // approval card; carry them into the app instead of dropping them.
+  // On an embedded install the panel route is what a notification link can
+  // reach without the server's secret path; the settings page reads the same
+  // two parameters from its own URL.
   const root = homeAssistantRoot();
   const language = (root && root.hass && root.hass.language) || "";
   return buildAppUrl(parentSearch(window), language);
+}}
+
+function applyLink(force) {{
+  // A link that names nothing is the user leaving the panel: keep the app as
+  // it is instead of reloading it behind them.
+  if (!force && !parentSearch(window)) return;
+  const target = appUrl();
+  if (frame.getAttribute("src") !== target) frame.setAttribute("src", target);
+}}
+
+function watchParentNavigation() {{
+  // Following a notification link while the panel is already open only changes
+  // the parent's URL. Without this the app keeps the old link until the next
+  // session mint -- and that mint then reloads it at an arbitrary time.
+  try {{
+    if (window.parent === window) return;
+    window.parent.addEventListener("location-changed", function () {{ applyLink(false); }});
+    window.parent.addEventListener("popstate", function () {{ applyLink(false); }});
+  }} catch (err) {{ /* cross-origin parent: nothing to follow */ }}
 }}
 
 function showMessage(text, isError) {{
@@ -753,9 +770,7 @@ async function showApp() {{
     transientFailure("The settings UI returned HTTP " + probe.status + ".");
     return;
   }}
-  if (frame.getAttribute("src") !== targetUrl) {{
-    frame.setAttribute("src", targetUrl);
-  }}
+  applyLink(true);
   msg.classList.add("hidden");
   frame.classList.remove("hidden");
   if (!timer) {{
@@ -763,6 +778,7 @@ async function showApp() {{
   }}
 }}
 
+watchParentNavigation();
 mint();
 """
 
