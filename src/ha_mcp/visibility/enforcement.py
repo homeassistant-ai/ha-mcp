@@ -704,8 +704,10 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         args = context.message.arguments or {}
         # A gated write tool attaches the server's own best-practices text to its
         # result, and can attach it to its errors: the bundled guide, which
-        # ``ha_get_skill_guide`` serves ungated, and the checker's warnings. Their examples name entities
-        # (``light.bedroom``) that are not this install's.
+        # ``ha_get_skill_guide`` serves ungated, and the checker's warnings. Their
+        # fixed examples name entities (``light.bedroom``) that are not this
+        # install's; the variables-order warning also repeats key names from the
+        # config being written.
         guide = _GUIDE_KEYS if name in STRICT_BPS_GATED_TOOLS else ()
         try:
             result = await call_next(context)
