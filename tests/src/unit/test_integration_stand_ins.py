@@ -285,6 +285,53 @@ REFUSED = {
     "format-field-in-another-scripts-digits": (
         "MockModule('{\u0660}'.format('hassio'))\n"
     ),
+    "method-default-from-the-class-body": (
+        "class Helpers:\n    DOMAIN = 'hassio'\n    @staticmethod\n"
+        "    def register(name=DOMAIN):\n        MockModule(name)\n"
+        "Helpers.register()\n"
+    ),
+    "parametrize-rows-from-the-class-body": (
+        "class TestIt:\n    NAMES = ['hassio']\n"
+        "    @pytest.mark.parametrize('name', NAMES)\n"
+        "    def test_it(self, hass, name):\n        MockModule(name)\n"
+    ),
+    "pytest-under-another-name": (
+        "import pytest as pt\n@pt.mark.parametrize('name', ['hassio'])\n"
+        "def test_it(hass, name):\n    MockModule(name)\n"
+    ),
+    "mark-under-another-name": (
+        "from pytest import mark as m\n@m.parametrize('name', ['hassio'])\n"
+        "def test_it(hass, name):\n    MockModule(name)\n"
+    ),
+    "pytest-param-under-another-name": (
+        "import pytest as pt\n"
+        "for name in [pt.param('hassio', id='real')]:\n    MockModule(name)\n"
+    ),
+    "target-after-a-starred-one": (
+        "for label, *extras, name in [('case', 'hassio')]:\n    MockModule(name)\n"
+    ),
+    "target-after-a-starred-one-in-a-longer-row": (
+        "for label, *extras, name in [('case', 'x', 'y', 'hassio')]:\n"
+        "    MockModule(name)\n"
+    ),
+    "zip-column-after-a-starred-target": (
+        "for label, *rest, name in zip(['a'], ['b'], ['hassio']):\n"
+        "    MockModule(name)\n"
+    ),
+    "dict-value-after-a-starred-target": (
+        "for key, *rest, name in {'a': 'hassio'}.items():\n    MockModule(name)\n"
+    ),
+    "call-inside-a-comprehension": (
+        "rows = [MockModule(name) for name in ['hassio']]\n"
+    ),
+    "comprehension-over-a-helpers-parameter": (
+        "def register(names):\n    return [MockModule(n) for n in names]\n"
+        "register(['hassio'])\n"
+    ),
+    "name-a-comprehension-assigns": (
+        "def test_it(hass):\n    rows = [last := 'hassio' for _ in range(1)]\n"
+        "    MockModule(last)\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -450,7 +497,8 @@ def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
 def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, capsys):
     """Listed: a call's result, a fixture's value at each stand-in it reaches,
     ``*`` and ``**`` arguments, a collection one branch reads at runtime, and
-    a parameter ``parametrize`` gives a fixture. Left out: a parameter a call
+    a parameter ``parametrize`` gives a fixture, and a loop over a name nothing
+    binds. Left out: a parameter a call
     fills, one with a default, one ``parametrize`` fills, and a loop over a
     list known to be empty."""
     source = (
@@ -467,6 +515,7 @@ def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, c
         "for none in []:\n    MockModule(none)\n"
         "@pytest.mark.parametrize('name', ['hassio'], indirect=True)\n"
         "def test_indirect(hass, name):\n    MockModule(name)\n"
+        "for unbound in NOWHERE:\n    MockModule(unbound)\n"
     )
     repo = _repo(tmp_path, {_SAMPLE: source})
 
@@ -474,7 +523,7 @@ def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, c
 
     listed = [(2, "MockModule"), (4, "mock_component"), (5, "MockModule")]
     listed += [(6, "MockModule"), (7, "MockModule"), (11, "register")]
-    listed += [(21, "MockModule"), (26, "MockModule")]
+    listed += [(21, "MockModule"), (26, "MockModule"), (28, "MockModule")]
     assert (status, capsys.readouterr().out.splitlines()) == (
         0,
         [
@@ -561,6 +610,35 @@ ALLOWED = {
     "format-field-that-is-not-a-number": "MockModule('{\u00b2}'.format())\n",
     "format-field-too-long-for-a-number": (
         "MockModule('{" + "9" * 5000 + "}'.format('hassio'))\n"
+    ),
+    "class-name-a-method-body-does-not-see": (
+        "DOMAIN = 'made_up_probe'\nclass Helpers:\n    DOMAIN = 'hassio'\n"
+        "    @staticmethod\n    def register():\n        MockModule(DOMAIN)\n"
+        "Helpers.register()\n"
+    ),
+    "comprehension-target-after-the-comprehension": (
+        "def test_it(hass):\n    name = 'made_up_probe'\n"
+        "    rows = [name for name in ['hassio']]\n    MockModule(name)\n"
+    ),
+    "name-replaced-before-a-comprehension-reads-it": (
+        "def test_it(hass):\n    name = 'hassio'\n    name = 'made_up_probe'\n"
+        "    rows = [MockModule(name) for _ in range(2)]\n"
+    ),
+    "built-in-name-the-tests-define": (
+        "def sorted(rows):\n    return ['made_up_probe']\n"
+        "def test_it(hass):\n    for name in sorted(['hassio']):\n"
+        "        MockModule(name)\n"
+    ),
+    "mark-parametrize-of-a-local-object": (
+        "class Fake:\n    class mark:\n        @staticmethod\n"
+        "        def parametrize(names, rows):\n"
+        "            return lambda function: function\n"
+        "fake = Fake()\n@fake.mark.parametrize('name', ['hassio'])\n"
+        "def test_it(hass, name):\n    MockModule(name)\n"
+    ),
+    "target-before-a-starred-one": (
+        "for name, *extras, label in [('made_up_probe', 'hassio', 'x')]:\n"
+        "    MockModule(name)\n"
     ),
     "spread-call-with-a-default": (
         "def register(hass, name='hassio'):\n    MockModule(name)\n"

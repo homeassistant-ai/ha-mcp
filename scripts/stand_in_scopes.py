@@ -41,7 +41,8 @@ class ModuleRef(NamedTuple):
 
 
 class Each(NamedTuple):
-    """What a ``for`` takes from ``iterable``, or element ``column`` of it."""
+    """What a ``for`` takes from ``iterable``, or element ``column`` of it
+    (from the end when negative)."""
 
     iterable: ast.expr
     column: int | None
@@ -70,8 +71,11 @@ def bind_loop(
     scope: Scope, target: ast.expr, iterable: ast.expr, new: list[object]
 ) -> None:
     if isinstance(target, (ast.Tuple, ast.List)):
+        stars = [isinstance(element, ast.Starred) for element in target.elts]
         for index, element in enumerate(target.elts):
-            bind(scope, element, Each(iterable, index), new)
+            # A target after ``*rest`` is counted from the end of each row.
+            column = index - len(stars) if any(stars[:index]) else index
+            bind(scope, element, Each(iterable, column), new)
     else:
         bind(scope, target, Each(iterable, None), new)
 
@@ -140,10 +144,12 @@ def bind_parametrized(
     scope: Scope,
     text_of: Callable[[ast.expr], str | None],
     is_parametrize: Callable[[ast.expr], bool],
+    around: Chain,
 ) -> None:
     """Bind the values ``pytest.mark.parametrize`` gives each argument;
-    ``text_of`` reads argument names given through a name, and
-    ``is_parametrize`` says whether a decorator is pytest's own."""
+    ``text_of`` reads argument names given through a name,
+    ``is_parametrize`` says whether a decorator is pytest's own, and the rows
+    are read in ``around``, the scopes the decorator stands in."""
     for decorator in node.decorator_list:
         found = _parametrized(decorator, text_of, is_parametrize)
         if found is None:
@@ -152,7 +158,7 @@ def bind_parametrized(
         for index, name in enumerate(fields):
             column = index if len(fields) > 1 else None
             if name:
-                scope.setdefault(name, []).append((Each(rows, column), None))
+                scope.setdefault(name, []).append((Each(rows, column), around))
 
 
 def column_of(found: Sequence[Bound], column: int | None) -> list[Bound]:
@@ -162,5 +168,6 @@ def column_of(found: Sequence[Bound], column: int | None) -> list[Bound]:
     return [
         (element.elts[column], own)
         for element, own in found
-        if isinstance(element, (ast.Tuple, ast.List)) and len(element.elts) > column
+        if isinstance(element, (ast.Tuple, ast.List))
+        and -len(element.elts) <= column < len(element.elts)
     ]

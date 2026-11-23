@@ -50,6 +50,7 @@ from stand_in_allowlist import (  # type: ignore[import-not-found]
     load_allowlist,
 )
 from stand_in_resolver import (  # type: ignore[import-not-found]
+    COMPREHENSIONS,
     DEFINITIONS,
     ENDLESS,
     FUNCTIONS,
@@ -154,6 +155,9 @@ class Checker(Resolver):
         if isinstance(node, DEFINITIONS):
             self.visit_definition(module, node, chain)
             return
+        if isinstance(node, COMPREHENSIONS):
+            # Its targets are its own: nothing after it sees them.
+            chain = [*chain, self.scope_of(module, node, chain)]
         if isinstance(node, ast.Call):
             self.check_call(module, node, chain)
         for child in ast.iter_child_nodes(node):
@@ -170,8 +174,10 @@ class Checker(Resolver):
         else:
             header = [*node.args.defaults, *filter(None, node.args.kw_defaults)]
             header += node.decorator_list if isinstance(node, FUNCTIONS) else []
+        # Read where the definition stands: for a method, in its class's body.
+        around = self.header_scopes(node, chain)
         for child in header:
-            self.visit(module, child, chain)
+            self.visit(module, child, around)
         inner = [*chain, self.scope_of(module, node, chain)]
         body = node.body if isinstance(node.body, list) else [node.body]
         for statement in body:

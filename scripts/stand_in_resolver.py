@@ -50,6 +50,7 @@ NAME_HERE = "\x04"  # where the name goes in the text a helper puts around it
 MARKER = re.compile("\x02([0-9]+)\x03")
 FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 DEFINITIONS = (*FUNCTIONS, ast.Lambda, ast.ClassDef)
+COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 SEQUENCES = (ast.Tuple, ast.List, ast.Set)
 
 FunctionKey = tuple[str, str, int, int]
@@ -103,12 +104,20 @@ def function_key(module: str, node: ast.AST) -> tuple[str, str, int, int]:
     return (module, name, getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
 
 
+def _from_start(column: int | None, width: int) -> int | None:
+    """``column`` counted from the start of a row ``width`` long."""
+    return column + width if column is not None and column < 0 else column
+
+
 def _scope_nodes(scope: ast.AST) -> Iterator[ast.AST]:
-    """Nodes in one scope, leaving nested definitions' bodies to their own."""
+    """Nodes in one scope, leaving nested definitions' bodies, and the targets
+    of comprehensions inside it, to their own."""
+    own = {id(clause) for clause in getattr(scope, "generators", ())}
     pending = list(ast.iter_child_nodes(scope))
     while pending:
         node = pending.pop()
-        yield node
+        if not isinstance(node, ast.comprehension) or id(node) in own:
+            yield node
         if not isinstance(node, DEFINITIONS):
             pending += ast.iter_child_nodes(node)
 
@@ -123,6 +132,7 @@ class Resolver:
         self.params: list[Param] = []
         self.scopes: dict[int, Scope] = {}
         self.owners: dict[int, ast.AST] = {}  # the definition each scope is of
+        self.comprehensions: set[int] = set()  # the scopes of comprehensions
         self.functions: dict[int, FunctionKey] = {}
         self.methods: dict[int, ast.ClassDef] = {}  # each method's class
         # Each parameter's default, and the scopes it is read in.
@@ -203,6 +213,11 @@ class Resolver:
         self, module: Module, node: ast.AST, outer: Chain | None = None
     ) -> Scope:
         scope: Scope = {}
+        # Defaults and decorators are read where the definition stands.
+        around = self.header_scopes(node, outer or [module.top])
+        here = AsOf(
+            around, (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+        )
         if isinstance(node, (*FUNCTIONS, ast.Lambda)):
             key = function_key(module.name, node)
             for name in _parameters(node):
@@ -217,16 +232,14 @@ class Resolver:
             ]
             # A default applies where a call leaves the argument out (G1).
             for arg, default in defaults:
-                # Read as its scope stood where the function is defined.
-                here = AsOf(outer or [module.top], (node.lineno, node.col_offset))
                 self.defaults[(key, arg.arg)] = (default, here)
         if isinstance(node, FUNCTIONS):
-            around = outer or [module.top]
             bind_parametrized(
                 node,
                 scope,
-                lambda e: self._one_text(e, around),
-                lambda f: self._pytest_parametrize(f, around),
+                lambda e: self._one_text(e, here),
+                lambda f: self._pytest_parametrize(f, here),
+                here,
             )
             key = function_key(module.name, node)
             self.given |= {
@@ -256,23 +269,42 @@ class Resolver:
             spans = self.loops.setdefault(id(scope), [])
             spans.append(((node.lineno, node.col_offset), end))
 
-    def _pytest_parametrize(self, func: ast.expr, chain: Chain) -> bool:
-        """Whether ``func`` is pytest's own ``mark.parametrize``: read off the
-        imported ``pytest`` or ``mark`` (or a ``pytest`` nothing binds), not a
-        decorator the tests define under a similar name."""
-        dotted = ast.unparse(func).split(".")
-        if dotted[-2:] != ["mark", "parametrize"] or len(dotted) > 3:
-            return False
-        bound = self.lookup(dotted[0], chain)
-        if len(dotted) == 3:
-            return dotted[0] == "pytest" and all(
-                isinstance(value, ModuleRef) and value.module == "pytest"
-                for value, _ in bound
-            )
-        return any(
-            isinstance(value, Imported)
-            and (value.module, value.name) == ("pytest", "mark")
+    def header_scopes(self, node: ast.AST, outer: Chain) -> Chain:
+        """The scopes a definition's decorators and defaults are read in: for
+        a method its class's body too, which its own body does not see."""
+        owner = self.methods.get(id(node))
+        body = self.scopes.get(id(owner)) if owner is not None else None
+        return outer if body is None else [*outer, body]
+
+    def _is_pytest(self, name: str, chain: Chain) -> bool:
+        """Whether ``name`` is the pytest module: imported under that name
+        (``import pytest as pt``), or ``pytest`` where nothing binds it."""
+        bound = self.lookup(name, chain)
+        if not bound:
+            return name == "pytest"
+        return all(
+            isinstance(value, ModuleRef) and value.module == "pytest"
             for value, _ in bound
+        )
+
+    def _pytest_parametrize(self, func: ast.expr, chain: Chain) -> bool:
+        """Whether ``func`` is pytest's own ``mark.parametrize``, read off the
+        pytest module or an imported ``mark`` under whatever name, not a
+        decorator the tests define under a similar one."""
+        if not (isinstance(func, ast.Attribute) and func.attr == "parametrize"):
+            return False
+        mark = func.value
+        if isinstance(mark, ast.Name):
+            return any(
+                isinstance(value, Imported)
+                and (value.module, value.name) == ("pytest", "mark")
+                for value, _ in self.lookup(mark.id, chain)
+            )
+        return (
+            isinstance(mark, ast.Attribute)
+            and mark.attr == "mark"
+            and isinstance(mark.value, ast.Name)
+            and self._is_pytest(mark.value.id, chain)
         )
 
     def _one_text(self, node: ast.expr, chain: Chain) -> str | None:
@@ -329,6 +361,8 @@ class Resolver:
         if id(node) not in self.scopes:
             self.scopes[id(node)] = self._scope(module, node, outer)
             self.owners[id(self.scopes[id(node)])] = node
+            if isinstance(node, COMPREHENSIONS):
+                self.comprehensions.add(id(self.scopes[id(node)]))
         return self.scopes[id(node)]
 
     def enclosing_class(self, chain: Chain) -> list[Bound]:
@@ -343,15 +377,19 @@ class Resolver:
 
     def lookup(self, name: str, chain: Chain) -> list[Bound]:
         """What ``name`` is bound to. In scopes read as of a position, the
-        innermost scope gives what the name held there, and each value goes on
-        being read as of where it was bound."""
+        innermost scope (the one around it too, for a comprehension) gives
+        what the name held there, and each value goes on being read as of
+        where it was bound."""
         at = chain.at if isinstance(chain, AsOf) else None
         for depth in range(len(chain) - 1, -1, -1):
             if name not in chain[depth]:
+                # Only a comprehension reads the scope around it where it stands.
+                if id(chain[depth]) not in self.comprehensions:
+                    at = None
                 continue
             inner = chain[: depth + 1]
             bound = chain[depth][name]
-            if at is None or depth != len(chain) - 1:
+            if at is None:
                 return [(v, own if own is not None else inner) for v, own in bound]
             loops = self.loops.get(id(chain[depth]), [])
             return [
@@ -578,13 +616,13 @@ class Resolver:
             return [parts]
         _, first, scopes = shared[0]
         rows = self.items(first.iterable, scopes, seen)
-        width = max(each.column or 0 for _, each, _ in shared)
+        columns = {index: each.column or 0 for index, each, _ in shared}
         if not all(
-            isinstance(r, (ast.Tuple, ast.List)) and len(r.elts) > width
+            isinstance(r, (ast.Tuple, ast.List))
+            and all(-len(r.elts) <= c < len(r.elts) for c in columns.values())
             for r, _ in rows
         ):
             return [parts]
-        columns = {index: each.column or 0 for index, each, _ in shared}
         return [
             [
                 (row.elts[columns[index]], own or scopes) if index in columns else part
@@ -633,9 +671,8 @@ class Resolver:
         return []
 
     def _pytest_param(self, call: ast.Call, chain: Chain) -> bool:
-        """Whether ``call`` calls pytest's own ``param``: ``pytest.param`` where
-        ``pytest`` is the imported module (or is not bound at all), or a bare
-        ``param`` imported from pytest."""
+        """Whether ``call`` calls pytest's own ``param``: read off the pytest
+        module, or a bare ``param`` imported from pytest."""
         func = call.func
         if isinstance(func, ast.Name):
             return any(
@@ -643,16 +680,11 @@ class Resolver:
                 and (value.module, value.name) == ("pytest", "param")
                 for value, _ in self.lookup(func.id, chain)
             )
-        if not (
+        return (
             isinstance(func, ast.Attribute)
             and func.attr == "param"
             and isinstance(func.value, ast.Name)
-            and func.value.id == "pytest"
-        ):
-            return False
-        return all(
-            isinstance(value, ModuleRef) and value.module == "pytest"
-            for value, _ in self.lookup("pytest", chain)
+            and self._is_pytest(func.value.id, chain)
         )
 
     @staticmethod
@@ -720,7 +752,11 @@ class Resolver:
         """``items`` (mode "item") or ``dict_values`` of what ``node`` names; a
         parameter's are its marker in that mode and column."""
         found: list[Bound] = []
-        for value, own in self.objects(node, chain, seen):
+        held_by = self.objects(node, chain, seen)
+        if not held_by:
+            # Nothing the check reads binds the name: its items are runtime names.
+            return [(ast.Constant(None), chain)]
+        for value, own in held_by:
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 if match := MARKER.fullmatch(value.value):
                     function, param, _ = self.params[int(match.group(1))]
@@ -750,11 +786,15 @@ class Resolver:
             return []
         if isinstance(func, ast.Attribute) and not args:
             return self._view_items(func, chain, seen, column)
+        if isinstance(func, ast.Name) and self.lookup(func.id, chain):
+            return []  # the tests' own function under a built-in's name
         name = ast.unparse(func)
         if name == "enumerate" and args:
-            return self.items(args[0], chain, seen) if column == 1 else []
+            item = _from_start(column, 2) == 1
+            return self.items(args[0], chain, seen) if item else []
         if name == "zip":
-            if column is None or column >= len(args):
+            column = _from_start(column, len(args))
+            if column is None or not 0 <= column < len(args):
                 return []
             rows = self.items(args[column], chain, seen)
             lengths = [self._length(a, chain, seen) for a in args]
@@ -786,8 +826,9 @@ class Resolver:
             return self.items(func.value, chain, seen, column)
         if func.attr == "values":
             return self.dict_values(func.value, chain, seen, column)
-        if func.attr == "items" and column == 0:
+        pair = _from_start(column, 2)
+        if func.attr == "items" and pair == 0:
             return self.items(func.value, chain, seen)
-        if func.attr == "items" and column == 1:
+        if func.attr == "items" and pair == 1:
             return self.dict_values(func.value, chain, seen)
         return []
