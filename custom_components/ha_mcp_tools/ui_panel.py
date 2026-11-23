@@ -526,6 +526,23 @@ class _suppress_all:
 _BOOT_JS = f"""
 const SESSION_URL = {_SESSION_URL!r};
 const APP_BASE_URL = {_APP_PREFIX!r} + "settings";
+// Deep-link parameters the panel URL may carry into the embedded settings app.
+// The settings page already understands both (activateTabFromQuery): the tab to
+// open, and the pending approval card to scroll to. Anything else in the panel
+// query is dropped -- it is untrusted input and the app has no contract for it.
+const PANEL_TAB_IDS = [
+  "tools",
+  "tool-security-policies",
+  "server",
+  "backups",
+  "entity-visibility",
+  "accessibility",
+];
+// Approval tokens are secrets.token_urlsafe(24): 32 URL-safe characters. The
+// length cap and the charset check keep a crafted link from carrying anything
+// else into the app.
+const APPROVAL_TOKEN_MAX_LENGTH = 128;
+const APPROVAL_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
 // Re-mint at half the cookie lifetime so an open panel never expires mid-use.
 const REFRESH_MS = {_SESSION_TTL_SECONDS // 2} * 1000;
 // While the frontend is still booting (a cold start straight into this panel),
@@ -556,11 +573,36 @@ function homeAssistantRoot() {{
   }}
 }}
 
+function parentSearch() {{
+  try {{
+    if (window.parent === window) return "";
+    return window.parent.location.search || "";
+  }} catch (err) {{
+    return "";  // cross-origin parent: nothing to forward
+  }}
+}}
+
+function forwardedQuery(source) {{
+  const params = new URLSearchParams();
+  const from = new URLSearchParams(source);
+  const tab = from.get("tab");
+  if (tab && PANEL_TAB_IDS.indexOf(tab) !== -1) params.set("tab", tab);
+  const token = from.get("token");
+  if (token && token.length <= APPROVAL_TOKEN_MAX_LENGTH && APPROVAL_TOKEN_PATTERN.test(token)) {{
+    params.set("token", token);
+  }}
+  return params;
+}}
+
 function appUrl() {{
+  // The panel URL is the only place a notification link can name a tab and an
+  // approval card; carry them into the app instead of dropping them.
+  const params = forwardedQuery(parentSearch());
   const root = homeAssistantRoot();
   const language = root && root.hass && root.hass.language;
-  if (!language) return APP_BASE_URL;
-  return APP_BASE_URL + "?ha_lang=" + encodeURIComponent(language);
+  if (language) params.set("ha_lang", language);
+  const search = params.toString();
+  return APP_BASE_URL + (search ? "?" + search : "");
 }}
 
 function showMessage(text, isError) {{
