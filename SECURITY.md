@@ -409,7 +409,12 @@ is gated by a short-lived, HttpOnly session cookie that an authenticated
 **administrator** obtains through Home Assistant, and every proxied request
 re-validates that the session still maps to an active admin. The loopback secret
 path is never exposed to the browser and no token or secret is placed in a URL;
-the proxy returns 503 whenever the server is not running.
+the proxy returns 503 whenever the server is not running. The one value the
+panel does put in a URL is a pending approval token, when a notification link
+names a card (`/ha-mcp?tab=tool-security-policies&token=…`): it authorizes
+nothing by itself — without the administrator session the policy endpoints
+answer 401 — and the same token is already carried by
+`ha_mcp_approval_requested` and by the `USER_APPROVAL_REQUIRED` error.
 
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)
 
