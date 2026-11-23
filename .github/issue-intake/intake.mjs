@@ -227,7 +227,7 @@ export const isHuman = (user) => user?.type === "User" && user.login !== "ghhamc
 // The API allows an issue without a user; its author is then named "ghost",
 // the login GitHub gives a deleted account.
 export const authorLogin = (issue) => issue.user?.login ?? "ghost";
-const isMaintainer = (role) => ["maintain", "admin"].includes(role);
+export const isMaintainer = (role) => ["maintain", "admin"].includes(role);
 const timestamp = (item) => item.updated_at ?? item.created_at;
 export const latestEvent = (events, predicate) =>
   events

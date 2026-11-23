@@ -75,6 +75,13 @@ def test_report_gate_runs_trusted_code_and_mints_write_access_only_to_act() -> N
     # Bot events (the gate's own close/reopen/comment) must not re-enter it.
     assert "github.event.sender.type == 'User'" in gate["if"]
     assert "!github.event.issue.pull_request" in gate["if"]
+    # Both applying and withdrawing the manual override must reach the gate.
+    required_label = "bug report output required"
+    for action in ("labeled", "unlabeled"):
+        condition = next(
+            line for line in gate["if"].split(" || ") if f"== '{action}'" in line
+        )
+        assert required_label in condition
     # A comment edited to add the report must be able to reopen the issue.
     assert '"edited"' in gate["if"].split("github.event_name == 'issue_comment'")[1]
     steps = gate["steps"]

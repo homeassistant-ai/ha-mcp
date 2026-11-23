@@ -119,6 +119,7 @@ Triage-state labels:
 | `ready-to-implement` | Clear path with no unresolved decisions. |
 | `needs-choices` | Multiple approaches need stakeholder input. |
 | `needs-info` | Awaiting the reporter. Any label application starts reminders on days 3/5/6 and closure on day 7; a reporter reply after labeling removes it. See [issue intake](issue-intake.md). |
+| `bug report output required` | A maintainer or admin requires generated output. The reporter has 24 hours from labeling to supply it. See [issue intake](issue-intake.md#report-gate). |
 | `missing bug report output` | A bug report with neither an `ha_report_issue` report nor a reason. The report gate applies it and closes the issue after 24 hours; adding either clears it, and a maintainer removing it waives the requirement. See [issue intake](issue-intake.md#report-gate). |
 | `priority: high/medium/low` | Relative priority. |
 | `triaged` | Historical marker from the retired triage bot. |
@@ -263,7 +264,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `dev-ha-env.yml` | Manual, forks only | Live throwaway HA (Docker or HAOS) running a branch's server standalone, embedded or as the app, behind encrypted-URL tunnels; see [`docs/dev-ha-env.md`](../dev-ha-env.md). |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
 | `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides, after the report gate. |
-| `report-gate.yml` | Hourly or manual | Close bug reports whose `missing bug report output` label is 24 hours old. |
+| `report-gate.yml` | Hourly or manual | Close bug reports still missing the answer required by their report label after 24 hours. |
 | `slash-agent.yml` | Maintainer slash command, trusted continuation event, or manual | Issue response and issue-to-PR implementation through readiness. |
 | `slash-agent-review-event.yml` | PR review or inline comment | Secretless wakeup for the slash controller; it reads no PR code. |
 | `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |

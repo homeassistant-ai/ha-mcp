@@ -5,6 +5,9 @@ name: Close issues still missing a report
 # once the label is 24 hours old, or clears the label if the answer arrived
 # without an event the gate saw. A maintainer removing the label stops it.
 on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/report-gate.yml]
   schedule:
     - cron: "47 * * * *"
   workflow_dispatch:
@@ -18,8 +21,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ensure-label:
+    if: github.event_name == 'push' && github.repository == 'homeassistant-ai/ha-mcp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      issues: write
+    steps:
+      - name: Make the maintainer override available in the label picker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/labels/bug%20report%20output%20required" --silent ||
+            gh label create "bug report output required" --repo "$GITHUB_REPOSITORY" \
+              --color b60205 --description "Maintainer requires generated ha_report_issue output within 24 hours"
+
   sweep:
-    if: github.repository == 'homeassistant-ai/ha-mcp'
+    if: github.event_name != 'push' && github.repository == 'homeassistant-ai/ha-mcp'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
