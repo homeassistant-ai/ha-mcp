@@ -14,14 +14,18 @@ backup manager.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 
+from custom_components.ha_mcp_tools import SERVICE_READ_LEGACY_BACKUP
+from custom_components.ha_mcp_tools.const import DOMAIN
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -31,22 +35,18 @@ from ha_mcp.visibility.model import VisibilityConfig
 
 from .._backup_core import backup_settings as backup_settings
 from .._backup_core import manage_backup
+from .._config_dir_yaml import write_config_files
 from .._core_setup import set_up_tools_entry
 from .._visibility_core import enforce_hiding, error_code
 
 HIDDEN = "script.secret_door"
 DEFINING = "www/a.yaml"
+CLEAR = "www/b.yaml"
 SCRIPTS = "secret_door:\n  sequence: []\n# 30000\n"
-
-
-async def _write(hass: HomeAssistant, path: str, text: str) -> None:
-    target = Path(hass.config.path(path))
-
-    def write() -> None:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
-
-    await hass.async_add_executor_job(write)
+DEFINING_CONFIG = {
+    "configuration.yaml": f"script: !include {DEFINING}\n",
+    DEFINING: SCRIPTS,
+}
 
 
 async def _read(hass: HomeAssistant, path: str) -> str | None:
@@ -67,8 +67,7 @@ async def manager(
     from ``www/a.yaml``, with the File & YAML Tools entry set up."""
     assert await async_setup_component(hass, "config", {})
     await set_up_tools_entry(hass)
-    await _write(hass, "configuration.yaml", f"script: !include {DEFINING}\n")
-    await _write(hass, DEFINING, SCRIPTS)
+    await write_config_files(hass, DEFINING_CONFIG)
     return bm.get_backup_manager(component_core_client, backup_settings)
 
 
@@ -125,6 +124,8 @@ async def test_a_backup_of_a_file_defining_a_hidden_item_is_not_read_out(
     file does, and a restore would write over it."""
     snapshot = await manager.maybe_snapshot(domain, target, force=True)
     assert snapshot is not None
+    later = SCRIPTS + "# later\n"
+    await write_config_files(hass, {DEFINING: later})
     enforce_hiding(set_config, HIDDEN)
 
     with pytest.raises(ToolError) as excinfo:
@@ -136,7 +137,7 @@ async def test_a_backup_of_a_file_defining_a_hidden_item_is_not_read_out(
         )
 
     assert error_code(excinfo) == "ENTITY_VISIBILITY_ENFORCED"
-    assert await _read(hass, DEFINING) == SCRIPTS
+    assert await _read(hass, DEFINING) == later
     assert [s["name"] for s in _file_snapshots(manager)] == [snapshot.name]
 
 
@@ -166,9 +167,10 @@ async def test_no_backup_is_taken_of_a_file_defining_a_hidden_item(
     [
         pytest.param("configuration.yaml.20260101_120000.bak", id="defining-file"),
         pytest.param("packages_my_pkg.yaml.20260101_120000.bak", id="ambiguous-path"),
+        pytest.param("packages_.20260101_120000.bak", id="folder-path"),
     ],
 )
-async def test_a_legacy_backup_is_not_read_out_unless_its_file_is_known_clear(
+async def test_a_legacy_backup_of_a_hidden_or_unknown_file_is_not_read_out(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
     manager: bm.BackupManager,
@@ -177,10 +179,13 @@ async def test_a_legacy_backup_is_not_read_out_unless_its_file_is_known_clear(
 ) -> None:
     """A legacy backup names its file only through its own name; one whose name
     fits more than one file cannot be checked and is refused."""
-    await _write(
-        hass, "configuration.yaml", "script:\n  secret_door:\n    sequence: []\n"
+    await write_config_files(
+        hass,
+        {
+            "configuration.yaml": "script:\n  secret_door:\n    sequence: []\n",
+            f".ha_mcp_tools_backups/{bak}": "a: 1\n",
+        },
     )
-    await _write(hass, f".ha_mcp_tools_backups/{bak}", "a: 1\n")
     enforce_hiding(set_config, HIDDEN)
 
     with pytest.raises(ToolError) as excinfo:
@@ -205,8 +210,7 @@ async def test_without_the_tools_entry_a_change_reports_the_missing_entry(
     """The entry is what the user can fix, so it is named before the check of
     a file the tools cannot touch anyway."""
     assert await async_setup_component(hass, "config", {})
-    await _write(hass, "configuration.yaml", f"script: !include {DEFINING}\n")
-    await _write(hass, DEFINING, SCRIPTS)
+    await write_config_files(hass, DEFINING_CONFIG)
     enforce_hiding(set_config, HIDDEN)
     tools = FilesystemTools(component_core_client)
 
@@ -217,3 +221,167 @@ async def test_without_the_tools_entry_a_change_reports_the_missing_entry(
             await tools.ha_write_file(path=DEFINING, content="x: 1\n", overwrite=True)
 
     assert error_code(excinfo) == "COMPONENT_NOT_INSTALLED"
+
+
+async def test_a_file_defining_nothing_hidden_is_still_written_with_a_backup(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """The refusals above are about the file, not about enforce mode."""
+    await write_config_files(hass, {CLEAR: "x: 1\n"})
+    enforce_hiding(set_config, HIDDEN)
+
+    await FilesystemTools(component_core_client).ha_write_file(
+        path=CLEAR, content="x: 2\n", overwrite=True
+    )
+
+    assert await _read(hass, CLEAR) == "x: 2\n"
+    assert [s["entity_id"] for s in _file_snapshots(manager)] == [CLEAR]
+
+
+@pytest.mark.parametrize(
+    ("domain", "target"),
+    [("file", CLEAR), ("yaml", "configuration.yaml::script"), ("legacy", "")],
+)
+async def test_a_backup_of_a_file_defining_nothing_hidden_is_shown(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+    domain: str,
+    target: str,
+) -> None:
+    """A backup whose file is known and defines nothing hidden stays readable."""
+    bak = "packages_clear.yaml.20260101_120000.bak"
+    await write_config_files(
+        hass, {CLEAR: "x: 1\n", f".ha_mcp_tools_backups/{bak}": "a: 1\n"}
+    )
+    if domain == "legacy":
+        name = f"legacy:{bak}"
+    else:
+        snapshot = await manager.maybe_snapshot(domain, target, force=True)
+        assert snapshot is not None
+        name = snapshot.name
+    enforce_hiding(set_config, HIDDEN)
+
+    result = await manage_backup(
+        component_core_client, scope="edits", action="view", backup_name=name
+    )
+
+    assert result["success"] is True
+
+
+async def test_a_backup_is_taken_of_a_file_defining_nothing_hidden(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    await write_config_files(hass, {CLEAR: "x: 1\n"})
+    enforce_hiding(set_config, HIDDEN)
+
+    await manage_backup(
+        component_core_client,
+        scope="edits",
+        action="create",
+        domain="file",
+        entity_id=CLEAR,
+    )
+
+    assert [s["entity_id"] for s in _file_snapshots(manager)] == [CLEAR]
+
+
+async def test_a_legacy_backup_whose_read_failed_is_not_shown_on_the_retry(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """The check's read of the backup fails; the action's own read, once the
+    component answers again, would hand out the hidden definition unchecked."""
+    bak = "configuration.yaml.20260101_120000.bak"
+    await write_config_files(
+        hass,
+        {
+            "configuration.yaml": "script:\n  secret_door:\n    sequence: []\n",
+            f".ha_mcp_tools_backups/{bak}": "script:\n  secret_door: {}\n",
+        },
+    )
+    enforce_hiding(set_config, HIDDEN)
+    native = hass.services.async_services()[DOMAIN][SERVICE_READ_LEGACY_BACKUP]
+    unanswered = 0
+
+    async def fail_first_read(call: ServiceCall) -> Any:
+        nonlocal unanswered
+        if not unanswered:
+            unanswered += 1
+            raise HomeAssistantError("busy")
+        reply = native.job.target(call)
+        return await reply if inspect.isawaitable(reply) else reply
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_READ_LEGACY_BACKUP,
+        fail_first_read,
+        schema=native.schema,
+        supports_response=native.supports_response,
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await manage_backup(
+            component_core_client,
+            scope="edits",
+            action="view",
+            backup_name=f"legacy:{bak}",
+        )
+
+    assert unanswered == 1
+    assert error_code(excinfo) == "ENTITY_VISIBILITY_ENFORCED"
+
+
+async def test_an_invalid_snapshot_is_reported_as_invalid_while_enforcing(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """The action reads a snapshot the same way, so its own error says what is
+    wrong with it."""
+    await write_config_files(hass, {CLEAR: "x: 1\n"})
+    snapshot = await manager.maybe_snapshot("file", CLEAR, force=True)
+    assert snapshot is not None
+    await hass.async_add_executor_job(snapshot.write_text, "- not a snapshot\n")
+    enforce_hiding(set_config, HIDDEN)
+
+    with pytest.raises(ToolError) as excinfo:
+        await manage_backup(
+            component_core_client,
+            scope="edits",
+            action="view",
+            backup_name=snapshot.name,
+        )
+
+    assert error_code(excinfo) == "VALIDATION_INVALID_PARAMETER"
+
+
+async def test_a_backup_target_naming_no_file_is_refused_while_enforcing(
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """A ``yaml`` target without ``::`` names no file the check could judge."""
+    enforce_hiding(set_config, HIDDEN)
+
+    with pytest.raises(ToolError) as excinfo:
+        await manage_backup(
+            component_core_client,
+            scope="edits",
+            action="create",
+            domain="yaml",
+            entity_id=DEFINING,
+        )
+
+    assert error_code(excinfo) == "ENTITY_VISIBILITY_ENFORCED"
+    assert _file_snapshots(manager) == []

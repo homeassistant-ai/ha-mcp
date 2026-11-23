@@ -69,10 +69,10 @@ class PathNotAllowedError(ToolError):
     subset of the read gate, so a path the read refuses, the wrapped write or
     delete would refuse too (#2908). The message names no operation and leaves
     out the component's read allowlist, which would mislead a write; the
-    component's own text stays in ``context``. ``custom_path_allowed`` and
-    ``volume_roots`` come with the component's refusal: whether its settings
-    UI would take the path as a custom path (``None`` from a component that
-    predates them).
+    component's own text stays in ``context``. The component's refusal also
+    says whether its settings UI would take the path as a custom path
+    (``custom_path_allowed``, ``None`` from a component that predates it) and
+    which absolute roots that UI accepts (``volume_roots``).
     """
 
     def __init__(
@@ -313,8 +313,9 @@ def with_auto_backup(
 
     ``precheck`` optionally refuses the call before anything is captured, with
     the client, the tool's name and its kwargs, so a refused call leaves no
-    snapshot behind. Unless ``skip_fn`` skips the decorator, it runs
-    whether or not a capture would be taken.
+    snapshot behind. It runs after the mandatory toggle check and outside the
+    write guard, whether or not a capture would be taken; an error it raises
+    other than a ``ToolError`` is reported as a structured error.
 
     ``mandatory=True`` makes auto-backup a precondition (file/YAML writes,
     #1579 — those formerly kept their own private backups). It fails the
@@ -341,9 +342,10 @@ def with_auto_backup(
     def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Read-only previews need no capture. Delegated writes acquire
-            # their own guard and snapshot after resolving or confirming the
-            # target, so they also bypass this outer capture and refusal.
+            # Calls that cannot write (previews, unconfirmed deletes) need no
+            # capture or precheck. Delegated writes acquire their own guard and
+            # snapshot after resolving or confirming the target, so they also
+            # bypass this outer capture and refusal.
             if skip_fn is not None and skip_fn(kwargs):
                 return await func(*args, **kwargs)
             # Settings + target resolution happen OUTSIDE the best-effort
@@ -377,10 +379,8 @@ def with_auto_backup(
                         },
                     )
                 )
-            if precheck is not None:
-                await precheck(
-                    _resolve_backup_client(explicit_client, args), func.__name__, kwargs
-                )
+            backup_client = _resolve_backup_client(explicit_client, args)
+            await _run_precheck(precheck, backup_client, func.__name__, kwargs)
             snap_domain, entity_id = _resolve_snapshot_target(
                 kwargs,
                 domain=domain,
@@ -389,7 +389,7 @@ def with_auto_backup(
                 id_fn=id_fn,
             )
             async with _template_write_context(
-                _resolve_backup_client(explicit_client, args),
+                backup_client,
                 settings,
                 snap_domain,
                 entity_id,
@@ -461,6 +461,23 @@ async def _template_write_context(
             yield
     else:
         yield
+
+
+async def _run_precheck(
+    precheck: Callable[[Any, str, dict[str, Any]], Awaitable[None]] | None,
+    client: Any,
+    tool_name: str,
+    kwargs: dict[str, Any],
+) -> None:
+    """Run ``with_auto_backup``'s precheck, outside the tool's own error handling."""
+    if precheck is None:
+        return
+    try:
+        await precheck(client, tool_name, kwargs)
+    except ToolError:
+        raise
+    except Exception as err:  # noqa: BLE001 - classified, not swallowed
+        exception_to_structured_error(err, {"tool_name": tool_name})
 
 
 def _resolve_backup_client(explicit_client: Any, args: tuple[Any, ...]) -> Any:

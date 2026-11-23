@@ -255,7 +255,8 @@ async def test_parallel_writes_snapshot_and_write_one_at_a_time(
         other = YamlConfigTools(tools_client).ha_config_set_yaml(
             yaml_path="dark",
             action="replace",
-            content="primary-color: red\n",
+            # Keeps the edited text, so either call can take the lock first.
+            content="primary-color: '30000'\naccent-color: red\n",
             file="themes/dark.yaml",
         )
     events: list[str] = []

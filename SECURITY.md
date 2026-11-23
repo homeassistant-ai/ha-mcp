@@ -149,22 +149,24 @@ surface a hidden entity_id are refused on contact. A hidden script, scene or
 automation addressed by its bare storage key or config `id` (the registry
 `unique_id`) rather than its entity_id is concealed the same way, including
 its traces. A `script.<storage key>` service call is concealed, and a config
-body or result that names one is refused. A config-file read or edit is
-refused when the file holds part of a hidden script, scene or automation's
+body or result that names one is refused. A config-file read (`ha_read_file`,
+`ha_config_get_yaml`), an `ha_write_file` write or an `ha_delete_file` delete
+is refused when the file holds part of a hidden script, scene or automation's
 definition as Home Assistant's loader reads the configuration, `!include`,
 `!include_dir_*` and packages included (judged per file, whatever slice was
-asked for). A copy Home Assistant does not load defines nothing and stays
-readable. A file that holds a single value, or no text at all (only numbers,
-booleans or nulls), can stay readable too: `!include` names the included value
-after the including file, and `!include_dir_merge_list` keeps only each file's
-items. Core's log files and `secrets.yaml` are not checked. An `ha_write_file`
-write or `ha_delete_file` delete of such a file is refused before its
-auto-backup is taken, and `ha_manage_backup(scope="edits")` refuses to show,
-compare, restore or take a backup of a file while the file defines a hidden
-item; a legacy backup whose name fits more than one file is refused while
-anything is hidden. The check judges the file as it is now: any backup whose
-file no longer defines the item stays readable, including one taken by an
-`ha_config_set_yaml` write, which is not checked. Those enforced
+asked for); the write and delete are refused before their auto-backup is taken.
+A copy Home Assistant does not load defines nothing and stays readable. A file
+that holds a single value, or no text at all (only numbers, booleans or nulls),
+can stay readable too: `!include` names the included value after the including
+file, and `!include_dir_merge_list` keeps only each file's items. Core's log
+files and `secrets.yaml` are not checked. `ha_manage_backup(scope="edits")`
+refuses to show, compare, restore or take a backup of a file while the file
+defines a hidden item, and, while enforce mode hides a script, scene or
+automation, a backup whose file it cannot tell (a legacy backup that could not
+be read, or whose name does not map to exactly one file). The check judges the
+file as it is now: any backup whose file no longer defines the item stays
+readable, including one taken by an `ha_config_set_yaml` write, which is not
+checked. Those enforced
 paths fail closed when registry data or the configuration cannot be loaded, or
 the component cannot be reached or lacks the check.
 

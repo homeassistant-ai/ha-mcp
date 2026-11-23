@@ -478,17 +478,27 @@ async def _refuse_hidden_file_backup(
     client: Any, mgr: BackupManager, bname: str
 ) -> None:
     """Refuse a backup of a config file that defines a hidden item. A backup
-    that cannot be read is left to the action, which reports why."""
+    that does not exist, or a snapshot that cannot be parsed, is left to the
+    action, which reports it. A legacy backup that cannot be read counts as
+    naming no file: when the component could not be reached, the action asks
+    again and may get its content."""
+    domain, target = "yaml_file", None
     try:
         if bname.startswith(LEGACY_PREFIX):
             info = await mgr.read_legacy(bname[len(LEGACY_PREFIX) :])
-            path = None if info.get("path_ambiguous", True) else info.get("file_path")
-            await refuse_reading_hidden_backup(client, "yaml_file", path)
-            return
-        data = await asyncio.to_thread(mgr.read_snapshot, bname)
-    except OSError, ValueError:
+            if not info.get("path_ambiguous", True):
+                target = info.get("file_path")
+        else:
+            data = await asyncio.to_thread(mgr.read_snapshot, bname)
+            domain, target = data.get("domain", domain), data.get("entity_id")
+    except FileNotFoundError:
         return
-    await refuse_reading_hidden_backup(client, data["domain"], data["entity_id"])
+    except ValueError:
+        if not bname.startswith(LEGACY_PREFIX):
+            return
+    except OSError:
+        pass
+    await refuse_reading_hidden_backup(client, domain, target)
 
 
 async def _edits_create(

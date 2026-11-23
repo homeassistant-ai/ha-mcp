@@ -1,4 +1,4 @@
-"""Enforce-mode guard for config-file reads and edits (``ha_read_file``,
+"""Enforce-mode guard for config-file reads and changes (``ha_read_file``,
 ``ha_write_file``, ``ha_delete_file``, ``ha_config_get_yaml``, and the file
 backups of ``ha_manage_backup(scope="edits")``).
 
@@ -12,10 +12,10 @@ knows, so the component answers from the configuration as Core loads it
 call, only in enforce mode; the component skips the load for its logs and
 ``secrets.yaml``.
 
-The check asks about the file as Core loads it now, so a backup of the file
-would outlive it: the file tools refuse before their pre-write snapshot, and
-the backup tool refuses to read, compare, restore or take a backup of a file
-while it defines a hidden item.
+The check asks about the file as Core loads it now, so a backup keeps the
+content after the file stops defining the item: the file tools refuse before
+their pre-write snapshot, and the backup tool refuses to read, compare,
+restore or take a backup of a file while it defines a hidden item.
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ async def refuse_reading_hidden_definitions(
     client: Any, tool_name: str, paths: Iterable[str | None]
 ) -> None:
     """Refuse the call when any file in ``paths`` defines a hidden item, or
-    when the component cannot tell. ``None`` stands for a file nobody can name
-    (a legacy backup whose original path is ambiguous), and is refused."""
+    when the component cannot tell. ``None`` stands for a file that cannot be
+    named (a backup whose file is not known), and is refused."""
     from ..visibility.enforcement import (
         active_identifier_aliases,
         refuse_hidden_config_file,
@@ -54,7 +54,7 @@ async def refuse_reading_hidden_definitions(
         _refuse_unchecked(
             tool_name,
             ErrorCode.ENTITY_VISIBILITY_ENFORCED,
-            "The backup does not say which file it was taken of.",
+            "Which file the backup belongs to is not known.",
         )
     try:
         caps = await get_component_caps(client, strict=True)
@@ -64,8 +64,9 @@ async def refuse_reading_hidden_definitions(
         raise_tool_error(
             create_error_response(
                 ErrorCode.COMPONENT_NOT_INSTALLED,
-                "While enforce mode hides a script, scene or automation, reading "
-                "or editing a config file needs a newer ha_mcp_tools component.",
+                "While enforce mode hides a script, scene or automation, reading, "
+                "changing or backing up a config file needs a newer ha_mcp_tools "
+                "component.",
                 suggestions=[
                     "Update the HA-MCP integration through the Marketplace",
                     "Restart Home Assistant after the update completes",
@@ -73,7 +74,7 @@ async def refuse_reading_hidden_definitions(
                 context={"tool": tool_name},
             )
         )
-    items = await ask_component(client, _CAPABILITY, paths=list(paths))
+    items = await ask_component(client, _CAPABILITY, paths=paths)
     if items is None:
         _refuse_unchecked(tool_name, ErrorCode.SERVICE_CALL_FAILED, None)
     if "error" in items:
@@ -91,9 +92,9 @@ async def refuse_changing_hidden_definitions(
     client: Any, tool_name: str, kwargs: dict[str, Any]
 ) -> None:
     """Refuse a write or delete of ``kwargs["path"]`` before its snapshot is
-    taken (``with_auto_backup``'s ``precheck``). Which edit failed would also
-    tell whether a guessed text is in the file. A missing tools entry, which the
-    user can fix, is reported first."""
+    taken (``with_auto_backup``'s ``precheck``). For ``edits=``, which edit
+    failed would also tell whether a guessed text is in the file. A missing
+    File & YAML Tools entry, which the user can fix, is reported first."""
     from .tools_filesystem import _assert_mcp_tools_available
 
     await _assert_mcp_tools_available(client)
@@ -104,12 +105,15 @@ async def refuse_reading_hidden_backup(
     client: Any, domain: str, target: str | None
 ) -> None:
     """Refuse ``ha_manage_backup`` on a backup of a config file that defines a
-    hidden item. A ``yaml`` backup's target is ``{file}::{yaml_path}``; other
-    domains hold no config file and pass."""
+    hidden item. ``file`` and ``yaml_file`` backups name the file; a ``yaml``
+    backup's target is ``{file}::{yaml_path}``; all other domains hold no config
+    file and pass. A target that names no file (empty, or a folder) is refused."""
     if domain == "yaml":
-        target = (target or "").rpartition("::")[0] or None
+        target = (target or "").rpartition("::")[0]
     elif domain not in ("file", "yaml_file"):
         return
+    if not target or target.endswith("/"):
+        target = None
     await refuse_reading_hidden_definitions(client, "ha_manage_backup", [target])
 
 
@@ -118,7 +122,7 @@ def _refuse_unchecked(tool_name: str, code: ErrorCode, details: str | None) -> N
         create_error_response(
             code,
             "Could not check whether the file defines a hidden script, scene or "
-            "automation, so it is neither read nor edited.",
+            "automation, so the call is refused.",
             details=details,
             context={"tool": tool_name},
         )

@@ -1061,22 +1061,25 @@ dimension. What it covers:
   with `domain: script` and that key as `service`, is concealed as not-found
   too. A script or automation body that calls `script.<storage key>`, a raw
   `trace/*` command or result naming the key, and an `ha_read_file` /
-  `ha_config_get_yaml` read, an `ha_write_file` write or `ha_delete_file`
+  `ha_config_get_yaml` read, an `ha_write_file` write or an `ha_delete_file`
   delete of a file that defines a hidden item are refused, the write and
-  delete before their auto-backup is taken. `ha_manage_backup(scope="edits")`
-  likewise refuses to show, compare, restore or take a backup of such a file.
-  Any backup whose file no longer defines the item stays readable, including
-  one taken by an `ha_config_set_yaml` write, which is not checked. A file defines one when Home Assistant's
-  loader takes part of the item's definition from it: `scripts.yaml`,
-  `scenes.yaml` and `automations.yaml`, a package, or any file pulled in with
-  `!include` or `!include_dir_*`. The whole file counts, even when only a
-  `tail_lines` or `yaml_path` slice is asked for. A copy Home Assistant does
-  not load stays readable. A file that holds a single value, or no text at all
-  (only numbers, booleans or nulls), can stay readable too: `!include` names
-  the included value after the including file, and `!include_dir_merge_list`
-  keeps only each file's items. Core's log files and `secrets.yaml` are not
-  checked. If the configuration does not load, or the component cannot be
-  reached or lacks the check, these reads and edits are refused. Elsewhere,
+  delete before their auto-backup is taken. A file defines a hidden item when
+  Home Assistant's loader takes part of the item's definition from it:
+  `scripts.yaml`, `scenes.yaml` and `automations.yaml`, a package, or any file
+  pulled in with `!include` or `!include_dir_*`. The whole file counts, even
+  when only a `tail_lines` or `yaml_path` slice is asked for. A copy Home
+  Assistant does not load stays readable. A file that holds a single value, or
+  no text at all (only numbers, booleans or nulls), can stay readable too:
+  `!include` names the included value after the including file, and
+  `!include_dir_merge_list` keeps only each file's items. Core's log files and
+  `secrets.yaml` are not checked. `ha_manage_backup(scope="edits")` likewise
+  refuses to show, compare, restore or take a backup of a file that defines a
+  hidden item, and a legacy backup that could not be read or whose name does
+  not map to exactly one file. Any backup whose file no longer defines the
+  item stays readable, including one taken by an `ha_config_set_yaml` write,
+  which is not checked.
+  If the configuration does not load, or the component cannot be reached or
+  lacks the check, these calls are refused. Elsewhere,
   because keys and ids now count, enforce mode can also refuse a read that
   only shares a hidden entity's key or id.
   An automation's bare `identifier` is only ever read as its config `id`.

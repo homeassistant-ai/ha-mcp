@@ -20,7 +20,11 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
-from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
+from custom_components.ha_mcp_tools.const import (
+    ALLOWED_VOLUME_ROOTS,
+    DOMAIN,
+    TOOLS_ENTRY_TITLE,
+)
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import (
     BackupManager,
@@ -37,6 +41,7 @@ from ._backup_core import snapshot_manager as snapshot_manager
 from ._tool_errors import error_body
 
 READ_REFUSAL = "Path not allowed. Allowed paths: www/**, blueprints/**"
+ONLY_UNDER_ROOTS = f"only under {', '.join(ALLOWED_VOLUME_ROOTS)};"
 
 
 @pytest.fixture
@@ -107,8 +112,8 @@ async def test_refused_path_write_reports_the_refusal(
     [
         ("pyscript/x.py", "add it"),
         ("/share/notes.md", "add it"),
-        ("/backup/x.txt", "only under /share, /media, /ssl;"),
-        ("/sharefoo/x.txt", "only under /share, /media, /ssl;"),
+        ("/backup/x.txt", ONLY_UNDER_ROOTS),
+        ("/sharefoo/x.txt", ONLY_UNDER_ROOTS),
         (".storage/auth", "never available"),
         ("pyscript/.storage/x", "never available"),
         ("www/secrets.yaml", "never available"),
@@ -137,10 +142,19 @@ async def test_a_refusal_without_the_verdict_suggests_no_custom_path() -> None:
     assert "never available" not in error
 
 
+def _refusal() -> PathNotAllowedError:
+    return PathNotAllowedError(
+        "/backup/x.txt",
+        READ_REFUSAL,
+        custom_path_allowed=False,
+        volume_roots=list(ALLOWED_VOLUME_ROOTS),
+    )
+
+
 def _capture_failure() -> MandatoryBackupError:
     # How maybe_snapshot(mandatory=True) wraps a refused live-file read.
     try:
-        raise PathNotAllowedError("/backup/x.txt", READ_REFUSAL)
+        raise _refusal()
     except PathNotAllowedError as refusal:
         try:
             raise MandatoryBackupError("could not back up") from refusal
@@ -151,7 +165,7 @@ def _capture_failure() -> MandatoryBackupError:
 @pytest.mark.parametrize(
     ("action", "err"),
     [
-        ("diff", PathNotAllowedError("/backup/x.txt", READ_REFUSAL)),
+        ("diff", _refusal()),
         ("restore", _capture_failure()),
     ],
 )
@@ -177,6 +191,7 @@ async def test_snapshot_of_a_refused_path_says_the_live_file_is_unreadable(
     assert message.startswith(f"Cannot {action} 'file-x': its live file")
     assert payload["backup_name"] == "file-x"
     assert payload["path"] == "/backup/x.txt"
+    assert ONLY_UNDER_ROOTS in json.dumps(payload["error"])
     if action == "restore":
         assert payload["data"]["apply_status"] == "not_applied"
 
