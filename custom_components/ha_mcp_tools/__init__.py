@@ -24,6 +24,8 @@ from typing import Any
 
 import voluptuous as vol
 import yaml  # type: ignore[import-untyped]
+from annotatedyaml import SECRET_YAML
+from homeassistant.bootstrap import ERROR_LOG_FILENAME
 from homeassistant.components import persistent_notification
 from homeassistant.config import async_check_ha_config_file
 from homeassistant.config_entries import ConfigEntry
@@ -42,13 +44,16 @@ from ruamel.yaml import YAMLError
 
 from .const import (
     ALLOWED_READ_DIRS,
+    ALLOWED_READ_FILES,
     ALLOWED_VOLUME_ROOTS,
     ALLOWED_WRITE_DIRS,
     ALLOWED_YAML_CONFIG_FILES,
     ALLOWED_YAML_KEYS,
     COMPONENT_VERSION,
     CONF_ENTRY_TYPE,
+    CUSTOM_COMPONENTS_READ_PATTERN,
     DASHBOARD_URL_PATH_PATTERN,
+    DEFAULT_LOG_TAIL_LINES,
     DENY_PATH_SEGMENTS,
     DENY_READ_BASENAMES,
     DOMAIN,
@@ -56,10 +61,12 @@ from .const import (
     ENTRY_TYPE_TOOLS,
     PACKAGES_ONLY_YAML_KEYS,
     RESERVED_DASHBOARD_URL_PATHS,
+    TAILED_LOG_FILES,
     TOOLS_ENTRY_LEGACY_TITLE,
     TOOLS_ENTRY_TITLE,
     YAML_KEY_DENYLIST,
 )
+from .core_log import read_allowlist_applies, read_log_tail_sync, read_target
 from .entry_device import async_register_entry_device
 from .entry_migration import async_migrate_entry as async_migrate_entry
 from .extra_yaml_keys import (
@@ -289,26 +296,6 @@ SERVICE_READ_LEGACY_BACKUP_SCHEMA = vol.Schema(
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
-
-# Files that are allowed to be read (even if not in ALLOWED_READ_DIRS)
-ALLOWED_READ_FILES = [
-    "configuration.yaml",
-    "automations.yaml",
-    "scripts.yaml",
-    "scenes.yaml",
-    "secrets.yaml",
-    "home-assistant.log",
-    # faulthandler's crash dump (HA Core's ``__main__`` enables it on this file).
-    # Written only on a native fatal signal, so it is the one place that
-    # traceback exists: journald / error_log never see it (issue #2373).
-    "home-assistant.log.fault",
-]
-
-# Root-level log files that the read service tails by default.
-TAILED_LOG_FILES = frozenset({"home-assistant.log", "home-assistant.log.fault"})
-
-# Default tail lines for log files
-DEFAULT_LOG_TAIL_LINES = 1000
 
 
 async def _load_or_create_caller_token(hass: HomeAssistant) -> str:
@@ -635,7 +622,7 @@ def _violates_deny_floor(config_dir: Path, normalized: str) -> bool:
     # target to still be a ``secrets.yaml``, so the one permitted path cannot
     # be pointed at another denied file. No other denied basename has an
     # exception: ``approval_pin.json`` is out of reach wherever it appears.
-    if normalized == "secrets.yaml" and resolved.name.lower() == "secrets.yaml":
+    if normalized == SECRET_YAML and resolved.name.lower() == SECRET_YAML:
         return False
     return (
         os.path.basename(normalized).lower() in DENY_READ_BASENAMES
@@ -1189,7 +1176,7 @@ def _is_path_allowed_for_read(
         return True
 
     # Check for custom_components/**/*.py pattern
-    if fnmatch.fnmatch(normalized, "custom_components/**/*.py"):
+    if fnmatch.fnmatch(normalized, CUSTOM_COMPONENTS_READ_PATTERN):
         return True
 
     # User-configured extra directories (read+write) — issue #1567. Prefix
@@ -1328,53 +1315,6 @@ def _read_file_sync(
         encoding="utf-8", newline="" if keep_line_endings else None
     )
     return {"content": content, "size": stat.st_size, "mtime": stat.st_mtime}
-
-
-def _read_log_tail_sync(
-    target_file: Path, tail_lines: int, *, chunk_size: int = 1 << 16
-) -> dict[str, Any]:
-    """Tail a log for one executor offload without materialising the whole file.
-
-    HA Core appends to ``home-assistant.log.fault`` for the life of the
-    install, so reading the file whole just to keep its last ``tail_lines``
-    lines scales with the crash history rather than the request. Line count
-    streams the file in chunks; the tail seeks back from the end until it holds
-    ``tail_lines`` newlines. The result carries the same ``content`` /
-    ``total_lines`` / ``truncated`` the whole-file split produced (``split("\n")``
-    semantics, so a trailing newline yields one empty last line), plus
-    ``size``/``mtime`` like ``_read_file_sync``.
-    """
-    if not target_file.exists():
-        return {"_error": "not_found"}
-    if not target_file.is_file():
-        return {"_error": "not_a_file"}
-    stat = target_file.stat()
-    newlines = 0
-    with target_file.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(chunk_size), b""):
-            newlines += chunk.count(b"\n")
-        total_lines = newlines + 1
-        pos = fh.tell()
-        buf = b""
-        while pos > 0 and buf.count(b"\n") < tail_lines:
-            step = min(chunk_size, pos)
-            pos -= step
-            fh.seek(pos)
-            buf = fh.read(step) + buf
-    parts = buf.split(b"\n")
-    truncated = total_lines > tail_lines
-    if truncated:
-        # The leading part may start mid-character at a chunk boundary; it is
-        # never part of the tail, so decode only what is returned.
-        parts = parts[-tail_lines:]
-    content = b"\n".join(parts).decode("utf-8")
-    return {
-        "content": content,
-        "size": stat.st_size,
-        "mtime": stat.st_mtime,
-        "total_lines": total_lines,
-        "truncated": truncated,
-    }
 
 
 def _write_file_sync(
@@ -2732,8 +2672,8 @@ async def _shape_read_file_response(
 ) -> dict[str, Any]:
     """Shape a successful _read_file_sync result into the read_file response.
 
-    Applies secrets masking, log tailing, optional tail, and yaml_path
-    subtree extraction.
+    Applies secrets masking, log tailing (with a hint to ha_get_logs on
+    Core's log), optional tail, and yaml_path subtree extraction.
     """
     modified_dt = datetime.fromtimestamp(result["mtime"])
     content = result["content"]
@@ -2745,14 +2685,14 @@ async def _shape_read_file_response(
     # Mask secrets.yaml. Offloaded because the first make_yaml() call on a
     # thread constructs a ruamel YAML instance, whose plugin discovery globs
     # the site-packages tree — blocking work that must stay off the loop.
-    if normalized == "secrets.yaml":
+    if normalized == SECRET_YAML:
         content = await hass.async_add_executor_job(_mask_secrets_content, content)
 
-    # Log files arrive already tailed by ``_read_log_tail_sync``.
+    # Log files arrive already tailed by ``read_log_tail_sync``.
     if normalized in TAILED_LOG_FILES:
         limit = tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES
         total_lines = result["total_lines"]
-        return {
+        log_response: dict[str, Any] = {
             "success": True,
             "path": rel_path,
             "content": content,
@@ -2762,6 +2702,12 @@ async def _shape_read_file_response(
             "total_lines": total_lines,
             "truncated": result["truncated"],
         }
+        if normalized == ERROR_LOG_FILENAME:
+            log_response["hint"] = (
+                "ha_get_logs(source='error_log') is the tool built for "
+                "Home Assistant's log."
+            )
+        return log_response
 
     # Apply tail for other files if requested
     full_content = content
@@ -2789,6 +2735,41 @@ async def _shape_read_file_response(
     return response
 
 
+async def _resolve_read(
+    hass: HomeAssistant, config_dir: Path, rel_path: str
+) -> dict[str, Any] | tuple[Path, str]:
+    """The file a read_file of ``rel_path`` opens and what a not-found answer
+    adds, or the error when it may not or cannot be opened.
+
+    Package files may live under a non-default folder (issue #1854), so resolve
+    the configured folder(s) — the same way the YAML editor does — and honour
+    them here too, otherwise the pre-write backup snapshot (a read of the
+    target) blocks edits to those files.
+    """
+    extra_dirs = _current_extra_dirs(hass)
+    package_dirs = await _detect_package_dirs(hass)
+    name = os.path.normpath(rel_path)  # noqa: ASYNC240
+    if read_allowlist_applies(hass, name) and not _is_path_allowed_for_read(
+        config_dir, rel_path, extra_dirs, package_dirs
+    ):
+        _LOGGER.warning("Attempted to read disallowed path: %s", rel_path)
+        allowed_patterns = (
+            ALLOWED_READ_FILES
+            + [f"{d}/**" for d in ALLOWED_READ_DIRS]
+            + [f"{d}/*.yaml" for d in sorted(package_dirs)]
+            + [CUSTOM_COMPONENTS_READ_PATTERN]
+            + [f"{d}/**" for d in extra_dirs]
+        )
+        return file_read_error(
+            "path_not_allowed",
+            f"Path not allowed. Allowed paths: {', '.join(allowed_patterns)}",
+        )
+    target_file, why = read_target(hass, config_dir, rel_path)
+    if target_file is None:
+        return file_read_error("not_found", f"File does not exist: {rel_path}{why}")
+    return target_file, why
+
+
 def _build_read_file_handler(
     hass: HomeAssistant,
 ) -> Callable[[ServiceCall], Coroutine[Any, Any, ServiceResponse]]:
@@ -2804,36 +2785,17 @@ def _build_read_file_handler(
         yaml_path = call.data.get("yaml_path")
         include_parsed = bool(call.data.get("include_parsed", False))
 
-        # Security check. Package files may live under a non-default folder
-        # (issue #1854), so resolve the configured folder(s) — the same way the
-        # YAML editor does — and honour them here too, otherwise the pre-write
-        # backup snapshot (a read of the target) blocks edits to those files.
-        extra_dirs = _current_extra_dirs(hass)
-        package_dirs = await _detect_package_dirs(hass)
-        if not _is_path_allowed_for_read(
-            config_dir, rel_path, extra_dirs, package_dirs
-        ):
-            _LOGGER.warning("Attempted to read disallowed path: %s", rel_path)
-            allowed_patterns = (
-                ALLOWED_READ_FILES
-                + [f"{d}/**" for d in ALLOWED_READ_DIRS]
-                + [f"{d}/*.yaml" for d in sorted(package_dirs)]
-                + ["custom_components/**/*.py"]
-                + [f"{d}/**" for d in extra_dirs]
-            )
-            return file_read_error(
-                "path_not_allowed",
-                f"Path not allowed. Allowed paths: {', '.join(allowed_patterns)}",
-            )
-
-        target_file = config_dir / rel_path
+        target = await _resolve_read(hass, config_dir, rel_path)
+        if isinstance(target, dict):
+            return target
+        target_file, why = target
 
         try:
             if os.path.normpath(rel_path) in TAILED_LOG_FILES:  # noqa: ASYNC240
-                # Bounded read: the fault log is append-only for the life of
-                # the install, so never materialise the whole file for a tail.
+                # Bounded read: the logs are append-only, the fault log for the
+                # life of the install, so never materialise a whole file.
                 result = await hass.async_add_executor_job(
-                    _read_log_tail_sync,
+                    read_log_tail_sync,
                     target_file,
                     tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES,
                 )
@@ -2860,7 +2822,7 @@ def _build_read_file_handler(
 
         err_kind = result.get("_error")
         if err_kind == "not_found":
-            return file_read_error(err_kind, f"File does not exist: {rel_path}")
+            return file_read_error(err_kind, f"File does not exist: {rel_path}{why}")
         if err_kind == "not_a_file":
             return file_read_error(err_kind, f"Path is not a file: {rel_path}")
 

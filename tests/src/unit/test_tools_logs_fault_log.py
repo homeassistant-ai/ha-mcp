@@ -286,18 +286,30 @@ class TestRecordedCrash:
 class TestFailures:
     @pytest.mark.usefixtures("tools_entry")
     async def test_other_read_failure_is_service_call_failed(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # A file the component cannot decode is a read failure with a cause
-        # other than the allowlist or a missing file.
-        await _write_fault_log(hass, b"Fatal Python error: \xff\xfe\n")
+        # A file Home Assistant cannot open is a read failure with a cause
+        # other than the allowlist or a missing file. Simulated, because root
+        # ignores mode bits.
+        fault_file = await _write_fault_log(hass, "Fatal Python error: Aborted\n")
+        real_open = Path.open
+
+        def refusing_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+            if path == fault_file:
+                raise PermissionError(13, "Permission denied")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", refusing_open)
 
         with pytest.raises(ToolError) as exc_info:
             await _get(core_client)
 
         payload = error_body(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "Cannot read binary file" in payload["error"]["message"]
+        assert "Permission denied" in payload["error"]["message"]
         suggestions = payload["error"]["suggestions"]
         assert any(FAULT_LOG_PATH in sug for sug in suggestions)
         assert any("readable" in sug for sug in suggestions)

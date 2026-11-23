@@ -85,8 +85,9 @@ class TestBuiltInFolders:
             ("scripts.yaml", None),
             ("scenes.yaml", None),
             ("secrets.yaml", None),
-            ("home-assistant.log", None),
             ("home-assistant.log.fault", None),
+            # home-assistant.log is read where Core writes it:
+            # test_custom_component_read_file.TestCoreLogFile.
             ("www/test.css", None),
             ("www/subdir/test.js", None),
             ("themes/dark.yaml", None),
