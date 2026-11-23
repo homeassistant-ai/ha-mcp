@@ -30,7 +30,7 @@ from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
-from ._config_dir_yaml import setup_scenes, write_config_files
+from ._config_dir_yaml import remove_yaml_only_scenes, setup_scenes, write_config_files
 from ._tool_errors import error_body, error_of
 
 _WRITE_MODES = ("config", "python_transform")
@@ -196,10 +196,7 @@ async def test_activate_a_removed_yaml_scene_is_entity_unavailable(
             {"id": "gone", "name": "Gone", "entities": {"input_boolean.tv": "on"}}
         ],
     )
-    await write_config_files(
-        hass, {"configuration.yaml": "scene: !include scenes.yaml\n"}
-    )
-    await hass.services.async_call("scene", "reload", blocking=True)
+    await remove_yaml_only_scenes(hass)
     state = hass.states.get("scene.gone")
     assert state is not None and state.attributes.get("restored") is True
 
@@ -214,6 +211,31 @@ async def test_activate_a_removed_yaml_scene_is_entity_unavailable(
         )
 
     assert error_of(exc)["code"] == "ENTITY_UNAVAILABLE"
+    assert "ha_remove_entity(entity_id='scene.gone')" in error_of(exc)["suggestions"][0]
+    call_service.assert_not_awaited()
+    assert _tv(hass) == "off"
+
+
+async def test_activate_an_unavailable_scene_is_entity_unavailable(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """``scene.film_night`` reports unavailable without a restored state: Core
+    would skip it, so nothing is called and the step is to retry."""
+    await _scene(hass, {"input_boolean.tv": {"state": "on"}})
+    hass.states.async_set("scene.film_night", "unavailable")
+
+    with (
+        patch.object(
+            core_client, "call_service", wraps=core_client.call_service
+        ) as call_service,
+        pytest.raises(ToolError) as exc,
+    ):
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="scene.film_night", activate=True
+        )
+
+    assert error_of(exc)["code"] == "ENTITY_UNAVAILABLE"
+    assert "Retry once the integration" in error_of(exc)["suggestions"][0]
     call_service.assert_not_awaited()
     assert _tv(hass) == "off"
 
@@ -401,6 +423,32 @@ async def test_write_whose_activation_fails_still_reports_the_write(
         scene_id="movie_night"
     )
     assert stored["config"]["entities"] == {"light.tv": {"state": "on"}}
+
+
+@pytest.mark.parametrize("mode", _WRITE_MODES)
+async def test_write_does_not_activate_a_disabled_scene(
+    hass: HomeAssistant, core_client: HomeAssistantClient, mode: str
+) -> None:
+    """``scene.film_night`` is disabled, so it has no state and Core's
+    ``scene.turn_on`` would skip it: the write stands, without an activation."""
+    await _scene(hass, {"input_boolean.tv": {"state": "off"}})
+    er.async_get(hass).async_update_entity(
+        "scene.film_night", disabled_by=er.RegistryEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
+
+    with patch.object(
+        core_client, "call_service", wraps=core_client.call_service
+    ) as call_service:
+        result = await _write_and_activate(
+            ConfigSceneTools(core_client), mode, {"input_boolean.tv": {"state": "on"}}
+        )
+
+    call_service.assert_not_awaited()
+    assert result["success"] is True
+    assert result["activated"] is False
+    assert any("could not be activated" in w for w in result["warnings"])
+    assert _tv(hass) == "off"
 
 
 @pytest.mark.parametrize("mode", _WRITE_MODES)

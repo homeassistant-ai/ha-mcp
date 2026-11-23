@@ -4,7 +4,7 @@ Core's scene config API reads only ``scenes.yaml``; a YAML scene with an ``id``
 in ``configuration.yaml`` still registers under that id. With the component
 (``component_core_client``), its id names it, even while a stored scene holds
 ``scene.<id>``; without it (``core_client``) only the entity registry entry of
-``scene.<id>`` and the config API answer, as before.
+``scene.<id>`` and the config API answer.
 """
 
 from __future__ import annotations
@@ -22,7 +22,8 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
-from ._config_dir_yaml import setup_scenes, write_config_files
+from ._component_frames import older_component
+from ._config_dir_yaml import remove_yaml_only_scenes, setup_scenes, write_config_files
 from ._tool_errors import error_body
 
 _ON = {"sun.sun": "above_horizon"}
@@ -36,6 +37,7 @@ _CALLS: dict[str, Callable[[ConfigSceneTools], Awaitable[Any]]] = {
         MandatoryBPS=False,
     ),
     "remove": lambda t: t.ha_config_remove_scene(scene_id="yid"),
+    "remove-entity": lambda t: t.ha_config_remove_scene(scene_id="scene.x_scene"),
 }
 
 
@@ -47,6 +49,9 @@ _CALLS: dict[str, Callable[[ConfigSceneTools], Awaitable[Any]]] = {
         ("remove", False, False),
         ("get", True, False),
         ("get", False, True),
+        ("set", False, True),
+        ("remove", False, True),
+        ("remove-entity", False, True),
     ],
 )
 async def test_a_yaml_scene_id_names_that_scene(
@@ -87,27 +92,55 @@ async def test_a_yaml_scene_id_names_that_scene(
     assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
 
 
+@pytest.mark.parametrize(
+    "routed_client", ["core_client", "component_core_client"], indirect=True
+)
 async def test_without_the_component_a_create_by_a_yaml_scene_id_says_so(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant,
+    routed_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without the component nothing tells ``yid`` ("X Scene") from a new key:
-    a set by ``yid`` stores it and warns that the id went unchecked."""
+    """Without the component, or with one that does not report ``loaded``,
+    nothing tells ``yid`` ("X Scene") from a new key: a set by ``yid`` stores
+    it and warns that the id went unchecked."""
+    older_component(monkeypatch, "entity_lookup_loaded")
     await setup_scenes(
         hass, [], yaml_only=[{"id": "yid", "name": "X Scene", "entities": _ON}]
     )
 
-    result = await _CALLS["set"](ConfigSceneTools(core_client))
+    result = await _CALLS["set"](ConfigSceneTools(routed_client))
 
     assert result["success"] is True
     assert any("ha_mcp_tools component" in w for w in result["warnings"])
 
 
+async def test_without_the_component_an_edit_of_a_renamed_scene_does_not_warn(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Stored ``key_a`` named "First" holds ``scene.first``; a set by ``key_a``
+    edits it, so no warning about an unchecked new id."""
+    await setup_scenes(hass, [{"id": "key_a", "name": "First", "entities": _ON}])
+
+    result = await ConfigSceneTools(core_client).ha_config_set_scene(
+        scene_id="key_a",
+        config={"name": "First", "entities": _ON},
+        wait=False,
+        MandatoryBPS=False,
+    )
+
+    assert result["success"] is True
+    assert not any("ha_mcp_tools component" in w for w in result.get("warnings", []))
+
+
+@pytest.mark.parametrize("call", ["set", "remove"])
 @pytest.mark.parametrize("disabled", [False, True])
 async def test_a_yaml_scene_whose_entity_is_its_id_is_not_written(
-    hass: HomeAssistant, core_client: HomeAssistantClient, disabled: bool
+    hass: HomeAssistant, core_client: HomeAssistantClient, disabled: bool, call: str
 ) -> None:
-    """``yid`` named "Yid" holds ``scene.yid``, live or disabled: a set by
-    ``yid`` is refused and leaves ``scenes.yaml`` as it was."""
+    """``yid`` named "Yid" holds ``scene.yid``, live or disabled: a set or
+    removal by ``yid`` is refused, saying when it is disabled, and leaves
+    ``scenes.yaml`` as it was. Only a live scene's removal leads with the hint
+    for a ``scene.create`` scene."""
     await setup_scenes(
         hass, [], yaml_only=[{"id": "yid", "name": "Yid", "entities": _ON}]
     )
@@ -121,10 +154,37 @@ async def test_a_yaml_scene_whose_entity_is_its_id_is_not_written(
     before = await hass.async_add_executor_job(scenes_yaml.read_text)
 
     with pytest.raises(ToolError) as exc:
-        await _CALLS["set"](ConfigSceneTools(core_client))
+        await _CALLS[call](ConfigSceneTools(core_client))
 
-    assert error_body(exc)["error"]["code"] == "CONFIG_NOT_FOUND"
+    body = error_body(exc)
+    assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+    assert ("is disabled" in body["error"]["message"]) is disabled
+    first = (body["error"].get("suggestions") or body["suggestions"])[0]
+    assert ("scene.create" in first) is (call == "remove" and not disabled)
     assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
+
+
+async def test_a_removal_by_the_entity_of_another_disabled_key_says_so(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """YAML scene ``other`` named "Yid" holds ``scene.yid`` and is disabled: a
+    removal by ``yid`` names it as disabled, without an activation hint."""
+    await setup_scenes(
+        hass, [], yaml_only=[{"id": "other", "name": "Yid", "entities": _ON}]
+    )
+    er.async_get(hass).async_update_entity(
+        "scene.yid", disabled_by=er.RegistryEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
+
+    with pytest.raises(ToolError) as exc:
+        await _CALLS["remove"](ConfigSceneTools(core_client))
+
+    body = error_body(exc)
+    assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+    assert "is disabled" in body["error"]["message"]
+    suggestions = " ".join(body["error"].get("suggestions") or body["suggestions"])
+    assert "activate=True" not in suggestions
 
 
 @pytest.mark.parametrize(
@@ -144,10 +204,7 @@ async def test_the_registry_entry_of_a_removed_yaml_scene_blocks_no_create(
     await setup_scenes(
         hass, [], yaml_only=[{"id": "gone", "name": name, "entities": _ON}]
     )
-    await write_config_files(
-        hass, {"configuration.yaml": "scene: !include scenes.yaml\n"}
-    )
-    await hass.services.async_call("scene", "reload", blocking=True)
+    await remove_yaml_only_scenes(hass)
     registry = er.async_get(hass)
     assert registry.async_get_entity_id("scene", "homeassistant", "gone") == entity_id
     state = hass.states.get(entity_id)
@@ -160,15 +217,47 @@ async def test_the_registry_entry_of_a_removed_yaml_scene_blocks_no_create(
         await tools.ha_config_get_scene(scene_id="gone")
     assert error_body(exc)["error"]["code"] == "ENTITY_NOT_FOUND"
 
-    await tools.ha_config_set_scene(
+    result = await tools.ha_config_set_scene(
         scene_id="gone",
         config={"name": name, "entities": _ON},
         wait=False,
         MandatoryBPS=False,
     )
 
+    assert "warnings" not in result
     stored = await component_core_client.get_scene_config("gone", _resolved=True)
     assert stored["config"]["name"] == name
+
+
+@pytest.mark.parametrize(
+    ("routed_client", "scene_id"),
+    [
+        ("component_core_client", "scene.gone"),
+        ("core_client", "scene.gone"),
+        ("core_client", "gone"),
+    ],
+    indirect=["routed_client"],
+)
+async def test_a_removed_yaml_scenes_leftover_entry_is_named_for_removal(
+    hass: HomeAssistant, routed_client: HomeAssistantClient, scene_id: str
+) -> None:
+    """``gone`` ("Gone", ``scene.gone``) was a YAML scene; its restored entry
+    gets no activation hint but the step to remove it. Without the component
+    the bare id names that entry too."""
+    await setup_scenes(
+        hass, [], yaml_only=[{"id": "gone", "name": "Gone", "entities": _ON}]
+    )
+    await remove_yaml_only_scenes(hass)
+
+    with pytest.raises(ToolError) as exc:
+        await ConfigSceneTools(routed_client).ha_config_get_scene(scene_id=scene_id)
+
+    body = error_body(exc)
+    assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+    assert "restored state" in body["error"]["message"]
+    suggestions = " ".join(body["error"].get("suggestions") or body["suggestions"])
+    assert "ha_remove_entity(entity_id='scene.gone')" in suggestions
+    assert "activate=True" not in suggestions
 
 
 async def test_an_integration_scene_restored_at_startup_still_answers_by_its_slug(
@@ -176,7 +265,7 @@ async def test_an_integration_scene_restored_at_startup_still_answers_by_its_slu
 ) -> None:
     """A Hue scene ``evening`` whose bridge was offline at startup holds only a
     restored state; a get by ``evening`` still names it as an integration
-    scene."""
+    scene, with a retry instead of an activation hint."""
     await setup_scenes(hass, [])
     entry = er.async_get(hass).async_get_or_create(
         "scene", "hue", "evening", suggested_object_id="evening"
@@ -191,6 +280,9 @@ async def test_an_integration_scene_restored_at_startup_still_answers_by_its_slu
     body = error_body(exc)
     assert body["error"]["code"] == "CONFIG_NOT_FOUND"
     assert body["platform"] == "hue"
+    suggestions = " ".join(body["error"].get("suggestions") or body["suggestions"])
+    assert "Retry once its integration has loaded" in suggestions
+    assert "activate=True" not in suggestions
 
 
 @pytest.mark.parametrize("call", ["get", "set"])
@@ -222,6 +314,28 @@ async def test_a_stored_scene_with_a_restored_state_still_answers_by_its_slug(
             )
         assert error_body(exc)["error"]["code"] == "VALIDATION_FAILED"
     assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
+
+
+async def test_a_failed_state_read_is_no_create(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core answers 500 for ``scene.fresh``'s state (an attribute it cannot
+    serialize): a set by ``fresh`` fails instead of storing a new scene."""
+    await setup_scenes(hass, [])
+    hass.states.async_set("scene.fresh", "on", {"unserializable": object()})
+
+    with pytest.raises(ToolError):
+        await ConfigSceneTools(core_client).ha_config_set_scene(
+            scene_id="fresh",
+            config={"name": "Fresh", "entities": _ON},
+            wait=False,
+            MandatoryBPS=False,
+        )
+
+    stored = await hass.async_add_executor_job(
+        Path(hass.config.path("scenes.yaml")).read_text
+    )
+    assert "fresh" not in stored
 
 
 _OWN_KEY_CALLS: dict[str, dict[str, Any]] = {

@@ -152,25 +152,6 @@ class TestEntityResolution:
 
         assert bool(_exhausted_logs(caplog)) is not registered
 
-    async def test_activation_ignores_another_domains_entry_with_that_unique_id(
-        self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        monkeypatch: pytest.MonkeyPatch,
-        entity_registry: er.EntityRegistry,
-    ) -> None:
-        tools = await scene_tools(
-            hass, core_client, monkeypatch, yaml_only=[_UNREGISTERED]
-        )
-        entity_registry.async_get_or_create(
-            "automation", "automation", "test_scene", suggested_object_id="collision"
-        )
-
-        result = await _activate(tools, "test_scene")
-
-        assert result["entity_id"] == "scene.test_scene"
-        assert result["activated"] is True
-
     async def test_activation_without_a_registry_answer_activates_nothing(
         self, core_client: HomeAssistantClient, tools: ConfigSceneTools
     ) -> None:

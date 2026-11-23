@@ -375,7 +375,7 @@ async def test_post_write_without_a_registry_entry_skips_the_steps(
     wait: bool,
 ) -> None:
     """Nothing stands in for the missing entry: ``scene.<key>`` can be another
-    scene's entity. A wait lends the lookup the state wait's budget."""
+    scene's entity. A wait adds the state wait's budget to the lookup's."""
     monkeypatch.setattr(registration, "RESOLVE_TIMEOUT", 0.4)
     monkeypatch.setattr(registration, "REGISTER_TIMEOUT", 0.7)
     result: dict[str, Any] = {}

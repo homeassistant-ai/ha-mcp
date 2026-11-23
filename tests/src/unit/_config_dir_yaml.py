@@ -39,6 +39,15 @@ async def setup_from_configuration(hass: HomeAssistant, *domains: str) -> None:
     await hass.async_block_till_done()
 
 
+async def remove_yaml_only_scenes(hass: HomeAssistant) -> None:
+    """Drop the ``yaml_only`` scenes from ``configuration.yaml`` and reload
+    scenes: Core keeps their registry entries and restores their states."""
+    await write_config_files(
+        hass, {"configuration.yaml": "scene: !include scenes.yaml\n"}
+    )
+    await hass.services.async_call("scene", "reload", blocking=True)
+
+
 async def setup_scenes(
     hass: HomeAssistant,
     stored: list[dict[str, Any]],

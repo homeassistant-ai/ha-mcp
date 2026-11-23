@@ -9,6 +9,11 @@ from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .config_helpers.registry import validate_registry_ids
 from .helpers import raise_tool_error
@@ -177,7 +182,26 @@ def _lead(core: str) -> str:
     return f"{core.rstrip('.')}. " if core else ""
 
 
-def raise_scene_not_storage_error(
+def leftover_step(entity_id: str) -> str:
+    """The next step for a scene whose state Core only restored: a removed
+    scene, or one whose integration or a running scene reload has yet to add it."""
+    return (
+        "Retry once its integration has loaded and a running scene reload has "
+        "finished; if the scene was removed, remove its leftover entry with "
+        f"ha_remove_entity(entity_id='{entity_id}')"
+    )
+
+
+async def _restored(client: Any, entity_id: str) -> bool:
+    try:
+        state = await client.get_entity_state(entity_id)
+    except HomeAssistantAPIError, HomeAssistantAuthError, HomeAssistantConnectionError:
+        return False  # it only picks the hint; the refusal stands
+    return bool(state.get("attributes", {}).get("restored"))
+
+
+async def raise_scene_not_storage_error(
+    client: Any,
     scene_id: str,
     platform: str | None,
     *,
@@ -197,17 +221,22 @@ def raise_scene_not_storage_error(
     generic otherwise. With ``remove`` and a bare ``scene_id`` on that generic
     branch, the first suggestion names the entity_id form, by which a
     ``scene.create`` scene is deleted. ``core`` is Core's refusal, which then
-    leads the message. A ``disabled`` entry has no state, so it gets no
-    activation hint: its YAML may be gone too.
+    leads the message. A ``disabled`` entry has no state and one whose state Core
+    only restored (a removed scene, or one its integration has yet to
+    load) no scene to activate, so neither gets an activation hint.
     """
     entity_id = f"scene.{scene_id.removeprefix('scene.')}"
+    leftover = not disabled and await _restored(client, entity_id)
     if disabled:
         status = "is disabled in the entity registry and"
         suggestions = [
             f"Enable it with ha_set_entity(entity_id='{entity_id}', enabled=True), "
-            "or, if its YAML definition is gone, remove the leftover entry with "
+            "or, if its definition is gone, remove the leftover entry with "
             f"ha_remove_entity(entity_id='{entity_id}').",
         ]
+    elif leftover:
+        status = "has only a restored state and"
+        suggestions = [leftover_step(entity_id)]
     else:
         status = "exists but"
         suggestions = [
@@ -231,7 +260,7 @@ def raise_scene_not_storage_error(
             "Scenes defined directly in YAML or made by scene.create are not "
             "editable through this API."
         )
-        if remove and not scene_id.startswith("scene."):
+        if remove and not (disabled or leftover or scene_id.startswith("scene.")):
             suggestions.insert(
                 0,
                 f"Pass '{entity_id}' to delete it if scene.create made it; a bare "

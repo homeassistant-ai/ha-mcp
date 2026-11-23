@@ -528,8 +528,9 @@ def _do_entity_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
 
     ``{matches: [{entity_id, unique_id, platform, domain, config_entry_id,
     categories, disabled_by, hidden_by, loaded}]}``. ``loaded`` is whether the
-    domain's entity component holds the entity: not for a disabled entry, nor for
-    one Core keeps only a restored placeholder state for (a removed YAML scene). Scans the entity registry for every
+    domain's entity component holds the entity: not for a disabled entry, one
+    Core keeps only a restored placeholder state for (a removed YAML scene), or
+    one a reload is re-adding. Scans the entity registry for every
     entry whose ``unique_id`` equals the requested one, optionally narrowed by
     ``domain`` (the entity's own domain, from its entity_id) and ``platform``
     (the owning integration). Multiple matches across platforms are all returned
@@ -561,6 +562,7 @@ def _do_entity_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
             continue
         if platform and getattr(entry, "platform", None) != platform:
             continue
+        component = components.get(ent_domain)
         matches.append(
             {
                 "entity_id": entity_id,
@@ -571,7 +573,7 @@ def _do_entity_lookup(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
                 "categories": _plainify(getattr(entry, "categories", None) or {}),
                 "disabled_by": _enum_value(getattr(entry, "disabled_by", None)),
                 "hidden_by": _enum_value(getattr(entry, "hidden_by", None)),
-                "loaded": (component := components.get(ent_domain)) is not None
+                "loaded": component is not None
                 and component.get_entity(entity_id) is not None,
             }
         )

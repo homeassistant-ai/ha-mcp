@@ -7,14 +7,15 @@ component:
   ``entity_registration.resolve_entity_id_after_write`` polls after scene/script
   writes, and before a standalone activation of a stored scene key, against one
   deadline and constructs no id when it finds none. ``_resolve_scene_entity_id``
-  uses a single retry for scene config reads and before scene removal.
+  uses a single retry for scene config reads and before a scene removal whose
+  resolution named no entity.
   ``entity_registration.lookup_entity_id`` is one strict lookup, which raises
   on a failed read, for the script get, run and remove and for a standalone
   scene activation by a bare id. ``scenes_with_id`` asks ``entity_lookup``,
   for the REST client's ``_resolve_scene``, which ``homeassistant`` scene Core
-  registered under a bare id and whether Core loaded it (``loaded``); without
-  the component that resolution reads only the registry entry of
-  ``scene.<id>``. The component's
+  registered under a bare id and whether Core loaded it (``loaded``, flag
+  ``entity_lookup_loaded``); without it that resolution falls back to the
+  registry entry of ``scene.<id>`` and the config API. The component's
   ``entity_lookup`` returns only matching rows instead of a full
   registry/state listing. A hit is authoritative at once,
   but an empty read can precede HA's asynchronous entity registration even when
@@ -67,6 +68,8 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from .component_api import (
+    ENTITY_LOOKUP_LOADED,
+    component_serves,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -91,7 +94,7 @@ async def fetch_entity_lookup_via_component(
     Returns the component's ``matches`` list — every entity-registry entry whose
     ``unique_id`` equals ``unique_id`` (each ``{entity_id, unique_id, platform,
     domain, config_entry_id, categories, disabled_by, hidden_by, loaded}``;
-    a component older than ``loaded`` omits it), optionally
+    ``loaded`` behind the ``entity_lookup_loaded`` flag), optionally
     narrowed by the entity's own ``domain``. Multiple matches (one ``unique_id``
     across platforms) are all returned — the caller picks. An AUTHORITATIVE empty
     list (no registry entry with that unique_id) is kept distinct from the
@@ -146,10 +149,12 @@ async def fetch_entity_lookup_via_component(
 
 async def scenes_with_id(client: Any, scene_id: str) -> list[dict[str, Any]] | None:
     """The ``homeassistant`` scenes Core registered under ``scene_id``, each
-    with ``loaded``; None when the component does not answer or predates
-    ``loaded``."""
+    with ``loaded``; None when the component does not answer or lacks
+    ``entity_lookup_loaded``."""
+    if not await component_serves(client, ENTITY_LOOKUP_LOADED):
+        return None
     matches = await fetch_entity_lookup_via_component(client, scene_id, domain="scene")
-    if matches is None or any("loaded" not in match for match in matches):
+    if matches is None:
         return None
     return [m for m in matches if m.get("platform") == "homeassistant"]
 

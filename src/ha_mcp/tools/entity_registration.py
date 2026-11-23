@@ -1,9 +1,12 @@
 """Resolve scene and script storage keys to their registry entity IDs."""
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any, Literal
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantAdminRequiredError,
@@ -13,7 +16,8 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
 from .component_config_reads import fetch_entity_lookup_via_component
-from .helpers import raise_tool_error
+from .helpers import exception_to_structured_error, raise_tool_error
+from .scene_checks import leftover_step
 from .ws_waiters import REGISTER_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -201,27 +205,66 @@ async def scene_entity_to_activate(client: Any, scene_id: str) -> str:
                 context={"scene_id": scene_id},
             )
         )
-    # HA's scene.turn_on is a silent no-op on an unknown or unavailable entity.
+    await refuse_unactivatable_scene(client, entity_id)
+    return entity_id
+
+
+async def refuse_unactivatable_scene(client: Any, entity_id: str) -> None:
+    """Raise when HA's ``scene.turn_on``, a silent no-op on an unknown or
+    unavailable entity, would skip ``entity_id``: ENTITY_NOT_FOUND without a
+    state (also a disabled entity), ENTITY_UNAVAILABLE when unavailable. A
+    failed state read raises as it is."""
     try:
         state = await client.get_entity_state(entity_id)
     except HomeAssistantAPIError as e:
         if e.status_code == 404:
             raise_tool_error(create_entity_not_found_error(entity_id))
         raise
-    if state.get("state") == "unavailable":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.ENTITY_UNAVAILABLE,
-                f"Scene {entity_id} is unavailable; Home Assistant skips an "
-                "unavailable scene, so nothing would be activated",
-                context={"entity_id": entity_id},
-                suggestions=[
-                    "Check that the scene is still defined; the leftover entry of "
-                    f"a removed scene goes with ha_remove_entity(entity_id='{entity_id}')"
-                ],
-            )
+    if state.get("state") != "unavailable":
+        return
+    if state.get("attributes", {}).get("restored"):
+        step = leftover_step(entity_id)
+    else:
+        step = "Retry once the integration that provides the scene is available"
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.ENTITY_UNAVAILABLE,
+            f"Scene {entity_id} is unavailable; Home Assistant skips an "
+            "unavailable scene, so nothing would be activated",
+            context={"entity_id": entity_id},
+            suggestions=[step],
         )
-    return entity_id
+    )
+
+
+async def activate_scene(
+    client: Any, response: dict[str, Any], entity_id: str, *, standalone: bool
+) -> None:
+    """Call scene.turn_on; raise when standalone, warn after a config write.
+
+    After a write, a scene HA would skip (:func:`refuse_unactivatable_scene`)
+    is not activated either; a standalone caller has already refused it.
+    """
+    try:
+        if not standalone:
+            await refuse_unactivatable_scene(client, entity_id)
+        await client.call_service("scene", "turn_on", {"entity_id": entity_id})
+    except ToolError as exc:  # the write path's refusal
+        reason: str | None = json.loads(str(exc))["error"]["message"]
+    except LOOKUP_ERRORS as exc:
+        if standalone:
+            exception_to_structured_error(
+                exc, context={"action": "activate", "entity_id": entity_id}
+            )
+        logger.warning("Scene %s not activated after config write: %s", entity_id, exc)
+        reason = str(exc)
+    else:
+        reason = None
+    response["activated"] = reason is None
+    if reason is not None:
+        response.setdefault("warnings", []).append(
+            f"Scene config was written, but the scene could not be activated: {reason}"
+        )
 
 
 async def post_write_entity(
@@ -254,9 +297,8 @@ async def post_write_entity(
     fallback = f"{domain}.{bare_id}" if bare_id != storage_key else None
     cause = f"the entity registry showed no entity for {domain} '{storage_key}' in time"
     try:
-        # A wait also lends the lookup the state wait's budget: a scene's
-        # registration can take that long, and after a hit the state wait
-        # still runs its own.
+        # With a wait, the lookup also gets the state wait's budget on top of
+        # its own; after a hit the state wait still runs its full budget.
         entity_id = await resolve_entity_id_after_write(
             client,
             storage_key,

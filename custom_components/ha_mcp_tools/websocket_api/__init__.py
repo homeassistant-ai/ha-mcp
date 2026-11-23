@@ -281,8 +281,9 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/entity_lookup`` — registry entries whose ``unique_id`` matches
   (optionally narrowed by ``domain`` / ``platform``), returned as
   ``{matches: [{entity_id, unique_id, platform, domain, config_entry_id,
-  categories, disabled_by, hidden_by}]}``. Multiple matches across platforms are
-  all returned; the server picks. The in-process read is authoritative
+  categories, disabled_by, hidden_by, loaded}]}``, ``loaded`` whether the
+  domain's entity component holds the entity (flag ``entity_lookup_loaded``).
+  Multiple matches across platforms are all returned; the server picks. The in-process read is authoritative
   immediately (no registry-write settle retry).
 * ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
   the rows Core's ``config/<x>_registry/list`` sends (Core's own serializers,

@@ -174,6 +174,9 @@ CAPABILITIES: list[str] = [
     "registry_lookup",
     "system_snapshot",
     "entity_lookup",
+    # A flag on entity_lookup: each match carries ``loaded``, whether the
+    # domain's entity component holds the entity.
+    "entity_lookup_loaded",
     "registries",
     "registry_fields",
     "dashboards",

@@ -35,6 +35,7 @@ from ..utils.python_sandbox import (
 )
 from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION, parse_json_param
+from .component_api import COMPONENT_INSTALL_HINT
 from .component_config_reads import fetch_entity_lookup_via_component
 from .config_write_helpers import (
     apply_entity_category,
@@ -48,6 +49,7 @@ from .config_write_helpers import (
 )
 from .entity_registration import (
     LOOKUP_ERRORS,
+    activate_scene,
     post_write_entity,
     scene_entity_to_activate,
 )
@@ -145,8 +147,8 @@ class ConfigSceneTools:
         Accept either a bare key or a key prefixed with ``scene.``.
 
         Only removals enable ``allow_component``; config reads list the
-        registry here. Neither reads the config body through the component
-        (the GET-path invariant in ``component_config_reads``). An empty
+        registry here (a bare id's resolution may already have asked the
+        component's ``entity_lookup``). An empty
         component result is rechecked once; component unavailability falls
         through to the registry list.
 
@@ -332,8 +334,9 @@ class ConfigSceneTools:
                 ],
                 context={"scene_id": scene_id},
             )
-            # Full scene config reads ALWAYS take the legacy path — no component
-            # routing here, unlike the automation/script gets. Scenes do not
+            # The config body always comes from Core's REST config API, unlike
+            # the automation/script gets (a bare id's resolution may still ask
+            # the component's entity_lookup). Scenes do not
             # retain their raw storage body in memory: HomeAssistantScene's
             # ``scene_config.states`` holds runtime State OBJECTS built at
             # setup, not the storage ``entities`` dict, so a component-served
@@ -351,7 +354,9 @@ class ConfigSceneTools:
             # The entity resolved but scenes.yaml has no config for it - a Hue/
             # vendor or raw-YAML scene. Surface CONFIG_NOT_FOUND, not the
             # ENTITY_NOT_FOUND the generic handler below would emit (#1971).
-            raise_scene_not_storage_error(e.scene_id, e.platform, disabled=e.disabled)
+            await raise_scene_not_storage_error(
+                self._client, e.scene_id, e.platform, disabled=e.disabled
+            )
         except Exception as e:
             # Pass `entity_id` so a 404 from rest_client surfaces as
             # ENTITY_NOT_FOUND (not the generic RESOURCE_NOT_FOUND fallback).
@@ -382,8 +387,9 @@ class ConfigSceneTools:
     async def _legacy_get_scene(self, scene_id: str) -> dict[str, Any]:
         """Assemble the scene-get response from the REST/WS pipeline.
 
-        The multi-fetch path: id-resolution WS + per-id config REST +
-        ``_resolve_scene_entity_id`` WS + ``fetch_entity_category`` WS. This is
+        The multi-fetch path: id resolution (component lookup or registry WS,
+        sometimes a config GET) + per-id config REST + ``_resolve_scene_entity_id``
+        WS when the resolution named no entity + ``fetch_entity_category`` WS. This is
         the ONLY scene-get path — see ``ha_config_get_scene`` for why scenes
         never route through the component's ``config_get`` (their in-memory
         ``scene_config.states`` is runtime State objects, not the storage
@@ -394,15 +400,18 @@ class ConfigSceneTools:
         # `success`/`scene_id`/`config` chain), and use the storage key
         # consistently for `scene_id` regardless of whether the caller
         # passed the entity_id slug or the storage key.
-        envelope = await self._client.get_scene_config(scene_id)
+        resolution = await self._client._resolve_scene(scene_id)
+        envelope = await self._client.get_scene_config(scene_id, resolution=resolution)
         actual_config = envelope.get("config", envelope)
         resolved_id = envelope.get("scene_id", scene_id)
         config_hash_value = compute_config_hash(actual_config)
 
-        # Resolve real entity_id via registry — see _resolve_scene_entity_id
-        # for the reasoning. Category fetch on the wrong entity_id is a
-        # silent no-op, masking real category assignments.
-        entity_id = await self._resolve_scene_entity_id(resolved_id)
+        # The resolution names the entity; else the registry does (see
+        # _resolve_scene_entity_id). Category fetch on the wrong entity_id is
+        # a silent no-op, masking real category assignments.
+        entity_id = resolution.entity_id or await self._resolve_scene_entity_id(
+            resolved_id
+        )
         cat_warnings: list[str] = []
         cat_id = await fetch_entity_category(
             self._client, entity_id, "scene", cat_warnings
@@ -554,8 +563,9 @@ class ConfigSceneTools:
             Field(
                 description="Scene storage key (e.g. 'movie_night') or entity_id "
                 "(e.g. 'scene.movie_night'). A bare id writes the scene stored "
-                "under that key. With none, it is refused when another scene's "
-                "entity is scene.<id> (pass scene.<id> for that scene) or, with "
+                "under that key. With no scene stored under it, it is refused when "
+                "another scene's entity is scene.<id> (pass scene.<id> for that "
+                "scene) or, with "
                 "the ha_mcp_tools component, for a YAML scene with that id (not "
                 "editable). A new scene takes "
                 "the bare key; Core names its entity after 'name'."
@@ -807,7 +817,9 @@ class ConfigSceneTools:
             # pre-fetch read 404s because the entity has no editable scenes.yaml
             # config (Hue/vendor or raw-YAML). Same CONFIG_NOT_FOUND
             # classification as get/delete (#1971), not a generic write failure.
-            raise_scene_not_storage_error(e.scene_id, e.platform, disabled=e.disabled)
+            await raise_scene_not_storage_error(
+                self._client, e.scene_id, e.platform, disabled=e.disabled
+            )
         except Exception as e:  # noqa: BLE001
             error = exception_to_structured_error(
                 e,
@@ -844,7 +856,9 @@ class ConfigSceneTools:
             exception_to_structured_error(
                 exc,
                 context={"action": "activate", "scene_id": scene_id},
-                suggestions=["Retry the activation once Home Assistant answers"],
+                suggestions=[
+                    "Retry the activation; if the error repeats, fix the cause it names"
+                ],
             )
             raise  # unreachable: exception_to_structured_error always raises
         response: dict[str, Any] = {
@@ -853,7 +867,7 @@ class ConfigSceneTools:
             "scene_id": scene_id,
             "entity_id": entity_id,
         }
-        await self._activate_scene(response, entity_id, standalone=True)
+        await activate_scene(self._client, response, entity_id, standalone=True)
         attach_skill_content(
             response,
             MandatoryBPS=MandatoryBPS,
@@ -861,33 +875,6 @@ class ConfigSceneTools:
             referenced_files=None,
         )
         return response
-
-    async def _activate_scene(
-        self, response: dict[str, Any], entity_id: str, *, standalone: bool
-    ) -> None:
-        """Call scene.turn_on; raise when standalone, warn after a config write."""
-        try:
-            await self._client.call_service(
-                "scene", "turn_on", {"entity_id": entity_id}
-            )
-        except (
-            HomeAssistantAPIError,
-            HomeAssistantAuthError,
-            HomeAssistantConnectionError,
-        ) as exc:
-            if standalone:
-                exception_to_structured_error(
-                    exc, context={"action": "activate", "entity_id": entity_id}
-                )
-            logger.warning(
-                "Scene %s not activated after config write: %s", entity_id, exc
-            )
-            response["activated"] = False
-            response.setdefault("warnings", []).append(
-                f"Scene config was written, but the scene could not be activated: {exc}"
-            )
-            return
-        response["activated"] = True
 
     async def _finish_scene_write(
         self,
@@ -931,7 +918,7 @@ class ConfigSceneTools:
                 self._client, entity_id, category, "scene", result, "scene"
             )
         if activate:
-            await self._activate_scene(result, entity_id, standalone=False)
+            await activate_scene(self._client, result, entity_id, standalone=False)
 
     async def _run_scene_python_transform(
         self,
@@ -1128,16 +1115,23 @@ class ConfigSceneTools:
             #
             # Existence takes both signals: an ``id``-less YAML scene has no
             # registry unique_id yet still holds a state-machine entity, and
-            # shadow-creates just the same. Only a scene missing from both (a
-            # state Core restored counts as none) is a real create, at the price
-            # of one extra ``/states/`` GET there.
-            if resolution.registry_hit or await self._client._scene_live(resolved_id):
+            # shadow-creates just the same. Only a scene missing from both is a
+            # real create, at the price of one extra ``/states/`` GET there; a
+            # ``leftover`` (only entries Core no longer loads) skips that GET.
+            if resolution.registry_hit or (
+                not resolution.leftover
+                and await self._client._scene_state_exists(resolved_id)
+            ):
                 await self._client.get_scene_config(scene_id, resolution=resolution)
                 # A bare id that resolved to another key is no edit of it.
                 refuse_write_by_bare_id_of_another_key("scene", scene_id, resolved_id)
             else:
                 problems += entity_form_create_problems(scene_id, resolved_id)
-                id_unchecked = resolution.id_unchecked
+                # Without the component, a key whose entity is not scene.<key>
+                # gets here too; an edit of it needs no warning.
+                id_unchecked = resolution.id_unchecked and not (
+                    await self._client._config_exists("scene", resolved_id)
+                )
         # These input refusals (entity-form create, body, category, captures)
         # come in one response.
         problems += scene_body_problems(config_dict, resolved_id, "set")
@@ -1175,10 +1169,11 @@ class ConfigSceneTools:
         )
         if id_unchecked:
             result.setdefault("warnings", []).append(
-                f"Stored as a new scene under key '{resolved_id}'. Only the "
-                "ha_mcp_tools component tells whether a scene defined in YAML "
-                "outside scenes.yaml already has this id; if one does, Home "
-                "Assistant now loads only one of the two."
+                f"Stored as a new scene under key '{resolved_id}'. Without the "
+                "ha_mcp_tools component the server cannot check whether a scene "
+                "defined in YAML outside scenes.yaml already has this id; if one "
+                "does, Home Assistant now loads only one of the two. "
+                + COMPONENT_INSTALL_HINT
             )
 
         merge_validation_meta(result, references)
@@ -1273,14 +1268,14 @@ class ConfigSceneTools:
             # entry is gone, the unique_id lookup can no longer find it.
             # Falls back to scene.<storage key> when the registry has no
             # matching unique_id; a scene left to Core's scene.delete is
-            # looked up by the caller's entity_id. A resolution through the
-            # component already names the entity.
-            if not isinstance(target, SceneResolution):
-                entity_id = scene_id
-            else:
+            # looked up by the caller's entity_id. A resolution that named its
+            # entity is not looked up again.
+            if isinstance(target, SceneResolution):
                 entity_id = target.entity_id or await self._resolve_scene_entity_id(
                     target.storage_key, allow_component=True
                 )
+            else:
+                entity_id = scene_id
             # A failed lookup only warns: it must not keep the scene alive.
             lookup: list[str] = []
             related = (
@@ -1312,8 +1307,8 @@ class ConfigSceneTools:
             # Only a bare id gets here (an entity_id goes to scene.delete): a
             # Hue/vendor, raw-YAML or scene.create scene with no stored config
             # (#1971).
-            raise_scene_not_storage_error(
-                e.scene_id, e.platform, remove=True, disabled=e.disabled
+            await raise_scene_not_storage_error(
+                self._client, e.scene_id, e.platform, remove=True, disabled=e.disabled
             )
         except Exception as e:
             exception_to_structured_error(
@@ -1345,8 +1340,11 @@ class ConfigSceneTools:
             # A bare id is a storage key: no delete goes to another key.
             if await self._client._config_exists("scene", key):
                 raise_bare_id_of_another_key(scene_id, key)
-            raise_scene_not_storage_error(
-                scene_id, resolution.platform, disabled=resolution.disabled
+            await raise_scene_not_storage_error(
+                self._client,
+                scene_id,
+                resolution.platform,
+                disabled=resolution.disabled,
             )
         return resolution
 
@@ -1390,8 +1388,8 @@ class ConfigSceneTools:
             ):
                 raise_scene_id_refusal(target.identifier, target.storage_key, core=core)
             if refusal in ("entity_not_scene", "entity_not_dynamically_created"):
-                raise_scene_not_storage_error(
-                    scene_id, platform, core=core, disabled=disabled
+                await raise_scene_not_storage_error(
+                    self._client, scene_id, platform, core=core, disabled=disabled
                 )
             raise_entity_refusal("Could not delete scene", reply, scene_id)
         return {"scene_id": scene_id, "deleted_with": "scene.delete"}

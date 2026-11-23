@@ -160,7 +160,7 @@ async def test_one_component_frame_resolves_the_scene_without_a_registry_dump(
 async def test_an_empty_lookup_is_rechecked_once_and_finds_a_late_registration(
     hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
-    """The entry lands in the registry between the two reads (#1168): the real
+    """The entry lands in the registry between the resolver's two reads (#1168): the real
     entity_id, not the ``scene.<key>`` guess, and no registry dump."""
     _move_unique_id(hass, "registering")
 
@@ -217,8 +217,8 @@ async def test_an_unanswered_recheck_falls_back_to_the_registry_not_a_guess(
 async def test_reading_a_scene_asks_the_component_only_which_scene_has_the_key(
     client: HomeAssistantClient,
 ) -> None:
-    """The key's own scene answers in one lookup frame; the body comes from
-    Core's config API."""
+    """The key's own scene, which also names its entity, answers in one lookup
+    frame and no registry dump; the body comes from Core's config API."""
     socket = await pooled_socket(client)
 
     with sent_commands(socket) as sent:
@@ -226,7 +226,7 @@ async def test_reading_a_scene_asks_the_component_only_which_scene_has_the_key(
 
     assert resp["config"]["id"] == SCENE_ID
     assert sent_frames(sent, LOOKUP) == [{"unique_id": SCENE_ID, "domain": "scene"}]
-    assert sent_types(sent).count(ENTITY_DUMP) == 1
+    assert ENTITY_DUMP not in sent_types(sent)
 
 
 async def test_a_component_without_the_capability_leaves_it_to_the_registry(

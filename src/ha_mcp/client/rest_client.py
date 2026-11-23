@@ -97,18 +97,17 @@ _ADMIN_ONLY_401_MESSAGE = (
 class SceneResolution:
     """Outcome of resolving a scene identifier via the entity registry.
 
-    ``registry_hit`` records whether the storage key came from the registry entry
-    of the scene's own entity - i.e. the entity EXISTS (a bare id that won as a
-    storage key carries False: the registry named another scene). It separates a
-    genuinely-missing scene from one that exists but is not editable through
-    HA's scene config API (a Hue/vendor scene, or a raw-YAML scene): both
-    resolve fine yet 404 on ``config/scene/config/{id}``, because that endpoint is
-    backed only by the managed ``scenes.yaml`` (issue #1971). ``platform`` carries
-    the registry entry's integration domain (``"hue"``, ``"homeassistant"``, …)
-    for error-message enrichment only - it never drives the classification, since
-    a raw-YAML scene is ``platform="homeassistant"`` yet still 404s.
-    ``entity_id`` and ``disabled``: the entity the registry named, and whether it
-    is disabled; ``id_unchecked``: a bare id resolved without the component (#2632).
+    ``registry_hit``: the storage key came from the registry entry of the scene's
+    own entity, so the entity EXISTS (a bare id that won as a storage key carries
+    False). It tells a missing scene from one HA's scene config API cannot edit
+    (a Hue/vendor or raw-YAML scene: both 404 on ``config/scene/config/{id}``,
+    which reads only ``scenes.yaml``, #1971). ``platform``, the entry's
+    integration domain, only enriches messages: a raw-YAML scene is
+    ``"homeassistant"`` yet still 404s. ``entity_id``: the entity the component's
+    ``entity_lookup`` named (None on the registry path); ``disabled``: whether it is disabled; ``leftover``: the component
+    named only entries Core no longer loads (a removed YAML scene);
+    ``id_unchecked``: a bare id that fell back to itself without the component
+    (or one lacking ``entity_lookup_loaded``) to check it (#2632).
     """
 
     storage_key: str
@@ -116,6 +115,7 @@ class SceneResolution:
     platform: str | None
     entity_id: str | None = None
     disabled: bool = False
+    leftover: bool = False
     id_unchecked: bool = False
 
 
@@ -123,8 +123,8 @@ class SceneStorageConfigNotFoundError(HomeAssistantAPIError):
     """A scene entity resolved in the registry, but ``config/scene/config/{id}``
     (backed by ``scenes.yaml``) has no matching entry.
 
-    The entity EXISTS; it is simply not an editable Home Assistant storage scene
-    (Hue/vendor scene, or a raw-YAML scene). Raised instead of a bare 404 so the
+    The entity EXISTS (``disabled``: only as a registry entry); it is simply not
+    an editable Home Assistant storage scene (Hue/vendor or raw-YAML). Raised instead of a bare 404 so the
     tools layer can surface ``CONFIG_NOT_FOUND`` rather than the misleading
     ``ENTITY_NOT_FOUND``/``RESOURCE_NOT_FOUND`` (issue #1971). Subclasses
     ``HomeAssistantAPIError`` so existing ``except HomeAssistantAPIError`` sites
@@ -2084,16 +2084,14 @@ class HomeAssistantClient:
     async def _resolve_scene(self, identifier: str) -> SceneResolution:
         """Resolve a scene identifier to its storage key AND registry metadata.
 
-        Backs :meth:`resolve_scene_id`. On a config-API 404, ``registry_hit``
-        tells "entity missing" from "entity exists but has no editable storage
-        config", and ``platform`` names the owning integration (issue #1971).
-
-        With the component, a bare id first names the scene Core registered
-        under it, wherever its YAML defines it; a removed YAML scene's leftover
-        entry names nothing. Then a bare id that is a storage key wins over
-        another scene whose entity is ``scene.<id>``, and ``scene.<id>`` raises
-        SceneIdNotAnEntityError when no such entity exists but key ``<id>``
-        holds a scene. A failed read raises (:meth:`_registry_entry`).
+        Backs :meth:`resolve_scene_id`. With the component, a bare id first
+        names the scene Core registered under it, loaded or disabled, wherever
+        its YAML defines it; an entry Core no longer loads (a removed YAML
+        scene) names nothing. Then a bare id that is a storage key wins over
+        another scene whose entity is ``scene.<id>``, else names that scene;
+        ``scene.<id>`` raises SceneIdNotAnEntityError when no such entity exists
+        but key ``<id>`` holds a scene. A component that does not answer leaves
+        the registry path; a failed registry or config read raises.
         """
         # Local import: component_config_reads imports this module.
         from ..tools.component_config_reads import scenes_with_id
@@ -2102,8 +2100,8 @@ class HomeAssistantClient:
         qualified = identifier != bare_id
         rows = None if qualified else await scenes_with_id(self, bare_id)
         for row in rows or []:
-            if row["loaded"] or row.get("disabled_by"):
-                disabled = bool(row.get("disabled_by"))
+            disabled = bool(row.get("disabled_by"))
+            if row["loaded"] or disabled:
                 return SceneResolution(
                     bare_id, True, "homeassistant", row["entity_id"], disabled
                 )
@@ -2111,17 +2109,17 @@ class HomeAssistantClient:
         if entry and entry.get("entity_id") in {row["entity_id"] for row in rows or []}:
             entry = None
         unchecked = not qualified and rows is None
-        fallback = SceneResolution(bare_id, False, None, id_unchecked=unchecked)
+        fallback = SceneResolution(
+            bare_id, False, None, leftover=bool(rows), id_unchecked=unchecked
+        )
         if entry and entry.get("unique_id"):
+            key, platform = str(entry["unique_id"]), entry.get("platform")
             disabled = bool(entry.get("disabled_by"))
-            registered = SceneResolution(
-                str(entry["unique_id"]), True, entry.get("platform"), disabled=disabled
-            )
-            if qualified or registered.storage_key == bare_id:
+            registered = SceneResolution(key, True, platform, disabled=disabled)
+            if qualified or key == bare_id:
                 return registered
-            return (
-                fallback if await self._config_exists("scene", bare_id) else registered
-            )
+            stored = await self._config_exists("scene", bare_id)
+            return fallback if stored else registered
         if qualified and entry is None and await self._config_exists("scene", bare_id):
             raise SceneIdNotAnEntityError(identifier, bare_id)
         return fallback
@@ -2183,17 +2181,17 @@ class HomeAssistantClient:
         """
         return (await self._resolve_scene(identifier)).storage_key
 
-    async def _scene_live(self, storage_key: str) -> bool:
-        """Whether ``scene.<storage_key>`` has a state Core did not restore: an
-        ``id``-less YAML scene has one, a removed scene's placeholder is no scene
-        (#1971). A 404 is False; another failure raises."""
+    async def _scene_state_exists(self, storage_key: str) -> bool:
+        """Whether ``scene.<storage_key>`` has a state: an ``id``-less YAML scene
+        has one but no registry entry (#1971). A 404 is False; another failure
+        raises."""
         try:
-            state = await self.get_entity_state(f"scene.{storage_key}")
+            await self.get_entity_state(f"scene.{storage_key}")
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
                 return False
             raise
-        return not state.get("attributes", {}).get("restored")
+        return True
 
     async def _raise_scene_config_404(
         self,
@@ -2203,8 +2201,8 @@ class HomeAssistantClient:
     ) -> NoReturn:
         """Translate a scene config-API 404 into the right exception.
 
-        A ``registry_hit``, or a live state (:meth:`_scene_live`) on a miss,
-        is a scene without editable storage config
+        A ``registry_hit``, or a state (:meth:`_scene_state_exists`) on a miss
+        that is no ``leftover``, is a scene without editable storage config
         (:class:`SceneStorageConfigNotFoundError`, issue #1971); else the 404 is
         a missing scene. ``resolution`` None (the ``_resolved`` re-fetch) skips
         the state check: a 404 there is a disappearance.
@@ -2217,7 +2215,7 @@ class HomeAssistantClient:
                     storage_key=resolved_id,
                     disabled=resolution.disabled,
                 )
-            if await self._scene_live(resolved_id):
+            if not resolution.leftover and await self._scene_state_exists(resolved_id):
                 raise SceneStorageConfigNotFoundError(
                     scene_id, platform=None, storage_key=resolved_id
                 )
