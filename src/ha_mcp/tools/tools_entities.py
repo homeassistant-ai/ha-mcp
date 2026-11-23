@@ -629,12 +629,14 @@ class EntityTools:
         options_succeeded: dict[str, dict[str, Any]],
         device_rename_result: dict[str, Any] | None,
         updates_made: list[str],
+        refetch: bool,
     ) -> tuple[dict[str, bool] | None, dict[str, Any] | None, str | None]:
         """Apply expose_to changes and add their entry to updates_made.
 
         Returns (exposure_result, entity_entry, warning): entity_entry is None
         for an entity without a registry entry, and warning says when the
-        entry could not be re-read after the write.
+        entry could not be re-read after the write. Without ``refetch`` (the
+        reply carries no entry) nothing is read after the write.
         """
         if parsed_expose_to is None:
             return None, entity_entry, None
@@ -693,8 +695,8 @@ class EntityTools:
         exposure_result: dict[str, bool] | None = succeeded if succeeded else None
         unchanged = target not in changed
         updates_made.append(expose_update(parsed_expose_to, unchanged))
-        if entry is None:
-            return exposure_result, None, None
+        if entry is None or not refetch:
+            return exposure_result, entry, None
 
         # Exposure mutates the registry entry's options, so refetch to return
         # the post-exposure state. The exposure already committed: a failed
@@ -787,6 +789,7 @@ class EntityTools:
         parsed_options: dict[str, dict[str, Any]] | None = None,
         use_entity_name_alias: bool | None = None,
         use_device_name: bool | None = None,
+        include_entity_entry: bool = True,
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
         reject_name_with_use_device_name(name, use_device_name)
@@ -931,6 +934,7 @@ class EntityTools:
                 options_succeeded,
                 device_rename_result,
                 updates_made,
+                refetch=include_entity_entry,
             )
 
         # Phase 7: Build response
@@ -1368,6 +1372,7 @@ class EntityTools:
                     parsed_options=parsed_options,
                     use_entity_name_alias=use_entity_name_alias,
                     use_device_name=use_device_name,
+                    include_entity_entry=include_entity_entry,
                 )
                 if not include_entity_entry:
                     del result["entity_entry"]

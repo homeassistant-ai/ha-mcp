@@ -94,6 +94,15 @@ class TestBulk:
 
         assert "empty" in error_of(exc_info)["message"].lower()
 
+    async def test_a_list_without_any_change_is_refused(
+        self, tools: EntityTools, sent: AsyncMock
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(entity_id=["light.a", "light.b"])
+
+        assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+        sent.assert_not_called()
+
     async def test_add_keeps_each_entitys_own_labels(
         self,
         tools: EntityTools,

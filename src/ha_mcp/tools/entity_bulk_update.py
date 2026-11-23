@@ -3,7 +3,7 @@
 Core's ``config/entity_registry/update`` takes one entity, so labels,
 categories, enabled and hidden go out once per entity; expose_to goes out as
 one ``homeassistant/expose_entity`` call for the assistants turned on and one
-for those turned off, each for the whole list. Each succeeded row
+for those turned off, each for every id still in the run. Each succeeded row
 keeps what Core answered for its entity besides the entry, such as
 ``require_restart`` or ``reload_delay`` after an enable. With auto-backup on,
 each entity gets its own pre-write snapshot, as a single-entity call does.
@@ -67,15 +67,13 @@ async def _registry_phase(
         if isinstance(result, BaseException) and not isinstance(result, Exception):
             # Never swallow cancellation/shutdown into per-entity errors.
             raise result
-        if isinstance(result, BaseException):
-            error_msg = (
-                extract_tool_error_message(result)
-                if isinstance(result, ToolError)
-                else str(result)
+        if isinstance(result, ToolError):
+            failed.append(
+                {"entity_id": eid, "error": extract_tool_error_message(result)}
             )
-            if not isinstance(result, ToolError):
-                logger.warning("Bulk update of %s failed", eid, exc_info=result)
-            failed.append({"entity_id": eid, "error": error_msg})
+        elif isinstance(result, BaseException):
+            logger.warning("Bulk update of %s failed", eid, exc_info=result)
+            failed.append({"entity_id": eid, "error": str(result)})
         else:
             # update_one returns success-shape or raises ToolError (caught above).
             entry_by_id[eid] = result.get("entity_entry")
@@ -98,7 +96,9 @@ async def _expose_phase(
     Returns (still_eligible_ids, newly_failed, warnings). An id that
     ``expose_targets`` cannot resolve fails before the write. A failed
     expose call is reported against every id it was sent for (each call
-    acts on the whole list) and clears eligibility. On success, options
+    acts on the whole list) and clears eligibility; when an earlier set of
+    that exposure landed, each such row is partial and names it under
+    ``exposure_succeeded``. On success, options
     mutate, so one get_entries refetch refreshes each registry entry; a
     refetch failure keeps the pre-exposure entry, since the exposure
     already committed, and adds a warning. Without ``refetch`` (the reply
@@ -108,16 +108,16 @@ async def _expose_phase(
     eligible_ids = [eid for eid in eligible_ids if eid in targets]
     if not eligible_ids:
         return [], failed, []
-    expose_error, changed = await apply_bulk_expose(
+    expose_error, changed, applied = await apply_bulk_expose(
         client,
         [targets[eid] for eid in eligible_ids],
         parsed_expose_to,
         _extract_ws_error,
     )
     if expose_error is not None:
+        landed = {"partial": True, "exposure_succeeded": applied} if applied else {}
         failed.extend(
-            {"entity_id": eid, "error": f"Exposure failed: {expose_error}"}
-            for eid in eligible_ids
+            {"entity_id": eid, "error": expose_error, **landed} for eid in eligible_ids
         )
         return [], failed, []
 

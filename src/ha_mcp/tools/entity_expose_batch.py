@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from ..client.exceptions import HomeAssistantError
+from ..client.exceptions import HomeAssistantCommandNotSent, HomeAssistantError
 from .entity_exposure import get_entries_or_unregistered
 from .helpers import raise_core_refusal
 
@@ -54,20 +54,22 @@ async def apply_bulk_expose(
     entity_ids: list[str],
     parsed_expose_to: dict[str, bool],
     extract_error: Callable[[dict[str, Any]], str],
-) -> tuple[str | None, set[str]]:
+) -> tuple[str | None, set[str], dict[str, bool]]:
     """Expose/hide many entities in one homeassistant/expose_entity call per set.
 
     The command's schema accepts the full entity_ids list, so bulk exposure
     needs at most two WS calls (one for the assistants being turned on, one
     for those being turned off) regardless of entity count — not one per
-    entity. Returns (error, changed): error is None on success, or the message
-    of the first failing set (a refusal or a lost connection), which applies
-    to every id in the list. changed
-    holds the ids Core reports it changed, and is empty on error.
+    entity. Returns (error, changed, applied). error is None on success, else
+    the row error for the first failing set, which applies to every id in the
+    list: a refusal or an unsent command failed, while a connection lost after
+    sending leaves the outcome unknown. changed holds the ids Core reports it
+    changed, and is empty on error. applied maps each assistant whose set
+    landed to its value.
     """
     expose_true = [a for a, v in parsed_expose_to.items() if v]
     expose_false = [a for a, v in parsed_expose_to.items() if not v]
-    applied: list[str] = []
+    applied: dict[str, bool] = {}
     changed: set[str] = set()
     for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
         if not assistants:
@@ -76,6 +78,7 @@ async def apply_bulk_expose(
             f"{'Exposing' if should_expose else 'Hiding'} {len(entity_ids)} "
             f"entities {'to' if should_expose else 'from'} {assistants}"
         )
+        error: str | None
         try:
             result = await client.send_websocket_message(
                 {
@@ -85,10 +88,22 @@ async def apply_bulk_expose(
                     "should_expose": should_expose,
                 }
             )
+        except HomeAssistantCommandNotSent as exc:
+            error = f"Exposure failed: {extract_error({'error': str(exc)})}"
         except HomeAssistantError as exc:
-            result = {"success": False, "error": str(exc)}
-        if not result.get("success"):
-            error = extract_error(result)
+            # Sent, then no answer: Core may have applied it.
+            error = (
+                "Exposure outcome unknown: Home Assistant did not answer "
+                f"({extract_error({'error': str(exc)})}); "
+                "the exposure may have been applied, and sending it again is safe"
+            )
+        else:
+            error = (
+                None
+                if result.get("success")
+                else f"Exposure failed: {extract_error(result)}"
+            )
+        if error is not None:
             if applied:
                 # The earlier assistant group already changed — say so, or
                 # the all-failed report implies no exposure was touched.
@@ -97,10 +112,10 @@ async def apply_bulk_expose(
                     f"{', '.join(applied)} were already applied before "
                     "this failure)"
                 )
-            return error, set()
-        applied.extend(assistants)
+            return error, set(), applied
+        applied.update(dict.fromkeys(assistants, should_expose))
         changed |= changed_entity_ids(result)
-    return None, changed
+    return None, changed, applied
 
 
 async def expose_targets(
