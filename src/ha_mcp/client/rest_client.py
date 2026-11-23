@@ -104,11 +104,11 @@ class SceneResolution:
     which reads only ``scenes.yaml``, #1971). ``platform``, the entry's
     integration domain, only enriches messages: a raw-YAML scene is
     ``"homeassistant"`` yet still 404s. ``entity_id``: the entity the component's
-    ``entity_lookup`` named (None on the registry path); ``disabled``: whether it is disabled; ``leftover``: the component
-    named only entries Core no longer loads, ``scene.<id>`` among them (a
-    removed YAML scene);
-    ``id_unchecked``: a bare id that fell back to itself without the component
-    (or one lacking ``entity_lookup_loaded``) to check it (#2632).
+    ``entity_lookup`` named (None on the registry path); ``disabled``: whether
+    it is disabled; ``leftover``: the component named only entries Core no
+    longer loads, ``scene.<id>`` among them (a removed YAML scene);
+    ``id_unchecked``: a bare id that fell back to itself with no component
+    answer to check it (none, no ``entity_lookup_loaded``, no reply; #2632).
     """
 
     storage_key: str
@@ -2107,12 +2107,11 @@ class HomeAssistantClient:
                     bare_id, True, "homeassistant", row["entity_id"], disabled
                 )
         own = f"scene.{bare_id}".lower()  # Core keeps entity_ids lowercase
-        leftover = any(row["entity_id"] == own for row in rows or [])
-        entry = None if leftover else await self._registry_entry("scene", identifier)
+        if any(row["entity_id"] == own for row in rows or []):
+            return SceneResolution(bare_id, False, None, leftover=True)
+        entry = await self._registry_entry("scene", identifier)
         unchecked = not qualified and rows is None
-        fallback = SceneResolution(
-            bare_id, False, None, leftover=leftover, id_unchecked=unchecked
-        )
+        fallback = SceneResolution(bare_id, False, None, id_unchecked=unchecked)
         if entry and entry.get("unique_id"):
             key, platform = str(entry["unique_id"]), entry.get("platform")
             disabled = bool(entry.get("disabled_by"))
