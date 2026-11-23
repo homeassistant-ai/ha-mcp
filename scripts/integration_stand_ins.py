@@ -52,7 +52,6 @@ from stand_in_allowlist import (  # type: ignore[import-not-found]
 )
 from stand_in_resolver import (  # type: ignore[import-not-found]
     COMPREHENSIONS,
-    FunctionKey,
     DEFINITIONS,
     ENDLESS,
     FUNCTIONS,
@@ -65,6 +64,7 @@ from stand_in_resolver import (  # type: ignore[import-not-found]
     TOO_MANY,
     UNKNOWN,
     Finding,
+    FunctionKey,
     Mode,
     Module,
     Param,
