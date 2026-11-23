@@ -243,7 +243,8 @@ class Checker:
         self.functions: dict[int, FunctionKey] = {}
         self.methods: dict[int, ast.ClassDef] = {}  # each method's class
         self.sinks: set[Param] = set()
-        self.sink_sites: dict[Param, tuple[str, int, str]] = {}  # where each began
+        # Each sink parameter's call sites.
+        self.sink_sites: dict[Param, set[tuple[str, int, str]]] = {}
         self.called: set[FunctionKey] = set()  # functions a call in the trees fills
         # Parameters with values of their own: a default or ``parametrize``.
         self.given: set[tuple[FunctionKey, str]] = set()
@@ -668,7 +669,8 @@ class Checker:
             if self.sinks == before:
                 self.unresolved |= {
                     site
-                    for param, site in self.sink_sites.items()
+                    for param, sites in self.sink_sites.items()
+                    for site in sites
                     if param[0] not in self.called
                     and (param[0], param[1]) not in self.given
                 }
@@ -816,7 +818,7 @@ class Checker:
             if match := _MARKER.fullmatch(domain):
                 param = self.params[int(match.group(1))]
                 self.sinks.add(param)
-                self.sink_sites.setdefault(param, site)
+                self.sink_sites.setdefault(param, set()).add(site)
             elif (match := _MARKER.search(domain)) and not _MARKER.search(
                 domain, match.end()
             ):
@@ -828,7 +830,7 @@ class Checker:
                     continue
                 param = (function, param_name, f"{taken}|{wrap}")
                 self.sinks.add(param)
-                self.sink_sites.setdefault(param, site)
+                self.sink_sites.setdefault(param, set()).add(site)
             elif domain == TOO_MANY or domain in self.real:
                 self.findings.add(Finding(module.path, call.lineno, domain, via))
             elif UNKNOWN in domain:

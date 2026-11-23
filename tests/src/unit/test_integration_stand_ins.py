@@ -247,17 +247,18 @@ def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
 def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, capsys):
     source = (
         "MockModule('made_up_probe')\nMockModule(pick())\n"
-        "def test_it(hass, name):\n    mock_component(hass, name)\n"
+        "def test_it(hass, name):\n    mock_component(hass, name)\n    MockModule(name)\n"
     )
     repo = _repo(tmp_path, {_SAMPLE: source})
 
     status = guard.main(["--repo", str(repo), "--all"])
 
-    assert (status, capsys.readouterr().out.splitlines()[:2]) == (
+    assert (status, capsys.readouterr().out.splitlines()[:3]) == (
         0,
         [
             f"{_SAMPLE}:2: MockModule() gets a name only known at runtime",
             f"{_SAMPLE}:4: mock_component() gets a name only known at runtime",
+            f"{_SAMPLE}:5: MockModule() gets a name only known at runtime",
         ],
     )
 
