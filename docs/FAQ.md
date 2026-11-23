@@ -1121,6 +1121,11 @@ automation:
         data:
           title: "Approval needed: {{ trigger.event.data.tool_name }}"
           message: "{{ trigger.event.data.args }}"
+          data:
+            # Opens the panel on the tab and card this request names.
+            # clickAction is Android, url is iOS; the app ignores the other.
+            clickAction: "/ha-mcp?tab=tool-security-policies&token={{ trigger.event.data.token }}"
+            url: "/ha-mcp?tab=tool-security-policies&token={{ trigger.event.data.token }}"
 ```
 
 The event data carries `token`, `tool_name`, `args`, `created_at` and
