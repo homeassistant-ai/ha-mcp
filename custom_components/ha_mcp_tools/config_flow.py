@@ -112,7 +112,7 @@ from .oauth_redirect_allowlist import (
     stored_allowlist,
 )
 from .server_pin import server_pins
-from .spec_dist import version_dist
+from .spec_dist import pip_spec_override, version_dist
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -776,17 +776,16 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         best-effort string ("unknown" / "not installed yet") rather than
         breaking the options form.
         """
-        opts = self.config_entry.options
-        override = str(opts.get(OPT_PIP_SPEC) or "").strip()
+        override = pip_spec_override(self.config_entry.options)
         source = (
             common["server_source_override"]
-            if override and override != DEFAULT_PIP_SPEC
+            if override
             else common["server_source_paired"]
         )
 
         component_version = common["version_unknown"]
         # The effective spec, as bring-up resolves it: the override, else the pin.
-        spec = override if override != DEFAULT_PIP_SPEC else ""
+        spec = override
         hass = getattr(self, "hass", None)
         if hass is not None:
             try:
