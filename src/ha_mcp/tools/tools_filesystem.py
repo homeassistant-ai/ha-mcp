@@ -32,6 +32,7 @@ from .auto_backup import with_auto_backup
 from .coercion import JSON_STRING_COERCION
 from .component_api import ComponentCaps, get_component_caps
 from .config_entry_flow import COMPONENT_DOMAIN as MCP_TOOLS_DOMAIN
+from .config_file_visibility import refuse_changing_hidden_definitions
 from .file_edit_refusal import raise_edit_file_refusal
 from .helpers import (
     exception_to_structured_error,
@@ -739,6 +740,7 @@ class FilesystemTools:
         id_param="path",
         mandatory=True,
         skip_fn=_write_mode_is_invalid,
+        precheck=refuse_changing_hidden_definitions,
     )
     @log_tool_usage
     async def ha_write_file(
@@ -848,19 +850,12 @@ class FilesystemTools:
                     )
                 )
 
-            # Check if custom component is available
             await _assert_mcp_tools_available(self._client)
 
             service: str
             service_data: dict[str, Any]
             if edits is not None:
-                from .config_file_visibility import refuse_reading_hidden_definitions
-
                 await _assert_file_edits_supported(self._client)
-                # Which edit failed reveals whether a guessed text is in the file.
-                await refuse_reading_hidden_definitions(
-                    self._client, "ha_write_file", [path]
-                )
                 service = EDIT_FILE_SERVICE
                 service_data = {"path": path, "edits": edits}
             else:
@@ -872,7 +867,6 @@ class FilesystemTools:
                     "create_dirs": create_dirs,
                 }
 
-            # Call the custom component service
             result = await call_mcp_tools_service(
                 self._client,
                 service,
@@ -912,7 +906,13 @@ class FilesystemTools:
             "Delete File", destructive=True, idempotent=True, open_world=False
         ),
     )
-    @with_auto_backup(domain="file", id_param="path", mandatory=True)
+    @with_auto_backup(
+        domain="file",
+        id_param="path",
+        mandatory=True,
+        precheck=refuse_changing_hidden_definitions,
+        skip_fn=lambda kwargs: not kwargs.get("confirm"),
+    )
     @log_tool_usage
     async def ha_delete_file(
         self,
@@ -959,13 +959,10 @@ class FilesystemTools:
                     )
                 )
 
-            # Check if custom component is available
             await _assert_mcp_tools_available(self._client)
 
-            # Build service data
             service_data: dict[str, Any] = {"path": path}
 
-            # Call the custom component service
             result = await call_mcp_tools_service(
                 self._client,
                 "delete_file",

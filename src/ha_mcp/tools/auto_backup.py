@@ -282,6 +282,7 @@ def with_auto_backup(
     skip_fn: Callable[[dict[str, Any]], bool] | None = None,
     domain_resolver: Callable[[Any, dict[str, Any], str, str], Awaitable[str]]
     | None = None,
+    precheck: Callable[[Any, str, dict[str, Any]], Awaitable[None]] | None = None,
 ) -> Callable[..., Any]:
     """Decorate a write/destructive tool with pre-write auto-backup capture.
 
@@ -307,6 +308,11 @@ def with_auto_backup(
     ``domain_resolver`` optionally refines the capture domain from HA metadata.
     It receives the client, tool kwargs, initial domain and entity ID inside
     the write guard, before capture. Its failures follow the capture policy.
+
+    ``precheck`` optionally refuses the call before anything is captured, with
+    the client, the tool's name and its kwargs, so a refused call leaves no
+    snapshot behind. Unless ``skip_fn`` skips the decorator, it runs
+    whether or not a capture would be taken.
 
     ``mandatory=True`` makes auto-backup a precondition (file/YAML writes,
     #1579 — those formerly kept their own private backups). It fails the
@@ -368,6 +374,10 @@ def with_auto_backup(
                             "enable_auto_backup": False,
                         },
                     )
+                )
+            if precheck is not None:
+                await precheck(
+                    _resolve_backup_client(explicit_client, args), func.__name__, kwargs
                 )
             snap_domain, entity_id = _resolve_snapshot_target(
                 kwargs,

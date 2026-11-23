@@ -1061,8 +1061,12 @@ dimension. What it covers:
   with `domain: script` and that key as `service`, is concealed as not-found
   too. A script or automation body that calls `script.<storage key>`, a raw
   `trace/*` command or result naming the key, and an `ha_read_file` /
-  `ha_config_get_yaml` read or `ha_write_file(edits=)` edit of a file that
-  defines a hidden item are refused. A file defines one when Home Assistant's
+  `ha_config_get_yaml` read, an `ha_write_file` write or `ha_delete_file`
+  delete of a file that defines a hidden item are refused, the write and
+  delete before their auto-backup is taken. `ha_manage_backup(scope="edits")`
+  likewise refuses to show, compare, restore or take a backup of such a file.
+  Any backup whose file no longer defines the item stays readable, including
+  one taken by an `ha_config_set_yaml` write, which is not checked. A file defines one when Home Assistant's
   loader takes part of the item's definition from it: `scripts.yaml`,
   `scenes.yaml` and `automations.yaml`, a package, or any file pulled in with
   `!include` or `!include_dir_*`. The whole file counts, even when only a

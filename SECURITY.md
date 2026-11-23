@@ -157,7 +157,14 @@ asked for). A copy Home Assistant does not load defines nothing and stays
 readable. A file that holds a single value, or no text at all (only numbers,
 booleans or nulls), can stay readable too: `!include` names the included value
 after the including file, and `!include_dir_merge_list` keeps only each file's
-items. Core's log files and `secrets.yaml` are not checked. Those enforced
+items. Core's log files and `secrets.yaml` are not checked. An `ha_write_file`
+write or `ha_delete_file` delete of such a file is refused before its
+auto-backup is taken, and `ha_manage_backup(scope="edits")` refuses to show,
+compare, restore or take a backup of a file while the file defines a hidden
+item; a legacy backup whose name fits more than one file is refused while
+anything is hidden. The check judges the file as it is now: any backup whose
+file no longer defines the item stays readable, including one taken by an
+`ha_config_set_yaml` write, which is not checked. Those enforced
 paths fail closed when registry data or the configuration cannot be loaded, or
 the component cannot be reached or lacks the check.
 

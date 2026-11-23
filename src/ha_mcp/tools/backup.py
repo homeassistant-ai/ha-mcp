@@ -57,6 +57,7 @@ from .backup_update_settings import (
     configure_update_backup_settings,
 )
 from .coercion import JSON_STRING_COERCION
+from .config_file_visibility import refuse_reading_hidden_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -383,6 +384,7 @@ survives an agent's own mistakes.
         # scope == "edits"
         mgr = get_backup_manager(client, settings)
         return await _dispatch_edits_action(
+            client,
             mgr,
             settings,
             action,
@@ -441,6 +443,7 @@ async def _dispatch_snapshot_action(
 
 
 async def _dispatch_edits_action(
+    client: Any,
     mgr: BackupManager,
     settings: Any,
     action: str,
@@ -453,6 +456,10 @@ async def _dispatch_edits_action(
     limit: int,
 ) -> dict[str, Any]:
     """Route a ``scope="edits"`` action to its per-entity auto-backup handler."""
+    if action == "create" and domain and entity_id:
+        await refuse_reading_hidden_backup(client, domain, entity_id)
+    if action in ("view", "diff", "restore") and backup_name:
+        await _refuse_hidden_file_backup(client, mgr, backup_name)
     if action == "create":
         return await _edits_create(mgr, scope, action, domain, entity_id)
     if action == "list":
@@ -465,6 +472,23 @@ async def _dispatch_edits_action(
         return await _edits_restore(mgr, scope, action, backup_name)
     # action == "delete"
     return await _edits_delete(mgr, domain, entity_id, backup_name, older_than_days)
+
+
+async def _refuse_hidden_file_backup(
+    client: Any, mgr: BackupManager, bname: str
+) -> None:
+    """Refuse a backup of a config file that defines a hidden item. A backup
+    that cannot be read is left to the action, which reports why."""
+    try:
+        if bname.startswith(LEGACY_PREFIX):
+            info = await mgr.read_legacy(bname[len(LEGACY_PREFIX) :])
+            path = None if info.get("path_ambiguous", True) else info.get("file_path")
+            await refuse_reading_hidden_backup(client, "yaml_file", path)
+            return
+        data = await asyncio.to_thread(mgr.read_snapshot, bname)
+    except OSError, ValueError:
+        return
+    await refuse_reading_hidden_backup(client, data["domain"], data["entity_id"])
 
 
 async def _edits_create(
