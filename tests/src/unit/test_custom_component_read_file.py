@@ -169,6 +169,24 @@ class TestCoreLogFile:
         assert (result["success"], result["content"]) == (True, "l5\n")
         assert result["total_lines"] == len(LOG_SAMPLE.split("\n"))
 
+    @pytest.mark.parametrize(
+        ("name", "hinted"),
+        [(ERROR_LOG, True), (f"./{ERROR_LOG}", True), (FAULT_LOG, False)],
+    )
+    async def test_a_read_of_cores_log_points_to_the_log_tool(
+        self, hass: HomeAssistant, files: FileService, name: str, hinted: bool
+    ) -> None:
+        await put(hass, {ERROR_LOG: LOG_SAMPLE, FAULT_LOG: LOG_SAMPLE})
+        hass.data[KEY_DATA_LOGGING] = hass.config.path(ERROR_LOG)
+
+        result = await _read(files, name)
+
+        assert result["success"] is True
+        if hinted:
+            assert "ha_get_logs(source='error_log')" in result["hint"]
+        else:
+            assert "hint" not in result
+
     # Under Supervisor, HA_DUPLICATE_LOG_FILE keeps Core's file log on.
     @pytest.mark.parametrize("supervisor", [False, True])
     async def test_reads_the_log_where_core_writes_it(
@@ -278,6 +296,7 @@ class TestReadFile:
         assert result["success"] is True
         assert result["content"] == "hello world"
         assert result["size"] == 11
+        assert "hint" not in result
         datetime.fromisoformat(result["modified"])
 
     @pytest.mark.parametrize(

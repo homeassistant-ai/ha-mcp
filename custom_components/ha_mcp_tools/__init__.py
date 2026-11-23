@@ -25,6 +25,7 @@ from typing import Any
 import voluptuous as vol
 import yaml  # type: ignore[import-untyped]
 from annotatedyaml import SECRET_YAML
+from homeassistant.bootstrap import ERROR_LOG_FILENAME
 from homeassistant.components import persistent_notification
 from homeassistant.config import async_check_ha_config_file
 from homeassistant.config_entries import ConfigEntry
@@ -2724,8 +2725,8 @@ async def _shape_read_file_response(
 ) -> dict[str, Any]:
     """Shape a successful _read_file_sync result into the read_file response.
 
-    Applies secrets masking, log tailing, optional tail, and yaml_path
-    subtree extraction.
+    Applies secrets masking, log tailing (with a hint to ha_get_logs on
+    Core's log), optional tail, and yaml_path subtree extraction.
     """
     modified_dt = datetime.fromtimestamp(result["mtime"])
     content = result["content"]
@@ -2744,7 +2745,7 @@ async def _shape_read_file_response(
     if normalized in TAILED_LOG_FILES:
         limit = tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES
         total_lines = result["total_lines"]
-        return {
+        log_response: dict[str, Any] = {
             "success": True,
             "path": rel_path,
             "content": content,
@@ -2754,6 +2755,12 @@ async def _shape_read_file_response(
             "total_lines": total_lines,
             "truncated": result["truncated"],
         }
+        if normalized == ERROR_LOG_FILENAME:
+            log_response["hint"] = (
+                "ha_get_logs(source='error_log') is the tool built for "
+                "Home Assistant's log."
+            )
+        return log_response
 
     # Apply tail for other files if requested
     full_content = content
