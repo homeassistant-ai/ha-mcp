@@ -573,9 +573,12 @@ let authDead = false;
 // Set once the session is minted and the app URL probed: before that, a
 // navigation must not point the iframe at the app (see applyLink).
 let appReady = false;
-// Set when a probe failed: the iframe may be showing the proxy's error page,
-// and the next successful mint has to reload it even if the src still matches.
-let probeWasDown = false;
+// Set when a navigation has pointed the iframe at a link since the last
+// successful probe, and when a probe failed while that load was pending. Only
+// the pair means the load may be the proxy's error page: a probe that fails
+// with no navigation behind it leaves a working app alone (see showApp).
+let navSinceSuccess = false;
+let navProbeFailed = false;
 
 function homeAssistantRoot() {{
   try {{
@@ -641,6 +644,12 @@ function applyLink(force, reloadIfSame) {{
   const target = appUrl();
   if (frame.getAttribute("src") !== target) {{
     frame.setAttribute("src", target);
+    if (!force) {{
+      // This load is the one a failed probe would have to account for. The
+      // periodic mint must not use that flag for a failure it did not cause.
+      navSinceSuccess = true;
+      navProbeFailed = false;
+    }}
     return;
   }}
   // reloadIfSame covers a repeat of the link just followed; !force is a fresh
@@ -783,12 +792,12 @@ async function showApp() {{
   try {{
     probe = await fetchWithTimeout(targetUrl, {{ credentials: "same-origin" }});
   }} catch (err) {{
-    probeWasDown = true;
+    if (navSinceSuccess) navProbeFailed = true;
     transientFailure("Could not reach Home Assistant to load the settings UI.");
     return;
   }}
   if (probe.status === 503) {{
-    probeWasDown = true;
+    if (navSinceSuccess) navProbeFailed = true;
     if (!timer) {{
       showMessage(
         "The in-process MCP server is starting or is not running yet. " +
@@ -802,16 +811,18 @@ async function showApp() {{
     return;
   }}
   if (!probe.ok) {{
-    probeWasDown = true;
+    if (navSinceSuccess) navProbeFailed = true;
     transientFailure("The settings UI returned HTTP " + probe.status + ".");
     return;
   }}
-  // A probe that just recovered means the iframe may still be showing the
-  // proxy's error page even though its src already matches: reload it once.
-  const wasDown = probeWasDown;
-  probeWasDown = false;
+  // A probe that failed while a navigation load was pending means that load
+  // may be the proxy's error page: reload it once, now that the probe is
+  // back. A failure with no navigation behind it leaves a working app alone.
+  const reload = navSinceSuccess && navProbeFailed;
+  navSinceSuccess = false;
+  navProbeFailed = false;
   appReady = true;
-  applyLink(true, wasDown);
+  applyLink(true, reload);
   msg.classList.add("hidden");
   frame.classList.remove("hidden");
   if (!timer) {{
