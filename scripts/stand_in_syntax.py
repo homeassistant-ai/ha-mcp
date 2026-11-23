@@ -49,13 +49,22 @@ def _format_parts(text: str, call: ast.Call) -> list[ast.expr] | None:
         key = field
         if not key:
             key, automatic = str(automatic), automatic + 1
-        if key.isascii() and key.isdecimal() and int(key) < len(call.args):
-            parts.append(call.args[int(key)])
+        index = _index(key)
+        if index is not None and index < len(call.args):
+            parts.append(call.args[index])
         elif key in keywords:
             parts.append(keywords[key])
         else:
             return None
     return parts
+
+
+def _index(key: str) -> int | None:
+    """The positional argument a format field names, when it names one."""
+    try:
+        return int(key) if key.isdecimal() else None
+    except ValueError:  # more digits than a number is read from
+        return None
 
 
 def name_parts(node: object) -> list[ast.expr] | None:
@@ -135,7 +144,9 @@ def bound_argument(
         return None if spread else ast.Tuple(call.args[len(positional) :], ast.Load())
     if function.args.kwarg and param == function.args.kwarg.arg:
         # ``**options`` holds the keywords no parameter takes.
-        named = {*positional, *(a.arg for a in function.args.kwonlyargs)}
+        # A positional-only parameter's name is free for a keyword to use.
+        by_keyword = (*function.args.args, *function.args.kwonlyargs)
+        named = {a.arg for a in by_keyword}
         extra = [k for k in call.keywords if k.arg not in named]
         if spread:
             return None

@@ -277,6 +277,14 @@ REFUSED = {
         "    for _ in range(2):\n        MockModule(name)\n"
         "        if flag:\n            name = 'hassio'\n"
     ),
+    "keyword-named-like-a-positional-only-parameter": (
+        "def register(name, /, **domains):\n"
+        "    for domain in domains.values():\n        MockModule(domain)\n"
+        "register('unused', name='hassio')\n"
+    ),
+    "format-field-in-another-scripts-digits": (
+        "MockModule('{\u0660}'.format('hassio'))\n"
+    ),
     "helper-two-parameters": (
         "def register(hass, a, b):\n    mock_component(hass, f'{a}{b}')\n"
         "register(hass, 'hass', 'io')\n"
@@ -551,6 +559,9 @@ ALLOWED = {
         "def test_it(hass, name):\n    MockModule(name)\n"
     ),
     "format-field-that-is-not-a-number": "MockModule('{\u00b2}'.format())\n",
+    "format-field-too-long-for-a-number": (
+        "MockModule('{" + "9" * 5000 + "}'.format('hassio'))\n"
+    ),
     "spread-call-with-a-default": (
         "def register(hass, name='hassio'):\n    MockModule(name)\n"
         "register(hass, **{'name': 'made_up_probe'})\n"
