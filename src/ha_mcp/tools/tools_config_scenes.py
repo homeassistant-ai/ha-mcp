@@ -1169,8 +1169,8 @@ class ConfigSceneTools:
         )
         if id_unchecked:
             result.setdefault("warnings", []).append(
-                f"Stored as a new scene under key '{resolved_id}'. Without the "
-                "ha_mcp_tools component the server cannot check whether a scene "
+                f"Stored as a new scene under key '{resolved_id}'. Without an "
+                "up-to-date ha_mcp_tools component the server cannot check whether a scene "
                 "defined in YAML outside scenes.yaml already has this id; if one "
                 "does, Home Assistant now loads only one of the two. "
                 + COMPONENT_INSTALL_HINT

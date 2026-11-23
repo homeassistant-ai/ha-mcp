@@ -1,7 +1,6 @@
 """Resolve scene and script storage keys to their registry entity IDs."""
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any, Literal
@@ -14,10 +13,14 @@ from ..client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
-from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
+from ..errors import ErrorCode, create_error_response
 from .component_config_reads import fetch_entity_lookup_via_component
-from .helpers import exception_to_structured_error, raise_tool_error
-from .scene_checks import leftover_step
+from .helpers import (
+    exception_to_structured_error,
+    extract_structured_error_reason,
+    raise_tool_error,
+)
+from .scene_checks import refuse_unactivatable_scene
 from .ws_waiters import REGISTER_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -175,10 +178,8 @@ async def scene_entity_to_activate(client: Any, scene_id: str) -> str:
     never ``scene.<id>``, which can be another scene's; any other bare id
     becomes ``scene.<id>`` (an integration scene, or a YAML scene without an
     ``id``), and so does every bare id without an entry for a non-admin token,
-    which Core does not let read ``scenes.yaml``. A failed registry, config or
-    state read raises, an entity without a state is ENTITY_NOT_FOUND and an
-    unavailable one (also the restored placeholder of a removed YAML scene)
-    ENTITY_UNAVAILABLE.
+    which Core does not let read ``scenes.yaml``. A failed registry or config
+    read raises; then :func:`refuse_unactivatable_scene`.
     """
     if scene_id.startswith("scene."):
         entity_id: str | None = scene_id
@@ -209,34 +210,6 @@ async def scene_entity_to_activate(client: Any, scene_id: str) -> str:
     return entity_id
 
 
-async def refuse_unactivatable_scene(client: Any, entity_id: str) -> None:
-    """Raise when HA's ``scene.turn_on``, a silent no-op on an unknown or
-    unavailable entity, would skip ``entity_id``: ENTITY_NOT_FOUND without a
-    state (also a disabled entity), ENTITY_UNAVAILABLE when unavailable. A
-    failed state read raises as it is."""
-    try:
-        state = await client.get_entity_state(entity_id)
-    except HomeAssistantAPIError as e:
-        if e.status_code == 404:
-            raise_tool_error(create_entity_not_found_error(entity_id))
-        raise
-    if state.get("state") != "unavailable":
-        return
-    if state.get("attributes", {}).get("restored"):
-        step = leftover_step(entity_id)
-    else:
-        step = "Retry once the integration that provides the scene is available"
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.ENTITY_UNAVAILABLE,
-            f"Scene {entity_id} is unavailable; Home Assistant skips an "
-            "unavailable scene, so nothing would be activated",
-            context={"entity_id": entity_id},
-            suggestions=[step],
-        )
-    )
-
-
 async def activate_scene(
     client: Any, response: dict[str, Any], entity_id: str, *, standalone: bool
 ) -> None:
@@ -250,7 +223,7 @@ async def activate_scene(
             await refuse_unactivatable_scene(client, entity_id)
         await client.call_service("scene", "turn_on", {"entity_id": entity_id})
     except ToolError as exc:  # the write path's refusal
-        reason: str | None = json.loads(str(exc))["error"]["message"]
+        reason: str | None = extract_structured_error_reason(exc) or str(exc)
     except LOOKUP_ERRORS as exc:
         if standalone:
             exception_to_structured_error(

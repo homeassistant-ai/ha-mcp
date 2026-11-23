@@ -105,7 +105,8 @@ class SceneResolution:
     integration domain, only enriches messages: a raw-YAML scene is
     ``"homeassistant"`` yet still 404s. ``entity_id``: the entity the component's
     ``entity_lookup`` named (None on the registry path); ``disabled``: whether it is disabled; ``leftover``: the component
-    named only entries Core no longer loads (a removed YAML scene);
+    named only entries Core no longer loads, ``scene.<id>`` among them (a
+    removed YAML scene);
     ``id_unchecked``: a bare id that fell back to itself without the component
     (or one lacking ``entity_lookup_loaded``) to check it (#2632).
     """
@@ -2090,8 +2091,8 @@ class HomeAssistantClient:
         scene) names nothing. Then a bare id that is a storage key wins over
         another scene whose entity is ``scene.<id>``, else names that scene;
         ``scene.<id>`` raises SceneIdNotAnEntityError when no such entity exists
-        but key ``<id>`` holds a scene. A component that does not answer leaves
-        the registry path; a failed registry or config read raises.
+        but key ``<id>`` holds a scene. Without a component answer the registry
+        decides; a failed registry or config read raises.
         """
         # Local import: component_config_reads imports this module.
         from ..tools.component_config_reads import scenes_with_id
@@ -2109,8 +2110,9 @@ class HomeAssistantClient:
         if entry and entry.get("entity_id") in {row["entity_id"] for row in rows or []}:
             entry = None
         unchecked = not qualified and rows is None
+        leftover = any(row["entity_id"] == f"scene.{bare_id}" for row in rows or [])
         fallback = SceneResolution(
-            bare_id, False, None, leftover=bool(rows), id_unchecked=unchecked
+            bare_id, False, None, leftover=leftover, id_unchecked=unchecked
         )
         if entry and entry.get("unique_id"):
             key, platform = str(entry["unique_id"]), entry.get("platform")

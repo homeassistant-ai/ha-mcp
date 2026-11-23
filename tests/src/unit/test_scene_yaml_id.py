@@ -49,8 +49,6 @@ _CALLS: dict[str, Callable[[ConfigSceneTools], Awaitable[Any]]] = {
         ("remove", False, False),
         ("get", True, False),
         ("get", False, True),
-        ("set", False, True),
-        ("remove", False, True),
         ("remove-entity", False, True),
     ],
 )
@@ -84,7 +82,7 @@ async def test_a_yaml_scene_id_names_that_scene(
 
     body = error_body(exc)
     assert body["error"]["code"] == "CONFIG_NOT_FOUND"
-    suggestions = " ".join(body["error"].get("suggestions") or body["suggestions"])
+    suggestions = " ".join(body["error"]["suggestions"])
     assert "'scene.x_scene'" in suggestions
     assert "scene.yid" not in suggestions
     assert ("activate=True" in suggestions) is not disabled
@@ -159,7 +157,7 @@ async def test_a_yaml_scene_whose_entity_is_its_id_is_not_written(
     body = error_body(exc)
     assert body["error"]["code"] == "CONFIG_NOT_FOUND"
     assert ("is disabled" in body["error"]["message"]) is disabled
-    first = (body["error"].get("suggestions") or body["suggestions"])[0]
+    first = (body["error"]["suggestions"])[0]
     assert ("scene.create" in first) is (call == "remove" and not disabled)
     assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
 
@@ -183,7 +181,7 @@ async def test_a_removal_by_the_entity_of_another_disabled_key_says_so(
     body = error_body(exc)
     assert body["error"]["code"] == "CONFIG_NOT_FOUND"
     assert "is disabled" in body["error"]["message"]
-    suggestions = " ".join(body["error"].get("suggestions") or body["suggestions"])
+    suggestions = " ".join(body["error"]["suggestions"])
     assert "activate=True" not in suggestions
 
 
@@ -230,34 +228,82 @@ async def test_the_registry_entry_of_a_removed_yaml_scene_blocks_no_create(
 
 
 @pytest.mark.parametrize(
-    ("routed_client", "scene_id"),
+    ("routed_client", "scene_id", "remove"),
     [
-        ("component_core_client", "scene.gone"),
-        ("core_client", "scene.gone"),
-        ("core_client", "gone"),
+        ("component_core_client", "scene.gone", False),
+        ("core_client", "scene.gone", False),
+        ("core_client", "gone", False),
+        ("core_client", "gone", True),
     ],
     indirect=["routed_client"],
 )
 async def test_a_removed_yaml_scenes_leftover_entry_is_named_for_removal(
-    hass: HomeAssistant, routed_client: HomeAssistantClient, scene_id: str
+    hass: HomeAssistant, routed_client: HomeAssistantClient, scene_id: str, remove: bool
 ) -> None:
     """``gone`` ("Gone", ``scene.gone``) was a YAML scene; its restored entry
-    gets no activation hint but the step to remove it. Without the component
-    the bare id names that entry too."""
+    gets no activation hint but the step to remove it, first also on a removal.
+    Without the component the bare id names that entry too."""
     await setup_scenes(
         hass, [], yaml_only=[{"id": "gone", "name": "Gone", "entities": _ON}]
     )
     await remove_yaml_only_scenes(hass)
+    tools = ConfigSceneTools(routed_client)
 
     with pytest.raises(ToolError) as exc:
-        await ConfigSceneTools(routed_client).ha_config_get_scene(scene_id=scene_id)
+        if remove:
+            await tools.ha_config_remove_scene(scene_id=scene_id)
+        else:
+            await tools.ha_config_get_scene(scene_id=scene_id)
 
     body = error_body(exc)
     assert body["error"]["code"] == "CONFIG_NOT_FOUND"
     assert "restored state" in body["error"]["message"]
-    suggestions = " ".join(body["error"].get("suggestions") or body["suggestions"])
-    assert "ha_remove_entity(entity_id='scene.gone')" in suggestions
-    assert "activate=True" not in suggestions
+    first, *rest = body["error"]["suggestions"]
+    assert "ha_remove_entity(entity_id='scene.gone')" in first
+    assert "activate=True" not in " ".join(rest)
+
+
+@pytest.mark.parametrize("call", ["get", "set", "remove"])
+async def test_a_leftover_entry_of_another_entity_hides_no_scene(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient, call: str
+) -> None:
+    """``gone`` was the YAML scene "Gone Scene", whose leftover entry is
+    ``scene.gone_scene``; the ``id``-less YAML scene "Gone" holds
+    ``scene.gone``. Each call by ``gone`` names ``scene.gone`` as not editable
+    and leaves ``scenes.yaml`` as it was."""
+    await setup_scenes(
+        hass, [], yaml_only=[{"id": "gone", "name": "Gone Scene", "entities": _ON}]
+    )
+    manual = (
+        "scene manual:\n  - name: Gone\n    entities:\n      sun.sun: above_horizon\n"
+    )
+    await write_config_files(
+        hass, {"configuration.yaml": "scene: !include scenes.yaml\n" + manual}
+    )
+    await hass.services.async_call("scene", "reload", blocking=True)
+    state = hass.states.get("scene.gone_scene")
+    assert state is not None and state.attributes.get("restored") is True
+    scenes_yaml = Path(hass.config.path("scenes.yaml"))
+    before = await hass.async_add_executor_job(scenes_yaml.read_text)
+    tools = ConfigSceneTools(component_core_client)
+    calls = {
+        "get": lambda: tools.ha_config_get_scene(scene_id="gone"),
+        "set": lambda: tools.ha_config_set_scene(
+            scene_id="gone",
+            config={"name": "Gone", "entities": _ON},
+            wait=False,
+            MandatoryBPS=False,
+        ),
+        "remove": lambda: tools.ha_config_remove_scene(scene_id="gone"),
+    }
+
+    with pytest.raises(ToolError) as exc:
+        await calls[call]()
+
+    body = error_body(exc)
+    assert body["error"]["code"] == "CONFIG_NOT_FOUND"
+    assert "'scene.gone'" in body["error"]["message"]
+    assert await hass.async_add_executor_job(scenes_yaml.read_text) == before
 
 
 async def test_an_integration_scene_restored_at_startup_still_answers_by_its_slug(
@@ -280,7 +326,7 @@ async def test_an_integration_scene_restored_at_startup_still_answers_by_its_slu
     body = error_body(exc)
     assert body["error"]["code"] == "CONFIG_NOT_FOUND"
     assert body["platform"] == "hue"
-    suggestions = " ".join(body["error"].get("suggestions") or body["suggestions"])
+    suggestions = " ".join(body["error"]["suggestions"])
     assert "Retry once its integration has loaded" in suggestions
     assert "activate=True" not in suggestions
 

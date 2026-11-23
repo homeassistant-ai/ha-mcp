@@ -447,7 +447,8 @@ async def test_write_does_not_activate_a_disabled_scene(
     call_service.assert_not_awaited()
     assert result["success"] is True
     assert result["activated"] is False
-    assert any("could not be activated" in w for w in result["warnings"])
+    step = "ha_set_entity(entity_id='scene.film_night', enabled=True)"
+    assert any("could not be activated" in w and step in w for w in result["warnings"])
     assert _tv(hass) == "off"
 
 

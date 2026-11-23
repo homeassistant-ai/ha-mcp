@@ -200,6 +200,47 @@ async def _restored(client: Any, entity_id: str) -> bool:
     return bool(state.get("attributes", {}).get("restored"))
 
 
+async def refuse_unactivatable_scene(client: Any, entity_id: str) -> None:
+    """Raise when HA's ``scene.turn_on``, a silent no-op on an unknown or
+    unavailable entity, would skip ``entity_id``: ENTITY_NOT_FOUND without a
+    state (also a disabled entity), ENTITY_UNAVAILABLE when unavailable. A
+    failed state read raises as it is."""
+    try:
+        state = await client.get_entity_state(entity_id)
+    except HomeAssistantAPIError as e:
+        if e.status_code != 404:
+            raise
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.ENTITY_NOT_FOUND,
+                f"Scene {entity_id} not found in the state machine: it is missing, "
+                "disabled or not loaded yet; Home Assistant skips such a scene, so "
+                "nothing would be activated",
+                context={"entity_id": entity_id},
+                suggestions=[
+                    "If it is disabled, enable it with "
+                    f"ha_set_entity(entity_id='{entity_id}', enabled=True)",
+                    "Otherwise find the scene's entity_id with ha_search",
+                ],
+            )
+        )
+    if state.get("state") != "unavailable":
+        return
+    if state.get("attributes", {}).get("restored"):
+        step = leftover_step(entity_id)
+    else:
+        step = "Retry once the integration that provides the scene is available"
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.ENTITY_UNAVAILABLE,
+            f"Scene {entity_id} is unavailable; Home Assistant skips an "
+            "unavailable scene, so nothing would be activated",
+            context={"entity_id": entity_id},
+            suggestions=[step],
+        )
+    )
+
+
 async def raise_scene_not_storage_error(
     client: Any,
     scene_id: str,
@@ -219,7 +260,8 @@ async def raise_scene_not_storage_error(
     EXISTS, so ``ENTITY_NOT_FOUND`` would be wrong (issue #1971). ``platform``
     names the owning integration when the registry exposed it; the message stays
     generic otherwise. With ``remove`` and a bare ``scene_id`` on that generic
-    branch, the first suggestion names the entity_id form, by which a
+    branch, unless the entry is disabled or only restored, the first suggestion
+    names the entity_id form, by which a
     ``scene.create`` scene is deleted. ``core`` is Core's refusal, which then
     leads the message. A ``disabled`` entry has no state and one whose state Core
     only restored (a removed scene, or one its integration has yet to
