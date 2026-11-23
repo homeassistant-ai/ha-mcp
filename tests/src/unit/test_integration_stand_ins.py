@@ -136,6 +136,27 @@ REFUSED = {
         "    for label, name in rows:\n        mock_component(hass, name)\n"
         "register(hass, [('case', 'hassio')])\n"
     ),
+    "parametrize-names-constant": (
+        "FIELDS = 'name'\n@pytest.mark.parametrize(FIELDS, ['hassio'])\n"
+        "def test_it(hass, name):\n    mock_component(hass, name)\n"
+    ),
+    "join-named-sequence": "PARTS = ('has', 'sio')\nMockModule(''.join(PARTS))\n",
+    "zip-both-rows": (
+        "for n, name in zip((0, 1), ('made_up_probe', 'hassio')):\n"
+        "    MockModule(name)\n"
+    ),
+    "reassigned-to-real": (
+        "def test_it(hass):\n    domain = 'made_up_probe'\n    domain = 'hassio'\n"
+        "    mock_component(hass, domain)\n"
+    ),
+    "reassigned-on-a-branch": (
+        "def test_it(hass, flag):\n    domain = 'hassio'\n    if flag:\n"
+        "        domain = 'made_up_probe'\n    mock_component(hass, domain)\n"
+    ),
+    "helper-prefix": (
+        "def register(hass, prefix):\n    mock_component(hass, f'{prefix}sio')\n"
+        "register(hass, 'has')\n"
+    ),
 }
 
 
@@ -224,14 +245,20 @@ def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
 
 
 def test_all_lists_the_names_only_known_at_runtime_for_review(guard, tmp_path, capsys):
-    source = "MockModule('made_up_probe')\nMockModule(pick())\n"
+    source = (
+        "MockModule('made_up_probe')\nMockModule(pick())\n"
+        "def test_it(hass, name):\n    mock_component(hass, name)\n"
+    )
     repo = _repo(tmp_path, {_SAMPLE: source})
 
     status = guard.main(["--repo", str(repo), "--all"])
 
-    assert (status, capsys.readouterr().out.splitlines()[0]) == (
+    assert (status, capsys.readouterr().out.splitlines()[:2]) == (
         0,
-        f"{_SAMPLE}:2: MockModule() gets a name only known at runtime",
+        [
+            f"{_SAMPLE}:2: MockModule() gets a name only known at runtime",
+            f"{_SAMPLE}:4: mock_component() gets a name only known at runtime",
+        ],
     )
 
 
@@ -244,6 +271,17 @@ ALLOWED = {
         "register(hass, 'made_up_probe')\n"
     ),
     "real-setup": "async_setup_component(hass, 'hassio', {})\n",
+    "reassigned-to-made-up": (
+        "def test_it(hass):\n    domain = 'hassio'\n    domain = 'made_up_probe'\n"
+        "    mock_component(hass, domain)\n"
+    ),
+    "zip-stops-short": (
+        "for n, name in zip((0,), ('made_up_probe', 'hassio')):\n    MockModule(name)\n"
+    ),
+    "helper-prefix-made-up": (
+        "def register(hass, prefix):\n    mock_component(hass, f'{prefix}sio')\n"
+        "register(hass, 'demo_')\n"
+    ),
     "other-helpers-arguments": (
         "def register(hass, name):\n    mock_component(hass, name)\n"
         "def unrelated(name):\n    pass\n"
@@ -315,6 +353,16 @@ def test_an_entry_without_exactly_a_file_integration_and_reason_fails(
 
     assert status == 1
     assert "entry 1 needs exactly a non-empty file, integration, reason" in out
+
+
+def test_a_key_repeated_in_an_entry_fails(guard, tmp_path, capsys):
+    allowlist = _LISTED.replace("  reason:", "  reason: ''\n  reason:")
+    repo = _repo(tmp_path, {_SAMPLE: "mock_component(hass, 'hassio')\n"}, allowlist)
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert "integration_stand_in_allowlist.yml:4: repeats the key 'reason'" in out
 
 
 def test_no_test_stands_in_for_a_real_integration_unlisted(guard, capsys):

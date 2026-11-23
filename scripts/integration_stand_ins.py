@@ -16,9 +16,12 @@ or ``parametrize`` value (a dict's keys or values, ``enumerate`` and ``zip``
 columns included), an f-string, concatenation, ``%``, ``str.format`` or
 ``str.join`` of those, or a value passed on through the parameters of
 functions in the test trees, or of methods called on ``self`` or ``cls``,
-until it reaches one of the helpers. More than ``MAX_ALTERNATIVES`` possible
-names fail, since they are not checked. A name only known at runtime is left
-to review; ``--all`` lists where one reaches a helper.
+until it reaches one of the helpers. Within one function a later plain
+assignment replaces an earlier one, and ``zip`` stops at its shortest input.
+More than ``MAX_ALTERNATIVES`` possible names fail, since they are not checked.
+A name only known at runtime is left to review; ``--all`` lists where one
+reaches a helper, also through a parameter no call in the trees fills (a
+fixture's, for example).
 
 A kept case is an entry of ``ALLOWLIST`` naming the file, the integration and
 the reason. An entry that matches nothing fails.
@@ -32,12 +35,18 @@ import importlib.util
 import itertools
 import math
 import re
-import string
-from collections.abc import Iterator, Sequence
+import sys
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
 import yaml  # type: ignore[import-untyped]
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from stand_in_name_parts import (  # type: ignore[import-not-found]
+    name_parts,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 TREES = ("tests/src/unit", "tests/addon")
@@ -56,6 +65,7 @@ TOO_MANY = "\1"  # more alternatives than are checked: reported, never dropped
 MAX_ALTERNATIVES = 256
 # The calls a ``for`` over takes the same elements from as from their argument.
 _SAME_ITEMS = ("sorted", "list", "tuple", "set", "frozenset")
+_AROUND = "\x04"  # where a wrapped parameter's name goes
 _MARKER = re.compile("\x02([0-9]+)\x03")
 _FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _DEFINITIONS = (*_FUNCTIONS, ast.Lambda, ast.ClassDef)
@@ -67,7 +77,8 @@ Scope = dict[str, list[Bound]]
 FunctionKey = tuple[str, str, int, int]
 # (function key, parameter, mode): the mode says what of the argument names
 # integrations: "value" the argument, "item" what a ``for`` over it takes, and
-# "dict_value" its values; "item:1" or "dict_value:1" takes element 1 of each.
+# "dict_value" its values; "item:1" or "dict_value:1" takes element 1 of each;
+# a "|prefix\x04suffix" ending wraps each name in text the helper adds.
 Param = tuple[FunctionKey, str, str]
 
 
@@ -169,8 +180,13 @@ def _bind_import(scope: Scope, node: ast.Import | ast.ImportFrom, package: str) 
         )
 
 
-def _parametrized(node: ast.FunctionDef | ast.AsyncFunctionDef, scope: Scope) -> None:
-    """Bind the values ``pytest.mark.parametrize`` gives each argument."""
+def _parametrized(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    scope: Scope,
+    text_of: Callable[[ast.expr], str | None],
+) -> None:
+    """Bind the values ``pytest.mark.parametrize`` gives each argument;
+    ``text_of`` reads argument names given as a constant."""
     for decorator in node.decorator_list:
         if not (
             isinstance(decorator, ast.Call)
@@ -183,6 +199,8 @@ def _parametrized(node: ast.FunctionDef | ast.AsyncFunctionDef, scope: Scope) ->
             fields = [name.strip() for name in names.value.split(",")]
         elif isinstance(names, _SEQUENCES):
             fields = [str(e.value) for e in names.elts if isinstance(e, ast.Constant)]
+        elif (text := text_of(names)) is not None:
+            fields = [name.strip() for name in text.split(",")]
         else:
             continue
         for index, name in enumerate(fields):
@@ -199,94 +217,6 @@ def _column(found: Sequence[Bound], column: int | None) -> list[Bound]:
         for element, own in found
         if isinstance(element, (ast.Tuple, ast.List)) and len(element.elts) > column
     ]
-
-
-def _text(node: ast.expr) -> str | None:
-    """The string ``node`` is written as, if it is a string literal."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    return None
-
-
-def _interleave(pieces: list[str], args: list[ast.expr]) -> list[ast.expr]:
-    """``pieces[0]``, ``args[0]``, ``pieces[1]``, ... as the parts of a string."""
-    parts: list[ast.expr] = [ast.Constant(pieces[0])]
-    for arg, piece in zip(args, pieces[1:], strict=True):
-        parts += [arg, ast.Constant(piece)]
-    return parts
-
-
-def _format_parts(text: str, call: ast.Call) -> list[ast.expr] | None:
-    """The parts ``text.format(...)`` joins, when every field is a plain one."""
-    if any(isinstance(a, ast.Starred) for a in call.args) or any(
-        k.arg is None for k in call.keywords
-    ):
-        return None
-    keywords = {k.arg: k.value for k in call.keywords}
-    parts: list[ast.expr] = []
-    automatic = 0
-    try:
-        fields = list(string.Formatter().parse(text))
-    except ValueError:
-        return None
-    for literal, field, spec, conversion in fields:
-        parts.append(ast.Constant(literal))
-        if field is None:
-            continue
-        if spec or conversion:
-            return None
-        key = field
-        if not key:
-            key, automatic = str(automatic), automatic + 1
-        if key.isdigit() and int(key) < len(call.args):
-            parts.append(call.args[int(key)])
-        elif key in keywords:
-            parts.append(keywords[key])
-        else:
-            return None
-    return parts
-
-
-def _parts(node: object) -> list[ast.expr] | None:
-    """The pieces a concatenation or formatting joins, in order."""
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        return [node.left, node.right]
-    if isinstance(node, ast.JoinedStr):
-        return list(node.values)
-    if (
-        isinstance(node, ast.FormattedValue)
-        and node.conversion == -1
-        and node.format_spec is None
-    ):
-        return [node.value]
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
-        args = node.right.elts if isinstance(node.right, ast.Tuple) else [node.right]
-        template = _text(node.left)
-        pieces = [] if template is None else template.split("%s")
-        if (
-            len(pieces) != len(args) + 1
-            or any("%" in piece for piece in pieces)
-            or any(isinstance(a, ast.Starred) for a in args)
-        ):
-            return None
-        return _interleave(pieces, args)
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-        return None
-    text = _text(node.func.value)
-    if text is None:
-        return None
-    if node.func.attr == "format":
-        return _format_parts(text, node)
-    joined = node.args[0] if len(node.args) == 1 else None
-    if (
-        node.func.attr != "join"
-        or node.keywords
-        or not isinstance(joined, (ast.List, ast.Tuple))
-        or not joined.elts
-        or any(isinstance(e, ast.Starred) for e in joined.elts)
-    ):
-        return None
-    return _interleave(["", *[text] * (len(joined.elts) - 1), ""], joined.elts)
 
 
 def _row(element: ast.expr, column: int | None) -> ast.expr:
@@ -313,6 +243,13 @@ class Checker:
         self.functions: dict[int, FunctionKey] = {}
         self.methods: dict[int, ast.ClassDef] = {}  # each method's class
         self.sinks: set[Param] = set()
+        self.sink_sites: dict[Param, tuple[str, int, str]] = {}  # where each began
+        self.called: set[FunctionKey] = set()  # functions a call in the trees fills
+        # Parameters with values of their own: a default or ``parametrize``.
+        self.given: set[tuple[FunctionKey, str]] = set()
+        self.straight: dict[int, int] = {}  # straight-line assignment value -> line
+        # The line and scope of the call being recorded.
+        self.at: tuple[int, int] | None = None
         self.findings: set[Finding] = set()
         self.unresolved: set[tuple[str, int, str]] = set()
         for tree in TREES:
@@ -392,16 +329,44 @@ class Checker:
             for arg, default in defaults:
                 scope[arg.arg].append((default, outer))
         if isinstance(node, _FUNCTIONS):
-            _parametrized(node, scope)
+            _parametrized(
+                node, scope, lambda e: self._one_text(e, outer or [module.top])
+            )
+            key = _key(module.name, node)
+            self.given |= {
+                (key, name) for name, bound in scope.items() if len(bound) > 1
+            }
         package = module.name
         if not module.path.endswith("__init__.py"):
             package = module.name.rpartition(".")[0]
+        body = (
+            frozenset(id(statement) for statement in getattr(node, "body", []))
+            if isinstance(node, _FUNCTIONS)
+            else frozenset()
+        )
         for child in _scope_nodes(node):
-            self._bind_node(scope, child, package)
+            self._bind_node(scope, child, package, body)
         return scope
 
-    def _bind_node(self, scope: Scope, node: ast.AST, package: str) -> None:
+    def _one_text(self, node: ast.expr, chain: Chain) -> str | None:
+        """The one string ``node`` can be, if it can be only one."""
+        found = self.values(node, chain)
+        if len(found) != 1:
+            return None
+        (text,) = found
+        return None if UNKNOWN in text or TOO_MANY in text else text
+
+    def _bind_node(
+        self,
+        scope: Scope,
+        node: ast.AST,
+        package: str,
+        body: frozenset[int] = frozenset(),
+    ) -> None:
         if isinstance(node, ast.Assign):
+            if id(node) in body and all(isinstance(t, ast.Name) for t in node.targets):
+                # A statement of the function's own body runs every time, in order.
+                self.straight[id(node.value)] = node.lineno
             for target in node.targets:
                 _bind(scope, target, node.value)
         elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value:
@@ -433,11 +398,23 @@ class Checker:
         for depth in range(len(chain) - 1, -1, -1):
             if name in chain[depth]:
                 inner = chain[: depth + 1]
+                bound = chain[depth][name]
+                if self.at is not None and id(chain[depth]) == self.at[1]:
+                    bound = self._latest(bound, self.at[0])
                 return [
-                    (value, own if own is not None else inner)
-                    for value, own in chain[depth][name]
+                    (value, own if own is not None else inner) for value, own in bound
                 ]
         return []
+
+    def _latest(self, bound: list[Bound], line: int) -> list[Bound]:
+        """Of a name's plain assignments in a function body, the last one before
+        ``line``; every binding when any of them may not run in order."""
+        if not all(id(value) in self.straight for value, _ in bound):
+            return bound
+        before = [b for b in bound if self.straight[id(b[0])] < line]
+        if not before:
+            return bound
+        return [max(before, key=lambda b: self.straight[id(b[0])])]
 
     def resolve(self, value: object, chain: Chain, seen: frozenset[int]) -> list[Bound]:
         """What an import names: a value in another module, or a module."""
@@ -525,10 +502,33 @@ class Checker:
             return self.values(node.body, chain, seen) | self.values(
                 node.orelse, chain, seen
             )
+        if (joined := self._named_join(node, chain, seen)) is not None:
+            return joined
         return self._joined(node, chain, seen)
 
+    def _named_join(
+        self, node: object, chain: Chain, seen: frozenset[int]
+    ) -> set[str] | None:
+        """``str.join`` over a sequence a name holds, read as if written inline."""
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "join"
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], (ast.Name, ast.Attribute))
+        ):
+            return None
+        found: set[str] = set()
+        for value, own in self.objects(node.args[0], chain, seen):
+            if not isinstance(value, _SEQUENCES):
+                return {UNKNOWN}
+            inline = ast.Call(func=node.func, args=[value], keywords=[])
+            found |= self._joined(inline, own or chain, seen)
+        return found or {UNKNOWN}
+
     def _joined(self, node: object, chain: Chain, seen: frozenset[int]) -> set[str]:
-        parts = _parts(node)
+        parts = name_parts(node)
         if parts is None:
             return {UNKNOWN}
         alternatives = [sorted(self.values(part, chain, seen)) for part in parts]
@@ -618,10 +618,23 @@ class Checker:
         if name == "zip":
             if column is None or column >= len(args):
                 return []
-            return self.items(args[column], chain, seen)
+            rows = self.items(args[column], chain, seen)
+            lengths = [self._length(a, chain, seen) for a in args]
+            known = [n for n in lengths if n is not None]
+            return rows[: min(known)] if len(known) == len(args) else rows
         if name in _SAME_ITEMS and len(args) == 1:
             return self.items(args[0], chain, seen, column)
         return []
+
+    def _length(self, node: ast.expr, chain: Chain, seen: frozenset[int]) -> int | None:
+        """How many elements a literal sequence, or a name holding one, has."""
+        if isinstance(node, _SEQUENCES):
+            return len(node.elts)
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            found = self.objects(node, chain, seen)
+            if len(found) == 1 and isinstance(found[0][0], _SEQUENCES):
+                return len(found[0][0].elts)
+        return None
 
     def _view_items(
         self,
@@ -653,6 +666,12 @@ class Checker:
             for module in self.local:
                 self.visit(module, module.tree, [module.top])
             if self.sinks == before:
+                self.unresolved |= {
+                    site
+                    for param, site in self.sink_sites.items()
+                    if param[0] not in self.called
+                    and (param[0], param[1]) not in self.given
+                }
                 return sorted(
                     self.findings, key=lambda f: (f.path, f.line, f.integration)
                 )
@@ -706,6 +725,7 @@ class Checker:
             key = self.functions.get(id(target))
             if key is None or not isinstance(target, _FUNCTIONS):
                 continue
+            self.called.add(key)
             bound = self.fills_first_parameter(call, target)
             for function, param, mode in sorted(self.sinks):
                 if function == key:
@@ -720,6 +740,23 @@ class Checker:
             isinstance(value, (_Imported, _ModuleRef))
             for value, _ in self.lookup(func.id, chain)
         )
+
+    def _names(self, argument: ast.expr, chain: Chain, mode: str) -> set[str]:
+        """The names ``argument`` gives, read as ``mode`` says."""
+        if mode == "value":
+            return self.values(argument, chain)
+        kind, _, taken = mode.partition(":")
+        column = int(taken) if taken else None
+        collect = self.items if kind == "item" else self.dict_values
+        names: set[str] = set().union(
+            *(
+                self.values(v, c or chain)
+                for v, c in collect(argument, chain, frozenset(), column)
+            )
+        )
+        if not names and not isinstance(argument, (*_SEQUENCES, ast.Dict)):
+            names = {UNKNOWN}
+        return names
 
     def fills_first_parameter(
         self, call: ast.Call, function: ast.FunctionDef | ast.AsyncFunctionDef
@@ -762,24 +799,36 @@ class Checker:
     ) -> None:
         if argument is None:
             return
-        if mode == "value":
-            names = self.values(argument, chain)
-        else:
-            kind, _, taken = mode.partition(":")
-            column = int(taken) if taken else None
-            collect = self.items if kind == "item" else self.dict_values
-            names = set().union(
-                *(
-                    self.values(v, c or chain)
-                    for v, c in collect(argument, chain, frozenset(), column)
-                )
-            )
-            if not names and not isinstance(argument, (*_SEQUENCES, ast.Dict)):
-                names = {UNKNOWN}
+        base, _, template = mode.partition("|")
+        self.at = (call.lineno, id(chain[-1]))
+        try:
+            names = self._names(argument, chain, base)
+        finally:
+            self.at = None
+        if template:
+            prefix, _, suffix = template.partition(_AROUND)
+            names = {
+                n if n in (UNKNOWN, TOO_MANY) else f"{prefix}{n}{suffix}" for n in names
+            }
+        site = (module.path, call.lineno, ast.unparse(call.func))
         for name in names:
             domain = name.partition(".")[0]
             if match := _MARKER.fullmatch(domain):
-                self.sinks.add(self.params[int(match.group(1))])
+                param = self.params[int(match.group(1))]
+                self.sinks.add(param)
+                self.sink_sites.setdefault(param, site)
+            elif (match := _MARKER.search(domain)) and not _MARKER.search(
+                domain, match.end()
+            ):
+                # The helper builds the name around its parameter.
+                function, param_name, taken = self.params[int(match.group(1))]
+                wrap = f"{domain[: match.start()]}{_AROUND}{domain[match.end() :]}"
+                if UNKNOWN in wrap or TOO_MANY in wrap:
+                    self.unresolved.add(site)
+                    continue
+                param = (function, param_name, f"{taken}|{wrap}")
+                self.sinks.add(param)
+                self.sink_sites.setdefault(param, site)
             elif domain == TOO_MANY or domain in self.real:
                 self.findings.add(Finding(module.path, call.lineno, domain, via))
             elif UNKNOWN in domain:
@@ -825,13 +874,34 @@ def load_allowlist(path: Path, problems: list[str]) -> dict[tuple[str, str], str
     return parse_allowlist(text, problems)
 
 
+def _repeated_key(node: yaml.Node | None) -> yaml.ScalarNode | None:
+    """A key repeated in one mapping, which loading would settle silently by
+    keeping the last value."""
+    if isinstance(node, yaml.MappingNode):
+        keys = [key.value for key, _ in node.value if isinstance(key, yaml.ScalarNode)]
+        for index, (key, _) in enumerate(node.value):
+            if isinstance(key, yaml.ScalarNode) and key.value in keys[:index]:
+                return key
+        children = [value for _, value in node.value]
+    elif isinstance(node, yaml.SequenceNode):
+        children = list(node.value)
+    else:
+        return None
+    return next((k for c in children if (k := _repeated_key(c)) is not None), None)
+
+
 def parse_allowlist(text: str, problems: list[str]) -> dict[tuple[str, str], str]:
     """Each entry's reason by (file, integration); a bad entry is a problem.
     ``scripts/stand_in_lists_ratchet.py`` reads the allowlist with this too."""
     try:
+        repeated = _repeated_key(yaml.compose(text, Loader=yaml.SafeLoader))
         entries = yaml.safe_load(text) or []
     except yaml.YAMLError as err:
         problems.append(f"{ALLOWLIST}: cannot be read: {err}")
+        return {}
+    if repeated is not None:
+        line = repeated.start_mark.line + 1
+        problems.append(f"{ALLOWLIST}:{line}: repeats the key {repeated.value!r}")
         return {}
     if not isinstance(entries, list):
         problems.append(f"{ALLOWLIST}: must be a list of entries")
