@@ -859,11 +859,16 @@ class TestEntityWriteFailure:
             assert entry.hidden_by is er.RegistryEntryHider.USER
 
     @pytest.mark.parametrize(
-        ("fault", "code", "error"),
+        ("fault", "code", "error", "ha_error_code"),
         [
-            ("refused", "SERVICE_CALL_FAILED", "Exposure failed: Command failed"),
-            ("not_sent", "CONNECTION_FAILED", "Exposure failed: not sent"),
-            ("dropped", "CONNECTION_FAILED", "Exposure outcome unknown: Home"),
+            (
+                "refused",
+                "SERVICE_CALL_FAILED",
+                "Exposure failed: Command failed",
+                "home_assistant_error",
+            ),
+            ("not_sent", "CONNECTION_FAILED", "Exposure failed: not sent", None),
+            ("dropped", "CONNECTION_FAILED", "Exposure outcome unknown: Home", None),
         ],
     )
     async def test_a_failed_single_exposure_still_reports_the_registry_write(
@@ -875,6 +880,7 @@ class TestEntityWriteFailure:
         fault: str,
         code: str,
         error: str,
+        ha_error_code: str | None,
     ) -> None:
         """The single-entity reply says what landed, as a bulk row does, and
         leaves out the entry it was asked to leave out; a write without an
@@ -896,6 +902,7 @@ class TestEntityWriteFailure:
         assert "entity_entry" not in body
         assert body["error"]["code"] == code
         assert body["error"]["message"].startswith(error)
+        assert body.get("ha_error_code") == ha_error_code
         assert (body["partial"], body["updates"]) == (True, ["enabled"])
         assert body["require_restart"] is True
         entry = registry.async_get("light.kitchen")

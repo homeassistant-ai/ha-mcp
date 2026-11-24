@@ -669,7 +669,7 @@ class EntityTools:
                 f"{'Exposing' if should_expose else 'Hiding'} {target} "
                 f"{'to' if should_expose else 'from'} {assistants}"
             )
-            error_msg, raised, changed_now = await expose_write(
+            error_msg, failure, changed_now = await expose_write(
                 self._client, assistants, [target], should_expose
             )
             if error_msg is not None:
@@ -684,7 +684,7 @@ class EntityTools:
                     updates_made,
                     core_extras,
                 )
-                raise_expose_failure(error_msg, raised, context)
+                raise_expose_failure(error_msg, failure, context)
 
             # Track successful exposures
             for a in assistants:

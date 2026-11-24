@@ -57,13 +57,14 @@ async def reject_unknown_assistants(
 
 async def expose_write(
     client: Any, assistants: list[str], entity_ids: list[str], should_expose: bool
-) -> tuple[str | None, HomeAssistantError | None, set[str]]:
-    """Send one ``homeassistant/expose_entity`` write: (error, raised, changed).
+) -> tuple[str | None, HomeAssistantError | dict[str, Any] | None, set[str]]:
+    """Send one ``homeassistant/expose_entity`` write: (error, failure, changed).
 
     error is None on success, and changed holds the ids Core reports it
     changed. A refusal, or a write that never left, failed for sure; one sent
-    without an answer may have been applied, and says so. raised is the
-    client's exception when Home Assistant did not answer.
+    without an answer may have been applied, and says so. failure is Core's
+    reply when it refused, else the client's exception when Home Assistant
+    did not answer.
     """
     try:
         result = await client.send_websocket_message(
@@ -86,20 +87,28 @@ async def expose_write(
         return error, exc, set()
     if result.get("success"):
         return None, None, changed_entity_ids(result)
-    return f"Exposure failed: {_extract_ws_error(result)}", None, set()
+    return f"Exposure failed: {_extract_ws_error(result)}", result, set()
 
 
 def raise_expose_failure(
-    error: str, raised: HomeAssistantError | None, context: dict[str, Any]
+    error: str,
+    failure: HomeAssistantError | dict[str, Any] | None,
+    context: dict[str, Any],
 ) -> NoReturn:
     """Raise the tool error for a failed exposure write: a refusal is a failed
-    service call; a write without an answer keeps the code and suggestions
-    its transport gives (connection, timeout, auth)."""
-    if raised is None:
+    service call with Core's code kept as ``ha_error_code``; a write without
+    an answer keeps the code and suggestions its transport gives (connection,
+    timeout, auth)."""
+    if not isinstance(failure, HomeAssistantError):
+        ha_error_code = (failure or {}).get("error_code")
         raise_tool_error(
-            create_error_response(ErrorCode.SERVICE_CALL_FAILED, error, context=context)
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                error,
+                context={**context, "ha_error_code": ha_error_code},
+            )
         )
-    response = exception_to_structured_error(raised, context, raise_error=False)
+    response = exception_to_structured_error(failure, context, raise_error=False)
     response["error"]["message"] = error
     raise_tool_error(response)
 
