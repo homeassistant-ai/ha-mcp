@@ -573,12 +573,10 @@ let authDead = false;
 // Set once the session is minted and the app URL probed: before that, a
 // navigation must not point the iframe at the app (see applyLink).
 let appReady = false;
-// Set when a navigation has pointed the iframe at a link since the last
-// successful probe, and when a probe failed while that load was pending. Only
-// the pair means the load may be the proxy's error page: a probe that fails
-// with no navigation behind it leaves a working app alone (see showApp).
-let navSinceSuccess = false;
-let navProbeFailed = false;
+// Set when the latest navigation's own probe failed: that load may be the
+// proxy's error page. A periodic probe that fails with no navigation behind it
+// leaves a working app alone (see showApp), so this is not a probe-health flag.
+let navLoadFailed = false;
 
 function homeAssistantRoot() {{
   try {{
@@ -634,6 +632,19 @@ function reloadFrame() {{
   }} catch (err) {{ /* not same-origin: nothing else to do */ }}
 }}
 
+function checkNavigationLoad(target) {{
+  // The iframe's own load event cannot tell the app from the proxy's error
+  // page, so ask the proxy once, for this navigation. A periodic probe failing
+  // later says nothing about whether this load worked.
+  fetchWithTimeout(target, {{ credentials: "same-origin" }})
+    .then(function (resp) {{
+      navLoadFailed = !resp.ok;
+    }})
+    .catch(function () {{
+      navLoadFailed = true;
+    }});
+}}
+
 function applyLink(force, reloadIfSame) {{
   // A link that names nothing is the user leaving the panel: keep the app as
   // it is instead of reloading it behind them. Before the session is minted
@@ -644,17 +655,15 @@ function applyLink(force, reloadIfSame) {{
   const target = appUrl();
   if (frame.getAttribute("src") !== target) {{
     frame.setAttribute("src", target);
-    if (!force) {{
-      // This load is the one a failed probe would have to account for. The
-      // periodic mint must not use that flag for a failure it did not cause.
-      navSinceSuccess = true;
-      navProbeFailed = false;
-    }}
+    if (!force) checkNavigationLoad(target);
     return;
   }}
   // reloadIfSame covers a repeat of the link just followed; !force is a fresh
   // navigation that resolves to the URL already loaded.
-  if (reloadIfSame || !force) reloadFrame();
+  if (reloadIfSame || !force) {{
+    reloadFrame();
+    checkNavigationLoad(target);
+  }}
 }}
 
 function watchParentNavigation() {{
@@ -792,12 +801,10 @@ async function showApp() {{
   try {{
     probe = await fetchWithTimeout(targetUrl, {{ credentials: "same-origin" }});
   }} catch (err) {{
-    if (navSinceSuccess) navProbeFailed = true;
     transientFailure("Could not reach Home Assistant to load the settings UI.");
     return;
   }}
   if (probe.status === 503) {{
-    if (navSinceSuccess) navProbeFailed = true;
     if (!timer) {{
       showMessage(
         "The in-process MCP server is starting or is not running yet. " +
@@ -811,16 +818,14 @@ async function showApp() {{
     return;
   }}
   if (!probe.ok) {{
-    if (navSinceSuccess) navProbeFailed = true;
     transientFailure("The settings UI returned HTTP " + probe.status + ".");
     return;
   }}
-  // A probe that failed while a navigation load was pending means that load
-  // may be the proxy's error page: reload it once, now that the probe is
-  // back. A failure with no navigation behind it leaves a working app alone.
-  const reload = navSinceSuccess && navProbeFailed;
-  navSinceSuccess = false;
-  navProbeFailed = false;
+  // The navigation's own probe said whether its load failed; a recovered probe
+  // reloads the iframe only in that case, so a background failure never resets
+  // a working app.
+  const reload = navLoadFailed;
+  navLoadFailed = false;
   appReady = true;
   applyLink(true, reload);
   msg.classList.add("hidden");
