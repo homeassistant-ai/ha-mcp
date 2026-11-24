@@ -9,6 +9,7 @@ from __future__ import annotations
 import builtins
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -84,10 +85,16 @@ def test_read_only_write_never_cold_imports_the_server_package(
     """The HA executor must not join a worker's in-progress ha_mcp import."""
     real_import = builtins.__import__
 
-    def reject_server_import(name: str, *args: object, **kwargs: object):
+    def reject_server_import(
+        name: str,
+        globals_: Mapping[str, object] | None = None,
+        locals_: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] | None = (),
+        level: int = 0,
+    ):
         if name == "ha_mcp" or name.startswith("ha_mcp."):
             raise AssertionError(f"component write imported {name}")
-        return real_import(name, *args, **kwargs)
+        return real_import(name, globals_, locals_, fromlist, level)
 
     with monkeypatch.context() as import_guard:
         import_guard.setattr(builtins, "__import__", reject_server_import)
