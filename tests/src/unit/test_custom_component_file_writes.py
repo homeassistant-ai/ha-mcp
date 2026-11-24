@@ -18,6 +18,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import async_mock_service
 
 from custom_components.ha_mcp_tools import (
+    SERVICE_DELETE_FILE,
     SERVICE_READ_FILE,
     SERVICE_WRITE_FILE,
     file_ops,
@@ -413,6 +414,22 @@ class TestAfterFileWrite:
 
         assert info == {}
 
+    @pytest.mark.parametrize("www_at_start", [False, True])
+    async def test_a_www_file_local_does_not_serve_yet_is_flagged(
+        self, hass: HomeAssistant, www_at_start: bool
+    ) -> None:
+        """Core registers /local/ at startup, and only if www/ existed then."""
+        if www_at_start:
+            (Path(hass.config.config_dir) / "www").mkdir()
+        assert await async_setup_component(hass, "frontend", {})
+
+        info = await file_post_action.after_file_write(hass, "www/sub/card.js", 1)
+
+        if www_at_start:
+            assert info == {}
+        else:
+            assert "/local/sub/card.js" in info["warnings"][0]
+
     @pytest.mark.parametrize(
         "path", ["www/card.js", "/share/themes/x.yaml", "themes/readme.md"]
     )
@@ -444,4 +461,98 @@ async def test_an_edit_reports_the_theme_reload(
     assert response["success"] is True
     assert response["post_action"] == "reload_performed"
     assert target.read_text() == "rev:\n  primary-color: blue\n"
+    assert len(reload_calls) == 1
+
+
+class TestAfterFileDelete:
+    async def test_a_deleted_theme_is_reloaded(self, hass: HomeAssistant) -> None:
+        reload_calls = async_mock_service(hass, "frontend", "reload_themes")
+
+        info = await file_post_action.after_file_delete(hass, "themes/rev.yaml")
+
+        assert len(reload_calls) == 1
+        assert info["reload_service"] == "frontend.reload_themes"
+
+    async def test_a_deleted_custom_template_is_reloaded(
+        self, hass: HomeAssistant
+    ) -> None:
+        assert await async_setup_component(hass, "homeassistant", {})
+
+        info = await file_post_action.after_file_delete(
+            hass, "custom_templates/rev.jinja"
+        )
+
+        assert info == {
+            "post_action": "reload_performed",
+            "reload_service": "homeassistant.reload_custom_templates",
+        }
+
+    async def test_a_dashboard_left_without_its_file_is_named(
+        self, hass: HomeAssistant
+    ) -> None:
+        assert await async_setup_component(
+            hass,
+            "lovelace",
+            {
+                "lovelace": {
+                    "dashboards": {
+                        "rev-2976": {
+                            "mode": "yaml",
+                            "filename": "dashboards/rev.yaml",
+                            "title": "Rev",
+                        }
+                    }
+                }
+            },
+        )
+
+        info = await file_post_action.after_file_delete(hass, "dashboards/rev.yaml")
+
+        assert "rev-2976" in info["warnings"][0]
+
+    async def test_a_resource_left_without_its_file_is_named(
+        self, hass: HomeAssistant, hass_storage: dict[str, Any]
+    ) -> None:
+        """Storage-mode resources are read from disk on first use."""
+        hass_storage["lovelace_resources"] = {
+            "version": 1,
+            "key": "lovelace_resources",
+            "data": {
+                "items": [
+                    {"id": "a", "type": "module", "url": "/local/sub/card.js?v=2"},
+                    {"id": "b", "type": "module", "url": "/local/other.js"},
+                ]
+            },
+        }
+        assert await async_setup_component(hass, "lovelace", {"lovelace": {}})
+
+        info = await file_post_action.after_file_delete(hass, "www/sub/card.js")
+
+        assert "/local/sub/card.js?v=2" in info["warnings"][0]
+        assert "/local/other.js" not in info["warnings"][0]
+
+    @pytest.mark.parametrize(
+        "path", ["www/unused.js", "dashboards/unused.yaml", "/share/themes/x.yaml"]
+    )
+    async def test_a_file_nothing_loads_needs_nothing(
+        self, hass: HomeAssistant, path: str
+    ) -> None:
+        assert await async_setup_component(hass, "lovelace", {"lovelace": {}})
+        reload_calls = async_mock_service(hass, "frontend", "reload_themes")
+
+        assert await file_post_action.after_file_delete(hass, path) == {}
+        assert reload_calls == []
+
+
+async def test_a_delete_reports_the_theme_reload(hass: HomeAssistant) -> None:
+    call = await make_file_service(hass)
+    themes = Path(hass.config.config_dir) / "themes"
+    themes.mkdir()
+    (themes / "rev.yaml").write_text("rev:\n  primary-color: red\n")
+    reload_calls = async_mock_service(hass, "frontend", "reload_themes")
+
+    response = await call(SERVICE_DELETE_FILE, {"path": "themes/rev.yaml"})
+
+    assert response["success"] is True
+    assert response["post_action"] == "reload_performed"
     assert len(reload_calls) == 1

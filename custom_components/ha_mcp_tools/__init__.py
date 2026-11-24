@@ -85,7 +85,7 @@ from .file_ops import (
     run_locked,
     write_text_atomic,
 )
-from .file_post_action import after_file_write, reload_after_edit
+from .file_post_action import after_file_delete, after_file_write, reload_after_edit
 from .tools_settings_store import (
     ALLOWED_PATHS_KEY,
     EXTRA_YAML_KEYS_KEY,
@@ -2965,14 +2965,14 @@ def _build_delete_file_handler(
                 "error": f"Path is not a file (cannot delete directories): {rel_path}",
             }
 
-        size = result["size"]
-        _LOGGER.info("Deleted file: %s (%d bytes)", rel_path, size)
+        _LOGGER.info("Deleted file: %s (%d bytes)", rel_path, result["size"])
 
         return {
             "success": True,
             "path": rel_path,
-            "deleted_size": size,
+            "deleted_size": result["size"],
             "message": f"File deleted successfully: {rel_path}",
+            **(await after_file_delete(hass, rel_path)),
         }
 
     return handle_delete_file

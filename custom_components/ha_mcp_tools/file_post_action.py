@@ -1,11 +1,14 @@
-"""What Home Assistant needs after a file write before it uses the new text.
+"""What Home Assistant needs after a file write or delete.
 
-Core reads themes and custom templates once and keeps them until a reload, and
-serves a YAML dashboard from the file a ``lovelace: dashboards:`` entry names.
+Core reads themes and custom templates once and keeps them until a reload,
+serves a YAML dashboard from the file a ``lovelace: dashboards:`` entry names,
+and serves ``www/`` at ``/local/`` only when the folder existed at startup.
 The write_file and edit_file services report that here: they reload themes and
 custom templates the way ``frontend.reload_themes`` and
 ``homeassistant.reload_custom_templates`` would, flag a file Core's template
-loader skips, and name the YAML dashboards a ``dashboards/`` file backs.
+loader skips or ``/local/`` does not serve yet, and name the YAML dashboards a
+``dashboards/`` file backs. The delete_file service reloads the same way and
+names the YAML dashboards and dashboard resources that still load the file.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import logging
 import os
 import posixpath
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from homeassistant.core import HomeAssistant
 
@@ -124,21 +128,71 @@ def _config_relative(hass: HomeAssistant, abs_path: str) -> str | None:
     return relative
 
 
-async def after_file_write(
-    hass: HomeAssistant, rel_path: str, size: int
-) -> dict[str, Any]:
-    """Response fields for a file written at ``rel_path``; empty when none apply.
+def _config_path(hass: HomeAssistant, rel_path: str) -> str | None:
+    """``rel_path`` normalized and relative to the config directory.
 
     An absolute path counts only inside the config directory, by its relative
     path there: elsewhere it is a HAOS sibling volume or a custom directory,
-    which Core does not load from.
+    which Core does not load from (None).
     """
     if os.path.isabs(rel_path) or rel_path.startswith("/"):
         inside = _config_relative(hass, rel_path)
         if inside is None:
-            return {}
+            return None
         rel_path = inside
-    normalized = posixpath.normpath(rel_path.replace("\\", "/"))
+    return posixpath.normpath(rel_path.replace("\\", "/"))
+
+
+def _local_served(hass: HomeAssistant) -> bool:
+    """Whether Core serves ``/local/``; True when its HTTP server is not set up."""
+    http = getattr(hass, "http", None)
+    return http is None or any(
+        resource.canonical == "/local" for resource in http.app.router.resources()
+    )
+
+
+def _same_origin_path(url: Any) -> str | None:
+    """A resource URL's path as a browser resolves it; None for another origin.
+
+    Core's ``_async_warn_missing_local_resources`` reads ``/local/`` URLs so.
+    """
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme or parts.netloc:
+        return None
+    return posixpath.normpath(unquote(parts.path))
+
+
+async def _resources_loading(hass: HomeAssistant, url_path: str) -> list[str]:
+    """URLs of the dashboard resources that load ``url_path``; [] if unread."""
+    from .websocket_api.dashboards import _lovelace_container
+
+    resources = getattr(_lovelace_container(hass), "resources", None)
+    if resources is None:
+        return []
+    try:
+        await resources.async_get_info()  # loads a storage-mode collection
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Could not read dashboard resources: %s", err)
+        return []
+    return [
+        str(item["url"])
+        for item in resources.async_items()
+        if _same_origin_path(item.get("url")) == url_path
+    ]
+
+
+async def after_file_write(
+    hass: HomeAssistant, rel_path: str, size: int
+) -> dict[str, Any]:
+    """Response fields for a file written at ``rel_path``; empty when none apply."""
+    normalized = _config_path(hass, rel_path)
+    if normalized is None:
+        return {}
     top = normalized.split("/", 1)[0]
     if top == "themes" and normalized.endswith(_YAML_SUFFIXES):
         return await reload_after_edit(hass, "frontend", "reload_themes")
@@ -146,4 +200,46 @@ async def after_file_write(
         return await _custom_template_action(hass, normalized, size)
     if top == "dashboards" and normalized.endswith(_YAML_SUFFIXES):
         return _dashboard_action(hass, normalized)
+    if top == "www" and not _local_served(hass):
+        return {
+            "warnings": [
+                "Home Assistant serves www/ at /local/ only if the folder existed "
+                f"when it started, so /local/{normalized[4:]} is not served until "
+                "Home Assistant restarts."
+            ]
+        }
+    return {}
+
+
+async def after_file_delete(hass: HomeAssistant, rel_path: str) -> dict[str, Any]:
+    """Response fields for a file deleted at ``rel_path``; empty when none apply."""
+    normalized = _config_path(hass, rel_path)
+    if normalized is None:
+        return {}
+    top = normalized.split("/", 1)[0]
+    if top == "themes" and normalized.endswith(_YAML_SUFFIXES):
+        return await reload_after_edit(hass, "frontend", "reload_themes")
+    if top == "custom_templates" and normalized.endswith(".jinja"):
+        return await reload_after_edit(hass, "homeassistant", "reload_custom_templates")
+    if top == "dashboards" and normalized.endswith(_YAML_SUFFIXES):
+        rows = _dashboards_using(hass, hass.config.path(normalized)) or []
+        if rows:
+            names = ", ".join(str(row["url_path"]) for row in rows)
+            return {
+                "warnings": [
+                    f"The YAML dashboards {names} name {normalized} as their file "
+                    "and fail to load until it is restored or their lovelace: "
+                    "dashboards: entry is removed."
+                ]
+            }
+    if top == "www":
+        urls = await _resources_loading(hass, f"/local/{normalized[4:]}")
+        if urls:
+            return {
+                "warnings": [
+                    f"The dashboard resources {', '.join(urls)} load {normalized} "
+                    "and fail in the browser until it is restored or they are "
+                    "removed (ha_config_delete_dashboard_resource)."
+                ]
+            }
     return {}
