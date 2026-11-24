@@ -10,7 +10,7 @@ import logging
 from typing import Any
 
 from ..errors import ErrorCode, create_error_response
-from .helpers import raise_tool_error
+from .helpers import ha_error_code_field, raise_core_refusal, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -47,18 +47,19 @@ def _extract_ws_error(result: dict[str, Any]) -> str:
 
 async def get_entries_raw(
     client: Any, entity_ids: list[str]
-) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, str]]]:
     """Bulk-fetch registry entries via chunked config/entity_registry/get_entries.
 
     Returns ``(raw_entries, errors)``: ``raw_entries`` maps a found
     entity_id to HA's raw extended registry dict; ``errors`` maps a failed
-    entity_id to a message. Every id sent lands in exactly one of the two: a
-    ``null`` in HA's entries map (id not in the registry) gives it
-    ``_NOT_IN_REGISTRY``, and a failed chunk gives each of its ids that
-    failure.
+    entity_id to its failure row fields, ``error`` and, when Core refused,
+    Core's code as ``ha_error_code``. Every id sent lands in exactly one of
+    the two: a ``null`` in HA's entries map (id not in the registry) gives it
+    ``_NOT_IN_REGISTRY`` as its error, and a failed chunk gives each of its
+    ids that failure.
     """
     raw: dict[str, dict[str, Any]] = {}
-    errors: dict[str, str] = {}
+    errors: dict[str, dict[str, str]] = {}
     if not entity_ids:
         return raw, errors
 
@@ -88,15 +89,21 @@ async def get_entries_raw(
                 # Core lowercases the ids it is sent and keys its reply so.
                 entry = result_map.get(eid.lower())
                 if entry is None:
-                    errors[eid] = _NOT_IN_REGISTRY
+                    errors[eid] = {"error": _NOT_IN_REGISTRY}
                 else:
                     raw[eid] = entry
             continue
         # Whole-chunk failure (WS raised, or success=False): each id in the
         # chunk gets that failure as its error.
-        msg = _extract_ws_error(resp) if isinstance(resp, dict) else str(resp)
+        if isinstance(resp, dict):
+            failure = {
+                "error": _extract_ws_error(resp),
+                **ha_error_code_field(resp.get("error_code")),
+            }
+        else:
+            failure = {"error": str(resp)}
         for eid in chunk:
-            errors[eid] = msg
+            errors[eid] = dict(failure)
     return raw, errors
 
 
@@ -117,13 +124,11 @@ async def resolve_by_unique_id(
         {"type": "config/entity_registry/list"}
     )
     if not list_resp.get("success"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to list entity registry: {_extract_ws_error(list_resp)}",
-                context={"unique_id": unique_id},
-                suggestions=["Check Home Assistant connection and retry"],
-            )
+        raise_core_refusal(
+            "Failed to list entity registry",
+            list_resp,
+            {"unique_id": unique_id},
+            ["Check Home Assistant connection and retry"],
         )
 
     matches = [

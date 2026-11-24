@@ -26,7 +26,12 @@ from .entity_expose_batch import (
     refresh_warning,
 )
 from .entity_registry_reads import get_entries_raw
-from .helpers import extract_tool_error_message, raise_tool_error, tool_error_ha_code
+from .helpers import (
+    extract_tool_error_message,
+    ha_error_code_field,
+    raise_tool_error,
+    tool_error_ha_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +74,13 @@ async def _registry_phase(
             # Never swallow cancellation/shutdown into per-entity errors.
             raise result
         if isinstance(result, ToolError):
-            row = {"entity_id": eid, "error": extract_tool_error_message(result)}
-            if code := tool_error_ha_code(result):
-                row["ha_error_code"] = code
-            failed.append(row)
+            failed.append(
+                {
+                    "entity_id": eid,
+                    "error": extract_tool_error_message(result),
+                    **ha_error_code_field(tool_error_ha_code(result)),
+                }
+            )
         elif isinstance(result, BaseException):
             logger.warning("Bulk update of %s failed", eid, exc_info=result)
             failed.append({"entity_id": eid, "error": str(result)})
@@ -136,7 +144,7 @@ async def _expose_phase(
         if targets[eid] in refetched:
             entry_by_id[eid] = refetched[targets[eid]]
         else:
-            warnings.append(refresh_warning(eid, refetch_errors[targets[eid]]))
+            warnings.append(refresh_warning(eid, refetch_errors[targets[eid]]["error"]))
     if warnings:
         logger.warning("Bulk exposure applied; %s", " ".join(warnings))
     return eligible_ids, failed, warnings

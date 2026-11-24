@@ -1656,7 +1656,7 @@ class EntityTools:
             elif eid in known:
                 unregistered_entities.append(unregistered_row(eid, known[eid][1]))
             else:
-                errors.append({"entity_id": eid, "error": error_map[eid]})
+                errors.append({"entity_id": eid, **error_map[eid]})
 
         warning = await self._enrich_entries(entity_entries)
 

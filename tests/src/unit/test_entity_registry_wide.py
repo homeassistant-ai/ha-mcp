@@ -354,6 +354,7 @@ class TestExposeToWithoutRegistryEntry:
         [failed] = result["failed"]
         assert failed["entity_id"] == "light.porch"
         assert "server down" in failed["error"]
+        assert "ha_error_code" not in failed
         [write] = [m for m in _messages(sent) if m["type"] == _EXPOSE]
         assert write["entity_ids"] == ["light.kitchen"]
 
@@ -381,6 +382,9 @@ class TestExposeToWithoutRegistryEntry:
         failed = {row["entity_id"]: row["error"] for row in result["failed"]}
         assert failed.keys() == {"light.kitchen", _BAD_ID}
         assert all("entity_ids" in error for error in failed.values())
+        assert [row["ha_error_code"] for row in result["failed"]] == [
+            "invalid_format"
+        ] * 2
         assert _EXPOSE not in _types(sent)
 
     async def test_a_device_rename_without_an_entry_is_skipped_not_failed(
@@ -453,6 +457,9 @@ class TestBulkRead:
         assert "entity_ids" in errors[_BAD_ID]
         assert "no registry entry" not in errors[_BAD_ID]
         assert "no registry entry" in errors["light.porch"]
+        codes = {row["entity_id"]: row.get("ha_error_code") for row in result["errors"]}
+        # Core refused the bad id and the exposure-list read for the porch.
+        assert codes == {_BAD_ID: "invalid_format", "light.porch": "unauthorized"}
 
     async def test_an_unreadable_unique_id_match_is_an_error_not_zero_matches(
         self, monkeypatch: pytest.MonkeyPatch, tools: EntityTools
@@ -468,7 +475,10 @@ class TestBulkRead:
         body = _body(exc_info)
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert list(body["errors"]) == ["light.kitchen"]
-        assert "registry busy" in body["errors"]["light.kitchen"]
+        assert "registry busy" in body["errors"]["light.kitchen"]["error"]
+        assert (
+            body["errors"]["light.kitchen"]["ha_error_code"] == "home_assistant_error"
+        )
 
     @pytest.mark.usefixtures("refetch_drops")
     async def test_a_dropped_refetch_keeps_the_exposed_rows_and_warns(
@@ -485,7 +495,7 @@ class TestBulkRead:
         assert [row["entity_id"] for row in result["succeeded"]] == ids
         assert [row["entity_entry"]["entity_id"] for row in result["succeeded"]] == ids
         assert [w.split(":")[0] for w in result["warnings"]] == ids
-        assert all("connection lost" in w for w in result["warnings"])
+        assert all("failed (connection lost);" in w for w in result["warnings"])
 
 
 class TestRegistryWideWrite:

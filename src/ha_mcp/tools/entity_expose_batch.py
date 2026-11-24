@@ -10,6 +10,7 @@ from .entity_exposure import get_entries_or_unregistered
 from .entity_registry_reads import _extract_ws_error
 from .helpers import (
     exception_to_structured_error,
+    ha_error_code_field,
     raise_core_refusal,
     raise_tool_error,
 )
@@ -156,10 +157,8 @@ async def apply_bulk_expose(
                 f"{', '.join(applied)} were already applied before "
                 "this failure)"
             )
-        row = {"error": error}
-        if isinstance(failure, dict) and (code := failure.get("error_code")):
-            row["ha_error_code"] = code
-        return row, set(), applied
+        code = failure.get("error_code") if isinstance(failure, dict) else None
+        return {"error": error, **ha_error_code_field(code)}, set(), applied
     return None, changed, applied
 
 
@@ -188,7 +187,7 @@ async def expose_targets(
         elif eid in known:
             targets[eid] = known[eid][0]
         else:
-            failed.append({"entity_id": eid, "error": errors[eid]})
+            failed.append({"entity_id": eid, **errors[eid]})
     return targets, failed
 
 

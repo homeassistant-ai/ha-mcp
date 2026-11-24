@@ -1,4 +1,4 @@
-"""tool_error_ha_code: Core's code a ToolError keeps, and nothing else.
+"""tool_error_ha_code and ha_error_code_field: Core's code, and nothing else.
 
 Callers branch on the code (a dashboard with no stored config, an unknown
 command, a bulk row's ha_error_code), so a body that does not carry one as a
@@ -10,7 +10,7 @@ import json
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.helpers import tool_error_ha_code
+from ha_mcp.tools.helpers import ha_error_code_field, tool_error_ha_code
 
 
 def test_the_code_core_gave_is_read() -> None:
@@ -30,3 +30,14 @@ def test_the_code_core_gave_is_read() -> None:
 )
 def test_a_body_without_a_string_code_has_none(text: str) -> None:
     assert tool_error_ha_code(ToolError(text)) is None
+
+
+def test_a_failure_row_keeps_cores_code() -> None:
+    assert ha_error_code_field("invalid_format") == {"ha_error_code": "invalid_format"}
+
+
+@pytest.mark.parametrize("code", [None, ""])
+def test_a_failure_row_without_a_code_gets_no_key(code: object) -> None:
+    """A failure without a string code from Core (a lost connection, a fault
+    on this side) gets no key rather than null."""
+    assert ha_error_code_field(code) == {}

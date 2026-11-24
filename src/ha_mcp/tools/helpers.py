@@ -116,6 +116,13 @@ def extract_tool_error_message(te: ToolError | str) -> str:
         return str(te)
 
 
+def ha_error_code_field(code: object) -> dict[str, str]:
+    """The ``ha_error_code`` of a per-item failure row: Core's code when the
+    failure carries one as a string, else nothing, so a failure without a
+    code from Core has no such key rather than null."""
+    return {"ha_error_code": code} if isinstance(code, str) and code else {}
+
+
 def tool_error_ha_code(exc: ToolError) -> str | None:
     """Core's code a ToolError keeps as ``ha_error_code``, if any."""
     try:

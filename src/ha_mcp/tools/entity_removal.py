@@ -18,7 +18,12 @@ from ..client.rest_client import (
 )
 from .config_helpers.listing import listed_items
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
-from .helpers import core_error_message, exception_to_structured_error, ws_failure_code
+from .helpers import (
+    core_error_message,
+    exception_to_structured_error,
+    ha_error_code_field,
+    ws_failure_code,
+)
 
 
 def _unread(entity_id: str, reason: Any) -> list[str]:
@@ -113,14 +118,14 @@ async def remove_registry_entries(client: Any, entity_ids: list[str]) -> dict[st
         elif result.get("error_code") == "not_found":
             skipped.append(eid)
         else:
-            row = {
-                "entity_id": eid,
-                "code": ws_failure_code(result).value,
-                "message": core_error_message(result.get("error", "Unknown error")),
-            }
-            if code := result.get("error_code"):
-                row["ha_error_code"] = code
-            errors.append(row)
+            errors.append(
+                {
+                    "entity_id": eid,
+                    "code": ws_failure_code(result).value,
+                    "message": core_error_message(result.get("error", "Unknown error")),
+                    **ha_error_code_field(result.get("error_code")),
+                }
+            )
     response: dict[str, Any] = {
         "success": not errors,
         "total": len(entity_ids),

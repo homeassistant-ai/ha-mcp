@@ -32,6 +32,7 @@ from .entity_registry_reads import _NOT_IN_REGISTRY, _extract_ws_error, get_entr
 from .helpers import (
     core_error_message,
     get_entity_state_or_none,
+    ha_error_code_field,
     raise_core_refusal,
 )
 
@@ -196,17 +197,18 @@ async def get_entries_or_unregistered(
 ) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, tuple[str, dict[str, Any]]],
-    dict[str, str],
+    dict[str, dict[str, str]],
 ]:
     """Registry entries, the ids without one that Home Assistant knows (as
-    ``unregistered_lookup`` returns them), and the get_entries error of every
-    id without a registry entry.
+    ``unregistered_lookup`` returns them), and the failure row fields (as
+    ``get_entries_raw`` gives them) of every other id.
 
     When the lookup fails, each id without a registry entry gets that failure
-    as its error, since whether Home Assistant knows it is still open.
+    as its error, with the failure's code as ``ha_error_code`` if it has one,
+    since whether Home Assistant knows it is still open.
     """
     found, errors = await get_entries_raw(client, entity_ids)
-    missing = [eid for eid, err in errors.items() if err == _NOT_IN_REGISTRY]
+    missing = [eid for eid, err in errors.items() if err["error"] == _NOT_IN_REGISTRY]
     try:
         known = await unregistered_lookup(client, missing)
     except HomeAssistantError as exc:
@@ -215,7 +217,8 @@ async def get_entries_or_unregistered(
             "no registry entry, and checking whether Home Assistant knows it "
             f"failed: {exc}"
         )
-        errors.update(dict.fromkeys(missing, unchecked))
+        code_field = ha_error_code_field(getattr(exc, "code", None))
+        errors.update({eid: {"error": unchecked, **code_field} for eid in missing})
     return found, known, errors
 
 
