@@ -25,6 +25,7 @@ __all__ = (
 )
 
 _RUNTIME_MODULE = "ha_mcp.runtime_config"
+_SET_READ_ONLY_MODE = "set_read_only_mode"
 _RUNTIME_LOCK = threading.Lock()
 
 
@@ -97,7 +98,7 @@ def set_read_only_mode(config_dir: Path, enabled: bool) -> None:
     """Persist Read Only Mode with the server's canonical rules."""
     runtime = _runtime_config()
     try:
-        runtime.set_read_only_mode(config_dir, enabled)
+        getattr(runtime, _SET_READ_ONLY_MODE)(config_dir, enabled)
     except Exception as err:
         raise _translate_error(runtime, err) from err
 
