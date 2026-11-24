@@ -10,13 +10,13 @@ its parent, and turning a parent off keeps what was saved under it.
 from __future__ import annotations
 
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import (
     BETA_FEATURE_FIELDS,
@@ -24,7 +24,6 @@ from ha_mcp.config import (
     reset_global_settings,
 )
 from ha_mcp.server import HomeAssistantSmartMCPServer
-from ha_mcp.settings_ui import _persistence
 from ha_mcp.utils import config_write_lock
 
 from ._settings_ui_app import app_server, settings_http
@@ -53,7 +52,7 @@ class TestSave:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         active = False
-        real_write = _persistence._atomic_write_json  # noqa: SLF001
+        real_replace = os.replace
 
         @asynccontextmanager
         async def guard():
@@ -64,12 +63,12 @@ class TestSave:
             finally:
                 active = False
 
-        def checked_write(*args, **kwargs):
+        def checked_replace(*args, **kwargs):
             assert active
-            return real_write(*args, **kwargs)
+            return real_replace(*args, **kwargs)
 
         monkeypatch.setattr(config_write_lock, "config_write_guard", guard)
-        monkeypatch.setattr(_persistence, "_atomic_write_json", checked_write)
+        monkeypatch.setattr(os, "replace", checked_replace)
 
         assert (await _save({"read_only_mode": True})).status_code == 200
 

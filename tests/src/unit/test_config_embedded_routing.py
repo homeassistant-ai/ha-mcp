@@ -22,7 +22,6 @@ import threading
 from pathlib import Path
 
 import pytest
-
 from ha_mcp import config
 from ha_mcp.utils.data_paths import get_data_dir
 
@@ -50,25 +49,27 @@ def _a_backup_env_name() -> str:
 
 def test_reset_waits_for_a_complete_settings_build(monkeypatch):
     """A reset cannot expose or return the singleton halfway through a build."""
-    entered_override = threading.Event()
-    release_override = threading.Event()
+    entered_read = threading.Event()
+    release_read = threading.Event()
     reset_done = threading.Event()
     built = []
-    real_apply = config._apply_feature_flag_overrides  # noqa: SLF001
+    override_path = get_data_dir() / "feature_flags.json"
+    override_path.write_text(json.dumps({"timeout": 77}))
+    real_read = Path.read_text
 
-    def held_apply(settings):
-        entered_override.set()
-        assert release_override.wait(5)
-        real_apply(settings)
-        settings.timeout = 77
+    def held_read(path, *args, **kwargs):
+        if path == override_path:
+            entered_read.set()
+            assert release_read.wait(5)
+        return real_read(path, *args, **kwargs)
 
-    monkeypatch.setattr(config, "_apply_feature_flag_overrides", held_apply)
+    monkeypatch.setattr(Path, "read_text", held_read)
     config.reset_global_settings()
     builder = threading.Thread(
         target=lambda: built.append(config.get_global_settings())
     )
     builder.start()
-    assert entered_override.wait(5)
+    assert entered_read.wait(5)
 
     def reset() -> None:
         config.reset_global_settings()
@@ -77,7 +78,7 @@ def test_reset_waits_for_a_complete_settings_build(monkeypatch):
     resetter = threading.Thread(target=reset)
     resetter.start()
     assert not reset_done.wait(0.05)
-    release_override.set()
+    release_read.set()
     builder.join(5)
     resetter.join(5)
 

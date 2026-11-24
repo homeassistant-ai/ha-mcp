@@ -15,14 +15,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from homeassistant.components.switch.const import DATA_COMPONENT
-from homeassistant.const import STATE_OFF, STATE_ON
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import entity_registry as er
-from homeassistant.util import dt as dt_util
-from pytest_homeassistant.common import async_fire_time_changed
-
 from custom_components.ha_mcp_tools import switch as switch_platform
 from custom_components.ha_mcp_tools.const import (
     DATA_ACCESS_ENABLED,
@@ -30,6 +22,13 @@ from custom_components.ha_mcp_tools.const import (
 )
 from custom_components.ha_mcp_tools.embedded_read_only import set_read_only_mode
 from ha_mcp.read_only import read_only_remedy_hint
+from homeassistant.components.switch.const import DATA_COMPONENT
+from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant.common import async_fire_time_changed
 
 from ._server_entry import add_server_entry, replace_server, set_up
 
@@ -288,24 +287,27 @@ async def test_read_only_mode_refuses_to_replace_an_invalid_override(
     assert path.read_bytes() == payload
 
 
+@pytest.mark.parametrize("env_name", ["READ_ONLY_MODE", "read_only_mode"])
 async def test_read_only_mode_environment_lock_is_friendly_and_removable(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
     entity_registry_enabled_by_default: None,
     server: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
+    env_name: str,
 ) -> None:
-    monkeypatch.setenv("READ_ONLY_MODE", "y")
+    monkeypatch.setenv(env_name, "y")
     registered = await _read_only_mode_entry(hass, entity_registry)
     path = _feature_flags_path(hass)
 
+    assert _shown(hass, registered.entity_id) == STATE_ON
     with pytest.raises(HomeAssistantError, match="locked by the READ_ONLY_MODE"):
         await hass.services.async_call(
             "switch", "turn_off", {"entity_id": registered.entity_id}, blocking=True
         )
     assert not path.exists()
 
-    monkeypatch.delenv("READ_ONLY_MODE")
+    monkeypatch.delenv(env_name)
     await hass.services.async_call(
         "switch", "turn_off", {"entity_id": registered.entity_id}, blocking=True
     )
