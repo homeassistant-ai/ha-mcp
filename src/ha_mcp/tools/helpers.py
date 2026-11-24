@@ -116,6 +116,16 @@ def extract_tool_error_message(te: ToolError | str) -> str:
         return str(te)
 
 
+def tool_error_ha_code(exc: ToolError) -> str | None:
+    """Core's code a ToolError keeps as ``ha_error_code``, if any."""
+    try:
+        payload = json.loads(str(exc))
+    except ValueError, TypeError:
+        return None
+    code = payload.get("ha_error_code") if isinstance(payload, dict) else None
+    return code if isinstance(code, str) else None
+
+
 def extract_structured_error_reason(exc: BaseException) -> str | None:
     """Extract "message" + first actionable suggestion from a structured error.
 

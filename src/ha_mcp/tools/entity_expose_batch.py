@@ -116,16 +116,17 @@ async def apply_bulk_expose(
     client: Any,
     entity_ids: list[str],
     parsed_expose_to: dict[str, bool],
-) -> tuple[str | None, set[str], dict[str, bool]]:
+) -> tuple[dict[str, Any] | None, set[str], dict[str, bool]]:
     """Expose/hide many entities in one homeassistant/expose_entity call per set.
 
     The command's schema accepts the full entity_ids list, so bulk exposure
     needs at most two WS calls (one for the assistants being turned on, one
     for those being turned off) regardless of entity count — not one per
     entity. Returns (error, changed, applied). error is None on success, else
-    the row error for the first failing set, which applies to every id in the
+    the row fields for the first failing set, which apply to every id in the
     list: a refusal or an unsent command failed, while a connection lost after
-    sending leaves the outcome unknown. changed holds the ids Core reports it
+    sending leaves the outcome unknown. A refusal keeps Core's code as
+    ``ha_error_code``. changed holds the ids Core reports it
     changed, and is empty on error. applied maps each assistant whose set
     landed to its value.
     """
@@ -140,7 +141,7 @@ async def apply_bulk_expose(
             f"{'Exposing' if should_expose else 'Hiding'} {len(entity_ids)} "
             f"entities {'to' if should_expose else 'from'} {assistants}"
         )
-        error, _, changed_now = await expose_write(
+        error, failure, changed_now = await expose_write(
             client, assistants, entity_ids, should_expose
         )
         if error is None:
@@ -155,7 +156,10 @@ async def apply_bulk_expose(
                 f"{', '.join(applied)} were already applied before "
                 "this failure)"
             )
-        return error, set(), applied
+        row: dict[str, Any] = {"error": error}
+        if isinstance(failure, dict):
+            row["ha_error_code"] = failure.get("error_code")
+        return row, set(), applied
     return None, changed, applied
 
 

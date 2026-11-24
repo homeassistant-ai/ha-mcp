@@ -805,11 +805,19 @@ class TestEntityWriteFailure:
         assert _types(sent)[-1] == _EXPOSE
 
     @pytest.mark.parametrize(
-        ("fault", "error"),
+        ("fault", "error", "ha_error_code"),
         [
-            ("refused", "Exposure failed: Command failed: boom"),
-            ("not_sent", "Exposure failed: not sent"),
-            ("dropped", "Exposure outcome unknown: Home Assistant did not answer"),
+            (
+                "refused",
+                "Exposure failed: Command failed: boom",
+                "home_assistant_error",
+            ),
+            ("not_sent", "Exposure failed: not sent", "absent"),
+            (
+                "dropped",
+                "Exposure outcome unknown: Home Assistant did not answer",
+                "absent",
+            ),
         ],
     )
     async def test_a_failed_bulk_exposure_still_reports_the_registry_write(
@@ -820,10 +828,12 @@ class TestEntityWriteFailure:
         tools: EntityTools,
         fault: str,
         error: str,
+        ha_error_code: str,
     ) -> None:
         """Each entity was enabled and hidden before the exposure failed: a reply
         hiding that, or Core's restart notice for an entry without a config
-        entry, makes an agent retry or misreport. Only an unsent write failed."""
+        entry, makes an agent retry or misreport. Only an unsent write failed,
+        and a refusal keeps Core's code, as a single-entity reply does."""
         registry = er.async_get(hass)
         ids = [
             registry.async_get_or_create(
@@ -850,6 +860,7 @@ class TestEntityWriteFailure:
         assert [row["entity_id"] for row in result["failed"]] == ids
         for row in result["failed"]:
             assert row["error"].startswith(error)
+            assert row.get("ha_error_code", "absent") == ha_error_code
             assert row["partial"] is True
             assert row["updates"] == ["enabled", "hidden"]
             assert row["require_restart"] is True

@@ -26,7 +26,7 @@ from .entity_expose_batch import (
     refresh_warning,
 )
 from .entity_registry_reads import get_entries_raw
-from .helpers import extract_tool_error_message, raise_tool_error
+from .helpers import extract_tool_error_message, raise_tool_error, tool_error_ha_code
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,10 @@ async def _registry_phase(
             # Never swallow cancellation/shutdown into per-entity errors.
             raise result
         if isinstance(result, ToolError):
+            code = tool_error_ha_code(result)
             failed.append(
                 {"entity_id": eid, "error": extract_tool_error_message(result)}
+                | ({"ha_error_code": code} if code else {})
             )
         elif isinstance(result, BaseException):
             logger.warning("Bulk update of %s failed", eid, exc_info=result)
@@ -117,7 +119,7 @@ async def _expose_phase(
     if expose_error is not None:
         landed = {"partial": True, "exposure_succeeded": applied} if applied else {}
         failed.extend(
-            {"entity_id": eid, "error": expose_error, **landed} for eid in eligible_ids
+            {"entity_id": eid, **expose_error, **landed} for eid in eligible_ids
         )
         return [], failed, []
 

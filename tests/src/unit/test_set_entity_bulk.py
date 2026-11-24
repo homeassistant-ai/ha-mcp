@@ -90,7 +90,9 @@ class TestBulk:
         assert result["success"] is False
         assert result["partial"] is True
         assert [row["entity_id"] for row in result["succeeded"]] == ["light.a"]
-        assert [row["entity_id"] for row in result["failed"]] == ["light.b"]
+        [failed] = result["failed"]
+        assert failed["entity_id"] == "light.b"
+        assert failed["ha_error_code"] == "not_found"
         assert stored_entry(entity_registry, "light.a").labels == {"outdoor"}
 
     async def test_an_empty_entity_list_is_refused(self, tools: EntityTools) -> None:
