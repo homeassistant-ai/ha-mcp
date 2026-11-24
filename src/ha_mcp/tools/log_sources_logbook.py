@@ -17,9 +17,10 @@ Transport order (best first), all fetching from Home Assistant's own code:
    requests without the component (the only transport with a device filter).
 """
 
-import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn
+
+from ulid_transform import ulid_to_bytes_or_none
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
@@ -98,9 +99,7 @@ class LogbookLogSourceMixin:
 
         # Core uses a binary ULID to constrain a context-only recorder query.
         if hours_back > 1 and not (
-            entity_id
-            or device_id
-            or re.fullmatch(r"[0-7][0-9A-HJKMNP-TV-Z]{25}", context_id or "")
+            entity_id or device_id or ulid_to_bytes_or_none(context_id) is not None
         ):
             raise_tool_error(
                 create_error_response(
