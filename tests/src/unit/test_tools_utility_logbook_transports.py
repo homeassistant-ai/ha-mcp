@@ -551,6 +551,8 @@ async def test_sparse_search_keeps_parent_context_across_empty_pages(
         else:
             pytest.fail("Sparse search did not terminate")
     assert empty_continuation
+    for entry in actual + expected:
+        entry["when"] = datetime.fromisoformat(entry["when"])
     assert actual == expected
     rest.assert_not_awaited()
 
