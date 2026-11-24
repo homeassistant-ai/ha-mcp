@@ -448,6 +448,7 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
     hass: HomeAssistant,
     component_enabled: bool,
     core_client: HomeAssistantClient,
+    sent: AsyncMock,
     order: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -478,18 +479,35 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
         limit=2,
     )
     actual: list[str] = []
-    for _ in range(len(names)):
-        data = (await LogTools(core_client).get_logs(**params))["data"]
-        assert data["total_entries"] == len(names)
-        assert data["offset"] == len(actual)
-        actual.extend(row["name"] for row in data["entries"])
-        if not data["has_more"]:
-            break
-        params["offset"] = data["next_offset"]
-        if isinstance(params["offset"], str):
-            params["hours_back"] = None
-            params["end_time"] = None
+    with rest_reads(core_client) as rest:
+        for _ in range(len(names)):
+            data = (await LogTools(core_client).get_logs(**params))["data"]
+            assert data["total_entries"] == len(names)
+            assert data["offset"] == len(actual)
+            actual.extend(row["name"] for row in data["entries"])
+            if not data["has_more"]:
+                break
+            params["offset"] = data["next_offset"]
+            if isinstance(params["offset"], str):
+                params["hours_back"] = None
+                params["end_time"] = None
     assert actual == (names if order == "oldest" else names[::-1])
+    if component_enabled:
+        rest.assert_not_awaited()
+        pages = [
+            call.args[0]["page"]
+            for call in sent.await_args_list
+            if call.args[0]["type"] == COMPONENT_COMMAND
+        ]
+        counts = [page["count_range"] for page in pages if "count_range" in page]
+        assert len(counts) == 3  # The cursor carries the total on subsequent pages.
+        assert all(hi - lo == 3600 for lo, hi in counts)
+    else:
+        assert rest.await_count >= 3
+        for call in rest.await_args_list:
+            start = datetime.fromisoformat(call.kwargs["start_time"])
+            finish = datetime.fromisoformat(call.kwargs["end_time"])
+            assert finish - start <= timedelta(hours=1, microseconds=2)
 
 
 @pytest.mark.usefixtures("logbook")
