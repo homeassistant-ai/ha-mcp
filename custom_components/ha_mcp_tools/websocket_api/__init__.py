@@ -309,7 +309,8 @@ the info handshake carries no capability entry:
 completed reload (no version marker distinguishes a fresh body from a stale one),
 so a get racing a reload returned a pre-edit body. ``ha_config_get_{automation,
 script}`` stay on the legacy REST path (which reads the fresh config file);
-scenes were already legacy-only. A file-reading redesign may return (issue #1813).
+scenes were already legacy-only. YAML source support is planned for the dedicated
+get tools (issue #2632).
 
 Design notes that are load-bearing:
 
@@ -319,12 +320,11 @@ Design notes that are load-bearing:
   manifest version is reported for display only.
 * **Data minimization.** Flow-helper indexing reads ``ConfigEntry.options`` /
   ``title`` only — **never** ``ConfigEntry.data`` (integration credentials).
-* **YAML config bodies are never emitted.** automation/script/scene bodies are
-  indexed for *matching*, but a matched item's ``config`` body is returned only
-  when it is storage/editor-backed AND ``include_config`` is set. YAML-loaded
-  items return identity/metadata only (their ``raw_config`` may carry resolved
-  ``!secret`` plaintext). Body emission for YAML belongs to a future file-based
-  tool.
+* **Search result bodies come from saved editor definitions.** Search matches
+  automations, scripts and scenes against their loaded configuration. When
+  requested, automation and script bodies come from the editor file with YAML
+  tags preserved. A package match directs callers to ``ha_config_get_yaml``
+  for the source. Scenes return metadata only.
 * **Resolved secrets are scrubbed from the match corpus.** Because YAML bodies
   (and flow-helper options) can hold ``!secret`` values resolved to plaintext,
   a body leaf that exactly equals a ``secrets.yaml`` value is dropped before
