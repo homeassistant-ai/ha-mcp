@@ -15,7 +15,8 @@ backup manager.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import Settings
+from ha_mcp.tools import auto_backup
 from ha_mcp.tools.tools_filesystem import FilesystemTools
 from ha_mcp.visibility.model import VisibilityConfig
 
@@ -101,6 +103,38 @@ async def test_a_refused_change_leaves_no_backup_of_the_hidden_definition(
         else:
             await tools.ha_write_file(path=DEFINING, **arguments)
 
+    assert error_code(excinfo) == "ENTITY_VISIBILITY_ENFORCED"
+    assert await _read(hass, DEFINING) == SCRIPTS
+    assert _file_snapshots(manager) == []
+
+
+async def test_a_write_waiting_for_another_one_checks_the_file_it_left(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The check runs under the file lock: checked before the wait, the write
+    would snapshot and replace a hidden definition the other write added."""
+    await write_config_files(hass, {DEFINING: "# 30000\n"})
+    enforce_hiding(set_config, HIDDEN)
+    real_lock = auto_backup.registry_update_lock
+
+    @asynccontextmanager
+    async def another_write_first(
+        registry: str, resource_id: str
+    ) -> AsyncIterator[None]:
+        await write_config_files(hass, {DEFINING: SCRIPTS})
+        async with real_lock(registry, resource_id):
+            yield
+
+    monkeypatch.setattr(auto_backup, "registry_update_lock", another_write_first)
+
+    with pytest.raises(ToolError) as excinfo:
+        await FilesystemTools(component_core_client).ha_write_file(
+            path=DEFINING, content="x: 1\n", overwrite=True
+        )
     assert error_code(excinfo) == "ENTITY_VISIBILITY_ENFORCED"
     assert await _read(hass, DEFINING) == SCRIPTS
     assert _file_snapshots(manager) == []

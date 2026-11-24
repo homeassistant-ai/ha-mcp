@@ -313,9 +313,12 @@ def with_auto_backup(
 
     ``precheck`` optionally refuses the call before anything is captured, with
     the client, the tool's name and its kwargs, so a refused call leaves no
-    snapshot behind. It runs after the mandatory toggle check and outside the
-    write guard, whether or not a capture would be taken; an error it raises
-    other than a ``ToolError`` is reported as a structured error.
+    snapshot behind. It runs after the mandatory toggle check, inside the write
+    guard and whether or not a capture would be taken, so another file or YAML
+    write tool of this server cannot change the file between the check and the
+    capture (a ``scope="edits"`` restore takes no such lock); it must not take
+    the guard's lock. An error it raises other than a ``ToolError`` is reported
+    as a structured error.
 
     ``mandatory=True`` makes auto-backup a precondition (file/YAML writes,
     #1579 — those formerly kept their own private backups). It fails the
@@ -380,7 +383,6 @@ def with_auto_backup(
                     )
                 )
             backup_client = _resolve_backup_client(explicit_client, args)
-            await _run_precheck(precheck, backup_client, func.__name__, kwargs)
             snap_domain, entity_id = _resolve_snapshot_target(
                 kwargs,
                 domain=domain,
@@ -394,6 +396,7 @@ def with_auto_backup(
                 snap_domain,
                 entity_id,
             ):
+                await _run_precheck(precheck, backup_client, func.__name__, kwargs)
                 skipped = None
                 if enabled:
                     skipped = await _capture_pre_write_snapshot(
@@ -424,7 +427,7 @@ def with_auto_backup(
 async def _template_write_context(
     client: Any, settings: Any, domain: str, entity_id: str
 ) -> AsyncIterator[None]:
-    """Keep a write's capture and mutation in one critical section.
+    """Keep a write's check, capture and mutation in one critical section.
 
     Flow helpers and integrations share the restore critical section. The lock
     is needed even when ordinary auto-backup is disabled: restores of existing

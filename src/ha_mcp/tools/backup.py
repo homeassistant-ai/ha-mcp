@@ -497,7 +497,7 @@ async def _refuse_hidden_file_backup(
         if not bname.startswith(LEGACY_PREFIX):
             return
     except OSError:
-        pass
+        pass  # unreadable: counts as naming no file
     await refuse_reading_hidden_backup(client, domain, target)
 
 
