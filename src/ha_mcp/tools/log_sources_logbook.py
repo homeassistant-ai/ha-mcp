@@ -418,14 +418,14 @@ class LogbookLogSourceMixin:
     def _component_rows(result: Any, paged: bool) -> list[Any] | dict[str, Any] | None:
         if not paged:
             return result if isinstance(result, list) else None
-        if isinstance(result, dict) and isinstance(result.get("entries"), list):
-            return result
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "The Logbook component returned an invalid page.",
+        if not isinstance(result, dict) or not isinstance(result.get("entries"), list):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The Logbook component returned an invalid page.",
+                )
             )
-        )
+        return result
 
     async def _fetch_logbook_websocket(self, command: dict[str, Any]) -> list[Any]:
         """Core's ``logbook/get_events`` — the device-filter fallback."""
