@@ -42,7 +42,7 @@ class FeatureFlagStateError(ValueError):
     """An override file cannot be safely read or changed."""
 
 
-def _environment_value(values: Mapping[str, str], name: str) -> str | None:
+def environment_value(values: Mapping[str, str], name: str) -> str | None:
     """Resolve an environment name like pydantic-settings does."""
     normalized = name.lower()
     return {key.lower(): value for key, value in values.items()}.get(normalized)
@@ -68,7 +68,7 @@ def parse_boolean_string(raw: str) -> bool:
 def read_only_mode(config_dir: Path, environ: Mapping[str, str] | None = None) -> bool:
     """Resolve Read Only Mode with the server's env-over-file precedence."""
     values = os.environ if environ is None else environ
-    env_value = _environment_value(values, READ_ONLY_ENV)
+    env_value = environment_value(values, READ_ONLY_ENV)
     if env_value is not None:
         try:
             return parse_boolean_string(env_value)
@@ -112,7 +112,7 @@ def read_feature_flags(config_dir: Path) -> dict[str, Any]:
 
 def set_read_only_mode(config_dir: Path, enabled: bool) -> None:
     """Atomically persist Read Only Mode without dropping other overrides."""
-    if _environment_value(os.environ, READ_ONLY_ENV) is not None:
+    if environment_value(os.environ, READ_ONLY_ENV) is not None:
         raise FeatureFlagStateError(
             f"Read Only Mode is locked by the {READ_ONLY_ENV} environment variable"
         )

@@ -393,6 +393,26 @@ def _clear_all_feature_envs(monkeypatch):
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
 
 
+def test_lowercase_read_only_env_wins_over_the_override_file(
+    isolated_data_dir, monkeypatch
+) -> None:
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.setenv("read_only_mode", "true")
+    (isolated_data_dir / "feature_flags.json").write_text(
+        json.dumps({"read_only_mode": False})
+    )
+
+    from ha_mcp.config import (
+        get_feature_flag_origin,
+        get_global_settings,
+        reset_global_settings,
+    )
+
+    reset_global_settings()
+    assert get_global_settings().read_only_mode is True
+    assert get_feature_flag_origin("READ_ONLY_MODE") == "env"
+
+
 def test_master_off_forces_beta_subflags_false_even_with_file_overrides(
     isolated_data_dir, monkeypatch
 ) -> None:

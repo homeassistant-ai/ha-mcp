@@ -341,7 +341,7 @@ async def test_a_start_waits_for_the_job_a_cancelled_start_left_on_the_executor(
 
     second, _entry = await new_manager(hass)
     next_start = asyncio.create_task(second.async_start())
-    await wait_for_log(caplog, "install job is still running")
+    await wait_for_log(caplog, "package job is still running")
     assert len(package_index.calls) == 1, "the next start touched the package"
     held.release.set()
     with pytest.raises(es.EmbeddedServerError) as err:
@@ -350,6 +350,33 @@ async def test_a_start_waits_for_the_job_a_cancelled_start_left_on_the_executor(
     assert err.value.kind == "token"
     assert package_index.dists[STABLE] == INDEX_VERSION
     assert len(package_index.calls) == 1, "the job was run again"
+
+
+async def test_a_cancelled_runtime_preload_finishes_before_the_next_start(
+    hass: HomeAssistant,
+    package_index: PackageIndex,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cancelled bring-up must not leave an untracked package importer."""
+    held = Held()
+    monkeypatch.setattr(es, "prepare_runtime_config", held)
+    options = server_options(**{OPT_PIP_SPEC: PIN})
+    first, _entry = await new_manager(hass, token=True, options=options)
+    cancelled_start = asyncio.create_task(first.async_start())
+    await wait_for(hass, held.started)
+    await cancelled(cancelled_start)
+
+    second, _entry = await new_manager(hass, token=True, options=options)
+    next_start = asyncio.create_task(second.async_start())
+    await wait_for_log(caplog, "package job is still running")
+    package_calls = len(package_index.calls)
+    await asyncio.sleep(0.05)
+    assert len(package_index.calls) == package_calls
+
+    held.release.set()
+    await asyncio.wait_for(next_start, timeout=60)
+    await second.async_stop()
 
 
 async def test_a_start_gives_up_on_a_job_that_never_finishes(
@@ -387,7 +414,7 @@ async def test_a_job_that_raised_does_not_make_the_next_start_wait(
 
     await package_step(second)
 
-    assert "install job is still running" not in caplog.text
+    assert "package job is still running" not in caplog.text
     assert package_index.dists[STABLE] == INDEX_VERSION
 
 

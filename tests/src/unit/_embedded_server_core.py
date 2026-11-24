@@ -114,7 +114,7 @@ def shorten(monkeypatch: pytest.MonkeyPatch, **seconds: float) -> None:
         "ready_stall": "READY_STALL_TIMEOUT_SECONDS",
         "ready_cap": "READY_TOTAL_CAP_SECONDS",
         "ready_poll": "READY_POLL_INTERVAL_SECONDS",
-        "pending_install": "_PENDING_INSTALL_WAIT_SECONDS",
+        "pending_install": "_PENDING_PACKAGE_JOB_WAIT_SECONDS",
     }
     for key, value in seconds.items():
         monkeypatch.setattr(es, names[key], value)

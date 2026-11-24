@@ -17,7 +17,7 @@ from ha_mcp.config_registry import (
     RegistryFieldType,
 )
 from ha_mcp.config_settings import Settings
-from ha_mcp.runtime_config import coerce_feature_flag_bool
+from ha_mcp.runtime_config import coerce_feature_flag_bool, environment_value
 
 # All config modules log under the ``ha_mcp.config`` logger name.
 logger = logging.getLogger("ha_mcp.config")
@@ -91,12 +91,12 @@ def get_feature_flag_origin(env_name: str) -> str:
             # to "schema-bound on dev only"; the same env-var-presence
             # signal now distinguishes both for the master and the
             # beta sub-flags.
-            if os.environ.get(env_name) is not None:
+            if environment_value(os.environ, env_name) is not None:
                 return "addon"
             # else: stable / legacy-dev-no-master-key, fall through.
         else:
             return "addon"
-    if os.environ.get(env_name) is not None:
+    if environment_value(os.environ, env_name) is not None:
         return "env"
     if field_name is None:
         return "default"
@@ -230,7 +230,7 @@ def _apply_one_feature_flag_override(
     if in_addon and not is_beta:
         # Non-beta addon mode: start.py owns it. Skip.
         return
-    if os.environ.get(env_name) is not None:
+    if environment_value(os.environ, env_name) is not None:
         # Explicit env var wins over file for that field.
         return
     if field_name not in overrides:
@@ -452,7 +452,7 @@ def _apply_one_advanced_override(
                 fname,
             )
         return
-    if os.environ.get(env_name) is not None:
+    if environment_value(os.environ, env_name) is not None:
         return
     if fname not in overrides:
         return
