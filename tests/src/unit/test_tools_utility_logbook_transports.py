@@ -443,14 +443,21 @@ async def test_invalid_long_context_cannot_turn_into_an_unfiltered_read(
 
 @pytest.mark.usefixtures("logbook")
 @pytest.mark.parametrize("order", ["oldest", "newest"])
+@pytest.mark.parametrize("component_enabled", [False, True])
 async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
     hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
+    component_enabled: bool,
     core_client: HomeAssistantClient,
     order: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from custom_components.ha_mcp_tools.websocket_api import logbook_page
+    from custom_components.ha_mcp_tools.websocket_api import (
+        async_register_commands,
+        logbook_page,
+    )
+
+    if component_enabled:
+        async_register_commands(hass)
 
     end = dt_util.utcnow().replace(microsecond=0)
     seam = (end - timedelta(hours=1)).timestamp()
@@ -462,28 +469,27 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
         )
     await async_wait_recording_done(hass)
     monkeypatch.setattr(logbook_page, "RAW_PAGE_ROWS", 2)
-    for client in (component_core_client, core_client):
-        params = call_kwargs(
-            source="logbook",
-            hours_back=3,
-            search="range marker",
-            order=order,
-            end_time=end.isoformat(),
-            limit=2,
-        )
-        actual: list[str] = []
-        for _ in range(len(names)):
-            data = (await LogTools(client).get_logs(**params))["data"]
-            assert data["total_entries"] == len(names)
-            assert data["offset"] == len(actual)
-            actual.extend(row["name"] for row in data["entries"])
-            if not data["has_more"]:
-                break
-            params["offset"] = data["next_offset"]
-            if isinstance(params["offset"], str):
-                params.pop("hours_back", None)
-                params.pop("end_time", None)
-        assert actual == (names if order == "oldest" else names[::-1])
+    params = call_kwargs(
+        source="logbook",
+        hours_back=3,
+        search="range marker",
+        order=order,
+        end_time=end.isoformat(),
+        limit=2,
+    )
+    actual: list[str] = []
+    for _ in range(len(names)):
+        data = (await LogTools(core_client).get_logs(**params))["data"]
+        assert data["total_entries"] == len(names)
+        assert data["offset"] == len(actual)
+        actual.extend(row["name"] for row in data["entries"])
+        if not data["has_more"]:
+            break
+        params["offset"] = data["next_offset"]
+        if isinstance(params["offset"], str):
+            params["hours_back"] = None
+            params["end_time"] = None
+    assert actual == (names if order == "oldest" else names[::-1])
 
 
 @pytest.mark.usefixtures("logbook")

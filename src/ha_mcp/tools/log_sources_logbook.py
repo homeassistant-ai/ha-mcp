@@ -41,7 +41,7 @@ from .component_api import (
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import _coerce_limit, _compact_logbook_entries
 from .logbook_cursor import LogbookCursor, logbook_windows
-from .response_helpers import add_timezone_metadata
+from .response_helpers import add_timezone_metadata, require_ha_timezone
 
 # The component command serving Core's own logbook processor in-process, and
 # the capability that gates it.
@@ -683,8 +683,13 @@ class LogbookLogSourceMixin:
             )
         entries = page["entries"]
         after = page.get("after")
-        position = max(offset, before)
-        more = position + len(entries) < total
+        position = max(
+            offset, before + page.get("matched", len(entries)) - len(entries)
+        )
+        more = (
+            bool(after is not None or page.get("legacy"))
+            and position + len(entries) < total
+        )
         hours = (end - start) // timedelta(hours=1)
         data: dict[str, Any] = {
             "success": True,
@@ -741,8 +746,8 @@ class LogbookLogSourceMixin:
             )
         return await add_timezone_metadata(self._client, data)
 
-    @staticmethod
-    def _logbook_page_request(
+    async def _logbook_page_request(
+        self,
         offset: int | str,
         end_time: str | None,
         order: Literal["newest", "oldest"],
@@ -765,6 +770,13 @@ class LogbookLogSourceMixin:
                         ],
                     )
                 )
+        if end.tzinfo is None:
+            zone = await require_ha_timezone(
+                self._client,
+                needed_for="a Logbook time without an offset needs",
+                workaround="Pass end_time with an explicit UTC offset",
+            )
+            end = end.replace(tzinfo=zone).astimezone(UTC)
         if cursor and (
             scoped or (order, search, end) != (cursor.order, cursor.search, cursor.end)
         ):
@@ -804,7 +816,7 @@ class LogbookLogSourceMixin:
         effective_limit = _coerce_limit(limit)
 
         scoped = bool(entity_id or device_id or context_id)
-        cursor, end_dt, page = self._logbook_page_request(
+        cursor, end_dt, page = await self._logbook_page_request(
             offset, end_time, order, search, effective_limit, scoped
         )
         hours_back = (
