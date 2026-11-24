@@ -151,7 +151,7 @@ _UV_INSTALL_TIMEOUT_SECONDS = 1800
 # tree on slow hardware can legitimately run for minutes — a tighter bound
 # would misreport it as stuck. On expiry the bring-up fails with a clear
 # message and the next reload retries.
-_PENDING_PACKAGE_JOB_WAIT_SECONDS = 600.0
+PENDING_PACKAGE_JOB_WAIT_SECONDS = 600.0
 
 # The in-process connection API was added with the embedded server in 7.10.0.
 # Older distributions can be left behind by an unsupported Core version's
@@ -657,12 +657,12 @@ class EmbeddedServerManager:
             "waiting for it to finish before touching the ha-mcp package."
         )
         finished = await self._hass.async_add_executor_job(
-            pending.wait, _PENDING_PACKAGE_JOB_WAIT_SECONDS
+            pending.wait, PENDING_PACKAGE_JOB_WAIT_SECONDS
         )
         if not finished:
             raise EmbeddedServerError(
                 f"A previous package job was still running after "
-                f"{_PENDING_PACKAGE_JOB_WAIT_SECONDS:.0f}s; refusing to modify "
+                f"{PENDING_PACKAGE_JOB_WAIT_SECONDS:.0f}s; refusing to modify "
                 "the ha-mcp package underneath it. Reload the integration "
                 "to retry.",
                 kind="package",
