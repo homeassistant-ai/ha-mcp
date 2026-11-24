@@ -329,22 +329,27 @@ async def test_device_rows_that_carry_a_name_have_no_name_warning(
 
 
 @pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("lowercase", [False, True])
 async def test_context_filter_reads_the_rest_view(
-    hass: HomeAssistant, core_client: HomeAssistantClient, sent: AsyncMock
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    lowercase: bool,
 ) -> None:
     context = Context()
     hass.states.async_set("light.porch", "off")
     hass.states.async_set("light.porch", "on", context=context)
     await async_wait_recording_done(hass)
 
+    context_id = context.id.lower() if lowercase else context.id
     with rest_reads(core_client) as rest:
         result = await LogTools(core_client).get_logs(
-            **call_kwargs(source="logbook", hours_back=2, context_id=context.id)
+            **call_kwargs(source="logbook", hours_back=2, context_id=context_id)
         )
 
-    assert result["data"]["context_filter"] == context.id
+    assert result["data"]["context_filter"] == context_id
     assert set(by_entity(result)) == {"light.porch"}
-    assert rest.await_args_list[-1].kwargs["context_id"] == context.id
+    assert rest.await_args_list[-1].kwargs["context_id"] == context_id
     assert CORE_COMMAND not in sent_types(sent)
 
 
