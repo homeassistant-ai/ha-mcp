@@ -436,6 +436,24 @@ class TestDisableGuardrail:
         assert not any("retry" in item.lower() for item in suggestions)
         sent.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("entity_id", "pointer"),
+        [
+            ("SCRIPT.my_script", "script_id='script.my_script'"),
+            ("AUTOMATION.test", "entity_id='automation.test'"),
+        ],
+    )
+    async def test_disabling_in_another_case_is_refused(
+        self, tools: EntityTools, sent: AsyncMock, entity_id: str, pointer: str
+    ) -> None:
+        """Core lowercases the id it is sent, so the refusal points at the
+        lowercase id, the one the suggested tool matches."""
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(entity_id=entity_id, enabled=False)
+
+        assert pointer in str(exc_info.value)
+        sent.assert_not_called()
+
     async def test_disabling_an_automation_in_a_one_item_list_is_refused(
         self, tools: EntityTools, sent: AsyncMock
     ) -> None:

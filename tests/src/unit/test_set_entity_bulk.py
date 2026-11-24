@@ -243,15 +243,16 @@ class TestBulk:
         ]
         assert sent_types(sent).count("config/entity_registry/update") == 2
 
-    async def test_disabling_an_automation_in_a_list_is_refused(
+    async def test_disabling_a_script_in_a_list_is_refused(
         self, tools: EntityTools, sent: AsyncMock
     ) -> None:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(
-                entity_id=["light.a", "automation.night"], enabled=False
+                entity_id=["light.a", "SCRIPT.night"], enabled=False
             )
 
-        assert "ha_config_set_automation" in error_of(exc_info)["message"]
+        # The blocked id, not the list's first, picks the message.
+        assert "does not disable the script" in error_of(exc_info)["message"]
         sent.assert_not_called()
 
     async def test_a_compact_single_reply_leaves_out_the_entry(

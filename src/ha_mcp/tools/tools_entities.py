@@ -273,8 +273,10 @@ def _validate_enabled_constraint(
     has no script runtime enable/disable service.
     """
     if enabled is False:
+        # Core lowercases the id it is sent, so SCRIPT.x is script.x.
+        lowered = [eid.lower() for eid in entity_ids]
         blocked = [
-            eid for eid in entity_ids if eid.split(".")[0] in ("automation", "script")
+            eid for eid in lowered if eid.split(".")[0] in ("automation", "script")
         ]
         if blocked:
             _domain = blocked[0].split(".")[0]
