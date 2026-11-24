@@ -466,11 +466,12 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             and not response.get("entity_total_matches")
             and not response.get("config_total_matches"),
         )
-        if missing_editor_bodies and caps is not None:
+        if missing_editor_bodies:
+            action = "Install" if caps is None else "Update"
             notes.append(
-                "Update the installed ha_mcp_tools component to search automation "
-                "and script definitions with include_config. These results may be "
-                "incomplete, including matches inside YAML packages."
+                f"{action} the ha_mcp_tools component to search automation and script "
+                "definitions with include_config. These results may be incomplete, "
+                "including matches inside YAML packages."
             )
         response.setdefault("warnings", []).extend(notes)
         return _omit_empty_warnings(response)
