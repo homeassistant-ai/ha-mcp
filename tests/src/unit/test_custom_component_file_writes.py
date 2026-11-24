@@ -510,29 +510,66 @@ class TestAfterFileDelete:
 
         assert "rev-2976" in info["warnings"][0]
 
+    @pytest.mark.parametrize(
+        ("url", "path"),
+        [
+            ("/local/sub/card.js?v=2", "www/sub/card.js"),
+            ("/local/my%20card.js", "www/my card.js"),
+            ("/local/./old/../card.js", "www/card.js"),
+            (
+                "/hacsfiles/button-card/button-card.js?hacstag=1",
+                "www/community/button-card/button-card.js",
+            ),
+        ],
+    )
     async def test_a_resource_left_without_its_file_is_named(
-        self, hass: HomeAssistant, hass_storage: dict[str, Any]
+        self, hass: HomeAssistant, hass_storage: dict[str, Any], url: str, path: str
     ) -> None:
         """Storage-mode resources are read from disk on first use."""
+        other_origin = f"https://cdn.example{url}"
         hass_storage["lovelace_resources"] = {
             "version": 1,
             "key": "lovelace_resources",
             "data": {
                 "items": [
-                    {"id": "a", "type": "module", "url": "/local/sub/card.js?v=2"},
+                    {"id": "a", "type": "module", "url": url},
                     {"id": "b", "type": "module", "url": "/local/other.js"},
+                    {"id": "c", "type": "module", "url": other_origin},
                 ]
             },
         }
         assert await async_setup_component(hass, "lovelace", {"lovelace": {}})
 
-        info = await file_post_action.after_file_delete(hass, "www/sub/card.js")
+        info = await file_post_action.after_file_delete(hass, path)
 
-        assert "/local/sub/card.js?v=2" in info["warnings"][0]
+        assert url in info["warnings"][0]
         assert "/local/other.js" not in info["warnings"][0]
+        assert other_origin not in info["warnings"][0]
+
+    async def test_resources_that_cannot_be_read_are_reported(
+        self, hass: HomeAssistant, hass_storage: dict[str, Any]
+    ) -> None:
+        # Core refuses a store newer than its own version.
+        hass_storage["lovelace_resources"] = {
+            "version": 99,
+            "key": "lovelace_resources",
+            "data": {"items": []},
+        }
+        assert await async_setup_component(hass, "lovelace", {"lovelace": {}})
+
+        info = await file_post_action.after_file_delete(hass, "www/card.js")
+
+        assert "could not be read" in info["warnings"][0]
 
     @pytest.mark.parametrize(
-        "path", ["www/unused.js", "dashboards/unused.yaml", "/share/themes/x.yaml"]
+        "path",
+        [
+            "www/unused.js",
+            "dashboards/unused.yaml",
+            "themes/readme.md",
+            "custom_templates/notes.txt",
+            "/share/themes/x.yaml",
+        ],
     )
     async def test_a_file_nothing_loads_needs_nothing(
         self, hass: HomeAssistant, path: str

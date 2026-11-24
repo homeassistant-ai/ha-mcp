@@ -454,6 +454,11 @@ def _config_cache_key(config: VisibilityConfig) -> str:
     return json.dumps(config.to_wire(), sort_keys=True)
 
 
+def _enforce_active(config: VisibilityConfig) -> bool:
+    """Whether enforce mode is on and the config hides something."""
+    return config.enforce and config_has_active_hide_dimensions(config)
+
+
 _last_good_config: VisibilityConfig | None = None
 
 
@@ -470,9 +475,8 @@ async def _load_config_or_last_good(tool_name: str) -> VisibilityConfig | None:
     Module-shared so both middleware halves and the config-file check
     (``active_identifier_aliases``) decide on the same config.
 
-    Each half diagnoses a distinct config-load failure. A context-local
-    marker suppresses only the second traceback when both halves fail during
-    the same call.
+    Every caller loads on its own. Within one middleware-wrapped call a
+    context-local marker logs the traceback only once, however many fail.
     """
     global _last_good_config
     config: VisibilityConfig | None
@@ -543,9 +547,7 @@ class _VisibilityEnforcementBase(Middleware):
             if (
                 emit_report_issue_diagnostic
                 and config is not None
-                and config.enabled
-                and config.enforce
-                and config_has_active_hide_dimensions(config)
+                and _enforce_active(config)
             ):
                 logger.info(
                     "visibility enforce: bypassing ha_report_issue because "
@@ -554,11 +556,7 @@ class _VisibilityEnforcementBase(Middleware):
             return None
         if config is None:
             _raise_enforced(tool_name, _CONFIG_LOAD_FAILED_REASON)
-        if not (
-            config.enabled
-            and config.enforce
-            and config_has_active_hide_dimensions(config)
-        ):
+        if not _enforce_active(config):
             return None
         return config
 
@@ -899,11 +897,7 @@ async def _active_matcher(client: Any, *, fresh: bool = False) -> HiddenMatcher 
         config = await asyncio.to_thread(
             resolver.load_visibility_config, resolver.get_data_dir()
         )
-        if not (
-            config.enabled
-            and config.enforce
-            and config_has_active_hide_dimensions(config)
-        ):
+        if not _enforce_active(config):
             return None
         return await _hidden_cache.get(config, client, fresh=fresh)
     except Exception:  # noqa: BLE001
@@ -922,9 +916,7 @@ async def active_identifier_aliases(
     config = await _load_config_or_last_good(tool_name)
     if config is None:
         _raise_enforced(tool_name, _CONFIG_LOAD_FAILED_REASON)
-    if not (
-        config.enabled and config.enforce and config_has_active_hide_dimensions(config)
-    ):
+    if not _enforce_active(config):
         return None
     try:
         matcher = await _hidden_cache.get(config, client)

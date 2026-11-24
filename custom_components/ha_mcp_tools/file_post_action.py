@@ -8,7 +8,8 @@ custom templates the way ``frontend.reload_themes`` and
 ``homeassistant.reload_custom_templates`` would, flag a file Core's template
 loader skips or ``/local/`` does not serve yet, and name the YAML dashboards a
 ``dashboards/`` file backs. The delete_file service reloads the same way and
-names the YAML dashboards and dashboard resources that still load the file.
+names the YAML dashboards and the ``/local/`` or ``/hacsfiles/`` dashboard
+resources that still load the file.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from homeassistant.core import HomeAssistant
+
+from .custom_cards import _RESOURCE_PREFIXES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -151,10 +154,11 @@ def _local_served(hass: HomeAssistant) -> bool:
     )
 
 
-def _same_origin_path(url: Any) -> str | None:
-    """A resource URL's path as a browser resolves it; None for another origin.
+def _resource_config_path(url: Any) -> str | None:
+    """The config-relative file a same-origin resource URL serves, else None.
 
-    Core's ``_async_warn_missing_local_resources`` reads ``/local/`` URLs so.
+    Reads the URL as Core's ``_async_warn_missing_local_resources`` reads
+    ``/local/`` URLs, and maps ``/hacsfiles/`` as ``custom_cards`` does.
     """
     if not isinstance(url, str):
         return None
@@ -164,11 +168,18 @@ def _same_origin_path(url: Any) -> str | None:
         return None
     if parts.scheme or parts.netloc:
         return None
-    return posixpath.normpath(unquote(parts.path))
+    path = posixpath.normpath(unquote(parts.path))
+    for prefix, folder in _RESOURCE_PREFIXES:
+        if path.startswith(prefix):
+            return f"{folder}/{path[len(prefix) :]}"
+    return None
 
 
-async def _resources_loading(hass: HomeAssistant, url_path: str) -> list[str]:
-    """URLs of the dashboard resources that load ``url_path``; [] if unread."""
+async def _resources_loading(hass: HomeAssistant, rel_path: str) -> list[str] | None:
+    """URLs of the dashboard resources that load ``rel_path``.
+
+    [] without a Lovelace resource collection; None when it could not be read.
+    """
     from .websocket_api.dashboards import _lovelace_container
 
     resources = getattr(_lovelace_container(hass), "resources", None)
@@ -176,13 +187,13 @@ async def _resources_loading(hass: HomeAssistant, url_path: str) -> list[str]:
         return []
     try:
         await resources.async_get_info()  # loads a storage-mode collection
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.warning("Could not read dashboard resources: %s", err)
-        return []
+    except Exception:
+        _LOGGER.warning("Could not read dashboard resources", exc_info=True)
+        return None
     return [
-        str(item["url"])
+        item["url"]
         for item in resources.async_items()
-        if _same_origin_path(item.get("url")) == url_path
+        if _resource_config_path(item.get("url")) == rel_path
     ]
 
 
@@ -222,7 +233,7 @@ async def after_file_delete(hass: HomeAssistant, rel_path: str) -> dict[str, Any
     if top == "custom_templates" and normalized.endswith(".jinja"):
         return await reload_after_edit(hass, "homeassistant", "reload_custom_templates")
     if top == "dashboards" and normalized.endswith(_YAML_SUFFIXES):
-        rows = _dashboards_using(hass, hass.config.path(normalized)) or []
+        rows = _dashboards_using(hass, hass.config.path(normalized))
         if rows:
             names = ", ".join(str(row["url_path"]) for row in rows)
             return {
@@ -233,7 +244,15 @@ async def after_file_delete(hass: HomeAssistant, rel_path: str) -> dict[str, Any
                 ]
             }
     if top == "www":
-        urls = await _resources_loading(hass, f"/local/{normalized[4:]}")
+        urls = await _resources_loading(hass, normalized)
+        if urls is None:
+            return {
+                "warnings": [
+                    "The dashboard resources could not be read, so whether one "
+                    f"still loads {normalized} is unknown; the Home Assistant log "
+                    "has the error."
+                ]
+            }
         if urls:
             return {
                 "warnings": [

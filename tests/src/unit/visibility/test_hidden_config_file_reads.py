@@ -494,6 +494,18 @@ async def test_a_config_breaking_outside_enforce_mode_refuses_nothing(
     assert "Unlock house" in result.content[0].text
 
 
+async def test_a_file_defining_a_hidden_item_stays_readable_outside_enforce_mode(
+    client: HomeAssistantClient, set_config: Callable[..., VisibilityConfig]
+) -> None:
+    """Hiding without enforce mode declutters search; it refuses no file."""
+    set_config(enabled=True, deny_entity_ids=[_HIDDEN[0][0]])
+
+    result = await _call_through_enforcement(
+        client, _read_file_tool, {"path": "scripts.yaml"}
+    )
+    assert "Unlock house" in result.content[0].text
+
+
 async def test_a_config_that_never_loaded_refuses_the_check(
     unreachable_client: HomeAssistantClient,
     set_config: Callable[..., VisibilityConfig],
