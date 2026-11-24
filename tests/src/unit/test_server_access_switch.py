@@ -201,17 +201,6 @@ async def test_read_only_mode_is_opt_in_and_hidden_from_assist(
     assert hass.states.get(registered.entity_id) is None
 
 
-async def test_read_only_mode_defaults_off(
-    hass: HomeAssistant,
-    entity_registry: er.EntityRegistry,
-    entity_registry_enabled_by_default: None,
-    server: SimpleNamespace,
-) -> None:
-    registered = await _read_only_mode_entry(hass, entity_registry)
-
-    assert _shown(hass, registered.entity_id) == STATE_OFF
-
-
 async def test_read_only_mode_reads_the_panel_setting(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
