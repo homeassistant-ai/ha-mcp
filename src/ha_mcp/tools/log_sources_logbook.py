@@ -353,7 +353,7 @@ class LogbookLogSourceMixin:
         return rest, "rest"
 
     async def _fetch_logbook_component(
-        self, command: dict[str, Any], page: dict[str, Any] | None
+        self, command: dict[str, Any], page: dict[str, Any] | None = None
     ) -> list[Any] | dict[str, Any] | None:
         """Run the component's Core-processor command, or ``None`` to fall back.
 

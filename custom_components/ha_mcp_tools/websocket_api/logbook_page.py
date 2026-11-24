@@ -18,7 +18,7 @@ from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import extract_event_type_ids
 from homeassistant.helpers.json import json_bytes
 from homeassistant.helpers.recorder import session_scope
-from sqlalchemy import case, func, select, tuple_
+from sqlalchemy import case, func, literal, select, tuple_
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.selectable import Subquery
@@ -79,8 +79,11 @@ def _read_rows(
     # Probe sizes without bringing the event JSON/attributes into Python. Use
     # a conservative UTF-8 allowance for databases where LENGTH counts chars.
     size = sum(
-        func.coalesce(func.length(col), 0)
-        for col in (source.c.event_data, source.c.attributes, source.c.state)
+        (
+            func.coalesce(func.length(col), 0)
+            for col in (source.c.event_data, source.c.attributes, source.c.state)
+        ),
+        start=literal(0),
     )
     probe = select(*cols).order_by(*order).limit(RAW_PAGE_ROWS + 1)
     if after := page.get("after"):
@@ -97,7 +100,7 @@ def _read_rows(
             select(*cols, size).where(keys.in_(candidates[:RAW_PAGE_ROWS]))
         )
     }
-    chosen = []
+    chosen: list[RowKey] = []
     used = 0
     for stamp, kind, row_id in candidates[:RAW_PAGE_ROWS]:
         chars = sizes[(stamp, kind, row_id)]
