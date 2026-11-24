@@ -14,7 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ha_mcp._version import get_version
 from ha_mcp.config_meta import AppOption, Setting, setting_of
-from hamcp_runtime_config import parse_boolean_string
+from ha_mcp.runtime_config import parse_boolean_string
 
 # All config modules log under the ``ha_mcp.config`` logger name.
 logger = logging.getLogger("ha_mcp.config")

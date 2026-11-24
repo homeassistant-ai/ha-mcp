@@ -1,8 +1,9 @@
 """Dependency-light helpers shared by ha-mcp and its Home Assistant component.
 
-This module deliberately has no imports from :mod:`ha_mcp`.  Home Assistant can
-therefore read and update the embedded server's feature flags while a worker
-thread is cold-importing the main package without participating in that import.
+This module deliberately has no imports from sibling :mod:`ha_mcp` modules.
+The Home Assistant component loads it directly from its installed file path,
+so it can read and update embedded feature flags without cold-importing the
+package while the server worker is importing it.
 """
 
 from __future__ import annotations

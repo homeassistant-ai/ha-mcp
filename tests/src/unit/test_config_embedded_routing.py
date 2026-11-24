@@ -22,6 +22,7 @@ import threading
 from pathlib import Path
 
 import pytest
+
 from ha_mcp import config
 from ha_mcp.utils.data_paths import get_data_dir
 

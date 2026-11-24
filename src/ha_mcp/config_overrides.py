@@ -17,7 +17,7 @@ from ha_mcp.config_registry import (
     RegistryFieldType,
 )
 from ha_mcp.config_settings import Settings
-from hamcp_runtime_config import coerce_feature_flag_bool
+from ha_mcp.runtime_config import coerce_feature_flag_bool
 
 # All config modules log under the ``ha_mcp.config`` logger name.
 logger = logging.getLogger("ha_mcp.config")

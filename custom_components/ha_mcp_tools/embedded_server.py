@@ -372,6 +372,9 @@ class EmbeddedServerManager:
         await self._hass.async_add_executor_job(self.prepare_config_dir)
 
         self._maybe_purge_stale_modules(ready_version)
+        from .embedded_read_only import prepare_runtime_config
+
+        await self._hass.async_add_executor_job(prepare_runtime_config)
 
         self._thread_exc = None
         self._uv_server: Any = None

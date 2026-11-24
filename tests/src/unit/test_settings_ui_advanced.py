@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
+
 from ha_mcp.config import (
     ADVANCED_SETTINGS_FIELDS,
     get_global_settings,

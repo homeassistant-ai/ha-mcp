@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from weakref import WeakValueDictionary
 
-from hamcp_runtime_config import file_write_lock
+from ..runtime_config import file_write_lock
 
 _CONFIG_WRITE_LOCKS: WeakValueDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
     WeakValueDictionary()

@@ -15,13 +15,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from custom_components.ha_mcp_tools import switch as switch_platform
-from custom_components.ha_mcp_tools.const import (
-    DATA_ACCESS_ENABLED,
-    SERVER_CONFIG_SUBDIR,
-)
-from custom_components.ha_mcp_tools.embedded_read_only import set_read_only_mode
-from ha_mcp.read_only import read_only_remedy_hint
 from homeassistant.components.switch.const import DATA_COMPONENT
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
@@ -29,6 +22,14 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant.common import async_fire_time_changed
+
+from custom_components.ha_mcp_tools import switch as switch_platform
+from custom_components.ha_mcp_tools.const import (
+    DATA_ACCESS_ENABLED,
+    SERVER_CONFIG_SUBDIR,
+)
+from custom_components.ha_mcp_tools.embedded_read_only import set_read_only_mode
+from ha_mcp.read_only import read_only_remedy_hint
 
 from ._server_entry import add_server_entry, replace_server, set_up
 
@@ -261,7 +262,7 @@ async def test_read_only_mode_refreshes_after_a_panel_change(
     path.write_text(json.dumps({"read_only_mode": True}), encoding="utf-8")
 
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=31))
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
     assert _shown(hass, registered.entity_id) == STATE_ON
 

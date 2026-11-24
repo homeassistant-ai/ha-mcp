@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 import pytest
+
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.config import (
     BETA_FEATURE_FIELDS,

@@ -9,7 +9,7 @@ module holds the settings singleton and the embedded-mode connection.
 # isort: off
 import threading
 
-from hamcp_runtime_config import register_settings_reset
+from ha_mcp.runtime_config import register_settings_reset
 
 from ha_mcp.config_backup import (
     _apply_backup_overrides as _apply_backup_overrides,

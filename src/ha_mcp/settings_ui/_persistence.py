@@ -23,11 +23,10 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from hamcp_runtime_config import atomic_write_json as _atomic_write_json
-
 from ..config import get_global_settings
 from ..llm_exposure import LLM_API_CONFIG_KEY
 from ..renamed_tools import current_tool_name, rename_retired_keys
+from ..runtime_config import atomic_write_json as _atomic_write_json
 from ..utils.data_paths import get_data_dir
 
 if TYPE_CHECKING:
