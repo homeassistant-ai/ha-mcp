@@ -26,6 +26,7 @@ from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
@@ -403,6 +404,39 @@ async def test_device_filter_when_core_has_no_logbook_is_not_an_empty_success(
 
     assert error["code"] == "CONNECTION_FAILED"
     assert "device_id" in error["message"]
+    rest.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("logbook")
+async def test_wide_text_search_is_rejected_before_reading_recorder(
+    component_core_client: HomeAssistantClient, sent: AsyncMock
+) -> None:
+    with rest_reads(component_core_client) as rest:
+        error = await logbook_error(
+            LogTools(component_core_client), hours_back=125, search="started", limit=4
+        )
+
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "hours_back" in error["message"]
+    assert COMPONENT_COMMAND not in sent_types(sent)
+    assert CORE_COMMAND not in sent_types(sent)
+    rest.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("logbook")
+async def test_oversized_component_reply_never_repeats_the_read_over_rest(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await hass.services.async_call(
+        "logbook", "log", {"name": "Size test", "message": "m" * 12000}, blocking=True
+    )
+    await async_wait_recording_done(hass)
+    monkeypatch.setattr(websocket_client, "MAX_WS_MESSAGE_BYTES", 8192)
+    with rest_reads(component_core_client) as rest:
+        error = await logbook_error(LogTools(component_core_client))
+
+    assert "too large" in error["message"].lower()
     rest.assert_not_awaited()
 
 
