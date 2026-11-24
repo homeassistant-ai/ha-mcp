@@ -570,14 +570,14 @@ class LogbookLogSourceMixin:
         self, command: dict[str, Any], page: dict[str, Any]
     ) -> dict[str, Any]:
         response = await self._fetch_logbook_component(command, page)
-        if isinstance(response, dict):
-            return response
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "The component serving this Logbook page is unavailable.",
+        if not isinstance(response, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The component serving this Logbook page is unavailable.",
+                )
             )
-        )
+        return response
 
     async def _page_total(
         self,
