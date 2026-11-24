@@ -8,6 +8,7 @@ Core's WebSocket API (``component_ws``).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -54,13 +55,10 @@ def _kind(result: dict[str, Any], kind: str) -> list[dict[str, Any]]:
 @pytest.fixture
 async def yaml_and_storage_automations(hass: HomeAssistant) -> None:
     """``automation.package_auto`` has no id, ``automation.ui_auto`` has one."""
+    saved = _automation("UI Auto", item_id="uid-1")
+    Path(hass.config.path("automations.yaml")).write_text(json.dumps([saved]))
     await _set_up(
-        hass,
-        "automation",
-        [
-            _automation("Package Auto", message="YAMLSECRET"),
-            _automation("UI Auto", item_id="uid-1"),
-        ],
+        hass, "automation", [_automation("Package Auto", message="YAMLSECRET"), saved]
     )
 
 
@@ -73,6 +71,28 @@ async def test_a_yaml_body_is_never_sent_and_a_storage_body_is(
     assert (by_source["yaml"]["config"], by_source["yaml"]["id"]) == (None, None)
     assert by_source["storage"]["config"]["id"] == "uid-1"
     assert "YAMLSECRET" not in json.dumps(result)
+
+
+async def test_script_search_returns_only_a_matching_editor_body(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    body = {"alias": "Evening routine", "sequence": []}
+    await _set_up(hass, "script", {"evening_routine": body})
+    path = Path(hass.config.path("scripts.yaml"))
+    for saved, expected in [
+        ({}, None),
+        ({"evening_routine": {**body, "alias": "Pending edit"}}, None),
+        ({"evening_routine": body}, body),
+    ]:
+        path.write_text(json.dumps(saved))
+        result = await _search(
+            component_ws,
+            query="evening routine",
+            search_types=["script"],
+            include_config=True,
+        )
+        (hit,) = result["scripts"]
+        assert hit["config"] == expected
 
 
 async def test_a_yaml_body_is_matched_but_withheld(

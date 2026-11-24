@@ -39,6 +39,7 @@ def search_config_surface(
     include_config: bool,
     partial_reasons: list[str],
     diagnostics: dict[str, int],
+    saved_bodies: dict[str, dict[str, Any]],
     secret_values: frozenset[str] = frozenset(),
     omit: Callable[[Any], bool] | None = None,
 ) -> list[dict[str, Any]]:
@@ -82,20 +83,18 @@ def search_config_surface(
         if omit is not None and omit((entity_id, name, config_dict)):
             continue
 
-        # Scenes never emit a component-served body: a HomeAssistantScene holds no
-        # raw storage dict (its states are runtime State objects), so config stays
-        # None and config_dict is used only as the faithful match corpus.
-        config_out: dict[str, Any] | None = None
-        if (
-            domain != SEARCH_TYPE_SCENE
-            and include_config
-            and source == "storage"
-            and config_dict is not None
-        ):
-            if _too_large(config_dict):
+        # A package may define an id just like the editor. Only return a body
+        # independently read from the editor source with HA tags unresolved.
+        # A pending edit can also make the saved body differ from the hit.
+        config_out = saved_bodies.get(item_id) if include_config and item_id else None
+        if config_out is not None:
+            if config_out != config_dict:
+                config_out = None
+            elif _too_large(config_out):
                 partial_reasons.append(f"{domain} {entity_id} body omitted (too large)")
+                config_out = None
             else:
-                config_out = config_dict
+                config_out = _scrub_secret_values(config_out, secret_values)
 
         rec: dict[str, Any] = {
             "id": item_id,
@@ -189,17 +188,7 @@ def _scene_match_corpus(scene_config: Any) -> dict[str, Any] | None:
 
 
 def _classify_source(item_id: str | None) -> str:
-    """Classify an automation/script/scene as storage- or YAML-backed.
-
-    HA addresses editor-managed items by their ``id`` (the entity's
-    ``unique_id``); the config editor's ``/config/<domain>/config/<id>`` REST
-    path — and its edit link — key off exactly that id, and 404 for items with
-    no id. So an id-bearing item is treated as ``storage`` (body emittable under
-    ``include_config``); an id-less item is ``yaml`` and its body is never
-    emitted from search (its ``raw_config`` may carry resolved ``!secret``
-    plaintext). This is the conservative rule: the safe error is toward
-    withholding a body, not leaking one.
-    """
+    """Legacy source label. An id alone does not authorize returning a body."""
     return "storage" if item_id else "yaml"
 
 

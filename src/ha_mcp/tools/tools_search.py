@@ -27,7 +27,11 @@ from .helpers import (
     register_tool_methods,
 )
 from .response_helpers import project_fields
-from .search.component import ComponentSearchMixin, _component_serves_search_types
+from .search.component import (
+    ComponentSearchMixin,
+    _component_body_search_types,
+    _component_serves_search_types,
+)
 from .search.entities import (
     _COMPOSED_NAME_FIELD,
     ComponentNaming,
@@ -422,8 +426,19 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         mode_supported = component_supports(caps, "search_unified") or (
             bool(req.query_text) and not (req.area_filter or "").strip()
         )
+        needs_editor_bodies = (
+            req.include_config
+            and req.body_eligible
+            and bool(
+                {"automation", "script"}.intersection(_component_body_search_types(req))
+            )
+        )
         if (
             mode_supported
+            and (
+                not needs_editor_bodies
+                or component_supports(caps, "search_editor_bodies")
+            )
             and component_supports(caps, "search")
             and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
             and (

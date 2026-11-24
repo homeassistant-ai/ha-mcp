@@ -133,6 +133,7 @@ CAPABILITIES: list[str] = [
     "search",
     # Location/state filters precede pagination; search accepts any result window.
     "search_unified",
+    "search_editor_bodies",
     # A flag on search: gates its additive result_fields request and generic
     # is_group/member_entity_ids response fields.
     "search_entity_membership",

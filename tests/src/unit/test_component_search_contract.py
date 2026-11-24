@@ -27,6 +27,7 @@ Scene records never carry a body either.
 from __future__ import annotations
 
 import ast
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -106,16 +107,18 @@ async def marker_home(hass: HomeAssistant) -> None:
         hass, "input_boolean", {"contractmarker_flag": {"name": "Contractmarker Flag"}}
     )
     trigger = [{"trigger": "event", "event_type": "probe"}]
+    saved = {
+        "id": "auto1",
+        "alias": "Contractmarker Storage Automation",
+        "triggers": trigger,
+        "actions": [],
+    }
+    Path(hass.config.path("automations.yaml")).write_text(json.dumps([saved]))
     await set_up_domain(
         hass,
         "automation",
         [
-            {
-                "id": "auto1",
-                "alias": "Contractmarker Storage Automation",
-                "triggers": trigger,
-                "actions": [],
-            },
+            saved,
             {
                 "alias": "Yaml Automation",
                 "triggers": trigger,

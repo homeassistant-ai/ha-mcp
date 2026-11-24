@@ -40,6 +40,7 @@ from .registry import (
     _resolve_registries,
     _unambiguous_device_entries,
 )
+from .search_bodies import EDITOR_FILES, editor_bodies
 from .search_config import _search_helpers, search_config_surface
 from .search_score import _apply_hidden_penalty, _text_tier, _tokenize
 from .secrets import (
@@ -61,6 +62,7 @@ def do_search(  # noqa: PLR0915
     *,
     secret_values: frozenset[str] = frozenset(),
     secret_scrub_degraded: bool = False,
+    saved_bodies: dict[str, dict[str, dict[str, Any]]] | None = None,
     flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
     custom_domains: frozenset[str] = frozenset(),
     helper_flows_degraded: bool = False,
@@ -194,6 +196,7 @@ def do_search(  # noqa: PLR0915
                     partial_reasons=partial_reasons,
                     diagnostics=diagnostics,
                     secret_values=secret_values,
+                    saved_bodies=(saved_bodies or {}).get(domain, {}),
                     omit=omit,
                 )
             )
@@ -349,13 +352,20 @@ async def _search_prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, An
     scrub_surfaces = (*CONFIG_SEARCH_TYPES, SEARCH_TYPE_HELPER)
     if not any(st in search_types for st in scrub_surfaces):
         return {"secret_values": frozenset()}
+    prep: dict[str, Any] = {}
+    domains = [domain for domain in EDITOR_FILES if domain in search_types]
+    if msg.get("include_config") and domains:
+        prep["saved_bodies"] = await hass.async_add_executor_job(
+            editor_bodies, hass, domains
+        )
     if SEARCH_TYPE_HELPER not in search_types:
         values = await hass.async_add_executor_job(_load_secret_values, hass)
-        return {"secret_values": values}
+        return {**prep, "secret_values": values}
     values, degraded = await hass.async_add_executor_job(_load_secret_scrub, hass)
     return {
         "secret_values": values,
         "secret_scrub_degraded": degraded,
+        **prep,
         **await _flow_helper_domains(hass),
     }
 
