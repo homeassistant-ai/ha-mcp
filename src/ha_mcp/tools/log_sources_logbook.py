@@ -106,7 +106,7 @@ class LogbookLogSourceMixin:
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "Whole-instance Logbook reads support hours_back=1. "
-                    "Home Assistant reads the entire window before HA-MCP applies search or limit.",
+                    "Use end_time to select an hour and follow its pagination hints.",
                     suggestions=[
                         "Use hours_back=1 with end_time near the event",
                         "For a longer window, supply entity_id, device_id or a Home Assistant context ID",
@@ -380,8 +380,8 @@ class LogbookLogSourceMixin:
             )
         except HomeAssistantConnectionError as exc:
             self._raise_if_logbook_read_failed(exc, command)
-            if isinstance(exc.__cause__, HomeAssistantAuthError):
-                # The fallbacks would resend the rejected token.
+            if "page" in message or isinstance(exc.__cause__, HomeAssistantAuthError):
+                # A failed paged read must never turn into a whole-window retry.
                 exception_to_structured_error(exc)
             return None
         except HomeAssistantCommandError as exc:
@@ -391,20 +391,13 @@ class LogbookLogSourceMixin:
             invalidate_caps(self._client)
             return None
 
+        return self._component_reply(response, "page" in message)
+
+    def _component_reply(
+        self, response: Any, paged: bool
+    ) -> list[Any] | dict[str, Any] | None:
         if isinstance(response, dict) and response.get("success"):
-            # The command's result is Core's own row list (its result message
-            # wraps ``EventProcessor.get_events()`` output directly).
-            result = response.get("result")
-            if "page" in message:
-                if isinstance(result, dict) and isinstance(result.get("entries"), list):
-                    return result
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        "The Logbook component returned an invalid page.",
-                    )
-                )
-            return result if isinstance(result, list) else None
+            return self._component_rows(response.get("result"), paged)
 
         self._raise_logbook_rejection(response, LOGBOOK_EVENTS_COMMAND)
         if (
@@ -413,7 +406,26 @@ class LogbookLogSourceMixin:
         ):
             # Older component without the command: stop routing to it.
             invalidate_caps(self._client)
+        elif paged:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONNECTION_FAILED, "No reply to the paged Logbook read."
+                )
+            )
         return None
+
+    @staticmethod
+    def _component_rows(result: Any, paged: bool) -> list[Any] | dict[str, Any] | None:
+        if not paged:
+            return result if isinstance(result, list) else None
+        if isinstance(result, dict) and isinstance(result.get("entries"), list):
+            return result
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "The Logbook component returned an invalid page.",
+            )
+        )
 
     async def _fetch_logbook_websocket(self, command: dict[str, Any]) -> list[Any]:
         """Core's ``logbook/get_events`` — the device-filter fallback."""
@@ -618,6 +630,52 @@ class LogbookLogSourceMixin:
             )
         return await add_timezone_metadata(self._client, data)
 
+    @staticmethod
+    def _logbook_page_request(
+        offset: int | str,
+        end_time: str | None,
+        order: Literal["newest", "oldest"],
+        search: str | None,
+        limit: int,
+        scoped: bool,
+    ) -> tuple[LogbookCursor | None, datetime, dict[str, Any] | None]:
+        cursor = LogbookCursor.parse(offset) if isinstance(offset, str) else None
+        end = cursor.end if cursor else datetime.now(UTC)
+        if end_time:
+            try:
+                end = datetime.fromisoformat(end_time)
+            except ValueError:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid end_time '{end_time}': not an ISO 8601 timestamp",
+                        suggestions=[
+                            "Use ISO format, e.g. end_time='2026-08-28T01:00:00Z'"
+                        ],
+                    )
+                )
+        if cursor and (
+            scoped or (order, search, end) != (cursor.order, cursor.search, cursor.end)
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Use this Logbook cursor with the same window, filters and order.",
+                )
+            )
+        if scoped:
+            return None, end, None
+        page: dict[str, Any] = {
+            "order": order,
+            "limit": limit,
+            "skip": cursor.skip if cursor else offset,
+        }
+        if cursor:
+            page["after"] = list(cursor.after)
+        if search:
+            page["search"] = search
+        return cursor, end, page
+
     async def _get_logbook(
         self,
         hours_back: int = 1,
@@ -636,57 +694,13 @@ class LogbookLogSourceMixin:
 
         self._validate_logbook_window(hours_back, entity_id, device_id, context_id)
 
-        cursor = LogbookCursor.parse(offset) if isinstance(offset, str) else None
-        if cursor:
-            if (
-                entity_id
-                or context_id
-                or device_id
-                or cursor.order != order
-                or cursor.search != search
-                or (end_time and datetime.fromisoformat(end_time) != cursor.end)
-            ):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Use this Logbook cursor with the same window, filters and order.",
-                    )
-                )
-            end_time = cursor.end.isoformat()
+        scoped = bool(entity_id or device_id or context_id)
+        cursor, end_dt, page = self._logbook_page_request(
+            offset, end_time, order, search, effective_limit, scoped
+        )
         numeric_offset = offset if isinstance(offset, int) else 0
-
-        if end_time:
-            try:
-                end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
-            except ValueError:
-                # Outside the fetch try-block below, so without this guard the
-                # raw ValueError would bypass the structured ToolError shape.
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid end_time '{end_time}': not an ISO 8601 timestamp",
-                        suggestions=[
-                            "Use ISO format, e.g. end_time='2026-08-28T01:00:00Z'"
-                        ],
-                    )
-                )
-        else:
-            end_dt = datetime.now(UTC)
-
         start_dt = end_dt - timedelta(hours=hours_back)
         start_timestamp = start_dt.isoformat()
-
-        page = None
-        if not (entity_id or device_id or context_id):
-            page = {
-                "order": order,
-                "limit": effective_limit,
-                "skip": cursor.skip if cursor else numeric_offset,
-            }
-            if search:
-                page["search"] = search
-            if cursor:
-                page["after"] = list(cursor.after)
 
         try:
             response, transport = await self._fetch_logbook_events(
@@ -778,6 +792,10 @@ class LogbookLogSourceMixin:
                     order,
                 )
 
+            if page is not None:
+                transport_warnings.append(
+                    "Install or update ha_mcp_tools for Recorder-side paging of dense Logbook windows."
+                )
             if transport_warnings:
                 logbook_data["warnings"] = transport_warnings
             return await add_timezone_metadata(self._client, logbook_data)

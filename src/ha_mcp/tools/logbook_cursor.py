@@ -20,5 +20,5 @@ class LogbookCursor(BaseModel):
         return LOGBOOK_CURSOR_PREFIX + self.model_dump_json()
 
     @classmethod
-    def parse(cls, value: str) -> "LogbookCursor":
+    def parse(cls, value: str) -> LogbookCursor:
         return cls.model_validate_json(value.removeprefix(LOGBOOK_CURSOR_PREFIX))

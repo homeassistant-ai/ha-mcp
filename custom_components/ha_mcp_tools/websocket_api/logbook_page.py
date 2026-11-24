@@ -82,22 +82,29 @@ def _read_rows(
         func.coalesce(func.length(col), 0)
         for col in (source.c.event_data, source.c.attributes, source.c.state)
     )
-    probe = select(*cols, size).order_by(*order).limit(RAW_PAGE_ROWS + 1)
+    probe = select(*cols).order_by(*order).limit(RAW_PAGE_ROWS + 1)
     if after := page.get("after"):
         anchor = tuple(after)
         probe = probe.where(
             keys < anchor if page["order"] == "newest" else keys > anchor
         )
     candidates = session.connection().execute(probe).all()
+    if not candidates:
+        return [], False
+    sizes = {
+        (stamp, kind, row_id): chars
+        for stamp, kind, row_id, chars in session.connection().execute(
+            select(*cols, size).where(keys.in_(candidates[:RAW_PAGE_ROWS]))
+        )
+    }
     chosen = []
     used = 0
-    for stamp, kind, row_id, chars in candidates[:RAW_PAGE_ROWS]:
+    for stamp, kind, row_id in candidates[:RAW_PAGE_ROWS]:
+        chars = sizes[(stamp, kind, row_id)]
         if chosen and used + chars * 4 > PAGE_BYTES:
             break
         chosen.append((stamp, kind, row_id))
         used += chars * 4
-    if not chosen:
-        return [], False
     # Core always humanifies in chronological order, including newest-first pages.
     rows = list(
         session.connection().execute(
@@ -122,7 +129,7 @@ def read_logbook_page(
             .subquery()
         )
         rows, more = _read_rows(session, source, page)
-        if rows and (page.get("after") or page["order"] == "newest"):
+        if rows and (page.get("after") or (more and page["order"] == "newest")):
             _prime_contexts(session, source, processor, rows)
         rendered = [(row, processor.humanify([row])) for row in rows]
     if page["order"] == "newest":

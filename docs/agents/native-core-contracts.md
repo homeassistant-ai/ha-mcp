@@ -131,7 +131,11 @@ copied `EntityNameCache`. The server prefers the bridge and keeps Core's REST
 component-absent fallbacks — a `device_id` request needs the WebSocket path
 there because REST has no device filter, and the server reports bridge timeouts and oversized replies
 without repeating the recorder query. Whole-instance Logbook reads accept a one-hour
-window because Core applies neither the text search nor the returned page limit.
+window. The `logbook_event_pages` capability pages Core's Recorder query by
+timestamp, row type and primary key before rendering a bounded batch through
+Core's processor. Its cursor advances across equal timestamps and batches with
+no search matches. Without this capability Core's native endpoints supply the
+whole window and the tool advises updating the component for dense windows.
 
 `ha_restart` forwards Core's restart schema (`safe_mode`) and leaves the
 refusals to Core. The embedded server is the exception: it replies before the

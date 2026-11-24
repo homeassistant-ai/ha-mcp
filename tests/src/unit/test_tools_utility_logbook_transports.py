@@ -240,11 +240,25 @@ async def test_component_dropped_connection_falls_back_to_rest(
         dropped_on(hass, COMPONENT_COMMAND, socket),
     ):
         result = await LogTools(component_core_client).get_logs(
-            **call_kwargs(source="logbook")
+            **call_kwargs(source="logbook", entity_id="light.kitchen")
         )
 
     rest.assert_awaited()
     assert by_entity(result)["light.kitchen"]["name"] == "Kitchen Light"
+
+
+@pytest.mark.usefixtures("logbook")
+async def test_dropped_paged_connection_does_not_repeat_a_dense_read(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    socket = await pooled_socket(component_core_client)
+    with (
+        rest_reads(component_core_client) as rest,
+        dropped_on(hass, COMPONENT_COMMAND, socket),
+    ):
+        error = await logbook_error(LogTools(component_core_client))
+    assert error["message"]
+    rest.assert_not_awaited()
 
 
 @_REFUSED_SOCKET_TIMER
@@ -482,6 +496,62 @@ async def test_dense_logbook_pages_return_each_tied_event_once(
         else:
             pytest.fail("The last page must terminate")
     assert actual == (names if order == "oldest" else names[::-1])
+    rest.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("order", ["oldest", "newest"])
+async def test_sparse_search_keeps_parent_context_across_empty_pages(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    order: str,
+) -> None:
+    from custom_components.ha_mcp_tools.websocket_api import logbook_page
+
+    stamp = dt_util.utcnow().timestamp() - 30
+    parent = Context()
+    hass.bus.async_fire(
+        "call_service",
+        {"domain": "light", "service": "turn_on", "service_data": {}},
+        context=parent,
+        time_fired=stamp,
+    )
+    for i in range(6):
+        hass.bus.async_fire(
+            "logbook_entry",
+            {"name": "sparse child" if i == 3 else "noise", "message": "test"},
+            context=Context(parent_id=parent.id),
+            time_fired=stamp + i + 1,
+        )
+    await async_wait_recording_done(hass)
+    params = call_kwargs(
+        source="logbook", order=order, search="sparse child", compact=False
+    )
+    # Core's unpaged REST renderer is the reference for every field.
+    native = (
+        await component_core_client.get_logbook(
+            start_time=dt_util.utc_from_timestamp(stamp - 1).isoformat()
+        )
+    ) or []
+    expected = [entry for entry in native if entry.get("name") == "sparse child"]
+    assert len(expected) == 1 and expected[0]["context_service"] == "turn_on"
+    monkeypatch.setattr(logbook_page, "RAW_PAGE_ROWS", 2)
+    actual = []
+    empty_continuation = False
+    with rest_reads(component_core_client) as rest:
+        for _ in range(20):
+            data = (await LogTools(component_core_client).get_logs(**params))["data"]
+            actual.extend(data["entries"])
+            if not data["has_more"]:
+                assert data["total_entries"] == 1
+                break
+            empty_continuation |= not data["entries"]
+            params["offset"] = data["next_offset"]
+        else:
+            pytest.fail("Sparse search did not terminate")
+    assert empty_continuation
+    assert actual == expected
     rest.assert_not_awaited()
 
 
