@@ -106,9 +106,9 @@ Run it **from your fork only**. The job refuses to run in
    state through `HA:`'s REST API routes around the tools under test, so a
    gap in them goes unnoticed.
 5. Iterate the way you would update ha-mcp on any Home Assistant. The run
-   stays on the commit it started from; the standalone and embedded servers
-   run in developer mode, and the run starts from a wheel built from your
-   branch's checkout.
+   starts on `track_ref`'s commit; the standalone and embedded servers run in
+   developer mode, and the run starts from a wheel built from your branch's
+   checkout.
    - Component and embedded server: push, then load the new commit in this
      order:
      1. Download your branch through the Marketplace. On a new run, the
@@ -159,12 +159,26 @@ Run it **from your fork only**. The job refuses to run in
      the same `/tmp/app-repo`), push, run
      `ha_manage_app(action="check_updates")`, and update the app from
      Settings → Apps: an app cannot update itself through its own MCP.
-   - Standalone server: start a new run on the new commit.
+   - Standalone server (`server=standalone` or `oauth`): push the commit to
+     the run's ref in your fork:
+     ```bash
+     git push -f git@github.com:<you>/ha-mcp <commit>:refs/dev-ha-env/<run-id>
+     ```
+     Within about ten seconds the runner restarts the server on it, with its
+     dependencies synced, at the same `MCP:` URL; Home Assistant and its
+     state stay as they are. A request sent during the switch can fail with
+     a 502, so retry it. Read the outcome with
+     `ha_get_logs(source="error_log", search="dev-ha-env")`: "the standalone
+     server now runs <commit>", or an error naming the step that failed,
+     with the end of the server's output if it did not start, and that the
+     previous commit runs again. A commit is tried once; push another one to
+     switch again, back to the start commit included. This replaces only the
+     server: load a component change through steps 1 and 2 above.
 
-   The job log's `STATUS` lines show the commit the run started from and any
-   boot error. If the embedded server fails at boot, Home Assistant stays up
-   but the server's own tools are gone: log in to `HA:` as `mcp` / `mcp`,
-   open the HA-MCP integration's server entry under
+   The job log's `STATUS` lines show the commit the run started from, each
+   standalone switch, and any boot error. If the embedded server fails at
+   boot, Home Assistant stays up but the server's own tools are gone: log
+   in to `HA:` as `mcp` / `mcp`, open the HA-MCP integration's server entry under
    Settings → Devices & services, and put the fixed spec in Configure →
    "Developer: ha-mcp package override".
 
@@ -181,6 +195,8 @@ Run it **from your fork only**. The job refuses to run in
    ```bash
    gh run cancel <run-id> -R <you>/ha-mcp
    ```
+   If you switched the standalone server, delete the run's ref as well:
+   `git push git@github.com:<you>/ha-mcp :refs/dev-ha-env/<run-id>`.
 
 Anyone who has a tunnel URL has admin on that instance through the public test
 credentials. Don't share the URLs, and don't put anything real in it.
