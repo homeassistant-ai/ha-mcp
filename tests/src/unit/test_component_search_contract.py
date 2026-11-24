@@ -21,7 +21,8 @@ Legacy per-bucket record keys (the contract being pinned; see
 
 ``config`` is present only under ``include_config=True`` (mirroring the
 legacy pipeline's pop), and YAML-backed records must never carry a body.
-Scene records never carry a body either.
+When a requested automation or script has no saved editor definition, the
+component route adds a config_hint. Scene records never carry a body.
 """
 
 from __future__ import annotations
@@ -180,17 +181,22 @@ async def test_all_surfaces_match_and_shape_to_legacy_keys(
     assert shaped["success"] is True
     for rec in _records(shaped, "entities"):
         assert set(rec) == COMPONENT_ENTITY_KEYS, f"entity record keys drifted: {rec}"
-    autos = _records(shaped, "automations")
-    assert {r["entity_id"] for r in autos} == {
+    autos = {rec["entity_id"]: rec for rec in _records(shaped, "automations")}
+    assert set(autos) == {
         "automation.contractmarker_storage_automation",
         "automation.yaml_automation",
     }
-    for rec in autos:
-        assert set(rec) == AUTOMATION_KEYS | {"config"}, rec
-        assert rec["friendly_name"], "friendly_name must be populated from alias"
+    editor = autos["automation.contractmarker_storage_automation"]
+    package = autos["automation.yaml_automation"]
+    assert set(editor) == AUTOMATION_KEYS | {"config"}
+    assert set(package) == AUTOMATION_KEYS | {"config", "config_hint"}
+    assert "ha_config_get_yaml" in package["config_hint"]
+    assert all(rec["friendly_name"] for rec in autos.values())
     for rec in _records(shaped, "scripts"):
-        assert set(rec) == SCRIPT_KEYS | {"config"}, rec
+        assert set(rec) == SCRIPT_KEYS | {"config", "config_hint"}, rec
         assert rec["script_id"] == "contractmarker_script"
+        assert rec["config"] is None
+        assert "ha_config_get_yaml" in rec["config_hint"]
     for rec in _records(shaped, "scenes"):
         assert set(rec) == SCENE_KEYS | {"config"}, rec
         assert rec["scene_id"] == "scn1"
@@ -233,6 +239,7 @@ async def test_without_include_config_no_record_carries_a_config_key(
     for bucket in ("automations", "scripts", "scenes", "helpers"):
         for rec in _records(shaped, bucket):
             assert "config" not in rec, f"{bucket} record leaked config key: {rec}"
+            assert "config_hint" not in rec
     assert "should-never-appear" not in repr(shaped)
 
 
