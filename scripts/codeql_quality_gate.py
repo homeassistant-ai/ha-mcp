@@ -173,6 +173,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/unused-global-variable",
+        "src/ha_mcp/visibility/enforcement.py",
+        "_last_good_config",
+        "",
+        "Cross-invocation use: a successful visibility config load stores the "
+        "config, and a later call whose load fails reads it as the last good "
+        "config instead of failing closed. CodeQL's single-pass dead-store "
+        "analysis misses the later call's read, so the assignment looks dead.",
+    ),
+    (
+        "py/unused-global-variable",
         "custom_components/ha_mcp_tools/embedded_server.py",
         "_PENDING_INSTALL_DONE",
         "",
