@@ -5,11 +5,14 @@ from collections.abc import Iterable
 from typing import Any, NoReturn
 
 from ..client.exceptions import HomeAssistantCommandNotSent, HomeAssistantError
-from ..client_error_responses import create_client_error_response
 from ..errors import ErrorCode, create_error_response
 from .entity_exposure import get_entries_or_unregistered
 from .entity_registry_reads import _extract_ws_error
-from .helpers import raise_core_refusal, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    raise_core_refusal,
+    raise_tool_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +77,13 @@ async def expose_write(
     except HomeAssistantError as exc:
         detail = _extract_ws_error({"error": str(exc)})
         if isinstance(exc, HomeAssistantCommandNotSent):
-            return f"Exposure failed: {detail}", exc, set()
-        return (
-            (
+            error = f"Exposure failed: {detail}"
+        else:
+            error = (
                 f"Exposure outcome unknown: Home Assistant did not answer ({detail}); "
                 "the exposure may have been applied, and sending it again is safe"
-            ),
-            exc,
-            set(),
-        )
+            )
+        return error, exc, set()
     if result.get("success"):
         return None, None, changed_entity_ids(result)
     return f"Exposure failed: {_extract_ws_error(result)}", None, set()
@@ -98,7 +99,7 @@ def raise_expose_failure(
         raise_tool_error(
             create_error_response(ErrorCode.SERVICE_CALL_FAILED, error, context=context)
         )
-    response = create_client_error_response(raised, context)
+    response = exception_to_structured_error(raised, context, raise_error=False)
     response["error"]["message"] = error
     raise_tool_error(response)
 

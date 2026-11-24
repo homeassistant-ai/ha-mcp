@@ -44,9 +44,8 @@ async def expose_fault(
     core_client: HomeAssistantClient,
     updates: int,
 ) -> contextlib.AbstractContextManager[None]:
-    """The exposure write fails after ``updates`` registry updates landed:
-    Core refuses it, the socket is gone before it leaves, or it is sent and
-    the connection drops."""
+    """The exposure write fails as ``fault`` names, after ``updates`` registry
+    updates landed."""
     if fault == "refused":
         expose_raises(monkeypatch)
     elif fault == "not_sent":

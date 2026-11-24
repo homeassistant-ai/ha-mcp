@@ -595,7 +595,7 @@ class EntityTools:
             "exposure_failed": failed,
         }
         if prior_mutation:
-            context.update(core_extras, partial=True, updates=list(updates_made))
+            context.update(core_extras, partial=True, updates=updates_made)
             if entity_entry is not None:
                 context["entity_entry"] = entity_entry
             if options_succeeded:
