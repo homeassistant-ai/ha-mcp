@@ -577,6 +577,9 @@ let appReady = false;
 // proxy's error page. A periodic probe that fails with no navigation behind it
 // leaves a working app alone (see showApp), so this is not a probe-health flag.
 let navLoadFailed = false;
+// Which navigation the flag belongs to: a probe that finishes after a newer
+// navigation must not overwrite that navigation's result.
+let navSeq = 0;
 
 function homeAssistantRoot() {{
   try {{
@@ -636,12 +639,13 @@ function checkNavigationLoad(target) {{
   // The iframe's own load event cannot tell the app from the proxy's error
   // page, so ask the proxy once, for this navigation. A periodic probe failing
   // later says nothing about whether this load worked.
+  const seq = ++navSeq;
   fetchWithTimeout(target, {{ credentials: "same-origin" }})
     .then(function (resp) {{
-      navLoadFailed = !resp.ok;
+      if (seq === navSeq) navLoadFailed = !resp.ok;
     }})
     .catch(function () {{
-      navLoadFailed = true;
+      if (seq === navSeq) navLoadFailed = true;
     }});
 }}
 
