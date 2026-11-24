@@ -451,6 +451,40 @@ async def test_oversized_component_reply_never_repeats_the_read_over_rest(
     rest.assert_not_awaited()
 
 
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("order", ["oldest", "newest"])
+async def test_dense_logbook_pages_return_each_tied_event_once(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    order: str,
+) -> None:
+    stamp = dt_util.utcnow().timestamp() - 5
+    names = [f"page marker {i:02d}" for i in range(41)]
+    for name in names:
+        hass.bus.async_fire(
+            "logbook_entry",
+            {"name": name, "message": "x" * 1800},
+            time_fired=stamp,
+        )
+    await async_wait_recording_done(hass)
+    monkeypatch.setattr(websocket_client, "MAX_WS_MESSAGE_BYTES", 8192)
+    params = call_kwargs(source="logbook", limit=3, order=order, search="page marker")
+    actual = []
+    with rest_reads(component_core_client) as rest:
+        for _ in range(len(names)):
+            data = (await LogTools(component_core_client).get_logs(**params))["data"]
+            assert len(data["entries"]) <= 3
+            actual.extend(row["name"] for row in data["entries"])
+            if not data["has_more"]:
+                break
+            params["offset"] = data["next_offset"]
+        else:
+            pytest.fail("The last page must terminate")
+    assert actual == (names if order == "oldest" else names[::-1])
+    rest.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("field", "value"), [("entity_id", ", "), ("device_id", " , ")]
 )
