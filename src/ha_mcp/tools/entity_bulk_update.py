@@ -69,11 +69,10 @@ async def _registry_phase(
             # Never swallow cancellation/shutdown into per-entity errors.
             raise result
         if isinstance(result, ToolError):
-            code = tool_error_ha_code(result)
-            failed.append(
-                {"entity_id": eid, "error": extract_tool_error_message(result)}
-                | ({"ha_error_code": code} if code else {})
-            )
+            row = {"entity_id": eid, "error": extract_tool_error_message(result)}
+            if code := tool_error_ha_code(result):
+                row["ha_error_code"] = code
+            failed.append(row)
         elif isinstance(result, BaseException):
             logger.warning("Bulk update of %s failed", eid, exc_info=result)
             failed.append({"entity_id": eid, "error": str(result)})
@@ -111,15 +110,15 @@ async def _expose_phase(
     eligible_ids = [eid for eid in eligible_ids if eid in targets]
     if not eligible_ids:
         return [], failed, []
-    expose_error, changed, applied = await apply_bulk_expose(
+    failure_row, changed, applied = await apply_bulk_expose(
         client,
         [targets[eid] for eid in eligible_ids],
         parsed_expose_to,
     )
-    if expose_error is not None:
+    if failure_row is not None:
         landed = {"partial": True, "exposure_succeeded": applied} if applied else {}
         failed.extend(
-            {"entity_id": eid, **expose_error, **landed} for eid in eligible_ids
+            {"entity_id": eid, **failure_row, **landed} for eid in eligible_ids
         )
         return [], failed, []
 

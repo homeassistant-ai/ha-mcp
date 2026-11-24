@@ -832,8 +832,8 @@ class TestEntityWriteFailure:
     ) -> None:
         """Each entity was enabled and hidden before the exposure failed: a reply
         hiding that, or Core's restart notice for an entry without a config
-        entry, makes an agent retry or misreport. Only an unsent write failed,
-        and a refusal keeps Core's code, as a single-entity reply does."""
+        entry, makes an agent retry or misreport. A refusal keeps Core's code, as
+        a single-entity reply does; a write never sent or never answered has none."""
         registry = er.async_get(hass)
         ids = [
             registry.async_get_or_create(

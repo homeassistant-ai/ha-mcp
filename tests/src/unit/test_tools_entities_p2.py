@@ -17,7 +17,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_entities import EntityTools
 
 from ._entity_registry_core import sent_types
-from ._tool_errors import error_of
+from ._tool_errors import error_body, error_of
 
 GET = "config/entity_registry/get"
 GET_ENTRIES = "config/entity_registry/get_entries"
@@ -115,10 +115,23 @@ async def test_a_bulk_removal_sorts_each_id_by_cores_answer(
     assert error["entity_id"] == BAD_ID
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert error["ha_error_code"] == "invalid_format"
-    assert "entity_id" in error["message"]
+    # Core's message, as a single-id removal gives it.
+    assert error["message"].startswith("Entity ID not an id is an invalid entity ID")
     assert entity_registry.async_get("sensor.a") is None
     removals = [m.args[0] for m in sent.call_args_list if m.args[0]["type"] == REMOVE]
     assert [r["entity_id"] for r in removals] == ["sensor.a", "sensor.missing", BAD_ID]
+
+
+async def test_a_single_removal_core_refuses_keeps_its_code(
+    tools: EntityTools,
+) -> None:
+    """A malformed id is the caller's to fix, and Core's code says so."""
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_remove_entity(entity_id=BAD_ID)
+
+    body = error_body(exc_info)
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert body["ha_error_code"] == "invalid_format"
 
 
 async def test_a_bulk_removal_of_every_id_succeeds(

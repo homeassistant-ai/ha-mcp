@@ -325,7 +325,10 @@ class EntityTools:
             "type": "config/entity_registry/get",
             "entity_id": entity_id,
         }
-        result = await self._client.send_websocket_message(get_msg)
+        # An entity Core does not know is the answer raised below, not a failure to log.
+        result = await self._client.send_websocket_message(
+            get_msg, expected_error_codes=frozenset({"not_found"})
+        )
         if not result.get("success"):
             raise_entity_refusal(
                 f"Failed to get current labels for {entity_id}", result, entity_id
@@ -339,7 +342,10 @@ class EntityTools:
             "type": "config/entity_registry/get",
             "entity_id": entity_id,
         }
-        result = await self._client.send_websocket_message(get_msg)
+        # An entity Core does not know is the answer raised below, not a failure to log.
+        result = await self._client.send_websocket_message(
+            get_msg, expected_error_codes=frozenset({"not_found"})
+        )
         if not result.get("success"):
             raise_entity_refusal(
                 f"Failed to get current aliases for {entity_id}", result, entity_id
@@ -1750,9 +1756,7 @@ class EntityTools:
             if len(entity_ids) > 1
             else []
         )
-        result = await remove_registry_entries(
-            self._client, entity_ids, _extract_ws_error
-        )
+        result = await remove_registry_entries(self._client, entity_ids)
         if warnings:
             result["warnings"] = warnings
         return result
@@ -1829,7 +1833,10 @@ class EntityTools:
                         create_error_response(
                             ErrorCode.ENTITY_NOT_FOUND,
                             f"Entity '{entity_id}' not found in registry",
-                            context={"entity_id": entity_id},
+                            context={
+                                "entity_id": entity_id,
+                                "ha_error_code": "not_found",
+                            },
                             suggestions=[
                                 "Use ha_search() to find valid entity IDs",
                                 "The entity may have already been removed",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -19,6 +18,7 @@ from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
     raise_tool_error,
+    tool_error_ha_code,
 )
 
 _MODE_SUGGESTIONS = [
@@ -143,13 +143,9 @@ def raise_dashboard_edit_fetch_error(
     exc: ToolError, url_path: str, action: str
 ) -> NoReturn:
     """Only Core's explicit config_not_found means an absent dashboard/config."""
-    try:
-        data = json.loads(str(exc))
-    except ValueError, TypeError:
-        data = None
     reason = (
         "not_found"
-        if isinstance(data, dict) and data.get("ha_error_code") == CONFIG_NOT_FOUND_CODE
+        if tool_error_ha_code(exc) == CONFIG_NOT_FOUND_CODE
         else "load_failed"
     )
     raise_dashboard_edit_error(

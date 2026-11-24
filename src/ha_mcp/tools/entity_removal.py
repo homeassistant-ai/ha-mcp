@@ -9,7 +9,6 @@ item, so it gets no note.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from ..client.rest_client import (
@@ -19,7 +18,7 @@ from ..client.rest_client import (
 )
 from .config_helpers.listing import listed_items
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
-from .helpers import exception_to_structured_error, ws_failure_code
+from .helpers import core_error_message, exception_to_structured_error, ws_failure_code
 
 
 def _unread(entity_id: str, reason: Any) -> list[str]:
@@ -81,16 +80,14 @@ async def remove_registry_entry(
     return result, notes
 
 
-async def remove_registry_entries(
-    client: Any, entity_ids: list[str], error_text: Callable[[dict[str, Any]], str]
-) -> dict[str, Any]:
+async def remove_registry_entries(client: Any, entity_ids: list[str]) -> dict[str, Any]:
     """Remove each id in turn; each lands in ``removed``, ``skipped`` (Core's
     not_found: already absent) or ``errors``. A lost connection stops the run
     and lists the ids it never sent, which are safe to retry: the ones after the
     failing id, and the failing id too when its command provably never left."""
     removed: list[str] = []
     skipped: list[str] = []
-    errors: list[dict[str, str | None]] = []
+    errors: list[dict[str, str]] = []
     not_attempted: list[str] = []
     for index, eid in enumerate(entity_ids):
         try:
@@ -116,14 +113,14 @@ async def remove_registry_entries(
         elif result.get("error_code") == "not_found":
             skipped.append(eid)
         else:
-            errors.append(
-                {
-                    "entity_id": eid,
-                    "code": ws_failure_code(result).value,
-                    "message": error_text(result),
-                    "ha_error_code": result.get("error_code"),
-                }
-            )
+            row = {
+                "entity_id": eid,
+                "code": ws_failure_code(result).value,
+                "message": core_error_message(result.get("error", "Unknown error")),
+            }
+            if code := result.get("error_code"):
+                row["ha_error_code"] = code
+            errors.append(row)
     response: dict[str, Any] = {
         "success": not errors,
         "total": len(entity_ids),

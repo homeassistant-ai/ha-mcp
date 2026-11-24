@@ -10,6 +10,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import category_registry as cr
@@ -23,6 +24,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.tools_entities import EntityTools
 
+from ._command_faults import registry_lookup_failing
 from ._entity_registry_core import sent_types
 from ._entity_tools_core import labels as labels
 from ._entity_tools_core import registry_entity, stored_entry
@@ -194,22 +196,29 @@ class TestLabels:
         assert stored_entry(entity_registry, "light.test").labels == {"outdoor"}
 
     async def test_a_refused_label_read_writes_nothing(
-        self, tools: EntityTools, sent: AsyncMock
+        self,
+        hass: HomeAssistant,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        sent: AsyncMock,
     ) -> None:
-        """The merge needs the current labels, so Core's refusal of that read
-        is the answer, with its code."""
-        with pytest.raises(ToolError) as exc_info:
+        """The merge needs the current labels: a write after a refused read
+        would replace them with a list built from nothing."""
+        registry_entity(entity_registry, "light.test", labels={"outdoor", "porch"})
+
+        with registry_lookup_failing(hass), pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(
-                entity_id="light.t", labels=["outdoor"], label_operation="remove"
+                entity_id="light.test", labels=["outdoor"], label_operation="remove"
             )
 
         body = error_body(exc_info)
-        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert body["error"]["message"].startswith(
-            "Failed to get current labels for light.t: "
-        )
-        assert body["ha_error_code"] == "not_found"
-        assert sent_types(sent) == [_GET]
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert body["ha_error_code"] == "home_assistant_error"
+        assert _UPDATE not in sent_types(sent)
+        assert stored_entry(entity_registry, "light.test").labels == {
+            "outdoor",
+            "porch",
+        }
 
 
 class TestRegistryReferences:
