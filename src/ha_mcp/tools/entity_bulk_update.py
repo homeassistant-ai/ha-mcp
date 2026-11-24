@@ -3,11 +3,11 @@
 Core's ``config/entity_registry/update`` takes one entity, so labels,
 categories, enabled and hidden go out once per entity; expose_to goes out as
 one ``homeassistant/expose_entity`` call for the assistants turned on and one
-for those turned off, each for every id whose registry update succeeded. Each
-row whose registry update landed keeps what Core answered for its entity
-besides the entry, such as ``require_restart`` or ``reload_delay`` after an
-enable, also when its exposure then failed. With auto-backup on,
-each entity gets its own pre-write snapshot, as a single-entity call does.
+for those turned off, each for every id still in the run. Each row whose
+registry update landed keeps what Core answered for its entity besides the
+entry, such as ``require_restart`` or ``reload_delay`` after an enable, also
+when its exposure then failed. With auto-backup on, each entity gets its own
+pre-write snapshot, as a single-entity call does.
 """
 
 import asyncio
@@ -25,7 +25,7 @@ from .entity_expose_batch import (
     expose_update,
     refresh_warning,
 )
-from .entity_registry_reads import _extract_ws_error, get_entries_raw
+from .entity_registry_reads import get_entries_raw
 from .helpers import extract_tool_error_message, raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,6 @@ async def _expose_phase(
         client,
         [targets[eid] for eid in eligible_ids],
         parsed_expose_to,
-        _extract_ws_error,
     )
     if expose_error is not None:
         landed = {"partial": True, "exposure_succeeded": applied} if applied else {}

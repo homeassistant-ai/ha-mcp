@@ -43,9 +43,9 @@ from .component_api import (
 from .config_helpers.registry import validate_registry_ids
 from .entity_bulk_update import bulk_update_entities
 from .entity_expose_batch import (
-    changed_entity_ids,
     expose_update,
     expose_write,
+    raise_expose_failure,
     refresh_warning,
     reject_unknown_assistants,
 )
@@ -571,6 +571,8 @@ class EntityTools:
         options_succeeded: dict[str, dict[str, Any]],
         device_rename_result: dict[str, Any] | None,
         has_registry_updates: bool,
+        updates_made: list[str],
+        core_extras: dict[str, Any],
     ) -> dict[str, Any]:
         """Build error context for an expose_to failure.
 
@@ -578,7 +580,8 @@ class EntityTools:
         pipeline: main registry update, per-domain options, device rename, and
         any expose_to batch (e.g. expose_true) that ran before this
         one (expose_false) failed. Anything truthy in those means
-        the registry already moved.
+        the registry already moved; the context then says what landed, as a
+        bulk row does: the updates and Core's answer besides the entry.
         """
         prior_mutation = (
             has_registry_updates
@@ -592,8 +595,9 @@ class EntityTools:
             "exposure_failed": failed,
         }
         if prior_mutation:
-            context["partial"] = True
-            context["entity_entry"] = entity_entry
+            context.update(core_extras, partial=True, updates=list(updates_made))
+            if entity_entry is not None:
+                context["entity_entry"] = entity_entry
             if options_succeeded:
                 context["options_succeeded"] = options_succeeded
             if device_rename_result and device_rename_result.get("success"):
@@ -630,6 +634,7 @@ class EntityTools:
         options_succeeded: dict[str, dict[str, Any]],
         device_rename_result: dict[str, Any] | None,
         updates_made: list[str],
+        core_extras: dict[str, Any],
         refetch: bool,
     ) -> tuple[dict[str, bool] | None, dict[str, Any] | None, str | None]:
         """Apply expose_to changes and add their entry to updates_made.
@@ -660,32 +665,27 @@ class EntityTools:
                 f"{'Exposing' if should_expose else 'Hiding'} {target} "
                 f"{'to' if should_expose else 'from'} {assistants}"
             )
-            error_msg, expose_result = await expose_write(
-                self._client, assistants, [target], should_expose, _extract_ws_error
+            error_msg, raised, changed_now = await expose_write(
+                self._client, assistants, [target], should_expose
             )
             if error_msg is not None:
-                failed = dict.fromkeys(assistants, should_expose)
                 context = self._build_expose_failure_context(
                     entity_id,
-                    entry,
+                    entry if refetch else None,
                     succeeded,
-                    failed,
+                    dict.fromkeys(assistants, should_expose),
                     options_succeeded,
                     device_rename_result,
                     has_registry_updates,
+                    updates_made,
+                    core_extras,
                 )
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        error_msg,
-                        context=context,
-                    )
-                )
+                raise_expose_failure(error_msg, raised, context)
 
             # Track successful exposures
             for a in assistants:
                 succeeded[a] = should_expose
-            changed |= changed_entity_ids(expose_result)
+            changed |= changed_now
 
         exposure_result: dict[str, bool] | None = succeeded if succeeded else None
         unchanged = target not in changed
@@ -929,6 +929,7 @@ class EntityTools:
                 options_succeeded,
                 device_rename_result,
                 updates_made,
+                core_result,
                 refetch=include_entity_entry,
             )
 

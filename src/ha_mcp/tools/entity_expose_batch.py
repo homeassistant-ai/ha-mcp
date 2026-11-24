@@ -1,12 +1,15 @@
 """Assistant checks and bulk ``homeassistant/expose_entity`` calls."""
 
 import logging
-from collections.abc import Callable, Iterable
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, NoReturn
 
 from ..client.exceptions import HomeAssistantCommandNotSent, HomeAssistantError
+from ..client_error_responses import create_client_error_response
+from ..errors import ErrorCode, create_error_response
 from .entity_exposure import get_entries_or_unregistered
-from .helpers import raise_core_refusal
+from .entity_registry_reads import _extract_ws_error
+from .helpers import raise_core_refusal, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +53,14 @@ async def reject_unknown_assistants(
 
 
 async def expose_write(
-    client: Any,
-    assistants: list[str],
-    entity_ids: list[str],
-    should_expose: bool,
-    extract_error: Callable[[dict[str, Any]], str],
-) -> tuple[str | None, dict[str, Any]]:
-    """Send one ``homeassistant/expose_entity`` write: (error, Core's reply).
+    client: Any, assistants: list[str], entity_ids: list[str], should_expose: bool
+) -> tuple[str | None, HomeAssistantError | None, set[str]]:
+    """Send one ``homeassistant/expose_entity`` write: (error, raised, changed).
 
-    error is None on success. A refusal, or a write that never left, failed
-    for sure; one sent without an answer may have been applied, and says so.
+    error is None on success, and changed holds the ids Core reports it
+    changed. A refusal, or a write that never left, failed for sure; one sent
+    without an answer may have been applied, and says so. raised is the
+    client's exception when Home Assistant did not answer.
     """
     try:
         result = await client.send_websocket_message(
@@ -71,23 +72,41 @@ async def expose_write(
             }
         )
     except HomeAssistantError as exc:
-        detail = extract_error({"error": str(exc)})
+        detail = _extract_ws_error({"error": str(exc)})
         if isinstance(exc, HomeAssistantCommandNotSent):
-            return f"Exposure failed: {detail}", {}
+            return f"Exposure failed: {detail}", exc, set()
         return (
-            f"Exposure outcome unknown: Home Assistant did not answer ({detail}); "
-            "the exposure may have been applied, and sending it again is safe"
-        ), {}
+            (
+                f"Exposure outcome unknown: Home Assistant did not answer ({detail}); "
+                "the exposure may have been applied, and sending it again is safe"
+            ),
+            exc,
+            set(),
+        )
     if result.get("success"):
-        return None, result
-    return f"Exposure failed: {extract_error(result)}", result
+        return None, None, changed_entity_ids(result)
+    return f"Exposure failed: {_extract_ws_error(result)}", None, set()
+
+
+def raise_expose_failure(
+    error: str, raised: HomeAssistantError | None, context: dict[str, Any]
+) -> NoReturn:
+    """Raise the tool error for a failed exposure write: a refusal is a failed
+    service call; a write without an answer keeps the code and suggestions
+    its transport gives (connection, timeout, auth)."""
+    if raised is None:
+        raise_tool_error(
+            create_error_response(ErrorCode.SERVICE_CALL_FAILED, error, context=context)
+        )
+    response = create_client_error_response(raised, context)
+    response["error"]["message"] = error
+    raise_tool_error(response)
 
 
 async def apply_bulk_expose(
     client: Any,
     entity_ids: list[str],
     parsed_expose_to: dict[str, bool],
-    extract_error: Callable[[dict[str, Any]], str],
 ) -> tuple[str | None, set[str], dict[str, bool]]:
     """Expose/hide many entities in one homeassistant/expose_entity call per set.
 
@@ -112,12 +131,12 @@ async def apply_bulk_expose(
             f"{'Exposing' if should_expose else 'Hiding'} {len(entity_ids)} "
             f"entities {'to' if should_expose else 'from'} {assistants}"
         )
-        error, result = await expose_write(
-            client, assistants, entity_ids, should_expose, extract_error
+        error, _, changed_now = await expose_write(
+            client, assistants, entity_ids, should_expose
         )
         if error is None:
             applied.update(dict.fromkeys(assistants, should_expose))
-            changed |= changed_entity_ids(result)
+            changed |= changed_now
             continue
         if applied:
             # The earlier assistant group already changed — say so, or
