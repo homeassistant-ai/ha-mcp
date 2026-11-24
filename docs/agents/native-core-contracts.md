@@ -129,8 +129,9 @@ set, so names, context fields and the row shape come from Core instead of a
 copied `EntityNameCache`. The server prefers the bridge and keeps Core's REST
 (`/api/logbook`) and WebSocket (`logbook/get_events`) reads as the explicit
 component-absent fallbacks — a `device_id` request needs the WebSocket path
-there because REST has no device filter, and a bridge timeout surfaces rather
-than re-running the recorder query on another transport.
+there because REST has no device filter, and the server reports bridge timeouts and oversized replies
+without repeating the recorder query. Whole-instance Logbook reads accept a one-hour
+window because Core applies neither the text search nor the returned page limit.
 
 `ha_restart` forwards Core's restart schema (`safe_mode`) and leaves the
 refusals to Core. The embedded server is the exception: it replies before the

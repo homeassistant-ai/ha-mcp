@@ -17,11 +17,13 @@ Transport order (best first), all fetching from Home Assistant's own code:
    requests without the component (the only transport with a device filter).
 """
 
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..client.exceptions import HomeAssistantResponseTooLarge
 from ..client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantCommandError,
@@ -69,13 +71,48 @@ class LogbookLogSourceMixin:
     _client: Any
 
     @staticmethod
-    def _coerce_logbook_params(
+    def _validate_logbook_window(
         hours_back: int,
-        limit: int | None,
-        offset: int,
-    ) -> tuple[int, int, int]:
-        effective_limit = _coerce_limit(limit)
-        return hours_back, effective_limit, offset
+        entity_id: str | None,
+        device_id: str | None,
+        context_id: str | None,
+    ) -> None:
+        if context_id and (entity_id or device_id):
+            # Core's EventProcessor asserts on this combination and REST
+            # rejects it with a 400; fail early with the structured shape.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "context_id cannot be combined with entity_id or device_id",
+                    context={
+                        "entity_id": entity_id,
+                        "device_id": device_id,
+                        "context_id": context_id,
+                    },
+                    suggestions=[
+                        "Use context_id alone to trace what caused an event",
+                        "Use entity_id or device_id alone for entity/device events",
+                    ],
+                )
+            )
+
+        # Core uses a binary ULID to constrain a context-only recorder query.
+        if hours_back > 1 and not (
+            entity_id
+            or device_id
+            or re.fullmatch(r"[0-7][0-9A-HJKMNP-TV-Z]{25}", context_id or "")
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Whole-instance Logbook reads support hours_back=1. "
+                    "Home Assistant reads the entire window before HA-MCP applies search or limit.",
+                    suggestions=[
+                        "Use hours_back=1 with end_time near the event",
+                        "For a longer window, supply entity_id, device_id or a Home Assistant context ID",
+                    ],
+                )
+            )
 
     @staticmethod
     def _build_pagination_hint(
@@ -315,10 +352,9 @@ class LogbookLogSourceMixin:
         ``None`` means the component is absent, downgraded (``unknown_command``
         drops the cached capability) or the transport gave no answer: no
         connection, or one that dropped before the reply. Core's own rejections
-        surface unchanged; a timeout (the recorder query still runs inside Home
-        Assistant) surfaces instead of falling back, and so does a token
-        rejected on the command itself. A token already rejected on the
-        capability probe falls back.
+        surface unchanged. Timeouts and oversized replies must not repeat the
+        recorder query. A token rejected on the command itself also surfaces;
+        a token already rejected on the capability probe falls back.
         """
         caps = await get_component_caps(self._client)
         if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
@@ -331,10 +367,7 @@ class LogbookLogSourceMixin:
                 command["start_time"], command.get("end_time") or ""
             )
         except HomeAssistantConnectionError as exc:
-            if _wrapped_timeout(exc):
-                self._raise_logbook_timeout(
-                    command["start_time"], command.get("end_time") or ""
-                )
+            self._raise_if_logbook_read_failed(exc, command)
             if isinstance(exc.__cause__, HomeAssistantAuthError):
                 # The fallbacks would resend the rejected token.
                 exception_to_structured_error(exc)
@@ -370,10 +403,7 @@ class LogbookLogSourceMixin:
                 command["start_time"], command.get("end_time") or ""
             )
         except HomeAssistantConnectionError as exc:
-            if _wrapped_timeout(exc):
-                self._raise_logbook_timeout(
-                    command["start_time"], command.get("end_time") or ""
-                )
+            self._raise_if_logbook_read_failed(exc, command)
             if isinstance(exc.__cause__, HomeAssistantAuthError):
                 # A token rejected on connect is not a WebSocket outage.
                 exception_to_structured_error(
@@ -398,6 +428,23 @@ class LogbookLogSourceMixin:
             command.get("device_ids"),
             reason=str(reason) if reason else None,
         )
+
+    def _raise_if_logbook_read_failed(
+        self, exc: HomeAssistantConnectionError, command: dict[str, Any]
+    ) -> None:
+        if _wrapped_timeout(exc):
+            self._raise_logbook_timeout(command["start_time"], command["end_time"])
+        if isinstance(exc, HomeAssistantResponseTooLarge):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The WebSocket closed because a response was too large. "
+                    "The Logbook query was not repeated.",
+                    suggestions=[
+                        "Narrow the time window or filter by a specific entity or device"
+                    ],
+                )
+            )
 
     def _raise_logbook_timeout(self, start_time: str, end_time: str) -> NoReturn:
         """Surface a query timeout; never re-run it on a fallback transport.
@@ -515,28 +562,9 @@ class LogbookLogSourceMixin:
         order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch logbook entries with search and pagination."""
-        hours_back_int, effective_limit, offset_int = self._coerce_logbook_params(
-            hours_back, limit, offset
-        )
+        effective_limit = _coerce_limit(limit)
 
-        if context_id and (entity_id or device_id):
-            # Core's EventProcessor asserts on this combination and REST
-            # rejects it with a 400; fail early with the structured shape.
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "context_id cannot be combined with entity_id or device_id",
-                    context={
-                        "entity_id": entity_id,
-                        "device_id": device_id,
-                        "context_id": context_id,
-                    },
-                    suggestions=[
-                        "Use context_id alone to trace what caused an event",
-                        "Use entity_id or device_id alone for entity/device events",
-                    ],
-                )
-            )
+        self._validate_logbook_window(hours_back, entity_id, device_id, context_id)
 
         if end_time:
             try:
@@ -556,7 +584,7 @@ class LogbookLogSourceMixin:
         else:
             end_dt = datetime.now(UTC)
 
-        start_dt = end_dt - timedelta(hours=hours_back_int)
+        start_dt = end_dt - timedelta(hours=hours_back)
         start_timestamp = start_dt.isoformat()
 
         try:
@@ -589,7 +617,7 @@ class LogbookLogSourceMixin:
             response, filters_applied = self._filter_logbook_by_search(response, search)
 
             paginated_entries, total_entries, has_more = self._paginate_logbook_entries(
-                response, offset_int, effective_limit, order
+                response, offset, effective_limit, order
             )
 
             # In compact mode, strip entries to essential fields only.
@@ -602,7 +630,7 @@ class LogbookLogSourceMixin:
                 "success": True,
                 "source": "logbook",
                 "entries": paginated_entries,
-                "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
+                "period": f"{hours_back} hours back from {end_dt.isoformat()}",
                 "start_time": start_timestamp,
                 "end_time": end_dt.isoformat(),
                 "entity_filter": entity_id,
@@ -613,7 +641,7 @@ class LogbookLogSourceMixin:
                 if isinstance(paginated_entries, list)
                 else 1,
                 "limit": effective_limit,
-                "offset": offset_int,
+                "offset": offset,
                 "order": order,
                 "has_more": has_more,
             }
@@ -621,11 +649,11 @@ class LogbookLogSourceMixin:
                 logbook_data["filters_applied"] = filters_applied
             if has_more:
                 logbook_data["pagination_hint"] = self._build_pagination_hint(
-                    offset_int,
+                    offset,
                     effective_limit,
                     total_entries,
                     paginated_entries,
-                    hours_back_int,
+                    hours_back,
                     end_dt.isoformat(),
                     entity_id,
                     device_id,
@@ -645,7 +673,7 @@ class LogbookLogSourceMixin:
             exception_to_structured_error(
                 e,
                 context={
-                    "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
+                    "period": f"{hours_back} hours back from {end_dt.isoformat()}",
                 },
                 suggestions=self._logbook_error_suggestions(e),
             )

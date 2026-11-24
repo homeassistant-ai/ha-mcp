@@ -350,7 +350,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ge=1,
                 description=(
                     "How many hours back to read. Logbook (default 1), "
-                    "supervisor and system_service. For the last two, only "
+                    "supervisor and system_service. Whole-instance Logbook reads are limited "
+                    "to 1 hour. Use end_time near the event, or supply entity_id, device_id "
+                    "or a valid context_id for a longer window. Logbook search and limit "
+                    "apply after Home Assistant reads the window. For the journal sources, only "
                     "when given: the journal serves that window, from its "
                     "start to the journal's end, one page at a time, "
                     "oldest-first (see offset); has_more says more of it remains. With search "

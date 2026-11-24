@@ -339,7 +339,7 @@ async def test_context_filter_reads_the_rest_view(
 
     with rest_reads(core_client) as rest:
         result = await LogTools(core_client).get_logs(
-            **call_kwargs(source="logbook", context_id=context.id)
+            **call_kwargs(source="logbook", hours_back=2, context_id=context.id)
         )
 
     assert result["data"]["context_filter"] == context.id
@@ -408,12 +408,17 @@ async def test_device_filter_when_core_has_no_logbook_is_not_an_empty_success(
 
 
 @pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("context_id", [None, "invalid-context"])
 async def test_wide_text_search_is_rejected_before_reading_recorder(
-    component_core_client: HomeAssistantClient, sent: AsyncMock
+    component_core_client: HomeAssistantClient, sent: AsyncMock, context_id: str | None
 ) -> None:
     with rest_reads(component_core_client) as rest:
         error = await logbook_error(
-            LogTools(component_core_client), hours_back=125, search="started", limit=4
+            LogTools(component_core_client),
+            hours_back=125,
+            search="Home Assistant started",
+            limit=4,
+            context_id=context_id,
         )
 
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -425,7 +430,8 @@ async def test_wide_text_search_is_rejected_before_reading_recorder(
 
 @pytest.mark.usefixtures("logbook")
 async def test_oversized_component_reply_never_repeats_the_read_over_rest(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await hass.services.async_call(
@@ -514,7 +520,9 @@ async def test_omitted_end_time_covers_the_requested_window_up_to_now(
 ) -> None:
     before = dt_util.utcnow()
     result = await LogTools(core_client).get_logs(
-        **call_kwargs(source="logbook", hours_back=48)
+        **call_kwargs(
+            source="logbook", entity_id="light.kitchen,light.hall", hours_back=48
+        )
     )
 
     start = datetime.fromisoformat(result["data"]["start_time"])
@@ -534,10 +542,20 @@ async def test_explicit_end_time_honors_the_callers_window(
     future = (dt_util.utcnow() + timedelta(hours=1)).isoformat()
 
     earlier = await tools.get_logs(
-        **call_kwargs(source="logbook", hours_back=48, end_time=past)
+        **call_kwargs(
+            source="logbook",
+            entity_id="light.kitchen,light.hall",
+            hours_back=48,
+            end_time=past,
+        )
     )
     later = await tools.get_logs(
-        **call_kwargs(source="logbook", hours_back=48, end_time=future)
+        **call_kwargs(
+            source="logbook",
+            entity_id="light.kitchen,light.hall",
+            hours_back=48,
+            end_time=future,
+        )
     )
 
     start = datetime.fromisoformat(earlier["data"]["start_time"])
@@ -553,10 +571,17 @@ async def test_omitted_and_explicit_end_time_return_the_same_rows(
 ) -> None:
     """Passing back the end the tool reported reads the same window (#2767)."""
     tools = LogTools(core_client)
-    omitted = await tools.get_logs(**call_kwargs(source="logbook", hours_back=48))
+    omitted = await tools.get_logs(
+        **call_kwargs(
+            source="logbook", entity_id="light.kitchen,light.hall", hours_back=48
+        )
+    )
     explicit = await tools.get_logs(
         **call_kwargs(
-            source="logbook", hours_back=48, end_time=omitted["data"]["end_time"]
+            source="logbook",
+            entity_id="light.kitchen,light.hall",
+            hours_back=48,
+            end_time=omitted["data"]["end_time"],
         )
     )
 

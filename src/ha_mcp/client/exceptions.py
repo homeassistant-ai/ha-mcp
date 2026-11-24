@@ -4,7 +4,11 @@ from typing import Any
 
 import httpx
 
-from .._vendor.websockets.exceptions import InvalidProxyStatus, InvalidStatus
+from .._vendor.websockets.exceptions import (
+    ConnectionClosed,
+    InvalidProxyStatus,
+    InvalidStatus,
+)
 from ..error_wording import config_resource_not_found
 
 
@@ -24,6 +28,21 @@ class HomeAssistantConnectionError(HomeAssistantError):
         return isinstance(
             cause, (TimeoutError, httpx.TimeoutException, HomeAssistantCommandTimeout)
         )
+
+
+class HomeAssistantResponseTooLarge(HomeAssistantConnectionError):
+    """A WebSocket closed because a message exceeded its size limit."""
+
+
+def websocket_close_error_type(
+    close: BaseException | None,
+) -> type[HomeAssistantConnectionError]:
+    """Either peer can close with 1009 when a message exceeds its size limit."""
+    if isinstance(close, ConnectionClosed) and any(
+        frame and frame.code == 1009 for frame in (close.rcvd, close.sent)
+    ):
+        return HomeAssistantResponseTooLarge
+    return HomeAssistantConnectionError
 
 
 class HomeAssistantNotReached(HomeAssistantConnectionError):
