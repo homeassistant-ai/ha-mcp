@@ -36,7 +36,6 @@ def search_config_surface(
     *,
     match_all: bool,
     exact: bool,
-    include_config: bool,
     partial_reasons: list[str],
     diagnostics: dict[str, int],
     saved_bodies: dict[str, dict[str, Any]],
@@ -80,17 +79,14 @@ def search_config_surface(
             if scored is None:
                 continue
             score, match_in_name, match_in_config = scored
-        if omit is not None and omit((entity_id, name, config_dict)):
+        # Search matches the running configuration. Return the editor's saved
+        # definition by ID; Core can normalize action syntax during loading.
+        config_out = saved_bodies.get(item_id) if item_id else None
+        if omit is not None and omit((entity_id, name, config_dict, config_out)):
             continue
 
-        # A package may define an id just like the editor. Only return a body
-        # independently read from the editor source with HA tags unresolved.
-        # A pending edit can also make the saved body differ from the hit.
-        config_out = saved_bodies.get(item_id) if include_config and item_id else None
         if config_out is not None:
-            if config_out != config_dict:
-                config_out = None
-            elif _too_large(config_out):
+            if _too_large(config_out):
                 partial_reasons.append(f"{domain} {entity_id} body omitted (too large)")
                 config_out = None
             else:

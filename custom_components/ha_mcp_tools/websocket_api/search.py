@@ -192,11 +192,12 @@ def do_search(  # noqa: PLR0915
                     query_lower,
                     match_all=match_all,
                     exact=exact,
-                    include_config=include_config,
                     partial_reasons=partial_reasons,
                     diagnostics=diagnostics,
                     secret_values=secret_values,
-                    saved_bodies=(saved_bodies or {}).get(domain, {}),
+                    saved_bodies=(saved_bodies or {}).get(domain, {})
+                    if include_config
+                    else {},
                     omit=omit,
                 )
             )

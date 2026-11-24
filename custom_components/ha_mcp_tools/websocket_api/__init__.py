@@ -321,7 +321,7 @@ Design notes that are load-bearing:
   ``title`` only — **never** ``ConfigEntry.data`` (integration credentials).
 * **YAML config bodies are never emitted.** automation/script/scene bodies are
   indexed for *matching*, but a matched item's ``config`` body is returned only
-  when it is storage/editor-backed AND ``include_config`` is set. YAML-loaded
+  from its unresolved editor source when ``include_config`` is set. YAML-loaded
   items return identity/metadata only (their ``raw_config`` may carry resolved
   ``!secret`` plaintext). Body emission for YAML belongs to a future file-based
   tool.

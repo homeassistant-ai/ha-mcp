@@ -113,7 +113,9 @@ async def marker_home(hass: HomeAssistant) -> None:
         "triggers": trigger,
         "actions": [],
     }
-    Path(hass.config.path("automations.yaml")).write_text(json.dumps([saved]))
+    await hass.async_add_executor_job(
+        Path(hass.config.path("automations.yaml")).write_text, json.dumps([saved])
+    )
     await set_up_domain(
         hass,
         "automation",

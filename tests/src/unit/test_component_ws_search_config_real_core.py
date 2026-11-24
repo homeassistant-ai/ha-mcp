@@ -56,7 +56,9 @@ def _kind(result: dict[str, Any], kind: str) -> list[dict[str, Any]]:
 async def yaml_and_storage_automations(hass: HomeAssistant) -> None:
     """``automation.package_auto`` has no id, ``automation.ui_auto`` has one."""
     saved = _automation("UI Auto", item_id="uid-1")
-    Path(hass.config.path("automations.yaml")).write_text(json.dumps([saved]))
+    await hass.async_add_executor_job(
+        Path(hass.config.path("automations.yaml")).write_text, json.dumps([saved])
+    )
     await _set_up(
         hass, "automation", [_automation("Package Auto", message="YAMLSECRET"), saved]
     )
@@ -73,18 +75,24 @@ async def test_a_yaml_body_is_never_sent_and_a_storage_body_is(
     assert "YAMLSECRET" not in json.dumps(result)
 
 
-async def test_script_search_returns_only_a_matching_editor_body(
+async def test_script_search_returns_only_the_unresolved_editor_body(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
     body = {"alias": "Evening routine", "sequence": []}
     await _set_up(hass, "script", {"evening_routine": body})
     path = Path(hass.config.path("scripts.yaml"))
-    for saved, expected in [
-        ({}, None),
-        ({"evening_routine": {**body, "alias": "Pending edit"}}, None),
-        ({"evening_routine": body}, body),
+    pending = {**body, "alias": "Pending edit"}
+    for document, expected in [
+        ("{}", None),
+        ("evening_routine: [", None),
+        (
+            "evening_routine: {alias: !secret example, sequence: []}",
+            {**body, "alias": "!secret example"},
+        ),
+        (json.dumps({"evening_routine": pending}), pending),
+        (json.dumps({"evening_routine": body}), body),
     ]:
-        path.write_text(json.dumps(saved))
+        await hass.async_add_executor_job(path.write_text, document)
         result = await _search(
             component_ws,
             query="evening routine",
