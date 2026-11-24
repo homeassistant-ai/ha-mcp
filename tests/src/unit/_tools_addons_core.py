@@ -6,9 +6,8 @@ serves ``/ingress/<token>/...`` for the target app only to a request carrying
 one. ``TargetApp`` is the app's own web server, over HTTP and WebSocket, at the
 container address Supervisor reports for it (``127.0.0.1``).
 
-Outside the app the server's client reaches Supervisor through Core: ``hassio``'s
-WebSocket API and ingress view, set up as ``hassio``'s ``async_setup`` sets them
-up, with the Supervisor address pointing at the stand-in. Inside the app it asks
+Outside the app the server's client reaches Supervisor through Core: Core's own
+``hassio`` integration, set up against the stand-in (``_hassio_core``). Inside the app it asks
 the stand-in directly at ``SUPERVISOR_BASE_URL``, as the app's token allows.
 ``_supervisor_logs_core.route`` runs a test on ``app_route`` and ``core_route``
 in turn.
@@ -42,13 +41,7 @@ from aiohasupervisor.models.addons import (
     SupervisorRole,
 )
 from aiohttp import WSMsgType, web
-from homeassistant.components.hassio import const as hassio_const
-from homeassistant.components.hassio import websocket_api as hassio_websocket_api
-from homeassistant.components.hassio.handler import HassIO
-from homeassistant.components.hassio.ingress import async_setup_ingress_view
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from homeassistant.util.async_ import get_scheduled_timer_handles
 from pytest_homeassistant.common import async_fire_time_changed
@@ -58,6 +51,8 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.client.supervisor_client import make_supervisor_httpx_client
 from ha_mcp.tools import tools_addons
 from ha_mcp.tools.tools_addons import AddOnTools
+
+from ._hassio_core import set_up_hassio, supervisor_error, supervisor_ok
 
 SLUG = "local_target"
 # The token in the app's ingress URL, as Supervisor names it.
@@ -183,7 +178,7 @@ class Supervisor:
     """What Supervisor answers, what reached it, and the sessions it minted.
 
     Answers queued for one request are given in order; the last one is kept
-    for every later request.
+    for every later request. A request with none queued gets its ``default``.
     """
 
     def __init__(self, target: TargetApp) -> None:
@@ -191,6 +186,7 @@ class Supervisor:
         self.url = ""
         self.sessions: list[str] = []
         self._answers: dict[tuple[str, str], list[_Answer]] = {}
+        self._defaults: dict[tuple[str, str], _Answer] = {}
         self._seen: list[Seen] = []
 
     @property
@@ -207,14 +203,33 @@ class Supervisor:
         found = [s for s in self._seen if (s.method, s.path) == (method, path)]
         return found[-1].headers
 
+    def forget_requests(self) -> None:
+        """Start ``requests`` afresh, as after Core has set ``hassio`` up."""
+        self._seen.clear()
+
+    def default_refusal(
+        self, method: str, path: str, message: str, status: int = 400
+    ) -> None:
+        """Supervisor refuses ``method path`` with ``message`` whenever no
+        answer is queued for it."""
+        self._defaults[method, path] = _Answer(status, supervisor_error(message))
+
+    def forget_defaults(self) -> None:
+        """From now on answer only what is queued."""
+        self._defaults.clear()
+
     def _queue(self, method: str, path: str, answer: _Answer) -> None:
         self._answers.setdefault((method, path), []).append(answer)
 
     def answer(self, method: str, path: str, data: Any = None) -> None:
         """Supervisor accepts the request and answers ``data``; with none it
         answers ``{}``, as its ``api_return_ok`` does."""
-        payload = {"result": "ok", "data": {} if data is None else data}
-        self._queue(method, path, _Answer(payload=payload))
+        self._queue(method, path, _Answer(payload=supervisor_ok(data)))
+
+    def default(self, method: str, path: str, data: Any = None) -> None:
+        """Supervisor answers ``data`` to ``method path`` whenever no answer
+        is queued for it."""
+        self._defaults[method, path] = _Answer(payload=supervisor_ok(data))
 
     def refuse(
         self,
@@ -226,7 +241,7 @@ class Supervisor:
     ) -> None:
         """Supervisor refuses the request with its own message, and with the
         ``error_key`` its keyed errors add (``api_return_error``)."""
-        payload = {"result": "error", "message": message}
+        payload = supervisor_error(message)
         if error_key is not None:
             payload["error_key"] = error_key
         self._queue(method, path, _Answer(status, payload))
@@ -256,22 +271,24 @@ class Supervisor:
         info = app_info(slug, **{"ingress_port": self.target.port, **fields})
         self.answer("GET", f"/addons/{slug}/info", info)
 
+    def _next_answer(self, method: str, path: str) -> _Answer | None:
+        if queue := self._answers.get((method, path)):
+            return queue.pop(0) if len(queue) > 1 else queue[0]
+        return self._defaults.get((method, path))
+
     async def serve(self, request: web.Request) -> web.StreamResponse:
         path = "/" + request.match_info["path"]
         if path.startswith("/ingress/") and path.count("/") >= 3:
             return await self._ingress(request, path)
         self._seen.append(await _seen(request, path))
-        queue = self._answers.get((request.method, path))
-        if not queue:
+        answer = self._next_answer(request.method, path)
+        if answer is None:
             if (request.method, path) == ("POST", "/ingress/session"):
                 self.sessions.append(f"session-{len(self.sessions) + 1}")
-                return web.json_response(
-                    {"result": "ok", "data": {"session": self.sessions[-1]}}
-                )
+                return web.json_response(supervisor_ok({"session": self.sessions[-1]}))
             return web.json_response(
-                {"result": "error", "message": f"No answer for {path}"}, status=404
+                supervisor_error(f"No answer for {path}"), status=404
             )
-        answer = queue.pop(0) if len(queue) > 1 else queue[0]
         if answer.hang:
             await _forever()
         if answer.drop:
@@ -388,10 +405,9 @@ async def target_app(aiohttp_client: Any, socket_enabled: None) -> TargetApp:
     return target
 
 
-@pytest.fixture
-async def supervisor(aiohttp_client: Any, target_app: TargetApp) -> Supervisor:
-    """The stand-in Supervisor, in front of ``target_app``."""
-    found = Supervisor(target_app)
+async def serve_supervisor(aiohttp_client: Any, target: TargetApp) -> Supervisor:
+    """A stand-in Supervisor in front of ``target``, listening on 127.0.0.1."""
+    found = Supervisor(target)
     app = web.Application()
     app.router.add_route("*", "/{path:.*}", found.serve)
     server = await aiohttp_client(app)
@@ -400,23 +416,20 @@ async def supervisor(aiohttp_client: Any, target_app: TargetApp) -> Supervisor:
 
 
 @pytest.fixture
+async def supervisor(aiohttp_client: Any, target_app: TargetApp) -> Supervisor:
+    """The stand-in Supervisor, in front of ``target_app``."""
+    return await serve_supervisor(aiohttp_client, target_app)
+
+
+@pytest.fixture
 async def core_supervisor(
     hass: HomeAssistant, supervisor: Supervisor, monkeypatch: pytest.MonkeyPatch
 ) -> Supervisor:
-    """Core's ``hassio`` API and ingress view in front of ``supervisor``.
-
-    Registered before Core's HTTP server starts, which freezes its routes, so a
-    test takes it ahead of ``core_client``.
-    """
-    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
-    assert await async_setup_component(hass, "http", {})
-    hass.data[hassio_const.DATA_COMPONENT] = HassIO(
-        hass.loop, async_get_clientsession(hass), supervisor.url
-    )
-    hass.data[hassio_const.DATA_HASSIO_HOST] = supervisor.url
-    hassio_websocket_api.async_load_websocket_api(hass)
-    async_setup_ingress_view(hass)
+    """Core's ``hassio`` integration in front of ``supervisor``, no app
+    installed. Once Core is set up, Supervisor answers only what the test
+    queues."""
+    await set_up_hassio(hass, supervisor, monkeypatch)
+    supervisor.forget_defaults()
     return supervisor
 
 

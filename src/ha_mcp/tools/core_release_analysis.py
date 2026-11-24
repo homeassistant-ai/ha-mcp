@@ -8,7 +8,6 @@ unverified, never as checked.
 """
 
 import asyncio
-import logging
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -18,8 +17,6 @@ import httpx
 
 from ..client.exceptions import HomeAssistantConnectionError, HomeAssistantError
 from .update_release_notes import GITHUB_API_HEADERS, http_problem
-
-logger = logging.getLogger(__name__)
 
 _RELEASES_API = "https://api.github.com/repos/home-assistant/core/releases"
 _RELEASES_PAGE = "https://github.com/home-assistant/core/releases"

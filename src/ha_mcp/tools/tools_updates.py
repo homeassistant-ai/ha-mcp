@@ -23,6 +23,7 @@ from .core_release_analysis import core_release_analysis
 from .helpers import (
     core_error_message,
     exception_to_structured_error,
+    extract_structured_error_reason,
     log_tool_usage,
     raise_core_refusal,
     raise_tool_error,
@@ -266,12 +267,17 @@ class UpdateTools:
             "categories": categories,
             "include_skipped": include_skipped,
         }
+        if any(row["platform"] == "hassio" for row in rows):
+            try:
+                result["channel"] = await supervisor_channel(self._client)
+            except ToolError as e:
+                reason = extract_structured_error_reason(e) or str(e)
+                warnings.append(
+                    f"Supervisor's release channel could not be read ({reason}), "
+                    "so channel is left out."
+                )
         if warnings:
             result["warnings"] = warnings
-        if any(row["platform"] == "hassio" for row in rows) and (
-            channel := await supervisor_channel(self._client)
-        ):
-            result["channel"] = channel
 
         # Surface the MCP server's OWN update status alongside HA's updates so the
         # model is more likely to mention "you're on X, but Y is out" — this tool

@@ -61,7 +61,7 @@ async def test_core_job_wait_observes_completion(
     monkeypatch: pytest.MonkeyPatch,
     nested: bool,
 ) -> None:
-    load_supervisor_api(hass, aioclient_mock, monkeypatch, {})
+    await load_supervisor_api(hass, aioclient_mock, monkeypatch, {})
     polls = 0
 
     async def answer_jobs(
@@ -101,7 +101,7 @@ async def test_core_job_wait_is_bounded(
     aioclient_mock: AiohttpClientMocker,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    load_supervisor_api(
+    await load_supervisor_api(
         hass,
         aioclient_mock,
         monkeypatch,

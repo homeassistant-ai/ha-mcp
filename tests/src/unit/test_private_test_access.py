@@ -12,6 +12,8 @@ from types import ModuleType
 
 import pytest
 
+from ._guard_run import run_guard
+
 _SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "private_test_access.py"
 
 
@@ -30,13 +32,6 @@ def _repo(tmp_path: Path, source: str, tree: str = "tests/src/unit") -> Path:
         (tmp_path / each / "test_other.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / tree / "test_sample.py").write_text(source, encoding="utf-8")
     return tmp_path
-
-
-def _run(
-    guard: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> tuple[int, str]:
-    status = guard.main(["--repo", str(tmp_path)])
-    return status, capsys.readouterr().out
 
 
 REFUSED = {
@@ -114,7 +109,7 @@ REFUSED = {
 
 @pytest.mark.parametrize("source", REFUSED.values(), ids=REFUSED.keys())
 def test_private_name_through_a_string_is_refused(guard, tmp_path, capsys, source):
-    status, out = _run(guard, _repo(tmp_path, source), capsys)
+    status, out = run_guard(guard, _repo(tmp_path, source), capsys)
 
     assert status == 1
     assert out.startswith("tests/src/unit/test_sample.py:")
@@ -155,7 +150,7 @@ ALLOWED = {
 
 @pytest.mark.parametrize("source", ALLOWED.values(), ids=ALLOWED.keys())
 def test_public_targets_and_data_strings_are_allowed(guard, tmp_path, capsys, source):
-    status, out = _run(guard, _repo(tmp_path, source), capsys)
+    status, out = run_guard(guard, _repo(tmp_path, source), capsys)
 
     assert (status, out) == (
         0,
@@ -180,7 +175,7 @@ def test_too_many_alternatives_fail_instead_of_passing_unchecked(
         f"        getattr(mod, {target})\n"
     )
 
-    status, out = _run(guard, _repo(tmp_path, source), capsys)
+    status, out = run_guard(guard, _repo(tmp_path, source), capsys)
 
     assert status == 1
     assert out.startswith("tests/src/unit/test_sample.py:3: ")
@@ -189,7 +184,7 @@ def test_too_many_alternatives_fail_instead_of_passing_unchecked(
 def test_app_tests_are_checked_and_the_call_line_is_reported(guard, tmp_path, capsys):
     source = "x = 1\nmonkeypatch.setattr(\n    mod,\n    '_helper',\n    1,\n)\n"
 
-    status, out = _run(guard, _repo(tmp_path, source, "tests/addon"), capsys)
+    status, out = run_guard(guard, _repo(tmp_path, source, "tests/addon"), capsys)
 
     assert status == 1
     assert out.splitlines()[0] == (
@@ -203,14 +198,14 @@ def test_a_missing_tree_fails_instead_of_passing_empty(guard, tmp_path, capsys, 
     for path in (tmp_path / tree).iterdir():
         path.unlink()
 
-    status, out = _run(guard, tmp_path, capsys)
+    status, out = run_guard(guard, tmp_path, capsys)
 
     assert status == 1
     assert f"{tree}: no Python files to check" in out
 
 
 def test_unparseable_source_fails_with_its_line(guard, tmp_path, capsys):
-    status, out = _run(guard, _repo(tmp_path, "x = 1\ndef broken(:\n"), capsys)
+    status, out = run_guard(guard, _repo(tmp_path, "x = 1\ndef broken(:\n"), capsys)
 
     assert status == 1
     assert out.startswith("tests/src/unit/test_sample.py:2: ")

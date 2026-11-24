@@ -12,7 +12,6 @@ token in server memory to restore the engine user's saved theme (issue
 from __future__ import annotations
 
 import json
-import logging
 import math
 from dataclasses import dataclass
 from typing import Any, Literal, NoReturn, cast
@@ -28,8 +27,6 @@ from .engine_compat import is_legacy_puppet
 from .provision import TOKEN_HINT, EngineKind, resolve_engine
 from .theme_check import check_requested_theme
 from .theme_guard import ThemeGuard
-
-logger = logging.getLogger(__name__)
 
 ScreenshotFormat = Literal["png", "jpeg", "webp", "bmp"]
 ViewportPreset = Literal["mobile", "tablet", "desktop"]

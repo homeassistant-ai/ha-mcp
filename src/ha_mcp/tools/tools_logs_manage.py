@@ -1,7 +1,6 @@
 """Home Assistant's own write operations on the recorder, its statistics and the logs."""
 
 import asyncio
-import logging
 from typing import Annotated, Any, Literal, NoReturn
 
 from pydantic import Field
@@ -34,8 +33,6 @@ from .history_coverage import MIGRATING, when
 from .response_helpers import build_pagination_metadata
 from .tool_hints import write_hints
 from .tools_services import _fetch_catalog_and_translations, _process_services
-
-logger = logging.getLogger(__name__)
 
 # The tool's permission boundary: Core's own names, a dot for a service and a
 # slash for a WebSocket command.

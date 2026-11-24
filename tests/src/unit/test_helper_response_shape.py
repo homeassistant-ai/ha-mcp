@@ -575,7 +575,7 @@ class TestSweepWarningsShape:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Options mode answers ``status: "pending_restart"``, no ``success``."""
-        load_supervisor_api(
+        await load_supervisor_api(
             hass,
             aioclient_mock,
             monkeypatch,

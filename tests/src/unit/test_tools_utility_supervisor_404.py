@@ -7,7 +7,8 @@ Supervisor answered behind it; without it, the install is not managed by
 Supervisor; and when Core cannot say which (the supervision probe failed),
 the tool must not claim the instance is unmanaged.
 
-The supervised test registers Core's hassio HTTP proxy and records the upstream request.
+The supervised test runs Core's own ``hassio`` integration and records the
+request its proxy sent upstream.
 """
 
 from __future__ import annotations
@@ -20,8 +21,6 @@ import pytest
 from aiohttp import web
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
 
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp._vendor.mcp.types import TextContent
@@ -44,12 +43,6 @@ async def supervisor(aiohttp_client: Any) -> str:
     """A Supervisor that serves no log route: every request answers 404."""
     server = await aiohttp_client(web.Application())
     return f"{server.host}:{server.port}"
-
-
-async def _load_hassio(hass: HomeAssistant) -> None:
-    """Load ``hassio``, which Core lists in ``/api/config`` components."""
-    mock_integration(hass, MockModule("hassio"))
-    assert await async_setup_component(hass, "hassio", {})
 
 
 async def _core_service_404_suggestions(client: HomeAssistantClient) -> list[str]:
@@ -87,9 +80,8 @@ async def test_app_404_names_the_os_version_without_probing_core(
 
 
 async def test_supervised_404_names_the_os_version(
-    hass: HomeAssistant, core_proxy: Supervisor, core_client: HomeAssistantClient
+    core_proxy: Supervisor, core_client: HomeAssistantClient
 ) -> None:
-    await _load_hassio(hass)
     core_proxy.reply(status=404)
 
     suggestions = await _core_service_404_suggestions(core_client)

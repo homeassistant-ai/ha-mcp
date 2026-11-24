@@ -10,14 +10,11 @@ This module provides two search strategies:
 See issue #851 for background on the BM25 migration.
 """
 
-import logging
 import math
 import re
 from collections.abc import Iterable
 from difflib import SequenceMatcher
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Tokenizer for HA entity IDs and friendly names

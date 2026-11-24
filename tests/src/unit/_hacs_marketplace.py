@@ -20,7 +20,7 @@ import aiohttp
 from homeassistant.components.marketplace.enums import MarketplaceSignal
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from pytest_homeassistant.common import MockConfigEntry, MockModule, mock_integration
+from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -79,12 +79,10 @@ def _install_path(config_dir: Path, record: dict[str, Any]) -> Path | None:
 def prepare_marketplace(
     hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
 ) -> None:
-    """What the Marketplace's setup needs in a unit test: GitHub unreachable,
-    and a frontend, whose web assets are not installed here."""
+    """What the Marketplace's setup needs in a unit test: GitHub unreachable."""
     offline = aiohttp.ClientConnectionError("GitHub is not reachable in a unit test")
     for method in ("get", "post", "put", "patch", "delete"):
         getattr(aioclient_mock, method)(re.compile(".*"), exc=offline)
-    mock_integration(hass, MockModule("frontend"))
 
 
 def add_marketplace(

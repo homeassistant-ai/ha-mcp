@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 import re
 import threading
 from collections.abc import Callable, Iterable, Sequence
@@ -57,8 +56,6 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 )
 
 from .config import get_global_settings
-
-logger = logging.getLogger(__name__)
 
 # Sentinels emitted in place of secret values. SET/EMPTY preserve the
 # "configured at all?" diagnostic on schema-redacted surfaces; KNOWN marks a

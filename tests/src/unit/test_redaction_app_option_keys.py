@@ -6,7 +6,7 @@ options so they get the same handling as schema password fields.
 """
 
 import copy
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -61,12 +61,12 @@ def serve_info(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
     monkeypatch: pytest.MonkeyPatch,
-) -> Callable[[dict[str, Any]], None]:
+) -> Callable[[dict[str, Any]], Awaitable[None]]:
     """The Supervisor answers the backup app's info with the given data and
     accepts an options write."""
 
-    def serve(info: dict[str, Any]) -> None:
-        load_supervisor_api(
+    async def serve(info: dict[str, Any]) -> None:
+        await load_supervisor_api(
             hass,
             aioclient_mock,
             monkeypatch,
@@ -244,11 +244,11 @@ def test_listed_values_feed_the_known_value_scrub(
 
 async def test_get_app_hides_a_slug_scoped_password(
     core_client: HomeAssistantClient,
-    serve_info: Callable[[dict[str, Any]], None],
+    serve_info: Callable[[dict[str, Any]], Awaitable[None]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _settings(monkeypatch, f"{BACKUP_SLUG}:backup_password")
-    serve_info(BACKUP_INFO)
+    await serve_info(BACKUP_INFO)
 
     result = await get_addon_info(core_client, BACKUP_SLUG)
 
@@ -258,11 +258,11 @@ async def test_get_app_hides_a_slug_scoped_password(
 
 async def test_get_app_warns_when_a_name_scoped_to_it_matches_no_option(
     core_client: HomeAssistantClient,
-    serve_info: Callable[[dict[str, Any]], None],
+    serve_info: Callable[[dict[str, Any]], Awaitable[None]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _settings(monkeypatch, f"{BACKUP_SLUG}:backup_pasword, {BACKUP_SLUG}:upload")
-    serve_info(BACKUP_INFO)
+    await serve_info(BACKUP_INFO)
 
     result = await get_addon_info(core_client, BACKUP_SLUG)
 
@@ -273,13 +273,13 @@ async def test_get_app_warns_when_a_name_scoped_to_it_matches_no_option(
 
 async def test_get_app_does_not_warn_about_a_listed_option_the_schema_dropped(
     core_client: HomeAssistantClient,
-    serve_info: Callable[[dict[str, Any]], None],
+    serve_info: Callable[[dict[str, Any]], Awaitable[None]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _settings(monkeypatch, f"{BACKUP_SLUG}:old_password")
     info = copy.deepcopy(BACKUP_INFO)
     info["options"]["old_password"] = "left-over-password"
-    serve_info(info)
+    await serve_info(info)
 
     result = await get_addon_info(core_client, BACKUP_SLUG)
 
@@ -289,11 +289,11 @@ async def test_get_app_does_not_warn_about_a_listed_option_the_schema_dropped(
 
 async def test_get_app_without_a_schema_still_registers_listed_values(
     core_client: HomeAssistantClient,
-    serve_info: Callable[[dict[str, Any]], None],
+    serve_info: Callable[[dict[str, Any]], Awaitable[None]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _settings(monkeypatch, "backup_password")
-    serve_info({**BACKUP_INFO, "schema": []})
+    await serve_info({**BACKUP_INFO, "schema": []})
 
     result = await get_addon_info(core_client, BACKUP_SLUG)
 
@@ -304,11 +304,11 @@ async def test_get_app_without_a_schema_still_registers_listed_values(
 
 async def test_list_is_ignored_while_redact_secrets_is_off(
     core_client: HomeAssistantClient,
-    serve_info: Callable[[dict[str, Any]], None],
+    serve_info: Callable[[dict[str, Any]], Awaitable[None]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _settings(monkeypatch, "backup_password", redact=False)
-    serve_info(BACKUP_INFO)
+    await serve_info(BACKUP_INFO)
 
     result = await get_addon_info(core_client, BACKUP_SLUG)
 
@@ -318,11 +318,11 @@ async def test_list_is_ignored_while_redact_secrets_is_off(
 
 async def test_password_written_to_a_listed_key_is_registered_for_the_scrub(
     core_client: HomeAssistantClient,
-    serve_info: Callable[[dict[str, Any]], None],
+    serve_info: Callable[[dict[str, Any]], Awaitable[None]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _settings(monkeypatch, f"{BACKUP_SLUG}:backup_password")
-    serve_info(BACKUP_INFO)
+    await serve_info(BACKUP_INFO)
     registered: dict[str, Any] = {}
     mcp = MagicMock(
         tool=lambda *a, **k: lambda fn: registered.setdefault(fn.__name__, fn)

@@ -1,0 +1,4 @@
+# Stand-ins a unit or app test keeps under a real Home Assistant integration's
+# name (scripts/integration_stand_ins.py, tests/AGENTS.md): one entry per file
+# and integration, with the reason the real integration cannot run there.
+[]

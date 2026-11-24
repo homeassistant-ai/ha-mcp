@@ -44,14 +44,10 @@ async def _supervisor(
     return result
 
 
-async def supervisor_channel(client: Any) -> str | None:
-    """The channel Supervisor reports; None when no Supervisor answers."""
-    try:
-        info = await _supervisor(client, _INFO)
-    except ToolError:
-        return None
-    channel = info.get("channel")
-    return channel if isinstance(channel, str) else None
+async def supervisor_channel(client: Any) -> str:
+    """The channel Supervisor reports."""
+    info = await _supervisor(client, _INFO)
+    return str(info["channel"])
 
 
 async def set_supervisor_channel(client: Any, channel: str | None) -> dict[str, Any]:

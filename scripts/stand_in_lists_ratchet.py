@@ -23,13 +23,25 @@ Two rules decide every added entry:
   rule's definition changed. A wider rule matches older files it did not
   match before; nothing else justifies a longer list.
 
+The allowlist of ``scripts/integration_stand_ins.py`` lists a file with each
+real integration it keeps a stand-in for, and gets the same two rules for every
+added file and integration. That check counts as wider when the code of one
+of its scripts (``INTEGRATION_CHECK``) changed: an edit cannot be told to
+widen or narrow it, and the check itself still fails an entry that matches no
+stand-in it finds. The list is read with the check's own reader, so an entry
+the check refuses fails here too. A file taken off it is converted, as below.
+Its entries are kept stand-ins with a reason, not files waiting for
+conversion: an edit to a listed file does not take it off, and a file
+converted off the other lists may stay on it.
+
 A listed file is exempt as a whole, so a pull request that edits one could
 add a new faked test to it. A listed file the pull request changes is
 therefore converted, which takes it off every list.
 
 A file the pull request takes off any list is converted, and a converted file
-is on no list: one taken off an ast-grep rule's list but left on ``SLF001``
-still reaches into private members the conversion was meant to remove.
+is on none of them, the integration allowlist aside: one taken off an ast-grep
+rule's list but left on ``SLF001`` still reaches into private members the
+conversion was meant to remove.
 
 The script also refuses the ways around a list: narrowing a rule's ``files``,
 removing or renaming a rule (except one named in ``RETIRED_RULES`` whose list
@@ -46,6 +58,7 @@ from __future__ import annotations
 import argparse
 import ast
 import fnmatch
+import importlib.util
 import os
 import re
 import subprocess
@@ -53,9 +66,25 @@ import sys
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
+from types import ModuleType
 from typing import Any, NamedTuple
 
 import yaml  # type: ignore[import-untyped]
+
+
+def _allowlist_reader() -> ModuleType:
+    """``scripts/stand_in_allowlist.py`` beside this script: the reader
+    ``scripts/integration_stand_ins.py`` reads its allowlist with."""
+    path = Path(__file__).resolve().with_name("stand_in_allowlist.py")
+    spec = importlib.util.spec_from_file_location("stand_in_allowlist", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - unreachable
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_READER = _allowlist_reader()
 
 REPO = Path(__file__).resolve().parent.parent
 GUARD = "tests/core_stand_in_guard.py"
@@ -114,6 +143,15 @@ MYPY_LIST = f"{PYPROJECT} (mypy)"
 # no file is left to import from any of them. Matters only while a pull
 # request's base still has the rule, and only with its list empty.
 RETIRED_RULES = frozenset({"no-shared-core-fakes"})
+INTEGRATION_CHECK = (
+    "scripts/integration_stand_ins.py",
+    "scripts/stand_in_syntax.py",
+    "scripts/stand_in_scopes.py",
+    "scripts/stand_in_reader.py",
+    "scripts/stand_in_resolver.py",
+    "scripts/stand_in_allowlist.py",
+)
+INTEGRATION_ALLOWLIST: str = _READER.ALLOWLIST
 
 
 class Base:
@@ -524,19 +562,25 @@ def _lists(base: Base, repo: Path) -> tuple[dict[str, set[str]], dict[str, set[s
         before[MYPY_LIST] = {
             _module_path(base, module) for module in _mypy_state(pyproject_base).exempt
         }
+    allowlist_head, allowlist_base = _allowlists(base, repo, [])
+    head[INTEGRATION_ALLOWLIST] = {entry for entry, _ in allowlist_head or set()}
+    if allowlist_base is not None:
+        before[INTEGRATION_ALLOWLIST] = {entry for entry, _ in allowlist_base}
     return head, before
 
 
 def _check_full_conversion(
     head: dict[str, set[str]], before: dict[str, set[str]], problems: list[str]
 ) -> None:
-    """A file taken off one list is taken off every list."""
+    """A file taken off one list is taken off every list. The integration
+    allowlist holds kept stand-ins, so a file may stay on it."""
     taken_off: dict[str, list[str]] = {}
     for name, entries in sorted(before.items()):
         for entry in entries - head.get(name, set()):
             taken_off.setdefault(entry, []).append(name)
+    lists = {name: e for name, e in head.items() if name != INTEGRATION_ALLOWLIST}
     for entry, names in sorted(taken_off.items()):
-        still = sorted(name for name, entries in head.items() if entry in entries)
+        still = sorted(name for name, entries in lists.items() if entry in entries)
         if still:
             problems.append(
                 f"{entry} came off {', '.join(names)} but is still on "
@@ -547,15 +591,78 @@ def _check_full_conversion(
 def _check_changed_listed(
     base: Base, repo: Path, head: dict[str, set[str]], problems: list[str]
 ) -> None:
-    """A listed file the pull request changes is converted: it is on no list."""
+    """A listed file the pull request changes is converted: it is on no list.
+    The integration allowlist holds kept stand-ins, so it is not one of these."""
     changed = base.changed()
-    listed = {entry for entries in head.values() for entry in entries}
+    lists = {name: e for name, e in head.items() if name != INTEGRATION_ALLOWLIST}
+    listed = {entry for entries in lists.values() for entry in entries}
     for entry in sorted(listed & changed):
         if (repo / entry).is_file() and base.has(entry):
-            still = sorted(name for name, entries in head.items() if entry in entries)
+            still = sorted(name for name, entries in lists.items() if entry in entries)
             problems.append(
                 f"{entry} changed but is still on {', '.join(still)}; a listed "
                 "file a pull request changes is converted and comes off every list"
+            )
+
+
+def _allowlisted(text: str | None, problems: list[str]) -> set[tuple[str, str]] | None:
+    """The (file, integration) pairs of the integration allowlist, read as its
+    check reads them."""
+    if text is None:
+        return None
+    return set(_READER.parse_allowlist(text, problems))
+
+
+def _code(text: str | None) -> str | None:
+    """A script's code, without its comments and docstrings."""
+    if text is None:
+        return None
+    tree = ast.parse(text)
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (
+            isinstance(body, list)
+            and body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body.pop(0)
+    return ast.dump(tree)
+
+
+def _allowlists(
+    base: Base, repo: Path, problems: list[str]
+) -> tuple[set[tuple[str, str]] | None, set[tuple[str, str]] | None]:
+    """The integration allowlist in the checkout, whose bad entries are
+    ``problems``, and at the base."""
+    path = repo / INTEGRATION_ALLOWLIST
+    text = path.read_text(encoding="utf-8") if path.is_file() else None
+    return _allowlisted(text, problems), _allowlisted(
+        base.text(INTEGRATION_ALLOWLIST), []
+    )
+
+
+def _check_integration_allowlist(base: Base, repo: Path, problems: list[str]) -> None:
+    """The allowlist is one its check accepts, and grows by the same two rules
+    as every other list, per file and integration."""
+    head, before = _allowlists(base, repo, problems)
+    widened = before is None or any(
+        _code(base.text(name))
+        != _code(
+            (repo / name).read_text(encoding="utf-8")
+            if (repo / name).is_file()
+            else None
+        )
+        for name in INTEGRATION_CHECK
+    )
+    for entry, integration in sorted((head or set()) - (before or set())):
+        if not base.has(entry):
+            problems.append(f"{INTEGRATION_ALLOWLIST}: lists the new file {entry}")
+        elif not widened:
+            problems.append(
+                f"{INTEGRATION_ALLOWLIST}: {entry} was added to the list "
+                f"for {integration!r}"
             )
 
 
@@ -586,6 +693,7 @@ def problems_since(repo: Path, commit: str) -> list[str]:
     head_lists, base_lists = _lists(base, repo)
     _check_changed_listed(base, repo, head_lists, problems)
     _check_full_conversion(head_lists, base_lists, problems)
+    _check_integration_allowlist(base, repo, problems)
     return problems
 
 
