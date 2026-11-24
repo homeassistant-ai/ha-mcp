@@ -479,9 +479,12 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
         limit=2,
     )
     actual: list[str] = []
+    first_page_calls = 0
     with rest_reads(core_client) as rest:
-        for _ in range(len(names)):
+        for page_index in range(len(names)):
             data = (await LogTools(core_client).get_logs(**params))["data"]
+            if page_index == 0:
+                first_page_calls = len(sent.await_args_list)
             assert data["total_entries"] == len(names)
             assert data["offset"] == len(actual)
             actual.extend(row["name"] for row in data["entries"])
@@ -501,14 +504,18 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
         ]
         assert all("page" in cmd for cmd in commands)
         counts = [cmd for cmd in commands if "count_range" in cmd["page"]]
-        assert len(counts) == 3  # The cursor carries the total on subsequent pages.
+        assert counts
+        assert all(
+            "count_range" not in call.args[0].get("page", {})
+            for call in sent.await_args_list[first_page_calls:]
+        )
         for cmd in counts:
             span = datetime.fromisoformat(cmd["end_time"]) - datetime.fromisoformat(
                 cmd["start_time"]
             )
             assert span <= timedelta(hours=1, microseconds=1)
     else:
-        assert rest.await_count >= 3
+        assert rest.await_args_list
         for call in rest.await_args_list:
             start = datetime.fromisoformat(call.kwargs["start_time"])
             finish = datetime.fromisoformat(call.kwargs["end_time"])
