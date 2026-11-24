@@ -467,6 +467,7 @@ class EntityTools:
         entity_entry: dict[str, Any],
         has_registry_updates: bool,
         updates_made: list[str],
+        include_entity_entry: bool,
     ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
         """Apply per-domain options updates. Returns (entity_entry, options_succeeded).
 
@@ -506,9 +507,9 @@ class EntityTools:
                     "options_succeeded": options_succeeded,
                     "updates_applied": list(updates_made),
                 }
-                # Only include entity_entry when something actually mutated,
-                # as _build_expose_failure_context does.
-                if partial:
+                # Only include entity_entry when something actually mutated
+                # and the reply carries entries, as for an exposure failure.
+                if partial and include_entity_entry:
                     options_failure_context["entity_entry"] = entity_entry
                 raise_core_refusal(
                     f"{msg_prefix} domain '{opts_domain}'",
@@ -905,7 +906,12 @@ class EntityTools:
 
             # Phase 4: Per-domain options; Phases 3-6 run under one hold of the lock
             entity_entry, options_succeeded = await self._apply_options_updates(
-                entity_id, parsed_options, entity_entry, registry_updated, updates_made
+                entity_id,
+                parsed_options,
+                entity_entry,
+                registry_updated,
+                updates_made,
+                include_entity_entry,
             )
 
             # Phase 5: Device rename

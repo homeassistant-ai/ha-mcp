@@ -548,13 +548,16 @@ class TestShowAsAndOptions:
         assert {domain: stored.options[domain] for domain in options} == options
         assert result["entity_entry"]["options"] == dict(stored.options)
 
+    @pytest.mark.parametrize("include_entity_entry", [True, False])
     async def test_a_refused_second_domain_says_what_was_written(
         self,
         tools: EntityTools,
         entity_registry: er.EntityRegistry,
         monkeypatch: pytest.MonkeyPatch,
+        include_entity_entry: bool,
     ) -> None:
-        """A caller retrying blindly would apply the first domain twice."""
+        """A caller retrying blindly would apply the first domain twice; the
+        entry stays out of a compact reply."""
         registry_entity(entity_registry, "sensor.temp")
         update_options = er.EntityRegistry.async_update_entity_options
 
@@ -579,9 +582,11 @@ class TestShowAsAndOptions:
                     "sensor": {"display_precision": 1},
                     "weather": {"forecast_type": "hourly"},
                 },
+                include_entity_entry=include_entity_entry,
             )
 
         body = error_body(exc_info)
+        assert ("entity_entry" in body) is include_entity_entry
         assert "weather" in body["error"]["message"]
         assert body["options_domain"] == "weather"
         assert body["partial"] is True
