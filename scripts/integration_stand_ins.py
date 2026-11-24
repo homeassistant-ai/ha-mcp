@@ -398,13 +398,18 @@ class Checker(Resolver):
         return self._spelled(call.func, chain), not self._in_trees(call.func, chain)
 
     def _spelled(self, func: ast.expr, chain: Chain, depth: int = 0) -> str | None:
-        """The name ``func`` goes by: the attribute read, the name an import
-        gives it, or the name a local alias stands for (a helper's, when one
-        of its aliases is one), a few names deep at most."""
+        """The name ``func`` goes by: the name of the function or class of
+        Core's it is (also through re-exports by the tests' own modules), the
+        attribute read, the name an import gives it, or the name a local alias
+        stands for (a helper's, when one of its aliases is one), a few names
+        deep at most."""
         if isinstance(func, ast.Attribute):
             owner = ast.unparse(func.value).split(".")
             if func.attr == "add" and owner[-2:] == ["config", "components"]:
                 return "config.components.add"
+        if (defined := self._defined_helper(func, chain)) is not None:
+            return defined
+        if isinstance(func, ast.Attribute):
             return func.attr
         if not isinstance(func, ast.Name):
             return None
@@ -419,6 +424,18 @@ class Checker(Resolver):
             if isinstance(value, (ast.Name, ast.Attribute)) and depth < 5
         ]
         return next((n for n in names if n in SINKS), names[0] if names else func.id)
+
+    def _defined_helper(self, func: ast.expr, chain: Chain) -> str | None:
+        """The helper of Core's ``func`` is, by where it is defined: what a
+        module of the tests re-exports under another name is still Core's."""
+        for target, _ in self.objects(func, chain, frozenset()):
+            if not isinstance(
+                target, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                continue
+            if id(target) not in self._tree_definitions and target.name in SINKS:
+                return target.name
+        return None
 
     def record(
         self,

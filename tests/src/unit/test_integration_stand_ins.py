@@ -544,6 +544,56 @@ def test_a_name_passed_to_a_helper_in_another_module_is_refused_at_the_call(
     )
 
 
+@pytest.mark.parametrize(
+    ("files", "call"),
+    [
+        pytest.param(
+            {
+                "_reexport.py": "from pytest_homeassistant.common import mock_component as register\n"
+            },
+            "from ._reexport import register\n\n\nregister(hass, 'hassio')\n",
+            id="cores-helper-re-exported-under-another-name",
+        ),
+        pytest.param(
+            {
+                "_reexport.py": "from pytest_homeassistant.common import mock_component as register\n",
+                "_again.py": "from ._reexport import register as install\n",
+            },
+            "from ._again import install\n\n\ninstall(hass, 'hassio')\n",
+            id="cores-helper-re-exported-twice",
+        ),
+        pytest.param(
+            {
+                "_reexport.py": "from pytest_homeassistant.common import mock_component as register\n"
+            },
+            "from . import _reexport\n\n\n_reexport.register(hass, 'hassio')\n",
+            id="cores-helper-read-off-the-re-exporting-module",
+        ),
+        pytest.param(
+            {
+                "_reexport.py": "from pytest_homeassistant.common import MockModule as Module\n"
+            },
+            "from ._reexport import Module\n\n\nModule('hassio')\n",
+            id="cores-class-re-exported-under-another-name",
+        ),
+    ],
+)
+def test_a_helper_of_cores_re_exported_by_the_tests_is_refused(
+    guard, tmp_path, capsys, files, call
+):
+    modules = {f"tests/src/unit/{name}": source for name, source in files.items()}
+    repo = sample_repo(
+        tmp_path, {**modules, "tests/src/unit/__init__.py": "", SAMPLE: call}
+    )
+
+    status, out = run_guard(guard, repo, capsys)
+
+    assert status == 1
+    assert out.splitlines()[0] == (
+        f"{SAMPLE}:4: a stand-in registered under Home Assistant's 'hassio' integration"
+    )
+
+
 def test_a_helper_re_exported_under_another_name_is_refused(guard, tmp_path, capsys):
     helper = "def register(hass, name):\n    mock_component(hass, name)\n"
     test = "from ._reexport import install\n\n\ninstall(hass, 'hassio')\n"

@@ -133,11 +133,16 @@ _FETCH_WAIT_CAP = 120
 _FETCH_AGAIN = (403, 408, 429)
 
 
-def fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
+def fetch_requirements_all(
+    ha_version: str,
+    waits: tuple[int, ...] = _FETCH_WAITS,
+    wait_cap: int = _FETCH_WAIT_CAP,
+) -> dict[str, SpecifierSet]:
     """Fetch the HA release's direct integration requirements (fail-closed).
 
-    Up to five attempts against raw.githubusercontent, waiting at least as
-    long as GitHub's ``Retry-After`` asks when it throttles the runner (429).
+    One attempt for each of ``waits`` and one more against
+    raw.githubusercontent, waiting at least as long as GitHub's
+    ``Retry-After`` asks (up to ``wait_cap``) when it throttles the runner.
     An answer that will not change (a 404 for a release that does not exist)
     is not asked for again; a throttled one (``_FETCH_AGAIN``), a server error
     and a lost connection are. A total failure FAILS the test rather than
@@ -146,7 +151,7 @@ def fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
     """
     url = _REQUIREMENTS_ALL_URL.format(version=ha_version)
     last_error: Exception | None = None
-    for wait in (*_FETCH_WAITS, None):
+    for wait in (*waits, None):
         try:
             response = requests.get(url, timeout=30)
             response.raise_for_status()
@@ -158,7 +163,7 @@ def fetch_requirements_all(ha_version: str) -> dict[str, SpecifierSet]:
             if wait is None or settled:  # no backoff after the final attempt
                 break
             asked = getattr(err.response, "headers", {}).get("Retry-After", "")
-            longer = min(int(asked), _FETCH_WAIT_CAP) if asked.isdigit() else 0
+            longer = min(int(asked), wait_cap) if asked.isdigit() else 0
             time.sleep(max(wait, longer))
     raise AssertionError(
         f"could not fetch {url} to build the governed-package set "
