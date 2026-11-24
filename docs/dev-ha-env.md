@@ -164,16 +164,19 @@ Run it **from your fork only**. The job refuses to run in
      ```bash
      git push -f git@github.com:<you>/ha-mcp <commit>:refs/dev-ha-env/<run-id>
      ```
-     Within about ten seconds the runner restarts the server on it, with its
-     dependencies synced, at the same `MCP:` URL; Home Assistant and its
-     state stay as they are. A request sent during the switch can fail with
-     a 502, so retry it. Read the outcome with
+     The runner checks the ref every ten seconds and restarts the server on
+     the commit, with its dependencies synced, at the same `MCP:` URL; Home
+     Assistant and its state stay as they are. A request sent during the
+     switch can fail with a 502, so retry it. Read the outcome with
      `ha_get_logs(source="error_log", search="dev-ha-env")`: "the standalone
      server now runs <commit>", or an error naming the step that failed,
      with the end of the server's output if it did not start, and that the
-     previous commit runs again. A commit is tried once; push another one to
-     switch again, back to the start commit included. This replaces only the
-     server: load a component change through steps 1 and 2 above.
+     previous commit runs again. The outcome is usually there within 20
+     seconds of the push, later when new dependencies have to be downloaded;
+     a server that does not start can take two minutes more. A commit is
+     tried once; push another one to switch again, back to the start commit
+     included. This replaces only the server: load a component change
+     through steps 1 and 2 above.
 
    The job log's `STATUS` lines show the commit the run started from, each
    standalone switch, and any boot error. If the embedded server fails at
