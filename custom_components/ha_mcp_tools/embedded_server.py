@@ -15,9 +15,8 @@ ha-mcp server:
 * tears the thread down cleanly, and on entry removal deletes the account and
   token an older release provisioned (never the administrator's own).
 
-Everything the server needs from ha-mcp is imported **inside the worker thread**,
-after the required non-secret environment variables are staged, so importing this
-module never pulls in ``ha_mcp`` (which may not be installed yet) and never runs
+Server-package imports happen **inside the worker thread** after its required
+non-secret environment is staged, so this module never pulls in ``ha_mcp`` or runs
 before the connection is in place. The loopback URL and the admin token are handed
 to ha-mcp **in memory** via ``ha_mcp.config.set_embedded_connection`` — never
 through ``os.environ`` — so the admin token can never be read from the shared HA
@@ -89,6 +88,7 @@ from .embedded_listen import (
     async_probe_loopback,
     default_host_origin_guard_off,
 )
+from .embedded_read_only import prepare_runtime_config
 from .embedded_worker_teardown import (
     shutdown_server_resources_bounded,
     teardown_worker_loop,
@@ -370,10 +370,7 @@ class EmbeddedServerManager:
         await self.async_warn_on_dependency_conflicts()
         access_token = await self.async_access_token()
         await self._hass.async_add_executor_job(self.prepare_config_dir)
-
         self._maybe_purge_stale_modules(ready_version)
-        from .embedded_read_only import prepare_runtime_config
-
         await self._hass.async_add_executor_job(prepare_runtime_config)
 
         self._thread_exc = None
