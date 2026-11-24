@@ -193,6 +193,24 @@ class TestLabels:
         assert _LABELS not in sent_types(sent)
         assert stored_entry(entity_registry, "light.test").labels == {"outdoor"}
 
+    async def test_a_refused_label_read_writes_nothing(
+        self, tools: EntityTools, sent: AsyncMock
+    ) -> None:
+        """The merge needs the current labels, so Core's refusal of that read
+        is the answer, with its code."""
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.t", labels=["outdoor"], label_operation="remove"
+            )
+
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert body["error"]["message"].startswith(
+            "Failed to get current labels for light.t: "
+        )
+        assert body["ha_error_code"] == "not_found"
+        assert sent_types(sent) == [_GET]
+
 
 class TestRegistryReferences:
     async def test_an_unknown_area_is_refused_before_the_write(
@@ -689,9 +707,10 @@ class TestAliases:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(entity_id="light.t", aliases=["x"])
 
-        error = error_of(exc_info)
-        assert error["code"] == "SERVICE_CALL_FAILED"
-        assert "Entity not found" in error["message"]
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "Entity not found" in body["error"]["message"]
+        assert body["ha_error_code"] == "not_found"
         assert sent_types(sent) == [_GET]
 
     @pytest.mark.parametrize(

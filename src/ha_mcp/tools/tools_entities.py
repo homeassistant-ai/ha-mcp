@@ -319,18 +319,19 @@ class EntityTools:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    async def _get_entity_labels(
-        self, entity_id: str
-    ) -> tuple[list[str] | None, str | None]:
-        """Fetch current labels for an entity. Returns (labels, error_msg)."""
+    async def _get_entity_labels(self, entity_id: str) -> list[str]:
+        """Fetch the entity's current labels."""
         get_msg: dict[str, Any] = {
             "type": "config/entity_registry/get",
             "entity_id": entity_id,
         }
         result = await self._client.send_websocket_message(get_msg)
         if not result.get("success"):
-            return None, _extract_ws_error(result)
-        return (result.get("result") or {}).get("labels") or [], None
+            raise_entity_refusal(
+                f"Failed to get current labels for {entity_id}", result, entity_id
+            )
+        labels: list[str] = (result.get("result") or {}).get("labels") or []
+        return labels
 
     async def _get_entity_aliases(self, entity_id: str) -> list[str | None]:
         """Fetch the entity's current registry aliases (``null`` = own name)."""
@@ -340,13 +341,8 @@ class EntityTools:
         }
         result = await self._client.send_websocket_message(get_msg)
         if not result.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to get current aliases for {entity_id}: "
-                    f"{_extract_ws_error(result)}",
-                    context={"entity_id": entity_id},
-                )
+            raise_entity_refusal(
+                f"Failed to get current aliases for {entity_id}", result, entity_id
             )
         aliases: list[str | None] = (result.get("result") or {}).get("aliases") or []
         return aliases
@@ -387,15 +383,7 @@ class EntityTools:
         """Merge or filter labels using the current registry state for add/remove ops."""
         if parsed_labels is None or label_operation not in ("add", "remove"):
             return parsed_labels
-        current_labels, error_msg = await self._get_entity_labels(entity_id)
-        if current_labels is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to get current labels for {entity_id}: {error_msg}",
-                    context={"entity_id": entity_id},
-                )
-            )
+        current_labels = await self._get_entity_labels(entity_id)
         if label_operation == "add":
             # Add new labels without duplicates
             return list(set(current_labels) | set(parsed_labels))
@@ -1808,7 +1796,8 @@ class EntityTools:
         clearing the restored=true orphans an integration leaves behind after
         its filters change. Removals run sequentially and return:
           {removed: [...], skipped: [...], errors: [{entity_id, code, message}]}
-        where skipped = ids already absent (not-found is idempotent). A lost connection
+        where skipped = ids already absent (not-found is idempotent), and an error Core
+        refused also carries Core's own code as ha_error_code. A lost connection
         stops the run; not_attempted lists the ids never sent (the failing one too if
         it never left), safe to retry.
 
@@ -1835,7 +1824,6 @@ class EntityTools:
             result, notes = await remove_registry_entry(self._client, entity_id)
 
             if not result.get("success"):
-                error_msg = _extract_ws_error(result)
                 if result.get("error_code") == "not_found":
                     raise_tool_error(
                         create_error_response(
@@ -1848,15 +1836,11 @@ class EntityTools:
                             ],
                         )
                     )
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to remove entity '{entity_id}': {error_msg}",
-                        context={"entity_id": entity_id},
-                        suggestions=[
-                            "Check HA logs for details on why the removal was rejected",
-                        ],
-                    )
+                raise_core_refusal(
+                    f"Failed to remove entity '{entity_id}'",
+                    result,
+                    {"entity_id": entity_id},
+                    ["Check HA logs for details on why the removal was rejected"],
                 )
 
             return {"success": True, "entity_id": entity_id} | (

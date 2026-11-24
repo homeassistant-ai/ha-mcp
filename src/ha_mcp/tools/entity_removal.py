@@ -17,10 +17,9 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
-from ..errors import ErrorCode
 from .config_helpers.listing import listed_items
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
-from .helpers import exception_to_structured_error
+from .helpers import exception_to_structured_error, ws_failure_code
 
 
 def _unread(entity_id: str, reason: Any) -> list[str]:
@@ -91,7 +90,7 @@ async def remove_registry_entries(
     failing id, and the failing id too when its command provably never left."""
     removed: list[str] = []
     skipped: list[str] = []
-    errors: list[dict[str, str]] = []
+    errors: list[dict[str, str | None]] = []
     not_attempted: list[str] = []
     for index, eid in enumerate(entity_ids):
         try:
@@ -120,8 +119,9 @@ async def remove_registry_entries(
             errors.append(
                 {
                     "entity_id": eid,
-                    "code": ErrorCode.SERVICE_CALL_FAILED.value,
+                    "code": ws_failure_code(result).value,
                     "message": error_text(result),
+                    "ha_error_code": result.get("error_code"),
                 }
             )
     response: dict[str, Any] = {

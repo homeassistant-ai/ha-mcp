@@ -113,7 +113,8 @@ async def test_a_bulk_removal_sorts_each_id_by_cores_answer(
     assert result["skipped"] == ["sensor.missing"]
     [error] = result["errors"]
     assert error["entity_id"] == BAD_ID
-    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error["ha_error_code"] == "invalid_format"
     assert "entity_id" in error["message"]
     assert entity_registry.async_get("sensor.a") is None
     removals = [m.args[0] for m in sent.call_args_list if m.args[0]["type"] == REMOVE]
