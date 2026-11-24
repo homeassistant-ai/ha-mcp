@@ -406,10 +406,6 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             body_skipped_by_intent_gate=body_skipped_by_intent_gate,
         )
 
-        # Capability-gated semantics keep old components compatible while newer
-        # components serve queryless listings, locations, and complete windows.
-        # Visibility and membership gates still apply before any entity data is
-        # returned; schema hiding never changes old-client invocation support.
         if not _component_serves_search_types(req):
             return _omit_empty_warnings(await self._legacy_ha_search(req, ctx))
 
@@ -426,19 +422,17 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         mode_supported = component_supports(caps, "search_unified") or (
             bool(req.query_text) and not (req.area_filter or "").strip()
         )
-        needs_editor_bodies = (
+        missing_editor_bodies = (
             req.include_config
             and req.body_eligible
             and bool(
                 {"automation", "script"}.intersection(_component_body_search_types(req))
             )
+            and not component_supports(caps, "search_editor_bodies")
         )
         if (
             mode_supported
-            and (
-                not needs_editor_bodies
-                or component_supports(caps, "search_editor_bodies")
-            )
+            and not missing_editor_bodies
             and component_supports(caps, "search")
             and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
             and (
@@ -472,8 +466,13 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             and not response.get("entity_total_matches")
             and not response.get("config_total_matches"),
         )
-        if notes:
-            response.setdefault("warnings", []).extend(notes)
+        if missing_editor_bodies and caps is not None:
+            notes.append(
+                "Update the installed ha_mcp_tools component to search automation "
+                "and script definitions with include_config. These results may be "
+                "incomplete, including matches inside YAML packages."
+            )
+        response.setdefault("warnings", []).extend(notes)
         return _omit_empty_warnings(response)
 
     @tool(
