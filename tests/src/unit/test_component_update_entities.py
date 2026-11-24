@@ -31,7 +31,6 @@ async def test_each_update_comes_with_its_state_integration_and_features(
             "update.thing",
             features=UpdateEntityFeature.INSTALL | UpdateEntityFeature.BACKUP,
         ),
-        integration="marketplace",
     )
 
     result = await ws_result(component_ws, _COMMAND)
@@ -44,7 +43,7 @@ async def test_each_update_comes_with_its_state_integration_and_features(
                 "entity_id": "update.thing",
                 "state": "on",
                 "attributes": dict(state.attributes),
-                "platform": "marketplace",
+                "platform": "test",
                 "features": ["install", "backup"],
             }
         ]

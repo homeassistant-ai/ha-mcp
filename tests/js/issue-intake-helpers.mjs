@@ -105,7 +105,11 @@ export class FakeGitHub {
       return { role_name: this.data.roles[path.split("/").at(-2)] || "none" };
     if (path.includes("/comments?")) return structuredClone(this.data.comments);
     if (path.includes("/events?")) return structuredClone(this.data.events);
-    if (path.includes("/issues?")) return [structuredClone(this.data.issue)];
+    if (path.includes("/issues?")) {
+      const label = new URLSearchParams(path.split("?")[1]).get("labels");
+      return this.data.issue.state === "open" && this.data.issue.labels.some((l) => l.name === label)
+        ? [structuredClone(this.data.issue)] : [];
+    }
     return structuredClone(this.data.issue);
   }
 }

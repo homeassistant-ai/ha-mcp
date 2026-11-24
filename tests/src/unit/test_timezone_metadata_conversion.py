@@ -17,7 +17,6 @@ import pytest
 from homeassistant.components.recorder import Recorder
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
@@ -170,7 +169,6 @@ class TestConversion:
         hass: HomeAssistant,
         client: HomeAssistantClient,
     ) -> None:
-        mock_integration(hass, MockModule("frontend"))
         assert await async_setup_component(hass, "logbook", {})
         hass.states.async_set("light.kitchen", "off", timestamp=SUMMER.timestamp())
         hass.states.async_set(

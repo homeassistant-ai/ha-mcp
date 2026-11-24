@@ -12,7 +12,6 @@ focused (see issue #925):
 - ``fetch``, ``graph``: config fetches and the related-entity graph
 """
 
-import logging
 from collections.abc import Callable
 
 from ...client.rest_client import HomeAssistantClient
@@ -34,8 +33,6 @@ from ._deep import DeepSearchMixin
 from ._entities import EntitySearchMixin
 from ._overview import SystemOverviewMixin
 from .fetch import record_first_failure, summarize_fetch_error
-
-logger = logging.getLogger(__name__)
 
 
 class SmartSearchTools(DeepSearchMixin, SystemOverviewMixin, EntitySearchMixin):

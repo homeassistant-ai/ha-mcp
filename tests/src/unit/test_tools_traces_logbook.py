@@ -18,7 +18,6 @@ from homeassistant.components.recorder import Recorder
 from homeassistant.components.trace import async_store_trace
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 from pytest_homeassistant.typing import WebSocketGenerator
 
@@ -42,11 +41,8 @@ async def core_logbook(recorder_mock: Recorder, hass: HomeAssistant) -> None:
 
     ``recorder_mock`` is requested before ``hass`` because its database fixture
     refuses to run once Home Assistant exists; pytest resolves the arguments in
-    order. The logbook integration depends on ``frontend``, which the unit test
-    install does not ship, so the dependency is a Core ``mock_integration``;
-    logbook then registers its own processor, query and REST view.
+    order. Core sets up the logbook's dependencies, its frontend among them.
     """
-    mock_integration(hass, MockModule("frontend"))
     assert await async_setup_component(hass, "logbook", {})
     assert await async_setup_component(hass, "trace", {})
 

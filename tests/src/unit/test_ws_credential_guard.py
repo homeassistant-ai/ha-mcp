@@ -43,7 +43,7 @@ async def supervisor_calls(
     """Core answering ``auth/current_user``, and Core's own ``supervisor/api``
     in front of a Supervisor answering ``/core/info`` (``_supervisor_core``)."""
     assert await async_setup_component(hass, "auth", {})
-    load_supervisor_api(
+    await load_supervisor_api(
         hass,
         aioclient_mock,
         monkeypatch,

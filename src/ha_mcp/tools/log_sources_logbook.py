@@ -17,7 +17,6 @@ Transport order (best first), all fetching from Home Assistant's own code:
    requests without the component (the only transport with a device filter).
 """
 
-import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NoReturn
 
@@ -39,8 +38,6 @@ from .component_api import (
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import _coerce_limit, _compact_logbook_entries
 from .response_helpers import add_timezone_metadata
-
-logger = logging.getLogger(__name__)
 
 # The component command serving Core's own logbook processor in-process, and
 # the capability that gates it.

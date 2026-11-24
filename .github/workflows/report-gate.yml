@@ -1,9 +1,8 @@
 name: Close issues still missing a report
 
-# The issue-intake gate labels a bug report that has neither an
-# ha_report_issue report nor a reason why there is none. This sweep closes it
-# once the label is 24 hours old, or clears the label if the answer arrived
-# without an event the gate saw. A maintainer removing the label stops it.
+# Sweep both report labels. A missing-report issue gets 24 hours from labeling.
+# A maintainer override gets 24 hours from its request notice. If the label
+# event was missed, the sweep sends that notice before starting the clock.
 on:
   schedule:
     - cron: "47 * * * *"

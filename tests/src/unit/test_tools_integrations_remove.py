@@ -11,6 +11,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from functools import partial
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, PropertyMock, patch
 
@@ -34,6 +35,7 @@ from ha_mcp.tools import ws_waiters
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._command_faults import dropped_on, pooled_socket
+from ._core_setup import install_custom_helper
 from ._held_command import held_command
 from ._receipt_faults import at_entity_wait
 from ._tool_errors import rejected_call_body
@@ -114,22 +116,34 @@ def _meter_entry(
     return entry, entity_ids
 
 
+_NO_UNLOAD = "no_unload_helper"
+
+
 @pytest.fixture
-async def unloadable_meter(
-    hass: HomeAssistant, entity_registry: er.EntityRegistry
-) -> AsyncIterator[tuple[MockConfigEntry, list[str]]]:
-    """A loaded utility_meter entry whose integration has no unload: Core can
-    only delete it with a restart to follow."""
+async def unloadable_helper(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enable_custom_integrations: None,
+) -> AsyncIterator[tuple[MockConfigEntry, str]]:
+    """A loaded entry of a helper integration that has no unload, as Core's own
+    tests make one: Core can only delete it with a restart to follow. Its
+    manifest is installed, so Core lists it among the helper flows."""
+    install_custom_helper(tmp_path, monkeypatch, _NO_UNLOAD)
     mock_integration(
-        hass,
-        MockModule("utility_meter", async_setup_entry=AsyncMock(return_value=None)),
+        hass, MockModule(_NO_UNLOAD, async_setup_entry=AsyncMock(return_value=None))
     )
-    mock_platform(hass, "utility_meter.config_flow")
-    entry, entity_ids = _meter_entry(hass, entity_registry, "peak")
-    with mock_config_flow("utility_meter", type("MeterFlow", (ConfigFlow,), {})):
+    mock_platform(hass, f"{_NO_UNLOAD}.config_flow", None)
+    entry = MockConfigEntry(domain=_NO_UNLOAD, title="Energy")
+    entry.add_to_hass(hass)
+    with mock_config_flow(_NO_UNLOAD, type("NoUnloadFlow", (ConfigFlow,), {})):
         assert await hass.config_entries.async_setup(entry.entry_id)
         assert entry.state is ConfigEntryState.LOADED
-        yield entry, entity_ids
+        entity = entity_registry.async_get_or_create(
+            "sensor", _NO_UNLOAD, "energy", config_entry=entry
+        )
+        yield entry, entity.entity_id
 
 
 # --- an entry_id target ------------------------------------------------------------
@@ -155,9 +169,9 @@ async def test_an_entry_id_deletes_that_config_entry(
 async def test_an_entry_deleted_without_unloading_says_a_restart_is_needed(
     hass: HomeAssistant,
     tools: IntegrationTools,
-    unloadable_meter: tuple[MockConfigEntry, list[str]],
+    unloadable_helper: tuple[MockConfigEntry, str],
 ) -> None:
-    entry, _ = unloadable_meter
+    entry, _ = unloadable_helper
 
     result = await _remove(tools, entry.entry_id)
 
@@ -464,11 +478,11 @@ async def test_an_entry_removed_meanwhile_is_reported_as_a_concurrent_removal(
 
 
 async def test_a_flow_helper_deleted_without_unloading_says_a_restart_is_needed(
-    tools: IntegrationTools, unloadable_meter: tuple[MockConfigEntry, list[str]]
+    tools: IntegrationTools, unloadable_helper: tuple[MockConfigEntry, str]
 ) -> None:
-    _, entity_ids = unloadable_meter
+    _, entity_id = unloadable_helper
 
-    result = await _remove(tools, entity_ids[0], helper_type="utility_meter")
+    result = await _remove(tools, entity_id, helper_type=_NO_UNLOAD)
 
     assert result["method"] == "config_flow_delete"
     assert result["require_restart"] is True

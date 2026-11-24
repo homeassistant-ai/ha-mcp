@@ -6,7 +6,6 @@ has created or updated the helper.
 """
 
 import asyncio
-import logging
 from functools import partial
 from typing import Any
 
@@ -34,8 +33,6 @@ from .registry import (
     validate_registry_ids,
 )
 from .schemas import _attach_helper_skill, _helper_response
-
-logger = logging.getLogger(__name__)
 
 _OPEN_STEP_TYPES = ("form", "menu")
 

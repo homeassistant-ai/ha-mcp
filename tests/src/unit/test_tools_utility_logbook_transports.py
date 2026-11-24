@@ -22,7 +22,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant.common import MockConfigEntry, MockModule, mock_integration
+from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -51,8 +51,6 @@ def _recorder(recorder_mock: Recorder) -> None:
 @pytest.fixture
 async def logbook(hass: HomeAssistant) -> None:
     """Core's logbook on its recorder, with a kitchen light that turned on."""
-    # The logbook registers a sidebar panel; the frontend build is not installed.
-    mock_integration(hass, MockModule("frontend"))
     assert await async_setup_component(hass, "logbook", {})
     attributes = {"friendly_name": "Kitchen Light"}
     hall = {"friendly_name": "Hall"}

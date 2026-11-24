@@ -10,10 +10,12 @@ import {
   GitHub,
   authorLogin,
   collect,
+  compareEvents,
   escapeRegExp,
   hasHiddenReport,
   hasReport,
   isHuman,
+  isMaintainer,
   latestEvent,
   noReportHeading,
   roleFor,
@@ -25,6 +27,7 @@ export const gateMarker = "<!-- ha-mcp-report-gate -->";
 // The label that starts the 24-hour clock. A maintainer removing it waives
 // the requirement for that issue.
 export const gateLabel = "missing bug report output";
+export const requiredLabel = "missing bug report output (Override)";
 export const gateGraceHours = 24;
 // The issue forms' required report field. Any text the page shows there,
 // "N/A" included, counts as an answer.
@@ -110,6 +113,49 @@ const gateNotice = (snapshot, bot) =>
     )
     .at(-1);
 
+// Tie each notice to the label event so reapplying it starts a fresh request.
+function latestApplication(events) {
+  return latestEvent(
+    events,
+    (e) => e.event === "labeled" && e.label?.name === requiredLabel,
+  );
+}
+
+function requiredApplication({ issue, events }) {
+  return issue.labels.some((l) => l.name === requiredLabel) ? latestApplication(events) : null;
+}
+
+function authorizedApplication(snapshot) {
+  const applied = requiredApplication(snapshot);
+  if (isHuman(applied?.actor) && isMaintainer(snapshot.roles[applied.actor.login]))
+    return applied;
+  return null;
+}
+
+const requestMarker = (applied, action) =>
+  `<!-- required-report ${applied.id} ${action} -->`;
+
+function requiredAction(snapshot, bot, applied, now) {
+  const { issue, events } = snapshot;
+  const report = reporterTexts(snapshot).some(hasReport);
+  const notice = gateNotice(snapshot, bot);
+  const announced = (action) => notice?.body.includes(requestMarker(applied, action));
+  if (issue.state === "closed") {
+    const closed = latestEvent(events, (e) => e.event === "closed");
+    if (report && closed?.actor?.login === bot && announced("close"))
+      return "reopen";
+    return null;
+  }
+  if (report) return "clear";
+  // A close notice can survive a failed state update. Retry only the close.
+  if (announced("close")) return now === undefined ? null : "close";
+  if (!announced("require")) return "require";
+  // On recovery the first request may be hours late. Give the reporter the
+  // full response period from the notice for this application of the label.
+  const notifiedAt = Date.parse(notice.created_at);
+  return now >= notifiedAt + gateGraceHours * 3600 * 1000 ? "close" : null;
+}
+
 // A maintainer removed the label: the report is not required here.
 export function waived({ events, roles }) {
   const removed = latestEvent(events, (e) => isLabelEvent(e, "unlabeled"));
@@ -122,6 +168,17 @@ export function satisfied(snapshot) {
 
 export function gateAction(snapshot, bot, event) {
   const { issue, events } = snapshot;
+  const required = authorizedApplication(snapshot);
+  if (required) return requiredAction(snapshot, bot, required);
+  // Only a still-outstanding notice can be withdrawn. A delayed unlabeled
+  // event must not rewrite a success notice or cancel a fresh application.
+  if (
+    event.action === "unlabeled" &&
+    event.label === requiredLabel &&
+    !issue.labels.some((l) => l.name === requiredLabel) &&
+    /<!-- required-report \d+ (require|close) -->/.test(gateNotice(snapshot, bot)?.body)
+  )
+    return "withdraw";
   if (!gated(snapshot)) return null;
   if (exemptKind(issue)) {
     if (issue.state === "open") return hasGateLabel(issue) ? "exempt" : null;
@@ -142,7 +199,7 @@ export function gateAction(snapshot, bot, event) {
   const labeled = hasGateLabel(issue);
   if (done) {
     const closed = latestEvent(events, (e) => e.event === "closed");
-    if (issue.state === "closed" && closed?.actor?.login === bot)
+    if (issue.state === "closed" && labeled && closed?.actor?.login === bot)
       return "reopen";
     return issue.state === "open" && labeled ? "clear" : null;
   }
@@ -161,9 +218,12 @@ export function gateAction(snapshot, bot, event) {
 
 // The scheduled sweep: close a labeled issue once its grace period has run
 // out, or clear the label when the gate missed the answer.
-export function expireAction(snapshot, now) {
+export function expireAction(snapshot, now, bot) {
   const { issue, events } = snapshot;
-  if (issue.state !== "open" || !hasGateLabel(issue)) return null;
+  if (issue.state !== "open") return null;
+  const required = authorizedApplication(snapshot);
+  if (required) return requiredAction(snapshot, bot, required, now);
+  if (!hasGateLabel(issue)) return null;
   if (exemptKind(issue)) return "exempt";
   if (satisfied(snapshot)) return "clear";
   // A maintainer may apply the label by hand to start the same clock.
@@ -193,13 +253,17 @@ function gateHint(texts) {
   return sections.length ? `The \`### ${sections[0][1]}\` section is empty.` : "";
 }
 
-const howTo = `Ask your AI agent to run \`ha_report_issue\` in the session where the problem happened and add the report it generates (its \`issue_body\`, starting with the Auto-Generated heading) to the issue description or a comment, with secrets removed. It records the ha-mcp version, install type, client, settings and tool calls that maintainers otherwise have to ask for.
+const reportInstructions = `Ask your AI agent to run \`ha_report_issue\` in the session where the problem happened and add the report it generates (its \`issue_body\`, starting with the Auto-Generated heading) to the issue description or a comment, with secrets removed. It records the ha-mcp version, install type, client, settings and tool calls that maintainers otherwise have to ask for.`;
+
+const howTo = `${reportInstructions}
 
 If no report can exist, add a section headed \`### ${noReportHeading}\` and say why, for example that ha-mcp does not start or connect (include your startup logs and configuration, tokens removed) or that the problem was found by reading the code. "N/A" is enough.`;
 
 export function gateComment(action, login, hint, reopens) {
   const extra = hint ? ` ${hint}` : "";
   switch (action) {
+    case "withdraw":
+      return `${gateMarker}\nThe request for generated \`ha_report_issue\` output was withdrawn.\n`;
     case "reopen":
     case "clear":
       return `${gateMarker}\nThanks: the issue now includes an \`ha_report_issue\` report or a reason why there is none.\n`;
@@ -212,6 +276,16 @@ export function gateComment(action, login, hint, reopens) {
     default:
       return `${gateMarker}\n@${login}, this issue does not include an \`ha_report_issue\` report or a reason why there is none.${extra} It will be closed automatically in ${gateGraceHours} hours unless one is added. If this is a feature request, start the title with \`[FEATURE]\`.\n\n${howTo}\n`;
   }
+}
+
+function requiredComment(applied, action, login) {
+  const marker = `${gateMarker}\n${requestMarker(applied, action)}`;
+  if (action === "clear" || action === "reopen")
+    return `${marker}\nThanks for adding the requested \`ha_report_issue\` output.\n`;
+  const message = action === "close"
+    ? `this issue was closed because the requested report was still missing after ${gateGraceHours} hours. Add the report to reopen it automatically.`
+    : `a maintainer has requested the generated \`ha_report_issue\` output. Please add it within ${gateGraceHours} hours of this notice to keep this issue open.`;
+  return `${marker}\n@${login}, ${message}\n\n${reportInstructions}\n`;
 }
 
 // Retries a read or an idempotent write after a rate limit or server error,
@@ -231,28 +305,31 @@ async function retrying(api, call, attempt = 0) {
   }
 }
 
-// collect() looks up the roles of the reporter and commenters; a waiver
-// also needs the role of whoever removed the label.
+// Label actors may never have commented, so collect() may lack their roles.
 async function gateSnapshot(api, repository, number) {
   const snapshot = await retrying(api, () => collect(api, repository, number));
   const removed = latestEvent(snapshot.events, (e) =>
     isLabelEvent(e, "unlabeled"),
   );
-  const login = removed?.actor?.login;
-  if (login && !(login in snapshot.roles))
-    snapshot.roles[login] = await retrying(api, () =>
-      roleFor(api, repository, login),
-    );
+  for (const actor of [removed?.actor, requiredApplication(snapshot)?.actor]) {
+    if (isHuman(actor) && !(actor.login in snapshot.roles))
+      snapshot.roles[actor.login] = await retrying(api, () =>
+        roleFor(api, repository, actor.login),
+      );
+  }
   return snapshot;
 }
 
-async function applyGate(api, repository, number, bot, snapshot, action) {
+async function applyGate(
+  api, repository, number, bot, snapshot, action, required = authorizedApplication(snapshot),
+) {
   const base = `repos/${repository}/issues`;
   // The sweep also closes issues gateAction() never reopens, such as one
   // without a user; their close notice promises no reopen.
   const login = authorLogin(snapshot.issue);
-  const hint = gateHint(reporterTexts(snapshot));
-  const body = gateComment(action, login, hint, reopenable(snapshot));
+  const body = required
+    ? requiredComment(required, action, login)
+    : gateComment(action, login, gateHint(reporterTexts(snapshot)), reopenable(snapshot));
   const post = () =>
     api.request(`${base}/${number}/comments`, {
       method: "POST",
@@ -260,10 +337,10 @@ async function applyGate(api, repository, number, bot, snapshot, action) {
     });
   const idempotent = (path, options) =>
     retrying(api, () => api.request(path, options));
-  const unlabel = async () => {
-    if (!snapshot.issue.labels.some((l) => l.name === gateLabel)) return;
+  const unlabel = async (label) => {
+    if (!snapshot.issue.labels.some((l) => l.name === label)) return;
     try {
-      await idempotent(`${base}/${number}/labels/${encodeURIComponent(gateLabel)}`, {
+      await idempotent(`${base}/${number}/labels/${encodeURIComponent(label)}`, {
         method: "DELETE",
       });
     } catch (error) {
@@ -280,20 +357,23 @@ async function applyGate(api, repository, number, bot, snapshot, action) {
       data: { labels: [gateLabel] },
     });
   } else if (action === "close") {
-    await post();
+    if (!required || gateNotice(snapshot, bot)?.body !== body) await post();
     await idempotent(`${base}/${number}`, {
       method: "PATCH",
       data: { state: "closed", state_reason: "not_planned" },
     });
-  } else if (action === "request") {
+  } else if (action === "require" || action === "request") {
+    if (required) await unlabel(gateLabel);
     await post();
   } else {
-    if (snapshot.issue.state === "closed")
-      await idempotent(`${base}/${number}`, {
-        method: "PATCH",
-        data: { state: "open" },
-      });
-    await unlabel();
+    if (action !== "withdraw") {
+      if (snapshot.issue.state === "closed")
+        await idempotent(`${base}/${number}`, {
+          method: "PATCH",
+          data: { state: "open" },
+        });
+      await unlabel(gateLabel);
+    }
     const notice = gateNotice(snapshot, bot);
     if (notice)
       await idempotent(`${base}/comments/${notice.id}`, {
@@ -301,6 +381,8 @@ async function applyGate(api, repository, number, bot, snapshot, action) {
         data: { body },
       });
     else await post();
+    // Keep the override available for a retry if updating the notice failed.
+    if (required) await unlabel(requiredLabel);
   }
 }
 
@@ -312,25 +394,65 @@ export async function gate(api, repository, number, bot, event, write) {
   return action;
 }
 
+// A reporter can supply output or a maintainer can withdraw the request
+// between the sweep's read and its close. Recheck that same application.
+async function reconcileRequiredClose(api, repository, number, bot, applied) {
+  const fresh = await gateSnapshot(api, repository, number);
+  if (fresh.issue.state !== "closed") return false;
+  const closed = latestEvent(fresh.events, (e) => e.event === "closed");
+  if (closed?.actor?.login !== bot) return false;
+  if (latestApplication(fresh.events)?.id === applied.id && reporterTexts(fresh).some(hasReport)) {
+    await applyGate(api, repository, number, bot, fresh, "reopen", applied);
+    return true;
+  }
+  // A withdrawal before this close invalidates it even if another request
+  // has since been applied. A withdrawal after a valid close leaves it closed.
+  const withdrawn = fresh.events.some((e) =>
+    e.event === "unlabeled" && e.label?.name === requiredLabel &&
+    compareEvents(applied, e) < 0 && compareEvents(e, closed) < 0
+  );
+  if (!withdrawn) return false;
+  await retrying(api, () => api.request(`repos/${repository}/issues/${number}`, {
+    method: "PATCH", data: { state: "open" },
+  }));
+  // Use live labels and notices after reopening. The normal event handler
+  // acknowledges a withdrawal or starts the replacement request exactly once.
+  await gate(api, repository, number, bot, { action: "unlabeled", label: requiredLabel }, true);
+  return true;
+}
+
 // One pass of the scheduled sweep over every open labeled issue.
 export async function expire(api, repository, bot, now, write) {
-  const issues = await retrying(api, () =>
-    api.request(
-      `repos/${repository}/issues?labels=${encodeURIComponent(gateLabel)}&state=open&per_page=100`,
-      { paginate: true },
-    ),
-  );
+  // The GitHub issues API intersects comma-separated labels. Query each
+  // separately and process an issue carrying both only once.
+  const numbers = new Set();
+  for (const label of [gateLabel, requiredLabel]) {
+    const issues = await retrying(api, () =>
+      api.request(
+        `repos/${repository}/issues?labels=${encodeURIComponent(label)}&state=open&per_page=100`,
+        { paginate: true },
+      ),
+    );
+    for (const issue of issues)
+      if (!issue.pull_request) numbers.add(issue.number);
+  }
   const acted = [];
   const failed = [];
-  for (const { number, pull_request } of issues) {
-    if (pull_request) continue;
+  for (const number of numbers) {
     // One failing issue must not stop the sweep for the others.
     try {
       const snapshot = await gateSnapshot(api, repository, number);
-      const action = expireAction(snapshot, now);
+      let action = expireAction(snapshot, now, bot);
       if (!action) continue;
-      if (write)
-        await applyGate(api, repository, number, bot, snapshot, action);
+      if (write) {
+        const required = authorizedApplication(snapshot);
+        await applyGate(api, repository, number, bot, snapshot, action, required);
+        if (
+          action === "close" && required &&
+          await reconcileRequiredClose(api, repository, number, bot, required)
+        )
+          action = "reopen";
+      }
       acted.push(`${number}:${action}`);
     } catch (error) {
       failed.push(`#${number}: ${error.message}`);
@@ -364,7 +486,7 @@ export async function main(command, options = {}) {
         env.GITHUB_REPOSITORY,
         event.issue.number,
         bot,
-        { action: event.action, senderRole },
+        { action: event.action, label: event.label?.name, senderRole },
         apply,
       );
     }
