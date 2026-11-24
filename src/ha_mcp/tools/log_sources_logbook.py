@@ -73,8 +73,7 @@ class LogbookLogSourceMixin:
     _client: Any
 
     @staticmethod
-    def _validate_logbook_window(
-        hours_back: int,
+    def _validate_logbook_filters(
         entity_id: str | None,
         device_id: str | None,
         context_id: str | None,
@@ -99,11 +98,11 @@ class LogbookLogSourceMixin:
             )
 
         # Core uses a binary ULID to constrain a context-only recorder query.
-        if hours_back > 1 and context_id and ulid_to_bytes_or_none(context_id) is None:
+        if context_id and ulid_to_bytes_or_none(context_id) is None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "A context filter for a multi-hour Logbook query must be a valid Home Assistant context ID.",
+                    "The Logbook context filter must be a valid Home Assistant context ID.",
                 )
             )
 
@@ -606,6 +605,7 @@ class LogbookLogSourceMixin:
         limit: int,
         order: Literal["newest", "oldest"],
         search: str | None,
+        compact: bool,
     ) -> dict[str, Any]:
         """Collect a numeric page and exact total from Core's time-window endpoints."""
         entries: list[Any] = []
@@ -642,7 +642,20 @@ class LogbookLogSourceMixin:
             )
             entries.extend(selected)
             total += count
-        return {"entries": entries, "total": total, "legacy": True}
+        warnings = [
+            "Install or update ha_mcp_tools for Recorder-side paging of dense Logbook windows."
+        ]
+        if not compact and end - start > timedelta(hours=1):
+            warnings.append(
+                "Parent context fields can be missing when an earlier time window "
+                "contains the parent event. Update ha_mcp_tools for context across pages."
+            )
+        return {
+            "entries": entries,
+            "total": total,
+            "legacy": True,
+            "warnings": warnings,
+        }
 
     async def _format_logbook_page(
         self,
@@ -666,7 +679,7 @@ class LogbookLogSourceMixin:
                 response
                 if isinstance(response, dict)
                 else await self._legacy_window_page(
-                    start, end, offset, limit, order, search
+                    start, end, offset, limit, order, search, compact
                 )
             )
         total = page["total"]
@@ -676,11 +689,11 @@ class LogbookLogSourceMixin:
             total = await self._page_total(request, start, end)
         else:
             total += before
-        while (
-            not page["entries"]
-            and page.get("after")
-            and before + page["matched"] < total
-        ):
+        # An initial count of zero already searched the whole window. Once a
+        # cursor exists, Recorder can commit further matches after its anchor.
+        if cursor is None and total == 0 and not page["entries"]:
+            page["after"] = None
+        while not page["entries"] and page.get("after"):
             before += page["matched"]
             page = await self._required_component_page(
                 command, {**request, "after": page["after"], "skip": page["skip"]}
@@ -691,8 +704,7 @@ class LogbookLogSourceMixin:
             offset, before + page.get("matched", len(entries)) - len(entries)
         )
         more = (
-            bool(after is not None or page.get("legacy"))
-            and position + len(entries) < total
+            position + len(entries) < total if page.get("legacy") else after is not None
         )
         hours = (end - start) // timedelta(hours=1)
         data: dict[str, Any] = {
@@ -715,9 +727,7 @@ class LogbookLogSourceMixin:
         if search:
             data["filters_applied"] = {"search": search}
         if page.get("legacy"):
-            data["warnings"] = [
-                "Install or update ha_mcp_tools for Recorder-side paging of dense Logbook windows."
-            ]
+            data["warnings"] = page["warnings"]
             if more:
                 data["next_offset"] = position + len(entries)
                 data["pagination_hint"] = self._build_pagination_hint(
@@ -835,7 +845,7 @@ class LogbookLogSourceMixin:
                     "Use the same hours_back with this Logbook cursor.",
                 )
             )
-        self._validate_logbook_window(hours_back, entity_id, device_id, context_id)
+        self._validate_logbook_filters(entity_id, device_id, context_id)
         numeric_offset = offset if isinstance(offset, int) else 0
         start_dt = end_dt - timedelta(hours=hours_back)
         start_timestamp = start_dt.isoformat()
