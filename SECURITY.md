@@ -427,6 +427,12 @@ webhook ID, the secret path and any legacy OAuth credentials, which the panel
 states before the download. The export and import routes accept only
 same-origin requests from that admin session.
 
+One value that does travel in a URL is a pending approval token, when a
+notification link names a card (`/ha-mcp?tab=tool-security-policies&token=…`). It
+is not a credential: without the administrator session the policy endpoints
+answer 401, and the same token is already carried by
+`ha_mcp_approval_requested` and by the `USER_APPROVAL_REQUIRED` error.
+
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)
 
 In the app's `ha_auth` mode the Home Assistant login is the credential, not

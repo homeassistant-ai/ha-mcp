@@ -205,7 +205,12 @@ access uses a short-lived HttpOnly session cookie issued to an authenticated
 administrator. Every request revalidates that the session still maps to an
 active administrator. Never expose the loopback secret path or place a token or
 secret in a URL. The administrator's settings export is the one deliberate
-exception: a file download that carries the connection secrets, never a URL.
+exception: a file download that carries the connection secrets, never a URL. A
+pending approval token may also appear in a URL, when a notification link names
+a card (`/ha-mcp?tab=tool-security-policies&token=…`): it is not a credential —
+the policy endpoints still require the administrator session — and the same
+token travels in `ha_mcp_approval_requested` and in the
+`USER_APPROVAL_REQUIRED` error.
 
 The full threat model and route-ownership rules are in
 [`SECURITY.md`](../../SECURITY.md).

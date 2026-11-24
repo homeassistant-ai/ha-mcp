@@ -1,25 +1,34 @@
 // Auto-activate tab from the query string; supports deep links of the form
 // ?tab=<panel>&token=<approval token>.
 // If a &token=X is present and the target is the policy tab, scroll to
-// the matching pending entry once policyLoadPending() resolves.
+// the matching pending entry once policyLoadPending() has rendered the list.
 (function activateTabFromQuery() {
   try {
     const params = new URLSearchParams(window.location.search);
     const target = params.get('tab');
     if (!target) return;
-    const tabBtn = document.querySelector('.tab[data-panel="' + target + '"]');
+    // Both values come from the URL, so escape them before they reach a
+    // selector: the panel filters what it forwards, but this page's own URL
+    // (and the app/standalone pages) accept the same parameters.
+    const tabBtn = document.querySelector('.tab[data-panel="' + CSS.escape(target) + '"]');
     if (!tabBtn) return;
-    activateTab(target);
     const token = params.get('token');
+    // activateTab() returns policyLoadPending()'s promise for this tab: a fixed
+    // delay raced a slow queue and left the page at the top with nothing shown.
+    const loaded = activateTab(target);
     if (token && target === 'tool-security-policies') {
-      // policyLoadPending() runs inside activateTab; wait a fixed 500 ms,
-      // then scroll to the matching pending entry if it exists.
-      setTimeout(() => {
-        const row = document.querySelector('[data-pending-token="' + token + '"]');
+      Promise.resolve(loaded).then((pending) => {
+        // Undefined means the queue could not be read; the list itself says
+        // why, so a "no longer pending" toast would be wrong there.
+        if (!Array.isArray(pending)) return;
+        const row = document.querySelector('[data-pending-token="' + CSS.escape(token) + '"]');
         if (row && row.scrollIntoView) {
           row.scrollIntoView({behavior: 'smooth', block: 'center'});
+          return;
         }
-      }, 500);
+        showToast(t('policies.pending.invalid_token', {},
+          'This approval token is no longer valid (already consumed or expired).'), {isError: true});
+      }).catch(() => { /* best-effort */ });
     }
   } catch (_) { /* best-effort */ }
 })();
