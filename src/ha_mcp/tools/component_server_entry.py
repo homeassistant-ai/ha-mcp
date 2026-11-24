@@ -78,22 +78,24 @@ async def install_pending(
 
     ``server_entry`` is the ``fetch_server_entry_via_component`` result ``info``
     already read. ``None`` when that is unknown: a component without the
-    ``server_entry_install_pending`` flag, or one whose read failed, adds a
-    warning to update it; one that cannot tell (Home Assistant runs with
+    ``server_entry_install_pending`` flag, or one whose read failed or did not
+    return a boolean or ``None`` ``install_pending``, adds a warning to update
+    it; one that cannot tell (it returned ``None``: Home Assistant runs with
     ``skip_pip``) adds none. True adds a warning that the in-process server
     does not run the configured spec, whatever ``pip_spec`` says.
     """
     caps = await get_component_caps(client)
-    if server_entry is None or not component_supports(
-        caps, "server_entry_install_pending"
+    entry = server_entry or {}
+    pending = entry.get("install_pending")
+    if not (
+        component_supports(caps, "server_entry_install_pending")
+        and "install_pending" in entry
+        and isinstance(pending, bool | None)
     ):
         warnings.append(
             "Update the ha_mcp_tools component to see whether the server "
             "entry's pip_spec is installed yet."
         )
-        return None
-    pending = server_entry.get("install_pending")
-    if not isinstance(pending, bool):
         return None
     if pending:
         warnings.append(

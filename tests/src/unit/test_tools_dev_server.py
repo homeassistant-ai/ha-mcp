@@ -113,6 +113,8 @@ class TestInfo:
         assert entry["entry_id"] == entries[1]
         assert entry["pip_spec"] == ""
         assert "channel" not in entry
+        assert entry["install_pending"] is None
+        assert any("Update the ha_mcp_tools component" in w for w in result["warnings"])
         assert hass.config_entries.options.async_progress() == []
 
     async def test_info_says_the_entry_is_not_the_server_answering(
@@ -170,6 +172,7 @@ class TestInfo:
             "CAPABILITIES",
             [c for c in system.CAPABILITIES if c != "server_entry_install_pending"],
         )
+        monkeypatch.setattr(hass.config, "skip_pip", False)
         server_entry(hass, pip_spec=PIP_SPEC)
         result = await DevTools(client).ha_dev_manage_server(action="info")
         assert result["data"]["component_server_entry"]["install_pending"] is None

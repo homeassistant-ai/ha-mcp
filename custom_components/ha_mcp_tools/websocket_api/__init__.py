@@ -196,7 +196,7 @@ the info handshake carries no capability entry:
   ``ha_dev_manage_server`` need not probe every ``ha_mcp_tools``-domain entry's
   options-flow schema from the outside. The type marker and that record are
   the two ``entry.data`` keys this package reads, the data-minimization
-  exception: neither is returned, install_pending is only a boolean.
+  exception: neither is returned, install_pending is only a boolean or null.
 * ``ha_mcp_tools/server_entry_update`` — the WRITE counterpart of ``server_entry``:
   applies a ``channel`` / ``pip_spec`` delta to the server entry via
   ``hass.config_entries.async_update_entry`` DIRECTLY (what core's finish-flow
