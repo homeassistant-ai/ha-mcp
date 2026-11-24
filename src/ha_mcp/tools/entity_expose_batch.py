@@ -63,8 +63,8 @@ async def expose_write(
     error is None on success, and changed holds the ids Core reports it
     changed. A refusal, or a write that never left, failed for sure; one sent
     without an answer may have been applied, and says so. failure is Core's
-    reply when it refused, else the client's exception when Home Assistant
-    did not answer.
+    reply when it refused, else the client's exception for a write that was
+    not sent or got no answer.
     """
     try:
         result = await client.send_websocket_message(
@@ -99,18 +99,17 @@ def raise_expose_failure(
     service call with Core's code kept as ``ha_error_code``; a write without
     an answer keeps the code and suggestions its transport gives (connection,
     timeout, auth)."""
-    if not isinstance(failure, HomeAssistantError):
-        ha_error_code = (failure or {}).get("error_code")
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                error,
-                context={**context, "ha_error_code": ha_error_code},
-            )
+    if isinstance(failure, HomeAssistantError):
+        response = exception_to_structured_error(failure, context, raise_error=False)
+        response["error"]["message"] = error
+        raise_tool_error(response)
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            error,
+            context={**context, "ha_error_code": (failure or {}).get("error_code")},
         )
-    response = exception_to_structured_error(failure, context, raise_error=False)
-    response["error"]["message"] = error
-    raise_tool_error(response)
+    )
 
 
 async def apply_bulk_expose(

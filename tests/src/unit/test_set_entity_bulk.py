@@ -51,16 +51,21 @@ class TestBulk:
         ],
         ids=["name", "device_class", "options", "use_entity_name_alias"],
     )
+    @pytest.mark.parametrize(
+        "ids", [["light.a", "light.b"], ["light.a", "light.a"]], ids=["two", "repeat"]
+    )
     async def test_a_single_entity_parameter_is_refused(
         self,
         tools: EntityTools,
         sent: AsyncMock,
         single_entity_param: dict[str, Any],
+        ids: list[str],
     ) -> None:
-        """A bulk update would drop it silently, so it is refused."""
+        """A bulk update would drop it silently, so it is refused; a list
+        repeating one id is still a list."""
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(
-                entity_id=["light.a", "light.b"],
+                entity_id=ids,
                 labels=["outdoor"],
                 **single_entity_param,
             )
@@ -219,8 +224,9 @@ class TestBulk:
         tools: EntityTools,
         entity_registry: er.EntityRegistry,
         labels: list[str],
+        sent: AsyncMock,
     ) -> None:
-        """One outcome per entity: a repeat would count a second write."""
+        """One write and one outcome per entity."""
         for entity_id in ("light.a", "light.b"):
             registry_entity(entity_registry, entity_id)
 
@@ -233,6 +239,7 @@ class TestBulk:
             "light.a",
             "light.b",
         ]
+        assert sent_types(sent).count("config/entity_registry/update") == 2
 
     async def test_disabling_an_automation_in_a_list_is_refused(
         self, tools: EntityTools, sent: AsyncMock

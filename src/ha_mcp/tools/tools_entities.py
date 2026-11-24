@@ -911,7 +911,7 @@ class EntityTools:
                 entity_entry,
                 registry_updated,
                 updates_made,
-                include_entity_entry,
+                include_entity_entry=include_entity_entry,
             )
 
             # Phase 5: Device rename

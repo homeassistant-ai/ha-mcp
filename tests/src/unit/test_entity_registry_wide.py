@@ -867,8 +867,13 @@ class TestEntityWriteFailure:
                 "Exposure failed: Command failed",
                 "home_assistant_error",
             ),
-            ("not_sent", "CONNECTION_FAILED", "Exposure failed: not sent", None),
-            ("dropped", "CONNECTION_FAILED", "Exposure outcome unknown: Home", None),
+            ("not_sent", "CONNECTION_FAILED", "Exposure failed: not sent", "absent"),
+            (
+                "dropped",
+                "CONNECTION_FAILED",
+                "Exposure outcome unknown: Home",
+                "absent",
+            ),
         ],
     )
     async def test_a_failed_single_exposure_still_reports_the_registry_write(
@@ -880,11 +885,12 @@ class TestEntityWriteFailure:
         fault: str,
         code: str,
         error: str,
-        ha_error_code: str | None,
+        ha_error_code: str,
     ) -> None:
         """The single-entity reply says what landed, as a bulk row does, and
-        leaves out the entry it was asked to leave out; a write without an
-        answer is a connection failure, not a call to fix."""
+        leaves out the entry it was asked to leave out; a refusal keeps Core's
+        code, and a write without an answer is a connection failure, not a call
+        to fix."""
         registry = er.async_get(hass)
         registry.async_update_entity(
             "light.kitchen", disabled_by=er.RegistryEntryDisabler.USER
@@ -902,7 +908,7 @@ class TestEntityWriteFailure:
         assert "entity_entry" not in body
         assert body["error"]["code"] == code
         assert body["error"]["message"].startswith(error)
-        assert body.get("ha_error_code") == ha_error_code
+        assert body.get("ha_error_code", "absent") == ha_error_code
         assert (body["partial"], body["updates"]) == (True, ["enabled"])
         assert body["require_restart"] is True
         entry = registry.async_get("light.kitchen")

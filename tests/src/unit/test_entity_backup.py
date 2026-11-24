@@ -570,8 +570,8 @@ async def test_a_list_repeating_one_entity_backs_it_up(
     backup_settings: config.Settings,
     desk: Desk,
 ) -> None:
-    """The repeat collapses to one entity, and that entity is still backed up
-    before its write."""
+    """The repeat collapses to one entity, and that entity still gets its
+    backup."""
     await EntityTools(entity_client).ha_set_entity(
         entity_id=[desk.entity_id, desk.entity_id], hidden=True
     )
