@@ -196,8 +196,8 @@ def do_search(  # noqa: PLR0915
                     diagnostics=diagnostics,
                     secret_values=secret_values,
                     saved_bodies=(saved_bodies or {}).get(domain, {})
-                    if include_config
-                    else {},
+                    if include_config and domain in EDITOR_FILES
+                    else None,
                     omit=omit,
                 )
             )

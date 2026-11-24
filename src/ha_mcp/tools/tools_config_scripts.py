@@ -170,8 +170,7 @@ class ConfigScriptTools:
             # arm/HAOS runners). The legacy REST config endpoint reads the config
             # FILE, which is fresh the instant a write lands, so it stays the
             # sole path. Scenes were already legacy-only (no storage body in
-            # memory at all); scripts join them here for freshness. A
-            # file-reading ``config_get`` may return later (issue #1813).
+            # memory at all); scripts join them here for freshness.
             return await self._legacy_get_script(script_id)
         except ToolError:
             raise

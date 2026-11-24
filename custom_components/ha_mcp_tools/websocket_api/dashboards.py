@@ -56,7 +56,7 @@ def _do_dashboards(
 
     YAML-mode dashboard bodies are NEVER emitted (``get`` returns a ``yaml_excluded``
     status; ``search``/``docs`` skip them) — their config may carry resolved ``!secret``
-    plaintext, so body emission for YAML belongs to a future file-based tool.
+    plaintext.
     """
     mode = params.get("mode", "list")
     prepped = prepped or {}

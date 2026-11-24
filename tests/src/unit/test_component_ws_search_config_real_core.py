@@ -54,13 +54,18 @@ def _kind(result: dict[str, Any], kind: str) -> list[dict[str, Any]]:
 
 @pytest.fixture
 async def yaml_and_storage_automations(hass: HomeAssistant) -> None:
-    """``automation.package_auto`` has no id, ``automation.ui_auto`` has one."""
+    """Both automations have IDs. Only the editor owns UI Auto."""
     saved = _automation("UI Auto", item_id="uid-1")
     await hass.async_add_executor_job(
         Path(hass.config.path("automations.yaml")).write_text, json.dumps([saved])
     )
     await _set_up(
-        hass, "automation", [_automation("Package Auto", message="YAMLSECRET"), saved]
+        hass,
+        "automation",
+        [
+            _automation("Package Auto", item_id="package-id", message="YAMLSECRET"),
+            saved,
+        ],
     )
 
 
@@ -69,9 +74,12 @@ async def test_a_yaml_body_is_never_sent_and_a_storage_body_is(
 ) -> None:
     result = await _search(component_ws, query="auto", include_config=True)
 
-    by_source = {hit["source"]: hit for hit in result["automations"]}
-    assert (by_source["yaml"]["config"], by_source["yaml"]["id"]) == (None, None)
-    assert by_source["storage"]["config"]["id"] == "uid-1"
+    by_id = {hit["id"]: hit for hit in result["automations"]}
+    assert by_id["package-id"]["config"] is None
+    assert "ha_config_get_yaml" in by_id["package-id"]["config_hint"]
+    assert by_id["uid-1"]["config"]["id"] == "uid-1"
+    assert "config_hint" not in by_id["uid-1"]
+    assert all("source" not in hit for hit in by_id.values())
     assert "YAMLSECRET" not in json.dumps(result)
 
 
@@ -108,7 +116,8 @@ async def test_a_yaml_body_is_matched_but_withheld(
 ) -> None:
     result = await _search(component_ws, query="yamlsecret", include_config=True)
 
-    (hit,) = [hit for hit in result["automations"] if hit["source"] == "yaml"]
+    (hit,) = result["automations"]
+    assert hit["entity_id"] == "automation.package_auto"
     assert hit["match_in_config"] is True
     assert hit["config"] is None
     assert "YAMLSECRET" not in json.dumps(result)
@@ -121,6 +130,7 @@ async def test_a_storage_body_is_withheld_without_include_config(
 
     assert result["automations"]
     assert all(hit["config"] is None for hit in result["automations"])
+    assert all("config_hint" not in hit for hit in result["automations"])
 
 
 async def test_a_scene_matches_by_name_and_never_sends_a_body(
@@ -142,7 +152,9 @@ async def test_a_scene_matches_by_name_and_never_sends_a_body(
     result = await _search(component_ws, query="movie", include_config=True)
 
     (hit,) = result["scenes"]
-    assert (hit["name"], hit["source"]) == ("Movie Night", "storage")
+    assert hit["name"] == "Movie Night"
+    assert "source" not in hit
+    assert "config_hint" not in hit
     assert hit["match_in_name"] is True
     assert hit["config"] is None
 

@@ -38,7 +38,7 @@ def search_config_surface(
     exact: bool,
     partial_reasons: list[str],
     diagnostics: dict[str, int],
-    saved_bodies: dict[str, dict[str, Any]],
+    saved_bodies: dict[str, dict[str, Any]] | None,
     secret_values: frozenset[str] = frozenset(),
     omit: Callable[[Any], bool] | None = None,
 ) -> list[dict[str, Any]]:
@@ -55,13 +55,13 @@ def search_config_surface(
         )
         return []
 
+    name_key = "name" if domain == SEARCH_TYPE_SCENE else "alias"
     results: list[dict[str, Any]] = []
     for entity in entities:
         entity_id = getattr(entity, "entity_id", None)
         if not entity_id:
             continue
         name, item_id, config_dict = _extract_config(domain, entity)
-        source = _classify_source(item_id)
 
         if match_all:
             score: int | None = 100
@@ -81,10 +81,11 @@ def search_config_surface(
             score, match_in_name, match_in_config = scored
         # Search matches the running configuration. Return the editor's saved
         # definition by ID; Core can normalize action syntax during loading.
-        config_out = saved_bodies.get(item_id) if item_id else None
+        config_out = saved_bodies.get(item_id) if saved_bodies and item_id else None
         if omit is not None and omit((entity_id, name, config_dict, config_out)):
             continue
 
+        missing_editor_body = saved_bodies is not None and config_out is None
         if config_out is not None:
             if _too_large(config_out):
                 partial_reasons.append(f"{domain} {entity_id} body omitted (too large)")
@@ -95,17 +96,18 @@ def search_config_surface(
         rec: dict[str, Any] = {
             "id": item_id,
             "entity_id": entity_id,
-            "source": source,
+            name_key: name,
             "score": score,
             "match_in_name": match_in_name,
             "match_in_config": match_in_config,
             "config": config_out,
         }
-        # Scenes carry a "name"; automations/scripts carry an "alias".
-        if domain == SEARCH_TYPE_SCENE:
-            rec["name"] = name
-        else:
-            rec["alias"] = name
+        if missing_editor_body:
+            rec["config_hint"] = (
+                "Search could not find a saved editor definition for this match. "
+                "For a YAML package, use ha_config_get_yaml on the package file "
+                "if that tool is available."
+            )
         results.append(rec)
     return results
 
@@ -181,11 +183,6 @@ def _scene_match_corpus(scene_config: Any) -> dict[str, Any] | None:
     if entity_ids:
         out["entities"] = sorted(entity_ids)
     return out or None
-
-
-def _classify_source(item_id: str | None) -> str:
-    """Legacy source label. An id alone does not authorize returning a body."""
-    return "storage" if item_id else "yaml"
 
 
 def _too_large(config_dict: dict[str, Any]) -> bool:
