@@ -16,7 +16,6 @@ from homeassistant.components.recorder import Recorder
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant.common import MockModule, mock_integration
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
@@ -28,9 +27,6 @@ _WS = "ha_mcp_tools/logbook_events"
 @pytest.fixture
 async def logbook(recorder_mock: Recorder, hass: HomeAssistant) -> None:
     """Core's logbook on its recorder, with a lamp that turned on."""
-    # The logbook registers a sidebar panel; the real frontend needs the
-    # frontend build, which is not installed with Core.
-    mock_integration(hass, MockModule("frontend"))
     assert await async_setup_component(hass, "logbook", {})
     attributes = {"friendly_name": "Kitchen Lamp"}
     hass.states.async_set("light.kitchen", "off", attributes)

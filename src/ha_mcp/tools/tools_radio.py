@@ -12,7 +12,6 @@ Per-radio logic lives in ``radio/<name>.py``; this module is the dispatcher.
 
 from __future__ import annotations
 
-import logging
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -35,8 +34,6 @@ from .radio import zigbee as zigbee_handler
 from .radio import zwave as zwave_handler
 from .radio.base import confirm_required, require
 from .tool_hints import write_hints
-
-logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {
     "zwave": zwave_handler,

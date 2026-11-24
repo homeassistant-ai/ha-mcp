@@ -23,7 +23,7 @@ env:
   PYTHON_VERSION: "3.14"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.11.2"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.11.3"
   # Disable Testcontainers' Ryuk reaper: it has been reported to leave
   # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
   # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
@@ -374,6 +374,10 @@ jobs:
     - name: Check private names reached through strings
       if: success() || failure()
       run: uv run python scripts/private_test_access.py
+
+    - name: Check stand-ins registered under a real integration's name
+      if: success() || failure()
+      run: uv run python scripts/integration_stand_ins.py
 
     - name: Check decisions by the wording of an error
       if: success() || failure()

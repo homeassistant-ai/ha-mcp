@@ -19,13 +19,10 @@ so the token is built there and this module only applies it.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .models import ErrorLogPage
-
-logger = logging.getLogger(__name__)
 
 CURSOR_TOKEN_PREFIX = "cursor:"
 

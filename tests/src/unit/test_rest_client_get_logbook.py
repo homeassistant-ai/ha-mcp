@@ -13,7 +13,6 @@ import pytest
 from homeassistant.components.recorder import Recorder
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
@@ -22,7 +21,6 @@ from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnecti
 @pytest.fixture(autouse=True)
 async def core_logbook(recorder_mock: Recorder, hass: HomeAssistant) -> None:
     """Core's logbook integration, served by the real in-memory recorder."""
-    mock_integration(hass, MockModule("frontend"))
     assert await async_setup_component(hass, "logbook", {})
 
 

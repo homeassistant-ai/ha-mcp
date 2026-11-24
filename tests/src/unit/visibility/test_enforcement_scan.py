@@ -19,6 +19,7 @@ from homeassistant.setup import async_setup_component
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.errors import create_entity_not_found_error
+from ha_mcp.tools.helpers import BP_WARNINGS_SUGGESTION_PREFIX
 from ha_mcp.visibility.model import VisibilityConfig
 
 from .._tool_errors import error_body
@@ -445,6 +446,118 @@ class TestOutboundScan:
         body = error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
         assert "sensor.foo" not in json.dumps(body)
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param(
+                {
+                    "success": False,
+                    "error": {"code": "VALIDATION_FAILED", "message": "x"},
+                    "skill_content": {
+                        "references/x.md": "entity_id: cover.garage_door"
+                    },
+                },
+                id="bundled-guide",
+            ),
+            pytest.param(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "VALIDATION_FAILED",
+                        "message": "x",
+                        "suggestions": [
+                            f"{BP_WARNINGS_SUGGESTION_PREFIX}cover.garage_door"
+                        ],
+                    },
+                },
+                id="checker-warnings",
+            ),
+        ],
+    )
+    async def test_best_practice_text_on_a_gated_write_error_is_not_scanned(
+        self,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+        payload: dict[str, Any],
+    ) -> None:
+        """A failed write keeps its real error: the guide's and the checker's
+        examples name entities that are not this install's."""
+        enforce_hiding(set_config, "cover.garage_door")
+        original = json.dumps(payload)
+
+        async def _raise_with_guide(_context: Any) -> Any:
+            raise ToolError(original)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_config_set_script", {"script_id": "night"}),
+                _raise_with_guide,
+            )
+
+        assert exc.value.args[0] == original
+
+    @pytest.mark.parametrize(
+        ("tool", "text"),
+        [
+            pytest.param(
+                "ha_eval_template",
+                json.dumps(
+                    {
+                        "error": {
+                            "suggestions": [
+                                f"{BP_WARNINGS_SUGGESTION_PREFIX}cover.garage_door"
+                            ]
+                        }
+                    }
+                ),
+                id="a-tool-that-attaches-no-guide",
+            ),
+            pytest.param(
+                "ha_config_set_script",
+                json.dumps(
+                    {
+                        "error": {
+                            "message": "cover.garage_door",
+                            "suggestions": ["Use the guide"],
+                        },
+                        "skill_content": {"references/x.md": "text"},
+                    }
+                ),
+                id="in-the-message",
+            ),
+            pytest.param(
+                "ha_config_set_script",
+                json.dumps(
+                    {"error": {"suggestions": ["Did you mean cover.garage_door?"]}}
+                ),
+                id="in-another-suggestion",
+            ),
+            pytest.param(
+                "ha_config_set_script",
+                "Error calling tool 'ha_config_set_script': cover.garage_door",
+                id="in-a-plain-text-error",
+            ),
+        ],
+    )
+    async def test_hidden_id_outside_a_write_tools_error_guide_is_still_refused(
+        self,
+        mw: _ChainedEnforcement,
+        set_config: Callable[..., VisibilityConfig],
+        tool: str,
+        text: str,
+    ) -> None:
+        """Only the best-practice text is left out: a hidden id anywhere else in
+        a failed write's error still refuses it."""
+        enforce_hiding(set_config, "cover.garage_door")
+
+        async def _raise_leaky(_context: Any) -> Any:
+            raise ToolError(text)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(make_context(tool, {}), _raise_leaky)
+
+        assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
 
 
 class TestUnscannableSurfaces:

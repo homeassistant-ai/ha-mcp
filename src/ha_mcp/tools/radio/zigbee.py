@@ -14,7 +14,6 @@ network- and group-scoped actions act on the coordinator.
 from __future__ import annotations
 
 import contextlib
-import logging
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -31,8 +30,6 @@ from .base import (
     resolve_update_entity,
     ws_call,
 )
-
-logger = logging.getLogger(__name__)
 
 SUPPORTED: dict[str, ActionSpec] = {
     "diagnostics": ActionSpec(

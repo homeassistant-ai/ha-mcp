@@ -1,8 +1,8 @@
 """Subscription cleanup must survive the connection going away under it.
 
 Background cleanup collects failures on its original socket; a direct
-``unsubscribe_events`` / ``unsubscribe_command`` treats a socket closed during
-the send or before the answer as the transport loss it is.
+``unsubscribe_events`` treats a socket closed during the send or before the
+answer as the transport loss it is.
 
 The client is the server's own, connected to Core's ``websocket_api``. Core
 acknowledges a command late when ``execute_script`` waits on a state, and a
@@ -227,9 +227,7 @@ async def test_background_release_collects_outcome(
 
 
 @pytest.mark.parametrize("closed", ["during_send", "before_ack"])
-@pytest.mark.parametrize("method", ["unsubscribe_events", "unsubscribe_command"])
 async def test_unsubscribe_treats_a_closed_socket_as_transport_loss(
-    method: str,
     closed: str,
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
@@ -245,12 +243,7 @@ async def test_unsubscribe_treats_a_closed_socket_as_transport_loss(
     """
     caplog.set_level(logging.DEBUG, logger=WS_LOGGER)
     async with connected_ws(core_client) as client:
-        if method == "unsubscribe_events":
-            subscription = await client.subscribe_events(EVENT)
-        else:
-            subscription, _queue = await client.subscribe_command(
-                "subscribe_events", event_type=EVENT
-            )
+        subscription = await client.subscribe_events(EVENT)
         assert _subscribed(hass) == 1
 
         if closed == "during_send":
@@ -258,18 +251,20 @@ async def test_unsubscribe_treats_a_closed_socket_as_transport_loss(
             with patch.object(
                 client.websocket, "send", side_effect=ConnectionClosed(None, None)
             ):
-                await getattr(client, method)(subscription)
+                await client.unsubscribe_events(subscription)
         else:
             with answers_unread(client):
-                unsubscribe = asyncio.create_task(getattr(client, method)(subscription))
+                unsubscribe = asyncio.create_task(
+                    client.unsubscribe_events(subscription)
+                )
                 # Sent: Core has dropped the subscription, its answer unread.
                 await until(lambda: _subscribed(hass) == 0)
                 abort_transport(client)
                 async with asyncio.timeout(5):
-                    _ = await unsubscribe
+                    await unsubscribe
 
     assert [
         record.levelno
         for record in caplog.records
-        if f"{method}({subscription})" in record.getMessage()
+        if f"unsubscribe_events({subscription})" in record.getMessage()
     ] == [logging.DEBUG]

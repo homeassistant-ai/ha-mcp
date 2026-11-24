@@ -319,21 +319,6 @@ async def test_a_failed_release_does_not_raise_and_drops_the_queue(
         await until(lambda: subscribed(hass) == 0)
 
 
-async def test_unsubscribe_command_releases_the_queue_and_cores_subscription(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    async with connected_ws(core_client) as client:
-        subscription, queue = await client.subscribe_command(
-            "subscribe_events", event_type=EVENT
-        )
-
-        await client.unsubscribe_command(subscription)
-
-        assert subscribed(hass) == 0
-        with pytest.raises(asyncio.QueueShutDown):
-            queue.get_nowait()
-
-
 async def test_a_dropped_connection_wakes_a_reader_waiting_on_the_queue(
     core_client: HomeAssistantClient,
 ) -> None:

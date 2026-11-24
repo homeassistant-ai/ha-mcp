@@ -12,6 +12,7 @@ import pytest
 from homeassistant.components.hassio.entity import HassioAddonEntity, HassioCoreEntity
 from homeassistant.components.update import UpdateDeviceClass, UpdateEntityFeature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import Unauthorized
 from homeassistant.helpers import entity_registry as er
 
 from ha_mcp import update_check
@@ -20,6 +21,7 @@ from ha_mcp.client.exceptions import HomeAssistantCommandNotSent
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.helpers import core_error_message
 
+from ._command_faults import before_handling
 from ._hassio_updates_core import (
     OTHER_APP,
     OTHER_SLUG,
@@ -35,7 +37,6 @@ from ._tools_addons_core import core_supervisor as core_supervisor
 from ._tools_addons_core import supervisor as supervisor
 from ._tools_addons_core import target_app as target_app
 from ._tools_updates_core import (
-    CORE_UPDATE,
     SoftwareUpdate,
     core_refusal,
     manage_updates,
@@ -48,6 +49,7 @@ INSTALL = UpdateEntityFeature.INSTALL
 BACKUP = UpdateEntityFeature.BACKUP
 SPECIFIC = UpdateEntityFeature.SPECIFIC_VERSION
 CORE_TITLE = "Home Assistant Core"
+SETTINGS = "hassio/update/config/info"
 
 
 @pytest.fixture(autouse=True)
@@ -64,10 +66,10 @@ class TestBatchActions:
     ) -> None:
         installable = SoftwareUpdate("update.card_a", features=INSTALL)
         notify_only = SoftwareUpdate("update.card_b")
-        await set_up_updates(hass, installable, notify_only, integration="marketplace")
+        await set_up_updates(hass, installable, notify_only)
 
         result = await manage_updates(
-            component_core_client, action="install", categories=["hacs"]
+            component_core_client, action="install", categories=["other"]
         )
 
         assert installable.installs == [(None, False)]
@@ -80,10 +82,10 @@ class TestBatchActions:
         each is sent and Core's refusal is that item's error."""
         installable = SoftwareUpdate("update.card_a", features=INSTALL)
         notify_only = SoftwareUpdate("update.card_b")
-        await set_up_updates(hass, installable, notify_only, integration="marketplace")
+        await set_up_updates(hass, installable, notify_only)
 
         result = await manage_updates(
-            core_client, action="install", categories=["hacs"]
+            core_client, action="install", categories=["other"]
         )
 
         assert installable.installs == [(None, False)]
@@ -503,22 +505,36 @@ class TestBackupSetting:
         assert ("POST", "/core/update") in hassio_updates.requests
         assert not any(p.startswith("/backups") for _, p in hassio_updates.requests)
 
+    @pytest.mark.parametrize("core_versions", [("2026.11.1", "2026.11.2")])
     async def test_an_unreadable_setting_asks_for_no_backup_and_says_why(
-        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        component_core_client: HomeAssistantClient,
     ) -> None:
-        """Core's hassio integration always answers the setting, so the Core
-        update here is the stand-in's."""
-        core = SoftwareUpdate(CORE_UPDATE, title=CORE_TITLE, features=INSTALL | BACKUP)
-        await set_up_updates(hass, core, integration="hassio")
+        """Supervisor's proxy refuses the app's ``hassio/`` commands with Core's
+        own ``unauthorized``: the setting is on, but cannot be read."""
 
-        result = await manage_updates(
-            component_core_client, action="install", entity_ids=[CORE_UPDATE]
-        )
+        def refuse(msg: dict[str, object]) -> None:
+            raise Unauthorized
 
-        refusal = await component_core_client.send_websocket_message(
-            {"type": "hassio/update/config/info"}
-        )
-        assert core.installs == [(None, False)]
+        set_backup_options(hass, {"core_backup_before_update": True})
+        hassio_updates.answer("POST", "/core/update")
+        core = hassio_entity(hass, HassioCoreEntity).entity_id
+
+        with before_handling(hass, SETTINGS, refuse):
+            result = await manage_updates(
+                component_core_client, action="install", entity_ids=[core]
+            )
+            refusal = await component_core_client.send_websocket_message(
+                {"type": SETTINGS}
+            )
+
+        assert [(r["success"], r["backup"]) for r in result["results"]] == [
+            (True, False)
+        ]
+        assert ("POST", "/core/update") in hassio_updates.requests
+        assert not any(p.startswith("/backups") for _, p in hassio_updates.requests)
         assert any(
             core_error_message(refusal["error"]) in w for w in result["warnings"]
         )

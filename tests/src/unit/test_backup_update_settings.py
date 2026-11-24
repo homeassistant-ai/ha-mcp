@@ -5,8 +5,8 @@ settings as the Backups settings page does, through Core's
 Core's ``hassio`` WebSocket API answers every call: in front of the stand-in
 Supervisor (``_tools_addons_core.core_supervisor``) for a settings change, and
 on the Supervisor install of ``_backup_snapshot_core`` for the snapshot list.
-The settings live in the ``hassio`` config entry's options, as on a Supervisor
-install.
+The settings live in the options of the ``hassio`` config entry Core set up,
+as on a Supervisor install.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ import pytest
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import Unauthorized
-from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -47,9 +46,12 @@ pytestmark = pytest.mark.usefixtures("backup_settings")
 
 
 def hassio_entry(hass: HomeAssistant, **options: Any) -> ConfigEntry:
-    """The ``hassio`` config entry a Supervisor install has, holding ``options``."""
-    entry = MockConfigEntry(domain="hassio", options=options)
-    entry.add_to_hass(hass)
+    """The ``hassio`` config entry Core set up, with ``options`` stored."""
+    [entry] = hass.config_entries.async_entries("hassio")
+    if options:
+        hass.config_entries.async_update_entry(
+            entry, options={**entry.options, **options}
+        )
     return entry
 
 
@@ -101,6 +103,7 @@ async def test_core_refusal_comes_back_with_its_text_and_stores_nothing(
 ) -> None:
     """A value Core would refuse must not be judged or reworded by the tool."""
     entry = hassio_entry(hass)
+    before = dict(entry.options)
 
     with pytest.raises(ToolError) as exc_info:
         await configure(core_client, settings)
@@ -109,7 +112,7 @@ async def test_core_refusal_comes_back_with_its_text_and_stores_nothing(
     assert error_body(exc_info)["ha_error_code"] == reply["error_code"]
     assert core_error_message(reply["error"]) in error_of(exc_info)["message"]
     assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert entry.options == {}
+    assert entry.options == before
 
 
 async def test_configure_without_a_supervisor_says_it_needs_one(
@@ -132,7 +135,7 @@ async def test_a_user_core_does_not_answer_is_told_who_may(
     """Core answers these settings only to an administrator. Its refusal carries
     the code Supervisor also refuses an app's ``hassio/`` commands with, so the
     tool names both causes instead of a bare "Unauthorized"."""
-    entry = hassio_entry(hass)
+    entry = hassio_entry(hass, core_backup_before_update=False)
 
     with pytest.raises(ToolError) as exc_info:
         await configure(read_only_client, {"core_backup_before_update": True})
@@ -144,7 +147,7 @@ async def test_a_user_core_does_not_answer_is_told_who_may(
     assert core_error_message(reply["error"]) in error_of(exc_info)["message"]
     assert error_of(exc_info)["code"] == "AUTH_INSUFFICIENT_PERMISSIONS"
     assert "Home Assistant app" in error_of(exc_info)["message"]
-    assert entry.options == {}
+    assert entry.options["core_backup_before_update"] is False
 
 
 async def test_list_from_the_app_keeps_the_snapshots_and_says_why_settings_are_missing(
@@ -156,7 +159,6 @@ async def test_list_from_the_app_keeps_the_snapshots_and_says_why_settings_are_m
     ``unauthorized`` refusal; Core gives it here as it would to any caller it
     refuses."""
     await backup_install.supervisor()
-    hassio_entry(hass)
 
     def refuse(msg: dict[str, Any]) -> None:
         raise Unauthorized
@@ -187,8 +189,6 @@ async def test_settings_cannot_carry_another_command(
 ) -> None:
     """A ``type`` inside the settings would send some other command past the
     backup controls."""
-    hassio_entry(hass)
-
     with sent_messages(core_client) as sent, pytest.raises(ToolError):
         await configure(core_client, {"type": "backup/generate"})
 
@@ -201,7 +201,6 @@ async def test_a_change_that_got_no_answer_may_have_been_applied(
     core_client: HomeAssistantClient,
 ) -> None:
     """Called a failure without that, it would invite a blind retry."""
-    hassio_entry(hass)
 
     with (
         dropped_on(hass, UPDATE, await pooled_socket(core_client)),
@@ -219,7 +218,7 @@ async def test_a_stored_change_whose_readback_fails_is_still_a_success(
     core_client: HomeAssistantClient,
 ) -> None:
     """Home Assistant took the change; reporting it as failed would hide that."""
-    entry = hassio_entry(hass)
+    entry = hassio_entry(hass, core_backup_before_update=False)
 
     with registry_lookup_failing(hass, INFO):
         result = await configure(core_client, {"core_backup_before_update": True})
@@ -266,7 +265,6 @@ async def test_a_settings_read_that_fails_keeps_the_list_and_says_so(
     """The snapshot list is what a caller checks before a restore; losing it to
     a side read would leave them blind."""
     await backup_install.supervisor()
-    hassio_entry(hass)
     if failure == "refused":
         fault = registry_lookup_failing(hass, INFO)
     else:

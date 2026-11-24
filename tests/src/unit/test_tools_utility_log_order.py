@@ -18,7 +18,6 @@ from homeassistant.components.recorder import Recorder
 from homeassistant.const import KEY_DATA_LOGGING
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -41,9 +40,6 @@ async def get_logs(client: HomeAssistantClient, **overrides: Any) -> dict[str, A
 
 async def record_states(hass: HomeAssistant, states: dict[str, list[str]]) -> None:
     """Have Core's recorder write each entity's states, in order, into its logbook."""
-    # The logbook registers a sidebar panel; the real frontend needs the
-    # frontend build, which is not installed with Core.
-    mock_integration(hass, MockModule("frontend"))
     assert await async_setup_component(hass, "logbook", {})
     for step in range(max(len(values) for values in states.values())):
         for entity_id, values in states.items():

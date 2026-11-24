@@ -4,7 +4,6 @@ Home Assistant 2026.11 replaced HACS with the Marketplace; the tools keep
 their HACS names and drive its ``marketplace/*`` WebSocket API.
 """
 
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
@@ -27,8 +26,6 @@ from .helpers import (
 )
 from .response_helpers import add_timezone_metadata
 from .tool_hints import read_only_hints, write_hints
-
-logger = logging.getLogger(__name__)
 
 _REPOSITORY_ID_HELP = (
     "The repository's numeric Marketplace id or its 'owner/repo' name, "

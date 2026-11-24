@@ -16,7 +16,6 @@ firmware installs).
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,8 +24,6 @@ from ...errors import ErrorCode, create_error_response
 from ..component_config_entries import fetch_config_entries
 from ..component_devices import fetch_device_entities_via_component
 from ..helpers import raise_tool_error
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

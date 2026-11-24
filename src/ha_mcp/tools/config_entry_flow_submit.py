@@ -8,7 +8,6 @@ flow on inside the GET.
 """
 
 import asyncio
-import logging
 from typing import Any, NoReturn
 
 from ..client.rest_client import (
@@ -25,8 +24,6 @@ from .config_entry_flow_errors import (
 )
 from .config_entry_flow_progress import wait_for_progress
 from .helpers import raise_tool_error
-
-logger = logging.getLogger(__name__)
 
 # External steps need a browser (OAuth / cloud authorization), which an MCP
 # client cannot drive (issue #1814).

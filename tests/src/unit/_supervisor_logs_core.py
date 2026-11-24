@@ -3,9 +3,9 @@
 Inside the app the server's client asks Supervisor directly at
 ``SUPERVISOR_BASE_URL``, so ``app_route`` serves that address over real HTTP.
 Anywhere else the client asks Core's ``/api/hassio/...`` proxy, which is
-Core's own ``HassIOView`` as ``hassio``'s ``async_setup`` registers it; only the
-Supervisor HTTP API behind it is answered by ``aioclient_mock``, as Core's own
-hassio tests answer it. ``route`` is each of the two in turn.
+Core's own ``hassio`` integration (``_supervisor_core``); only the Supervisor
+HTTP API behind it is answered by ``aioclient_mock``, as Core's own hassio
+tests answer it. ``route`` is each of the two in turn.
 """
 
 from __future__ import annotations
@@ -18,10 +18,7 @@ from typing import Any
 
 import pytest
 from aiohttp import web
-from homeassistant.components.hassio.http import HassIOView
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.setup import async_setup_component
 from pytest_homeassistant.test_util.aiohttp import (
     AiohttpClientMocker,
     AiohttpClientMockResponse,
@@ -32,10 +29,9 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_logs import LogTools
 
 from ._log_tool_calls import call_kwargs
+from ._supervisor_core import SUPERVISOR, load_supervisor_api
 
 SUPERVISOR_TOKEN = "supervisor-token-for-tests"
-# The Supervisor address Core's hassio tests give it.
-CORE_SUPERVISOR_HOST = "127.0.0.1"
 
 
 @dataclass(frozen=True)
@@ -137,20 +133,13 @@ async def core_proxy(
     aioclient_mock: AiohttpClientMocker,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Supervisor:
-    """Core's hassio proxy in front of a Supervisor ``aioclient_mock`` answers.
-
-    Registered before ``core_client`` starts Core's HTTP server, which freezes
-    its routes, so a test takes it ahead of ``core_client``.
-    """
-    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
-    assert await async_setup_component(hass, "http", {})
-    hass.http.register_view(
-        HassIOView(CORE_SUPERVISOR_HOST, async_get_clientsession(hass))
-    )
+    """Core's hassio proxy in front of a Supervisor ``aioclient_mock`` answers;
+    the server's client is outside the app."""
+    await load_supervisor_api(hass, aioclient_mock, monkeypatch, {})
+    monkeypatch.delenv("SUPERVISOR_TOKEN")
     supervisor = Supervisor(aioclient_mock)
     aioclient_mock.get(
-        re.compile(rf"^http://{re.escape(CORE_SUPERVISOR_HOST)}/"),
+        re.compile(rf"^http://{re.escape(SUPERVISOR)}/"),
         side_effect=supervisor.serve_core,
     )
     return supervisor

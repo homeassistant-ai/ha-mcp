@@ -26,7 +26,7 @@ from ..error_wording import (
 )
 from ..errors import ErrorCode, create_error_response
 from .component_automation import automation_describe
-from .helpers import raise_tool_error
+from .helpers import bp_warnings_suggestion, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -187,10 +187,7 @@ async def raise_core_rejection(
             )
     suggestions.append("Use ha_get_skill_guide for automation examples")
     if bp_warnings:
-        suggestions.append(
-            "Config had best-practice issues that may be related: "
-            + "; ".join(bp_warnings)
-        )
+        suggestions.append(bp_warnings_suggestion(bp_warnings))
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_FAILED,

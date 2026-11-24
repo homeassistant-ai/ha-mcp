@@ -2,9 +2,11 @@
 
 Inside the app the client reads Core's journal straight from Supervisor
 (``in_app_client``). Outside it, the client asks Core whether ``hassio`` is
-loaded: a Supervised install is read at ``/api/hassio/core/logs``
-(``supervised_journal_route``), any other at Core's own ``/api/error_log``, the file
-Core names in ``KEY_DATA_LOGGING`` (the container route). The journal is
+loaded. A Supervised install is read at ``/api/hassio/core/logs``
+(``supervised_journal_route``); there Core's own ``hassio`` integration runs in
+front of the stand-in Supervisor of ``_tools_addons_core``. Any other install
+is read at Core's own ``/api/error_log``, the file Core names in
+``KEY_DATA_LOGGING`` (the container route). The journal is
 ``FakeGatewayd`` (``_journal_gatewayd.py``), an upstream of the server, not
 Home Assistant. A test takes these fixtures after importing their
 dependencies from ``_journal_gatewayd``, ``_gateway`` and ``_error_log_core``.
@@ -16,18 +18,19 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
-from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._error_log_core import serve_log
 from ._gateway import Gateway
+from ._hassio_core import set_up_hassio
 from ._journal_gatewayd import FakeGatewayd
+from ._tools_addons_core import TargetApp, serve_supervisor
 
 
 def load_lines(journal: FakeGatewayd, lines: list[str]) -> None:
@@ -68,10 +71,12 @@ async def supervised_journal_route(
     hassio_path_client: HomeAssistantClient,
     gatewayd: FakeGatewayd,
     journal_proxy: Gateway,
+    aiohttp_client: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> ErrorLogRoute:
     """``hassio_path_client`` against a Core that has ``hassio`` loaded."""
-    mock_integration(hass, MockModule("hassio"))
-    assert await async_setup_component(hass, "hassio", {})
+    supervisor = await serve_supervisor(aiohttp_client, TargetApp())
+    await set_up_hassio(hass, supervisor, monkeypatch)
     return ErrorLogRoute(
         "supervised", hassio_path_client, gatewayd, None, journal_proxy
     )

@@ -178,9 +178,14 @@ values.
 
 `ha_get_skill_guide` and `ha_search_tools` are never scanned: they return
 bundled docs and tool schemas, whose examples can name an entity_id that is also
-hidden. The same bundled text attached to a write tool's result (the
-best-practices guide and the checker's warnings) is not scanned either; the
-rest of that result is. The developer-mode `ha_dev_*` tools are not scanned either: developer
+hidden. The best-practices text attached to a write tool's result or error (the
+bundled guide and the checker's warnings) is not scanned either; the rest of
+that result or error is. One of the checker's warnings, on the order of keys in
+a `variables` block, repeats key names from the config it checks. A write whose
+arguments name a hidden entity_id is refused before it runs, but when the tool
+builds the config from what is stored (`python_transform`,
+`take_control_of_blueprint`), a key can name a hidden entity_id that the
+arguments never named, and that warning returns it unscanned. The developer-mode `ha_dev_*` tools are not scanned either: developer
 mode is a development and testing override that can change settings and replace
 the running server, and its reads (a stored security-policy rule, for example)
 can return a hidden entity_id.
