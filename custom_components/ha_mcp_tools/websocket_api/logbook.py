@@ -36,7 +36,7 @@ from homeassistant.util import dt as dt_util
 from .logbook_page import read_logbook_page
 from .seam import PreSerializedResult
 
-CAPABILITIES = ("logbook_events", "logbook_event_pages")
+CAPABILITIES = ("logbook_events", "logbook_event_pages", "logbook_page_counts")
 
 
 def _parse_time(value: str, label: str) -> datetime:

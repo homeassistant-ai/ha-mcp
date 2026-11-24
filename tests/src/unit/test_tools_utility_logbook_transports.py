@@ -427,24 +427,63 @@ async def test_device_filter_when_core_has_no_logbook_is_not_an_empty_success(
 
 
 @pytest.mark.usefixtures("logbook")
-@pytest.mark.parametrize("context_id", [None, "invalid-context"])
-async def test_wide_text_search_is_rejected_before_reading_recorder(
-    component_core_client: HomeAssistantClient, sent: AsyncMock, context_id: str | None
+async def test_invalid_long_context_cannot_turn_into_an_unfiltered_read(
+    component_core_client: HomeAssistantClient, sent: AsyncMock
 ) -> None:
     with rest_reads(component_core_client) as rest:
         error = await logbook_error(
             LogTools(component_core_client),
             hours_back=125,
-            search="Home Assistant started",
-            limit=4,
-            context_id=context_id,
+            context_id="invalid-context",
         )
-
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert "hours_back" in error["message"]
     assert COMPONENT_COMMAND not in sent_types(sent)
-    assert CORE_COMMAND not in sent_types(sent)
     rest.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("order", ["oldest", "newest"])
+async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    core_client: HomeAssistantClient,
+    order: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from custom_components.ha_mcp_tools.websocket_api import logbook_page
+
+    end = dt_util.utcnow().replace(microsecond=0)
+    seam = (end - timedelta(hours=1)).timestamp()
+    times = [seam - 3601, seam - 0.000001, seam, seam, seam + 0.000001, seam + 30]
+    names = [f"range marker {i}" for i in range(len(times))]
+    for name, stamp in zip(names, times, strict=True):
+        hass.bus.async_fire(
+            "logbook_entry", {"name": name, "message": "recorded"}, time_fired=stamp
+        )
+    await async_wait_recording_done(hass)
+    monkeypatch.setattr(logbook_page, "RAW_PAGE_ROWS", 2)
+    for client in (component_core_client, core_client):
+        params = call_kwargs(
+            source="logbook",
+            hours_back=3,
+            search="range marker",
+            order=order,
+            end_time=end.isoformat(),
+            limit=2,
+        )
+        actual: list[str] = []
+        for _ in range(len(names)):
+            data = (await LogTools(client).get_logs(**params))["data"]
+            assert data["total_entries"] == len(names)
+            assert data["offset"] == len(actual)
+            actual.extend(row["name"] for row in data["entries"])
+            if not data["has_more"]:
+                break
+            params["offset"] = data["next_offset"]
+            if isinstance(params["offset"], str):
+                params.pop("hours_back", None)
+                params.pop("end_time", None)
+        assert actual == (names if order == "oldest" else names[::-1])
 
 
 @pytest.mark.usefixtures("logbook")
@@ -488,6 +527,7 @@ async def test_dense_logbook_pages_return_each_tied_event_once(
     with rest_reads(component_core_client) as rest:
         for _ in range(len(names)):
             data = (await LogTools(component_core_client).get_logs(**params))["data"]
+            assert data["total_entries"] == len(names)
             assert len(data["entries"]) <= 3
             actual.extend(row["name"] for row in data["entries"])
             if not data["has_more"]:
@@ -538,7 +578,6 @@ async def test_sparse_search_keeps_parent_context_across_empty_pages(
     assert len(expected) == 1 and expected[0]["context_service"] == "turn_on"
     monkeypatch.setattr(logbook_page, "RAW_PAGE_ROWS", 2)
     actual = []
-    empty_continuation = False
     with rest_reads(component_core_client) as rest:
         for _ in range(20):
             data = (await LogTools(component_core_client).get_logs(**params))["data"]
@@ -546,11 +585,11 @@ async def test_sparse_search_keeps_parent_context_across_empty_pages(
             if not data["has_more"]:
                 assert data["total_entries"] == 1
                 break
-            empty_continuation |= not data["entries"]
+            assert data["entries"]
+            assert data["total_entries"] == 1
             params["offset"] = data["next_offset"]
         else:
             pytest.fail("Sparse search did not terminate")
-    assert empty_continuation
     for entry in actual + expected:
         entry["when"] = datetime.fromisoformat(entry["when"])
     assert actual == expected

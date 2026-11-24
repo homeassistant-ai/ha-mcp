@@ -140,22 +140,10 @@ async def test_logbook_pagination_with_offset(mcp_client):
 
     async with MCPAssertions(mcp_client) as mcp:
         first_raw = await mcp.call_tool_success(
-            "ha_get_logs",
-            {
-                "hours_back": 24,
-                "entity_id": "input_number.e2e_pagination_seed",
-                "limit": 5,
-                "offset": 0,
-            },
+            "ha_get_logs", {"hours_back": 24, "limit": 5, "offset": 0}
         )
         second_raw = await mcp.call_tool_success(
-            "ha_get_logs",
-            {
-                "hours_back": 24,
-                "entity_id": "input_number.e2e_pagination_seed",
-                "limit": 5,
-                "offset": 5,
-            },
+            "ha_get_logs", {"hours_back": 24, "limit": 5, "offset": 5}
         )
     first_data = get_logbook_data(first_raw)
     second_data = get_logbook_data(second_raw)
@@ -217,12 +205,7 @@ async def test_logbook_has_more_indicator(mcp_client):
     raw_data = await safe_call_tool(
         mcp_client,
         "ha_get_logs",
-        {
-            "hours_back": 24,
-            "entity_id": "input_number.e2e_pagination_seed",
-            "limit": 2,
-            "offset": 0,
-        },
+        {"hours_back": 24, "limit": 2, "offset": 0},
     )
     data = get_logbook_data(raw_data)
 
@@ -279,7 +262,7 @@ async def test_logbook_response_metadata(mcp_client):
     raw_data = await safe_call_tool(
         mcp_client,
         "ha_get_logs",
-        {"hours_back": 1, "limit": 10},
+        {"hours_back": 2, "limit": 10},
     )
     data = get_logbook_data(raw_data)
 
@@ -752,7 +735,7 @@ async def test_logs_logbook_with_search(mcp_client):
 
     async with MCPAssertions(mcp_client) as mcp:
         raw_data = await mcp.call_tool_success(
-            "ha_get_logs", {"source": "logbook", "hours_back": 1, "search": "sun"}
+            "ha_get_logs", {"source": "logbook", "hours_back": 24, "search": "sun"}
         )
     data = get_logbook_data(raw_data)
 

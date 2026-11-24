@@ -40,7 +40,7 @@ from .component_api import (
 )
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import _coerce_limit, _compact_logbook_entries
-from .logbook_cursor import LogbookCursor
+from .logbook_cursor import LogbookCursor, logbook_windows
 from .response_helpers import add_timezone_metadata
 
 # The component command serving Core's own logbook processor in-process, and
@@ -99,18 +99,11 @@ class LogbookLogSourceMixin:
             )
 
         # Core uses a binary ULID to constrain a context-only recorder query.
-        if hours_back > 1 and not (
-            entity_id or device_id or ulid_to_bytes_or_none(context_id) is not None
-        ):
+        if hours_back > 1 and context_id and ulid_to_bytes_or_none(context_id) is None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Whole-instance Logbook reads support hours_back=1. "
-                    "Use end_time to select an hour and follow its pagination hints.",
-                    suggestions=[
-                        "Use hours_back=1 with end_time near the event",
-                        "For a longer window, supply entity_id, device_id or a Home Assistant context ID",
-                    ],
+                    "A context filter for a multi-hour Logbook query must be a valid Home Assistant context ID.",
                 )
             )
 
@@ -262,7 +255,6 @@ class LogbookLogSourceMixin:
         entity_id: str | None,
         device_id: str | None,
         context_id: str | None,
-        page: dict[str, Any] | None,
     ) -> tuple[Any, str]:
         """Fetch events over Home Assistant's own transports, best first.
 
@@ -311,17 +303,10 @@ class LogbookLogSourceMixin:
         if context_id:
             command["context_id"] = context_id
 
-        response = await self._fetch_logbook_component(command, page)
+        response = await self._fetch_logbook_component(command)
         if response is not None:
             return response, "component"
 
-        if page and "after" in page:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Continuing this Logbook page requires the component that issued its cursor.",
-                )
-            )
         if device_ids:
             # REST has no device filter; only the WebSocket command can serve
             # this request.
@@ -368,9 +353,9 @@ class LogbookLogSourceMixin:
         if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
             return None
         message = {**command, "type": LOGBOOK_EVENTS_COMMAND}
-        if page and component_supports(caps, "logbook_event_pages"):
+        if page and component_supports(caps, "logbook_page_counts"):
             message["page"] = page
-        elif page and "after" in page:
+        elif page:
             return None
         try:
             response = await self._client.send_websocket_message(message)
@@ -581,9 +566,83 @@ class LogbookLogSourceMixin:
             normalized.append(row)
         return normalized
 
+    async def _required_component_page(
+        self, command: dict[str, Any], page: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = await self._fetch_logbook_component(command, page)
+        if isinstance(response, dict):
+            return response
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "The component serving this Logbook page is unavailable.",
+            )
+        )
+
+    async def _page_total(
+        self,
+        command: dict[str, Any],
+        page: dict[str, Any],
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        total = 0
+        for lo, hi in logbook_windows(start, end):
+            counted = await self._required_component_page(
+                command, {**page, "count_range": [lo.timestamp(), hi.timestamp()]}
+            )
+            total += counted["total"]
+        return total
+
+    async def _legacy_window_page(
+        self,
+        start: datetime,
+        end: datetime,
+        offset: int,
+        limit: int,
+        order: Literal["newest", "oldest"],
+        search: str | None,
+    ) -> dict[str, Any]:
+        """Collect a numeric page and exact total from Core's time-window endpoints."""
+        entries: list[Any] = []
+        total = 0
+        # Native Logbook bounds are exclusive. Overlap internal boundaries by a
+        # microsecond and assign rows to half-open bins using Core's displayed time.
+        overlap = timedelta(microseconds=1)
+        for lo, hi in logbook_windows(start, end, newest=order == "newest"):
+            rows, _ = await self._fetch_logbook_events(
+                start_time=(lo - overlap if lo > start else lo).isoformat(),
+                end_time=(hi + overlap if hi < end else hi).isoformat(),
+                entity_id=None,
+                device_id=None,
+                context_id=None,
+            )
+            if lo > start or hi < end:
+                rows = [
+                    r
+                    for r in rows
+                    if (
+                        lo == start
+                        or datetime.fromisoformat(r["when"]).timestamp()
+                        >= lo.timestamp()
+                    )
+                    and (
+                        hi == end
+                        or datetime.fromisoformat(r["when"]).timestamp()
+                        < hi.timestamp()
+                    )
+                ]
+            rows, _ = self._filter_logbook_by_search(rows, search)
+            selected, count, _ = self._paginate_logbook_entries(
+                rows, max(0, offset - total), limit - len(entries), order
+            )
+            entries.extend(selected)
+            total += count
+        return {"entries": entries, "total": total, "legacy": True}
+
     async def _format_logbook_page(
         self,
-        page: dict[str, Any],
+        request: dict[str, Any],
         cursor: LogbookCursor | None,
         offset: int,
         start: datetime,
@@ -593,31 +652,83 @@ class LogbookLogSourceMixin:
         limit: int,
         compact: bool,
     ) -> dict[str, Any]:
+        command = {"start_time": start.isoformat(), "end_time": end.isoformat()}
         before = cursor.seen if cursor else 0
+        if cursor:
+            page = await self._required_component_page(command, request)
+        else:
+            response = await self._fetch_logbook_component(command, request)
+            page = (
+                response
+                if isinstance(response, dict)
+                else await self._legacy_window_page(
+                    start, end, offset, limit, order, search
+                )
+            )
+        total = page["total"]
+        if cursor and cursor.total is not None:
+            total = cursor.total
+        elif total is None:
+            total = await self._page_total(command, request, start, end)
+        else:
+            total += before
+        while (
+            not page["entries"]
+            and page.get("after")
+            and before + page["matched"] < total
+        ):
+            before += page["matched"]
+            page = await self._required_component_page(
+                command, {**request, "after": page["after"], "skip": page["skip"]}
+            )
         entries = page["entries"]
-        after = page["after"]
-        total = page.get("total")
+        after = page.get("after")
+        position = max(offset, before)
+        more = position + len(entries) < total
+        hours = (end - start) // timedelta(hours=1)
         data: dict[str, Any] = {
             "success": True,
             "source": "logbook",
             "entries": _compact_logbook_entries(entries) if compact else entries,
-            "period": f"1 hours back from {end.isoformat()}",
+            "period": f"{hours} hours back from {end.isoformat()}",
             "start_time": start.isoformat(),
             "end_time": end.isoformat(),
             "entity_filter": None,
             "context_filter": None,
             "device_filter": None,
-            "total_entries": before + total if total is not None else None,
+            "total_entries": total,
             "returned_entries": len(entries),
             "limit": limit,
-            "offset": before if cursor else offset,
+            "offset": position,
             "order": order,
-            "has_more": after is not None,
+            "has_more": more,
         }
         if search:
             data["filters_applied"] = {"search": search}
-        if after is not None:
+        if page.get("legacy"):
+            data["warnings"] = [
+                "Install or update ha_mcp_tools for Recorder-side paging of dense Logbook windows."
+            ]
+            if more:
+                data["next_offset"] = position + len(entries)
+                data["pagination_hint"] = self._build_pagination_hint(
+                    position,
+                    limit,
+                    total,
+                    entries,
+                    hours,
+                    end.isoformat(),
+                    None,
+                    None,
+                    None,
+                    search,
+                    compact,
+                    order,
+                )
+        elif more and after is not None:
             data["next_offset"] = LogbookCursor(
+                hours_back=hours,
+                total=total,
                 end=end,
                 order=order,
                 search=search,
@@ -678,7 +789,7 @@ class LogbookLogSourceMixin:
 
     async def _get_logbook(
         self,
-        hours_back: int = 1,
+        hours_back: int | None = None,
         entity_id: str | None = None,
         device_id: str | None = None,
         context_id: str | None = None,
@@ -692,29 +803,31 @@ class LogbookLogSourceMixin:
         """Fetch logbook entries with search and pagination."""
         effective_limit = _coerce_limit(limit)
 
-        self._validate_logbook_window(hours_back, entity_id, device_id, context_id)
-
         scoped = bool(entity_id or device_id or context_id)
         cursor, end_dt, page = self._logbook_page_request(
             offset, end_time, order, search, effective_limit, scoped
         )
+        hours_back = (
+            hours_back
+            if hours_back is not None
+            else (cursor.hours_back if cursor else 1)
+        )
+        if cursor and hours_back != cursor.hours_back:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Use the same hours_back with this Logbook cursor.",
+                )
+            )
+        self._validate_logbook_window(hours_back, entity_id, device_id, context_id)
         numeric_offset = offset if isinstance(offset, int) else 0
         start_dt = end_dt - timedelta(hours=hours_back)
         start_timestamp = start_dt.isoformat()
 
         try:
-            response, transport = await self._fetch_logbook_events(
-                start_time=start_timestamp,
-                end_time=end_dt.isoformat(),
-                entity_id=entity_id,
-                device_id=device_id,
-                context_id=context_id,
-                page=page,
-            )
-
-            if transport == "component" and isinstance(response, dict):
+            if page is not None:
                 return await self._format_logbook_page(
-                    response,
+                    page,
                     cursor,
                     numeric_offset,
                     start_dt,
@@ -724,7 +837,13 @@ class LogbookLogSourceMixin:
                     effective_limit,
                     compact,
                 )
-
+            response, transport = await self._fetch_logbook_events(
+                start_time=start_timestamp,
+                end_time=end_dt.isoformat(),
+                entity_id=entity_id,
+                device_id=device_id,
+                context_id=context_id,
+            )
             response = self._normalize_logbook_events(response, transport)
             missing_names = (
                 transport == "websocket"
@@ -792,10 +911,6 @@ class LogbookLogSourceMixin:
                     order,
                 )
 
-            if page is not None:
-                transport_warnings.append(
-                    "Install or update ha_mcp_tools for Recorder-side paging of dense Logbook windows."
-                )
             if transport_warnings:
                 logbook_data["warnings"] = transport_warnings
             return await add_timezone_metadata(self._client, logbook_data)

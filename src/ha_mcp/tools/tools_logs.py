@@ -121,7 +121,7 @@ class LogTools(
         numeric_offset = offset if isinstance(offset, int) else 0
         if source == "logbook":
             return await self._get_logbook(
-                hours_back=hours_back if hours_back is not None else 1,
+                hours_back=hours_back,
                 entity_id=entity_id,
                 device_id=device_id,
                 context_id=context_id,
@@ -353,9 +353,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ge=1,
                 description=(
                     "How many hours back to read. Logbook (default 1), "
-                    "supervisor and system_service. Whole-instance Logbook reads are limited "
-                    "to 1 hour. Use end_time near the event, or supply entity_id, device_id "
-                    "or a valid context_id for a longer window. With a current ha_mcp_tools component, follow "
+                    "supervisor and system_service. With a current ha_mcp_tools component, follow "
                     "next_offset to page through the Recorder window. For the journal sources, only "
                     "when given: the journal serves that window, from its "
                     "start to the journal's end, one page at a time, "
@@ -405,8 +403,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "For whole-instance Logbook pages, return next_offset as offset with the same "
-                    "search and order. The cursor pins the end time. A sparse page can be empty "
-                    "with has_more=true, and total_entries is null until known. "
+                    "search and order. The cursor pins the time window. total_entries counts matching entries across the entire window. "
                     "Page deeper into source='logbook', 'error_log', "
                     "'fault_log', and supervisor/system_service on a page "
                     "read: hours_back and no search (ignored otherwise). "

@@ -131,6 +131,13 @@ def read_logbook_page(
             .order_by(None)
             .subquery()
         )
+        if bounds := page.get("count_range"):
+            return {
+                "entries": [],
+                "total": _count_matches(
+                    session, processor, source, bounds, page.get("search", "")
+                ),
+            }
         rows, more = _read_rows(session, source, page)
         if rows and (page.get("after") or (more and page["order"] == "newest")):
             _prime_contexts(session, source, processor, rows)
@@ -138,6 +145,37 @@ def read_logbook_page(
     if page["order"] == "newest":
         rendered.reverse()
     return _select_page(rendered, page, more)
+
+
+def _matches(entry: dict[str, Any], search: str) -> bool:
+    return not search or any(
+        search in str(entry.get(k, "")).lower()
+        for k in ("name", "message", "entity_id")
+    )
+
+
+def _count_matches(
+    session: Session,
+    processor: EventProcessor,
+    source: Subquery,
+    bounds: list[float],
+    search: str,
+) -> int:
+    """Count displayed entries through Core's renderer without retaining the window.
+
+    Counting uses only the display name, message and entity ID. Core's context
+    annotations do not affect these fields. Its stream mode avoids accumulating
+    context origins, and each small partition drops Core's decoded-event cache.
+    """
+    stamp = source.c.time_fired_ts
+    stmt = select(source).where(stamp >= bounds[0], stamp < bounds[1])
+    total = 0
+    needle = search.lower()
+    with session.connection().execute(stmt.execution_options(yield_per=4)) as result:
+        for rows in result.partitions(4):
+            processor.switch_to_live()
+            total += sum(_matches(entry, needle) for entry in processor.humanify(rows))
+    return total
 
 
 def _select_page(
@@ -148,14 +186,8 @@ def _select_page(
     entries: list[dict[str, Any]] = []
     search = page.get("search", "").lower()
 
-    def matches(entry: dict[str, Any]) -> bool:
-        return not search or any(
-            search in str(entry.get(k, "")).lower()
-            for k in ("name", "message", "entity_id")
-        )
-
     candidates = [
-        (row, events[0] if events and matches(events[0]) else None)
+        (row, events[0] if events and _matches(events[0], search) else None)
         for row, events in rendered
     ]
     total = None if more else sum(entry is not None for _, entry in candidates)

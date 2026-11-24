@@ -408,6 +408,9 @@ def _logbook_events_schema() -> dict[Any, Any]:
             vol.Required("limit"): vol.All(int, vol.Range(min=1, max=500)),
             vol.Required("skip"): vol.All(int, vol.Range(min=0)),
             vol.Optional("search"): str,
+            vol.Optional("count_range"): vol.ExactSequence(
+                [vol.Coerce(float), vol.Coerce(float)]
+            ),
             vol.Optional("after"): vol.ExactSequence(
                 [vol.Coerce(float), vol.In((0, 1)), int]
             ),
