@@ -18,7 +18,9 @@ from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_api import (
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     ENTITY_COMPOSED_NAME,
+    ComponentCaps,
     component_supports,
+    component_unusable_warning,
     get_component_caps,
 )
 from .helpers import (
@@ -54,6 +56,36 @@ from .search.response import (
 )
 from .search.state import StateMixin
 from .tool_hints import read_only_hints
+
+
+def _check_editor_body_support(
+    req: _ResolvedSearch, caps: ComponentCaps | None
+) -> list[str]:
+    """Require an update before a body search can downgrade other requested surfaces."""
+    if (
+        not req.include_config
+        or not req.body_eligible
+        or component_supports(caps, "search_editor_bodies")
+        or not {"automation", "script"}.intersection(_component_body_search_types(req))
+    ):
+        return []
+    if caps is not None:
+        raise_tool_error(
+            create_validation_error(
+                component_unusable_warning(
+                    caps, "it cannot safely return automation or script definitions"
+                ),
+                parameter="include_config",
+                suggestions=[
+                    "Retry after updating, or omit include_config for metadata."
+                ],
+            )
+        )
+    return [
+        component_unusable_warning(
+            None, "automation and script definition searches may be incomplete"
+        )
+    ]
 
 
 class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
@@ -422,17 +454,9 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         mode_supported = component_supports(caps, "search_unified") or (
             bool(req.query_text) and not (req.area_filter or "").strip()
         )
-        missing_editor_bodies = (
-            req.include_config
-            and req.body_eligible
-            and bool(
-                {"automation", "script"}.intersection(_component_body_search_types(req))
-            )
-            and not component_supports(caps, "search_editor_bodies")
-        )
+        editor_body_notes = _check_editor_body_support(req, caps)
         if (
             mode_supported
-            and not missing_editor_bodies
             and component_supports(caps, "search")
             and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
             and (
@@ -466,14 +490,7 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             and not response.get("entity_total_matches")
             and not response.get("config_total_matches"),
         )
-        if missing_editor_bodies:
-            action = "Install" if caps is None else "Update"
-            notes.append(
-                f"{action} the ha_mcp_tools component to search automation and script "
-                "definitions with include_config. These results may be incomplete, "
-                "including matches inside YAML packages."
-            )
-        response.setdefault("warnings", []).extend(notes)
+        response.setdefault("warnings", []).extend(editor_body_notes + notes)
         return _omit_empty_warnings(response)
 
     @tool(

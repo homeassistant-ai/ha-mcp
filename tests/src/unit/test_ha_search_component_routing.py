@@ -312,7 +312,7 @@ class TestOlderComponent:
         spies.states.assert_awaited_once()
         assert frames(spies.component, SEARCH) == []
 
-    async def test_missing_editor_bodies_warns_when_a_body_was_requested(
+    async def test_missing_editor_bodies_require_an_update_before_search(
         self,
         hass: HomeAssistant,
         component_core_client: HomeAssistantClient,
@@ -331,26 +331,32 @@ class TestOlderComponent:
             ],
         )
 
-        async def search(include_config: bool) -> dict[str, Any]:
-            return await _search(
-                component_core_client,
-                query="garden_probe",
-                search_types=["automation"],
-                include_config=include_config,
-            )
-
-        metadata = await search(False)
+        metadata = await _search(
+            component_core_client,
+            query="garden_probe",
+            search_types=["automation"],
+        )
         assert [row["entity_id"] for row in metadata["automations"]] == [
             "automation.garden_routine"
         ]
-        assert not any("update" in w.lower() for w in metadata.get("warnings", []))
 
-        with_bodies = await search(True)
-        assert not with_bodies["automations"]
-        assert any(
-            "update" in w.lower() and "ha_mcp_tools" in w and "incomplete" in w
-            for w in with_bodies.get("warnings", [])
-        )
+        socket = await pooled(component_core_client)
+        with (
+            routes(component_core_client, socket) as spies,
+            pytest.raises(ToolError) as exc,
+        ):
+            await _search(
+                component_core_client,
+                query="garden_probe",
+                search_types=["automation", "helper"],
+                include_config=True,
+            )
+
+        assert "ha_mcp_tools" in str(exc.value)
+        assert "Update" in str(exc.value)
+        spies.states.assert_not_called()
+        spies.bridge.assert_not_called()
+        assert frames(spies.component, SEARCH) == []
 
     async def test_membership_request_falls_back_from_old_component(
         self,
