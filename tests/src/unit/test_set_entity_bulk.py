@@ -214,6 +214,26 @@ class TestBulk:
         for entity_id in ids:
             assert stored_entry(entity_registry, entity_id).labels == {"outdoor"}
 
+    async def test_a_repeated_id_is_updated_and_reported_once(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+    ) -> None:
+        """One outcome per entity: a repeat would count a second write."""
+        for entity_id in ("light.a", "light.b"):
+            registry_entity(entity_registry, entity_id)
+
+        result = await tools.ha_set_entity(
+            entity_id=["light.a", "light.b", "light.a"], labels=["outdoor"]
+        )
+
+        assert (result["total"], result["succeeded_count"]) == (2, 2)
+        assert [row["entity_id"] for row in result["succeeded"]] == [
+            "light.a",
+            "light.b",
+        ]
+
     async def test_disabling_an_automation_in_a_list_is_refused(
         self, tools: EntityTools, sent: AsyncMock
     ) -> None:

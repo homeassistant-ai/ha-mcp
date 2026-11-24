@@ -196,7 +196,11 @@ def _single_entity_target(kw: dict[str, Any]) -> str:
 def _parse_set_entity_ids(
     entity_id: str | list[str] | None,
 ) -> tuple[list[str], bool]:
-    """Parse entity_id into (entity_ids, is_bulk). Raises on invalid input."""
+    """Parse entity_id into (entity_ids, is_bulk). Raises on invalid input.
+
+    A repeated id is updated once. is_bulk follows the list as given, as the
+    auto-backup target does, so the bulk path backs up a collapsed ``[a, a]``.
+    """
     if isinstance(entity_id, str):
         return [entity_id], False
     if not isinstance(entity_id, list):
@@ -220,7 +224,7 @@ def _parse_set_entity_ids(
                 "All entity_id values must be strings",
             )
         )
-    return entity_id, len(entity_id) > 1
+    return list(dict.fromkeys(entity_id)), len(entity_id) > 1
 
 
 def _parse_get_entity_ids(

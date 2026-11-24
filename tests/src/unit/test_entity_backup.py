@@ -565,6 +565,21 @@ async def test_a_bulk_call_backs_up_every_entity_before_writing(
     assert restored.hidden_by is None
 
 
+async def test_a_list_repeating_one_entity_backs_it_up(
+    entity_client: HomeAssistantClient,
+    backup_settings: config.Settings,
+    desk: Desk,
+) -> None:
+    """The repeat collapses to one entity, and that entity is still backed up
+    before its write."""
+    await EntityTools(entity_client).ha_set_entity(
+        entity_id=[desk.entity_id, desk.entity_id], hidden=True
+    )
+
+    files = await asyncio.to_thread(backup_files, backup_dir(backup_settings))
+    assert [name.split(".20")[0] for name in files] == ["entity.light.desk"]
+
+
 @pytest.mark.parametrize("fault", ["read", "write", "vanished", "directory"])
 async def test_each_backup_a_bulk_call_could_not_take_is_named(
     hass: HomeAssistant,
