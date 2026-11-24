@@ -47,21 +47,24 @@ def _extract_ws_error(result: dict[str, Any]) -> str:
 
 async def get_entries_raw(
     client: Any, entity_ids: list[str]
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, str]]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, str]], list[str]]:
     """Bulk-fetch registry entries via chunked config/entity_registry/get_entries.
 
-    Returns ``(raw_entries, errors)``: ``raw_entries`` maps a found
+    Returns ``(raw_entries, errors, absent)``: ``raw_entries`` maps a found
     entity_id to HA's raw extended registry dict; ``errors`` maps a failed
     entity_id to its failure row fields, ``error`` and, when Core refused,
     Core's code as ``ha_error_code``. Every id sent lands in exactly one of
     the two: a ``null`` in HA's entries map (id not in the registry) gives it
     ``_NOT_IN_REGISTRY`` as its error, and a failed chunk gives each of its
-    ids that failure.
+    ids that failure. ``absent`` lists, in the order sent, the ids Core
+    answered with a ``null``, so a caller tells them apart from a failed read
+    without reading the error text; each also has its row in ``errors``.
     """
     raw: dict[str, dict[str, Any]] = {}
     errors: dict[str, dict[str, str]] = {}
+    absent: list[str] = []
     if not entity_ids:
-        return raw, errors
+        return raw, errors, absent
 
     chunks = [
         entity_ids[i : i + GET_ENTRIES_CHUNK_SIZE]
@@ -90,6 +93,7 @@ async def get_entries_raw(
                 entry = result_map.get(eid.lower())
                 if entry is None:
                     errors[eid] = {"error": _NOT_IN_REGISTRY}
+                    absent.append(eid)
                 else:
                     raw[eid] = entry
             continue
@@ -104,7 +108,8 @@ async def get_entries_raw(
             failure = {"error": str(resp)}
         for eid in chunk:
             errors[eid] = dict(failure)
-    return raw, errors
+    # A repeated id is looked up once.
+    return raw, errors, list(dict.fromkeys(absent))
 
 
 async def resolve_by_unique_id(
@@ -165,7 +170,7 @@ async def resolve_by_unique_id(
         )
 
     # The list rows lack the extended fields (e.g. aliases, capabilities).
-    raw_map, errors = await get_entries_raw(client, matches)
+    raw_map, errors, _ = await get_entries_raw(client, matches)
     if errors:
         raise_tool_error(
             create_error_response(

@@ -28,7 +28,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .entity_registry_reads import _NOT_IN_REGISTRY, _extract_ws_error, get_entries_raw
+from .entity_registry_reads import _extract_ws_error, get_entries_raw
 from .helpers import (
     core_error_message,
     get_entity_state_or_none,
@@ -207,8 +207,7 @@ async def get_entries_or_unregistered(
     as its error, with the failure's code as ``ha_error_code`` if it has one,
     since whether Home Assistant knows it is still open.
     """
-    found, errors = await get_entries_raw(client, entity_ids)
-    missing = [eid for eid, err in errors.items() if err["error"] == _NOT_IN_REGISTRY]
+    found, errors, missing = await get_entries_raw(client, entity_ids)
     try:
         known = await unregistered_lookup(client, missing)
     except HomeAssistantError as exc:

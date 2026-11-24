@@ -136,7 +136,7 @@ async def _expose_phase(
     if not refetch:
         return eligible_ids, failed, []
     registered = [eid for eid in eligible_ids if entry_by_id.get(eid) is not None]
-    refetched, refetch_errors = await get_entries_raw(
+    refetched, refetch_errors, _ = await get_entries_raw(
         client, [targets[eid] for eid in registered]
     )
     warnings: list[str] = []

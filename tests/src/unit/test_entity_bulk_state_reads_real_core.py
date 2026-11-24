@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools import entity_exposure
+from ha_mcp.tools import entity_exposure, entity_registry_reads
 from ha_mcp.tools.tools_entities import EntityTools
 
 
@@ -42,3 +42,26 @@ async def test_a_long_bulk_of_ids_without_registry_entry_bounds_its_state_reads(
 
     assert [e["entity_id"] for e in result["unregistered_entities"]] == ids
     assert peak == entity_exposure.STATE_READS_AT_ONCE
+
+
+async def test_ids_without_registry_entry_in_every_chunk_are_all_looked_up(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    core_client: HomeAssistantClient,
+) -> None:
+    assert await async_setup_component(hass, "config", {})
+    assert await async_setup_component(hass, "homeassistant", {})
+    monkeypatch.setattr(entity_registry_reads, "GET_ENTRIES_CHUNK_SIZE", 1)
+    hass.states.async_set("light.loose_a", "on")
+    hass.states.async_set("light.loose_b", "on")
+
+    # Each id is its own chunk, and each chunk answers with no entry.
+    result = await EntityTools(core_client).ha_get_entity(
+        entity_id=["light.loose_a", "light.loose_b", "light.typo"]
+    )
+
+    assert [e["entity_id"] for e in result["unregistered_entities"]] == [
+        "light.loose_a",
+        "light.loose_b",
+    ]
+    assert [row["entity_id"] for row in result["errors"]] == ["light.typo"]
