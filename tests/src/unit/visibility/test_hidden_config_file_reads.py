@@ -35,8 +35,10 @@ from custom_components.ha_mcp_tools.websocket_api import system
 from custom_components.ha_mcp_tools.websocket_api.constants import WS_INFO
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.config_file_visibility import refuse_reading_hidden_definitions
 from ha_mcp.tools.tools_filesystem import FilesystemTools
 from ha_mcp.tools.tools_yaml_read import YamlReadTools
+from ha_mcp.visibility import persistence, resolver
 from ha_mcp.visibility.model import VisibilityConfig
 
 from .._command_faults import before_handling, dropped_on, pooled_socket
@@ -445,3 +447,81 @@ async def test_a_read_the_component_cannot_answer_is_refused(
             client, _read_file_tool, {"path": "www/presence.yaml"}
         )
     assert error_code(exc) == "SERVICE_CALL_FAILED"
+
+
+async def _read_scripts_after_the_config_breaks(
+    client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Any:
+    """One server's middleware loads the config, then the file breaks."""
+    mw = _ChainedEnforcement(lambda: client)
+
+    async def _run(kwargs: dict[str, Any]) -> Any:
+        async def _run_tool(_context: Any) -> Any:
+            result = await _read_file_tool(client, **kwargs)
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text=json.dumps(result))],
+                structured_content=result,
+            )
+
+        return await mw.on_call_tool(make_context("ha_read_file", kwargs), _run_tool)
+
+    await _run({"path": "www/presence.yaml"})
+    monkeypatch.setattr(
+        resolver, "load_visibility_config", persistence.load_visibility_config
+    )
+    (tmp_path / persistence.VISIBILITY_FILENAME).write_text("{ corrupt")
+    return await _run({"path": "scripts.yaml"})
+
+
+async def test_a_config_breaking_under_enforce_mode_keeps_refusing(
+    client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The middleware keeps the last config it loaded; so does the file check."""
+    with pytest.raises(ToolError) as exc:
+        await _read_scripts_after_the_config_breaks(client, monkeypatch, tmp_path)
+    assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
+
+async def test_a_config_breaking_outside_enforce_mode_refuses_nothing(
+    client: HomeAssistantClient,
+    set_config: Callable[..., VisibilityConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    set_config()
+
+    result = await _read_scripts_after_the_config_breaks(client, monkeypatch, tmp_path)
+    assert "Unlock house" in result.content[0].text
+
+
+async def test_a_config_that_never_loaded_refuses_the_check(
+    unreachable_client: HomeAssistantClient,
+    set_config: Callable[..., VisibilityConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """With no good load to fall back on, the check cannot tell enforce mode is off."""
+    set_config()
+    monkeypatch.setattr(
+        resolver, "load_visibility_config", persistence.load_visibility_config
+    )
+    (tmp_path / persistence.VISIBILITY_FILENAME).write_text("{ corrupt")
+
+    with pytest.raises(ToolError) as exc:
+        await refuse_reading_hidden_definitions(
+            unreachable_client, "ha_read_file", ["www/presence.yaml"]
+        )
+    assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"
+
+
+async def test_a_hidden_set_that_cannot_be_loaded_refuses_the_check(
+    unreachable_client: HomeAssistantClient,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    enforce_hiding(set_config, _HIDDEN[0][0])
+
+    with pytest.raises(ToolError) as exc:
+        await refuse_reading_hidden_definitions(
+            unreachable_client, "ha_read_file", ["www/presence.yaml"]
+        )
+    assert error_code(exc) == "ENTITY_VISIBILITY_ENFORCED"

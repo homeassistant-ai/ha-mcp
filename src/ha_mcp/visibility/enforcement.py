@@ -454,6 +454,58 @@ def _config_cache_key(config: VisibilityConfig) -> str:
     return json.dumps(config.to_wire(), sort_keys=True)
 
 
+_last_good_config: VisibilityConfig | None = None
+
+
+async def _load_config_or_last_good(tool_name: str) -> VisibilityConfig | None:
+    """Load the config, falling back to the last good load (``None`` if none).
+
+    The active-mode gate must not crash the call with an opaque trace on an
+    unloadable config (a hand-edit typo would break EVERY tool call), nor
+    silently disable enforcement (the file is the only record of whether
+    enforce was on). Policy: fall back to the last config this process
+    loaded successfully — for the common non-enforce install that preserves
+    availability, and for an enforce install it preserves the boundary.
+    With no good load ever, the caller fails CLOSED like PolicyMiddleware.
+    Module-shared so both middleware halves and the config-file check
+    (``active_identifier_aliases``) decide on the same config.
+
+    Each half diagnoses a distinct config-load failure. A context-local
+    marker suppresses only the second traceback when both halves fail during
+    the same call.
+    """
+    global _last_good_config
+    config: VisibilityConfig | None
+    try:
+        # Through the resolver module attribute so a test that redirects
+        # ``resolver.get_data_dir`` steers this and ``load_hidden_set`` together.
+        config = await asyncio.to_thread(
+            resolver.load_visibility_config, resolver.get_data_dir()
+        )
+        _last_good_config = config
+    except Exception:
+        config = _last_good_config
+        if config is not None:
+            outcome = "using last-known-good config"
+        elif tool_name == _REPORT_ISSUE_TOOL:
+            outcome = (
+                "allowing ha_report_issue because its diagnostic exemption "
+                "defaults to unrestricted"
+            )
+        else:
+            outcome = "failing closed"
+        warning_emitted = _config_load_warning_emitted.get()
+        if warning_emitted is not True:
+            logger.warning(
+                "visibility enforce: config load failed; %s",
+                outcome,
+                exc_info=True,
+            )
+            if warning_emitted is not None:
+                _config_load_warning_emitted.set(True)
+    return config
+
+
 class _VisibilityEnforcementBase(Middleware):
     """Shared config gate + hidden-set access for the two enforcement halves.
 
@@ -470,57 +522,6 @@ class _VisibilityEnforcementBase(Middleware):
 
     def __init__(self, *, get_client: Callable[[], Any]) -> None:
         self._get_client = get_client
-        self._last_good_config: VisibilityConfig | None = None
-
-    async def _load_config(self) -> VisibilityConfig:
-        # Through the resolver module attribute so a test that redirects
-        # ``resolver.get_data_dir`` steers this and ``load_hidden_set`` together.
-        return await asyncio.to_thread(
-            resolver.load_visibility_config, resolver.get_data_dir()
-        )
-
-    async def _load_config_or_last_good(
-        self, tool_name: str
-    ) -> VisibilityConfig | None:
-        """Load the config, falling back to the last good load (``None`` if none).
-
-        The active-mode gate must not crash the call with an opaque trace on an
-        unloadable config (a hand-edit typo would break EVERY tool call), nor
-        silently disable enforcement (the file is the only record of whether
-        enforce was on). Policy: fall back to the last config this process
-        loaded successfully — for the common non-enforce install that preserves
-        availability, and for an enforce install it preserves the boundary.
-        With no good load ever, the caller fails CLOSED like PolicyMiddleware.
-
-        Each half diagnoses a distinct config-load failure. A context-local
-        marker suppresses only the second traceback when both halves fail during
-        the same call.
-        """
-        config: VisibilityConfig | None
-        try:
-            config = await self._load_config()
-            self._last_good_config = config
-        except Exception:
-            config = self._last_good_config
-            if config is not None:
-                outcome = "using last-known-good config"
-            elif tool_name == _REPORT_ISSUE_TOOL:
-                outcome = (
-                    "allowing ha_report_issue because its diagnostic exemption "
-                    "defaults to unrestricted"
-                )
-            else:
-                outcome = "failing closed"
-            warning_emitted = _config_load_warning_emitted.get()
-            if warning_emitted is not True:
-                logger.warning(
-                    "visibility enforce: config load failed; %s",
-                    outcome,
-                    exc_info=True,
-                )
-                if warning_emitted is not None:
-                    _config_load_warning_emitted.set(True)
-        return config
 
     async def _active_config(
         self,
@@ -531,7 +532,7 @@ class _VisibilityEnforcementBase(Middleware):
         """Return the config when enforce is active, ``None`` when passthrough."""
         if tool_name in _UNGATED_TOOLS or tool_name.startswith(_UNGATED_PREFIX):
             return None
-        config = await self._load_config_or_last_good(tool_name)
+        config = await _load_config_or_last_good(tool_name)
         # ``ha_report_issue`` is an unconditional diagnostic escape hatch while
         # the toggle is off, not only a registry-failure fallback. A missing or
         # corrupt first config load follows that safe default; a last-known-good
@@ -883,8 +884,9 @@ _hidden_cache = _HiddenSetCache()
 
 def reset_hidden_set_cache() -> None:
     """Discard process-scoped visibility state between isolated server lifetimes."""
-    global _hidden_cache
+    global _hidden_cache, _last_good_config
     _hidden_cache = _HiddenSetCache()
+    _last_good_config = None
 
 
 async def _active_matcher(client: Any, *, fresh: bool = False) -> HiddenMatcher | None:
@@ -908,10 +910,27 @@ async def _active_matcher(client: Any, *, fresh: bool = False) -> HiddenMatcher 
         return None
 
 
-async def active_identifier_aliases(client: Any) -> IdentifierAliases | None:
-    """The hidden items' identifier aliases while enforce mode is active."""
-    matcher = await _active_matcher(client)
-    return matcher.identifier_aliases if matcher is not None else None
+async def active_identifier_aliases(
+    client: Any, tool_name: str
+) -> IdentifierAliases | None:
+    """The hidden items' identifier aliases while enforce mode is active.
+
+    Unlike ``_active_matcher``, fails closed like the middleware's call gate,
+    whose last-good config and hidden set it shares: the config-file check
+    that asks has no later gate to catch an unloadable config.
+    """
+    config = await _load_config_or_last_good(tool_name)
+    if config is None:
+        _raise_enforced(tool_name, _CONFIG_LOAD_FAILED_REASON)
+    if not (
+        config.enabled and config.enforce and config_has_active_hide_dimensions(config)
+    ):
+        return None
+    try:
+        matcher = await _hidden_cache.get(config, client)
+    except VisibilityDataUnavailable:
+        _raise_enforced(tool_name, _FAIL_CLOSED_REASON)
+    return matcher.identifier_aliases
 
 
 def refuse_hidden_config_file(tool_name: str) -> NoReturn:

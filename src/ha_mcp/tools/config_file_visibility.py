@@ -39,14 +39,15 @@ async def refuse_reading_hidden_definitions(
     client: Any, tool_name: str, paths: Iterable[str | None]
 ) -> None:
     """Refuse the call when any file in ``paths`` defines a hidden item, or
-    when the component cannot tell. ``None`` stands for a file that cannot be
-    named (a backup whose file is not known), and is refused."""
+    when the component or the visibility config cannot tell. ``None`` stands
+    for a file that cannot be named (a backup whose file is not known), and is
+    refused."""
     from ..visibility.enforcement import (
         active_identifier_aliases,
         refuse_hidden_config_file,
     )
 
-    aliases = await active_identifier_aliases(client)
+    aliases = await active_identifier_aliases(client, tool_name)
     if aliases is None or not (aliases.script_services or aliases.storage_keys):
         return
     paths = list(paths)
