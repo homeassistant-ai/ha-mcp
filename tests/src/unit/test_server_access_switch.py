@@ -7,8 +7,10 @@ entity platform; only the server bring-up / teardown are replaced.
 from __future__ import annotations
 
 import builtins
+import importlib.util
 import json
 import logging
+import sys
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from pathlib import Path
@@ -28,7 +30,10 @@ from custom_components.ha_mcp_tools.const import (
     DATA_ACCESS_ENABLED,
     SERVER_CONFIG_SUBDIR,
 )
-from custom_components.ha_mcp_tools.embedded_read_only import set_read_only_mode
+from custom_components.ha_mcp_tools.embedded_read_only import (
+    prepare_runtime_config,
+    set_read_only_mode,
+)
 from ha_mcp.read_only import read_only_remedy_hint
 
 from ._server_entry import add_server_entry, replace_server, set_up
@@ -102,6 +107,16 @@ def test_read_only_write_never_cold_imports_the_server_package(
     assert json.loads((tmp_path / "feature_flags.json").read_text()) == {
         "read_only_mode": True
     }
+
+
+def test_an_older_server_without_runtime_config_can_still_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    package = SimpleNamespace(submodule_search_locations=[str(tmp_path)])
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: package)
+    monkeypatch.delitem(sys.modules, "ha_mcp.runtime_config", raising=False)
+
+    assert prepare_runtime_config() is False
 
 
 def test_embedded_remedy_names_the_device_switch(

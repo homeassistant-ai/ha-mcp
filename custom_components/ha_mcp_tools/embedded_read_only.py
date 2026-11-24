@@ -33,6 +33,10 @@ class ReadOnlyStateError(ValueError):
     """The server's Read Only Mode state cannot be safely read or changed."""
 
 
+class _RuntimeConfigUnavailable(ReadOnlyStateError):
+    """The installed server predates the shared runtime helper."""
+
+
 def _runtime_config() -> ModuleType:
     """Load the server's dependency-light helper without importing its package."""
     with _RUNTIME_LOCK:
@@ -43,15 +47,15 @@ def _runtime_config() -> ModuleType:
         try:
             package = importlib.util.find_spec("ha_mcp")
         except (ImportError, ValueError) as err:
-            raise ReadOnlyStateError(
+            raise _RuntimeConfigUnavailable(
                 "the ha-mcp server package is unavailable"
             ) from err
         locations = None if package is None else package.submodule_search_locations
         if not locations:
-            raise ReadOnlyStateError("the ha-mcp server package is unavailable")
+            raise _RuntimeConfigUnavailable("the ha-mcp server package is unavailable")
         path = Path(next(iter(locations))) / "runtime_config.py"
         if not path.is_file():
-            raise ReadOnlyStateError(
+            raise _RuntimeConfigUnavailable(
                 "the installed ha-mcp server does not provide runtime configuration"
             )
 
@@ -73,9 +77,13 @@ def _runtime_config() -> ModuleType:
         return module
 
 
-def prepare_runtime_config() -> None:
-    """Load the helper before the worker begins importing :mod:`ha_mcp`."""
-    _runtime_config()
+def prepare_runtime_config() -> bool:
+    """Load the helper, or report that the installed server predates it."""
+    try:
+        _runtime_config()
+    except _RuntimeConfigUnavailable:
+        return False
+    return True
 
 
 def _translate_error(runtime: ModuleType, err: Exception) -> ReadOnlyStateError:
