@@ -33,9 +33,10 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.json import json_bytes
 from homeassistant.util import dt as dt_util
 
+from .logbook_page import read_logbook_page
 from .seam import PreSerializedResult
 
-CAPABILITIES = ("logbook_events",)
+CAPABILITIES = ("logbook_events", "logbook_event_pages")
 
 
 def _parse_time(value: str, label: str) -> datetime:
@@ -58,6 +59,7 @@ def _serialize_logbook_result(
     start_time: datetime,
     end_time: datetime,
     event_processor: EventProcessor,
+    page: dict[str, Any] | None,
 ) -> bytes:
     """Fetch the rows and encode the result message in the executor.
 
@@ -65,11 +67,12 @@ def _serialize_logbook_result(
     JSON encoding both run off the event loop, so a large window cannot stall
     Home Assistant while its response is built.
     """
-    payload: bytes = json_bytes(
-        messages.result_message(
-            msg_id, event_processor.get_events(start_time, end_time)
-        )
+    result = (
+        read_logbook_page(event_processor, start_time, end_time, page)
+        if page is not None
+        else event_processor.get_events(start_time, end_time)
     )
+    payload: bytes = json_bytes(messages.result_message(msg_id, result))
     return payload
 
 
@@ -86,6 +89,11 @@ async def _logbook_events_prep(
     entity_ids = msg.get("entity_ids")
     device_ids = msg.get("device_ids")
     context_id = msg.get("context_id")
+    page = msg.get("page")
+    if page is not None and (entity_ids or device_ids or context_id):
+        raise HomeAssistantError(
+            "Recorder pages require a whole-instance Logbook query"
+        )
     if context_id and (entity_ids or device_ids):
         # Core's processor asserts on this; fail with a shaped error instead.
         raise HomeAssistantError(
@@ -98,7 +106,7 @@ async def _logbook_events_prep(
             # Everything has been filtered away
             return {"payload": _empty_result(msg["id"])}
 
-    if start_time > dt_util.utcnow():
+    if start_time > dt_util.utcnow() and page is None:
         return {"payload": _empty_result(msg["id"])}
 
     if "logbook" not in hass.data:
@@ -122,7 +130,12 @@ async def _logbook_events_prep(
         include_entity_name=True,
     )
     payload = await get_instance(hass).async_add_executor_job(
-        _serialize_logbook_result, msg["id"], start_time, end_time, event_processor
+        _serialize_logbook_result,
+        msg["id"],
+        start_time,
+        end_time,
+        event_processor,
+        page,
     )
     return {"payload": payload}
 

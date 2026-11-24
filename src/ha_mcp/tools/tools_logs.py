@@ -30,13 +30,16 @@ from .log_sources import _SYSTEM_LOG_MESSAGE_CAP, CoreLogSourcesMixin
 from .log_sources_fault import FaultLogSourceMixin
 from .log_sources_logbook import LogbookLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
+from .logbook_cursor import LOGBOOK_CURSOR_PREFIX, LogbookCursor
 from .tool_hints import read_only_hints
 
 
 def _validate_offset_token(source: str, token: str) -> str:
     """Check ``token`` is a ``next_offset`` value ``source`` itself returns."""
-    if source in ("supervisor", "system_service"):
-        parse: Callable[[str], object] = parse_window_token
+    if source == "logbook" and token.startswith(LOGBOOK_CURSOR_PREFIX):
+        parse: Callable[[str], object] = LogbookCursor.parse
+    elif source in ("supervisor", "system_service"):
+        parse = parse_window_token
     elif source == "error_log":
         if not is_cursor_token(token):
             raise ToolError(
@@ -124,7 +127,7 @@ class LogTools(
                 context_id=context_id,
                 end_time=end_time,
                 limit=limit,
-                offset=numeric_offset,
+                offset=offset,
                 search=search,
                 compact=compact,
                 order=chosen,
@@ -401,6 +404,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | str,
             Field(
                 description=(
+                    "For whole-instance Logbook pages, return next_offset as offset with the same "
+                    "search and order. The cursor pins the end time. A sparse page can be empty "
+                    "with has_more=true, and total_entries is null until known. "
                     "Page deeper into source='logbook', 'error_log', "
                     "'fault_log', and supervisor/system_service on a page "
                     "read: hours_back and no search (ignored otherwise). "

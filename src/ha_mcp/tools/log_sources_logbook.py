@@ -40,6 +40,7 @@ from .component_api import (
 )
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import _coerce_limit, _compact_logbook_entries
+from .logbook_cursor import LogbookCursor
 from .response_helpers import add_timezone_metadata
 
 # The component command serving Core's own logbook processor in-process, and
@@ -261,6 +262,7 @@ class LogbookLogSourceMixin:
         entity_id: str | None,
         device_id: str | None,
         context_id: str | None,
+        page: dict[str, Any] | None,
     ) -> tuple[Any, str]:
         """Fetch events over Home Assistant's own transports, best first.
 
@@ -309,10 +311,17 @@ class LogbookLogSourceMixin:
         if context_id:
             command["context_id"] = context_id
 
-        response = await self._fetch_logbook_component(command)
+        response = await self._fetch_logbook_component(command, page)
         if response is not None:
             return response, "component"
 
+        if page and "after" in page:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Continuing this Logbook page requires the component that issued its cursor.",
+                )
+            )
         if device_ids:
             # REST has no device filter; only the WebSocket command can serve
             # this request.
@@ -344,8 +353,8 @@ class LogbookLogSourceMixin:
         return rest, "rest"
 
     async def _fetch_logbook_component(
-        self, command: dict[str, Any]
-    ) -> list[Any] | None:
+        self, command: dict[str, Any], page: dict[str, Any] | None
+    ) -> list[Any] | dict[str, Any] | None:
         """Run the component's Core-processor command, or ``None`` to fall back.
 
         ``None`` means the component is absent, downgraded (``unknown_command``
@@ -359,6 +368,10 @@ class LogbookLogSourceMixin:
         if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
             return None
         message = {**command, "type": LOGBOOK_EVENTS_COMMAND}
+        if page and component_supports(caps, "logbook_event_pages"):
+            message["page"] = page
+        elif page and "after" in page:
+            return None
         try:
             response = await self._client.send_websocket_message(message)
         except HomeAssistantCommandTimeout:
@@ -382,6 +395,15 @@ class LogbookLogSourceMixin:
             # The command's result is Core's own row list (its result message
             # wraps ``EventProcessor.get_events()`` output directly).
             result = response.get("result")
+            if "page" in message:
+                if isinstance(result, dict) and isinstance(result.get("entries"), list):
+                    return result
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "The Logbook component returned an invalid page.",
+                    )
+                )
             return result if isinstance(result, list) else None
 
         self._raise_logbook_rejection(response, LOGBOOK_EVENTS_COMMAND)
@@ -547,6 +569,55 @@ class LogbookLogSourceMixin:
             normalized.append(row)
         return normalized
 
+    async def _format_logbook_page(
+        self,
+        page: dict[str, Any],
+        cursor: LogbookCursor | None,
+        offset: int,
+        start: datetime,
+        end: datetime,
+        order: Literal["oldest", "newest"],
+        search: str | None,
+        limit: int,
+        compact: bool,
+    ) -> dict[str, Any]:
+        before = cursor.seen if cursor else 0
+        entries = page["entries"]
+        after = page["after"]
+        total = page.get("total")
+        data: dict[str, Any] = {
+            "success": True,
+            "source": "logbook",
+            "entries": _compact_logbook_entries(entries) if compact else entries,
+            "period": f"1 hours back from {end.isoformat()}",
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+            "entity_filter": None,
+            "context_filter": None,
+            "device_filter": None,
+            "total_entries": before + total if total is not None else None,
+            "returned_entries": len(entries),
+            "limit": limit,
+            "offset": before if cursor else offset,
+            "order": order,
+            "has_more": after is not None,
+        }
+        if search:
+            data["filters_applied"] = {"search": search}
+        if after is not None:
+            data["next_offset"] = LogbookCursor(
+                end=end,
+                order=order,
+                search=search,
+                after=after,
+                seen=before + page["matched"],
+                skip=page["skip"],
+            ).token()
+            data["pagination_hint"] = (
+                "Pass next_offset as offset with the same search and order to continue this Logbook window."
+            )
+        return await add_timezone_metadata(self._client, data)
+
     async def _get_logbook(
         self,
         hours_back: int = 1,
@@ -555,7 +626,7 @@ class LogbookLogSourceMixin:
         context_id: str | None = None,
         end_time: str | None = None,
         limit: int | None = None,
-        offset: int = 0,
+        offset: int | str = 0,
         search: str | None = None,
         compact: bool = True,
         order: Literal["newest", "oldest"] = "newest",
@@ -564,6 +635,25 @@ class LogbookLogSourceMixin:
         effective_limit = _coerce_limit(limit)
 
         self._validate_logbook_window(hours_back, entity_id, device_id, context_id)
+
+        cursor = LogbookCursor.parse(offset) if isinstance(offset, str) else None
+        if cursor:
+            if (
+                entity_id
+                or context_id
+                or device_id
+                or cursor.order != order
+                or cursor.search != search
+                or (end_time and datetime.fromisoformat(end_time) != cursor.end)
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Use this Logbook cursor with the same window, filters and order.",
+                    )
+                )
+            end_time = cursor.end.isoformat()
+        numeric_offset = offset if isinstance(offset, int) else 0
 
         if end_time:
             try:
@@ -586,6 +676,18 @@ class LogbookLogSourceMixin:
         start_dt = end_dt - timedelta(hours=hours_back)
         start_timestamp = start_dt.isoformat()
 
+        page = None
+        if not (entity_id or device_id or context_id):
+            page = {
+                "order": order,
+                "limit": effective_limit,
+                "skip": cursor.skip if cursor else numeric_offset,
+            }
+            if search:
+                page["search"] = search
+            if cursor:
+                page["after"] = list(cursor.after)
+
         try:
             response, transport = await self._fetch_logbook_events(
                 start_time=start_timestamp,
@@ -593,7 +695,21 @@ class LogbookLogSourceMixin:
                 entity_id=entity_id,
                 device_id=device_id,
                 context_id=context_id,
+                page=page,
             )
+
+            if transport == "component" and isinstance(response, dict):
+                return await self._format_logbook_page(
+                    response,
+                    cursor,
+                    numeric_offset,
+                    start_dt,
+                    end_dt,
+                    order,
+                    search,
+                    effective_limit,
+                    compact,
+                )
 
             response = self._normalize_logbook_events(response, transport)
             missing_names = (
@@ -616,7 +732,7 @@ class LogbookLogSourceMixin:
             response, filters_applied = self._filter_logbook_by_search(response, search)
 
             paginated_entries, total_entries, has_more = self._paginate_logbook_entries(
-                response, offset, effective_limit, order
+                response, numeric_offset, effective_limit, order
             )
 
             # In compact mode, strip entries to essential fields only.
@@ -648,7 +764,7 @@ class LogbookLogSourceMixin:
                 logbook_data["filters_applied"] = filters_applied
             if has_more:
                 logbook_data["pagination_hint"] = self._build_pagination_hint(
-                    offset,
+                    numeric_offset,
                     effective_limit,
                     total_entries,
                     paginated_entries,

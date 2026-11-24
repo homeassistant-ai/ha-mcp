@@ -403,6 +403,15 @@ def _logbook_events_schema() -> dict[Any, Any]:
         vol.Optional("entity_ids"): [cv.entity_id],
         vol.Optional("device_ids"): [str],
         vol.Optional("context_id"): str,
+        vol.Optional("page"): {
+            vol.Required("order"): vol.In(("oldest", "newest")),
+            vol.Required("limit"): vol.All(int, vol.Range(min=1, max=500)),
+            vol.Required("skip"): vol.All(int, vol.Range(min=0)),
+            vol.Optional("search"): str,
+            vol.Optional("after"): vol.ExactSequence(
+                [vol.Coerce(float), vol.In((0, 1)), int]
+            ),
+        },
     }
 
 
