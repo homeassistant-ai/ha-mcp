@@ -9,6 +9,8 @@ module holds the settings singleton and the embedded-mode connection.
 # isort: off
 import threading
 
+from hamcp_runtime_config import register_settings_reset
+
 from ha_mcp.config_backup import (
     _apply_backup_overrides as _apply_backup_overrides,
     get_backup_setting_origin as get_backup_setting_origin,
@@ -269,7 +271,10 @@ def reset_global_settings() -> None:
     process restart). The settings POST handlers call it to publish a freshly
     edited override file value to runtime consumers (``get_global_settings`` is
     the only documented read path; the ``@with_auto_backup`` decorator reads it
-    per tool call), and tests that mutate env vars call it to force a re-read.
+    per tool call). The dependency-light runtime-config bridge also calls it
+    after the Home Assistant switch writes the shared override file, without
+    importing this package from HA's executor. Tests that mutate env vars call
+    it to force a re-read as well.
     """
     global _settings
     with _SETTINGS_LOCK:
@@ -279,3 +284,6 @@ def reset_global_settings() -> None:
         # tool off?" should see the next gate fire logged. This keeps
         # the dedup tight to the lifetime of one cached Settings.
         _BETA_GATE_LOGGED.clear()
+
+
+register_settings_reset(reset_global_settings)

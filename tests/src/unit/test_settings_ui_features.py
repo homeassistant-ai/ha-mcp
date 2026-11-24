@@ -10,6 +10,7 @@ its parent, and turning a parent off keeps what was saved under it.
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from ha_mcp.config import (
     reset_global_settings,
 )
 from ha_mcp.server import HomeAssistantSmartMCPServer
+from ha_mcp.settings_ui import _persistence
+from ha_mcp.utils import config_write_lock
 
 from ._settings_ui_app import app_server, settings_http
 from ._settings_ui_app import settings_world as settings_world
@@ -46,6 +49,30 @@ def _on_disk(tmp_path: Path) -> dict[str, Any]:
 
 
 class TestSave:
+    async def test_feature_file_write_holds_the_cross_loop_guard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        active = False
+        real_write = _persistence._atomic_write_json  # noqa: SLF001
+
+        @asynccontextmanager
+        async def guard():
+            nonlocal active
+            active = True
+            try:
+                yield
+            finally:
+                active = False
+
+        def checked_write(*args, **kwargs):
+            assert active
+            return real_write(*args, **kwargs)
+
+        monkeypatch.setattr(config_write_lock, "config_write_guard", guard)
+        monkeypatch.setattr(_persistence, "_atomic_write_json", checked_write)
+
+        assert (await _save({"read_only_mode": True})).status_code == 200
+
     async def test_the_save_answers_like_every_other_save(self) -> None:
         """The page shows its restart banner from ``restart_required``."""
         response = await _save({"enable_tool_search": True})

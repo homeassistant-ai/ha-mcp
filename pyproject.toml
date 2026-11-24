@@ -110,7 +110,7 @@ ha-mcp-oidc = "ha_mcp.__main__:main_oidc"
 [tool.uv.build-backend]
 # Explicit because publish-dev.yml renames the project to ha-mcp-dev, which
 # would otherwise make the module name ha_mcp_dev.
-module-name = "ha_mcp"
+module-name = ["ha_mcp", "hamcp_runtime_config"]
 # Every file under src/ha_mcp ships unless excluded here. Of the skills
 # submodule only skills/ and LICENSE ship; its evals, scripts, docs, git and
 # CI files are not read at runtime, and neither is the settings UI's agent

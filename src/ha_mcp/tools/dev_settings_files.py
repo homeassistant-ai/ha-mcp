@@ -18,7 +18,13 @@ REMOVE = object()
 
 
 async def merge_feature_overrides(changes: dict[str, Any]) -> None:
-    """Merge changes atomically, refusing to overwrite unreadable or corrupt JSON."""
+    """Merge atomically without cancellation releasing the file lock early.
+
+    The entire read-modify-write runs in one worker while it owns the
+    cross-process lock. Cancelling the awaiter cannot stop that worker, and a
+    later writer therefore blocks until the atomic replace has completed.
+    Unreadable or corrupt JSON is refused rather than overwritten.
+    """
     from ..config import _FEATURE_FLAG_OVERRIDE_FILENAME
     from ..settings_ui._persistence import _atomic_write_json
     from ..utils.config_write_lock import get_config_write_lock, run_with_file_lock

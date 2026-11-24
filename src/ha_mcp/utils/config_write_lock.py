@@ -20,23 +20,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
-import os
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from typing import Any
 from weakref import WeakValueDictionary
 
-try:  # POSIX
-    import fcntl
-except ImportError:  # pragma: no cover - Windows
-    fcntl = None  # type: ignore[assignment]
-try:  # Windows
-    import msvcrt
-except ImportError:  # pragma: no cover - POSIX
-    msvcrt = None  # type: ignore[assignment]
-
-logger = logging.getLogger(__name__)
+from hamcp_runtime_config import file_write_lock
 
 _CONFIG_WRITE_LOCKS: WeakValueDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
     WeakValueDictionary()
@@ -110,44 +99,6 @@ def config_file_lock(data_dir: Path | None = None) -> Iterator[None]:
     lock_dir = data_dir if data_dir is not None else get_data_dir()
     with file_write_lock(lock_dir / ".config_write.lock"):
         yield
-
-
-@contextlib.contextmanager
-def file_write_lock(lock_path: Path, *, required: bool = False) -> Iterator[None]:
-    fd: int | None = None
-    locked = False
-    try:
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-                locked = True
-            elif msvcrt is not None:  # pragma: no cover - Windows
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-                locked = True
-            elif required:
-                raise OSError("Cross-process file locking is unavailable")
-        except OSError:
-            if required:
-                raise
-            logger.warning(
-                "config write lockfile unavailable; proceeding without "
-                "cross-process lock",
-                exc_info=True,
-            )
-        yield
-    finally:
-        if fd is not None:
-            with contextlib.suppress(OSError):
-                if locked:
-                    if fcntl is not None:
-                        fcntl.flock(fd, fcntl.LOCK_UN)
-                    elif msvcrt is not None:  # pragma: no cover - Windows
-                        os.lseek(fd, 0, os.SEEK_SET)
-                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            with contextlib.suppress(OSError):
-                os.close(fd)
 
 
 def run_with_file_lock(fn: Callable[..., Any], /, *args: Any) -> Any:

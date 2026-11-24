@@ -2,7 +2,10 @@
 
 Turning Access off closes every way into the server while the entry stays
 loaded, so access can be granted on demand and revoked by automations. Its
-state lives in ``entry.data`` (see :func:`embedded_entry.access_enabled`).
+state lives in ``entry.data`` (see :func:`embedded_entry.access_enabled`), not
+in the entity, because entry setup decides whether to start before this
+platform is forwarded. Disabling the entity keeps its last state; while that
+state is off, nothing can turn access back on until the entity is enabled.
 Read Only Mode persists the server's existing flag and applies it live; its
 polling keeps the entity aligned with edits from the web panel.
 
@@ -20,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
@@ -98,6 +102,7 @@ class ServerReadOnlyModeSwitch(SwitchEntity):
         self._attr_unique_id = f"{entry.entry_id}_server_read_only_mode"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, entry.entry_id)})
         self._read_only = False
+        self._read_error: str | None = None
         self._config_dir: Path = embedded_config_dir(hass.config.config_dir)
 
     @property
@@ -111,9 +116,13 @@ class ServerReadOnlyModeSwitch(SwitchEntity):
             )
         except ReadOnlyStateError as err:
             self._attr_available = False
-            _LOGGER.warning("Cannot read embedded Read Only Mode: %s", err)
+            message = str(err)
+            if self._read_error != message:
+                _LOGGER.warning("Cannot read embedded Read Only Mode: %s", err)
+            self._read_error = message
         else:
             self._attr_available = True
+            self._read_error = None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._set_read_only(True)
@@ -122,9 +131,12 @@ class ServerReadOnlyModeSwitch(SwitchEntity):
         await self._set_read_only(False)
 
     async def _set_read_only(self, enabled: bool) -> None:
-        await self.hass.async_add_executor_job(
-            set_read_only_mode, self._config_dir, enabled
-        )
+        try:
+            await self.hass.async_add_executor_job(
+                set_read_only_mode, self._config_dir, enabled
+            )
+        except ReadOnlyStateError as err:
+            raise HomeAssistantError(f"Could not change Read Only Mode: {err}") from err
         self._read_only = enabled
         self._attr_available = True
         self.async_write_ha_state()

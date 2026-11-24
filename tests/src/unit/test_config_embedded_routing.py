@@ -18,6 +18,7 @@ embedded-awareness itself is covered hermetically in ``test_version_embedded``.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,45 @@ def _clean_env(monkeypatch, tmp_path):
 
 def _a_backup_env_name() -> str:
     return config.BACKUP_OVERRIDE_FIELDS[0][1]
+
+
+def test_reset_waits_for_a_complete_settings_build(monkeypatch):
+    """A reset cannot expose or return the singleton halfway through a build."""
+    entered_override = threading.Event()
+    release_override = threading.Event()
+    reset_done = threading.Event()
+    built = []
+    real_apply = config._apply_feature_flag_overrides  # noqa: SLF001
+
+    def held_apply(settings):
+        entered_override.set()
+        assert release_override.wait(5)
+        real_apply(settings)
+        settings.timeout = 77
+
+    monkeypatch.setattr(config, "_apply_feature_flag_overrides", held_apply)
+    config.reset_global_settings()
+    builder = threading.Thread(
+        target=lambda: built.append(config.get_global_settings())
+    )
+    builder.start()
+    assert entered_override.wait(5)
+
+    def reset() -> None:
+        config.reset_global_settings()
+        reset_done.set()
+
+    resetter = threading.Thread(target=reset)
+    resetter.start()
+    assert not reset_done.wait(0.05)
+    release_override.set()
+    builder.join(5)
+    resetter.join(5)
+
+    assert not builder.is_alive()
+    assert not resetter.is_alive()
+    assert built[0].timeout == 77
+    assert reset_done.is_set()
 
 
 def _a_plain_bool_feature_flag_field() -> tuple[str, str]:

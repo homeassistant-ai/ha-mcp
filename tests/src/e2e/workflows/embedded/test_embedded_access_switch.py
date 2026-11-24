@@ -1,9 +1,8 @@
 """The server safety switches operate through real Home Assistant entities.
 
-The unit tests cover the entities and persistence against fakes. This drives
+The unit tests cover the entities and persistence against real Core fixtures. This drives
 both switches through Home Assistant itself: Access closes and reopens the
-webhook across a reload, while Read Only Mode writes the same persistent flag
-as the settings panel and updates the live tool catalog.
+webhook across a reload, while Read Only Mode updates the live tool catalog.
 
 It switches off the server of this worker's session container and turns it
 back on in ``finally``, waiting for the webhook, then restores write access
@@ -169,7 +168,7 @@ async def _exercise_read_only_mode_switch(ha_client: Any, webhook_url: str) -> N
 
 
 @pytest.mark.timeout(900)
-async def test_server_safety_switches_apply_live_and_survive_reload(
+async def test_server_safety_switches_apply_live(
     ha_client: Any, ha_container_with_fresh_config: dict[str, Any]
 ) -> None:
     webhook_url = ha_container_with_fresh_config["embedded_webhook_url"]

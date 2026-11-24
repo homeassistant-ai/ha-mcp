@@ -30,7 +30,6 @@ from starlette.responses import JSONResponse
 from .._version import get_version, is_embedded, is_running_in_addon
 from ..config import get_global_settings, reset_global_settings
 from ..errors import ErrorCode, create_error_response
-from ..utils.config_write_lock import config_write_guard
 from . import _persistence, _supervisor
 
 if TYPE_CHECKING:
@@ -623,7 +622,7 @@ async def _write_feature_flag_overrides_file(
     from ..utils.data_paths import get_data_dir
 
     path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-    async with _persistence._get_override_file_lock(), config_write_guard():
+    async with config_write_guard():
         existing: dict[str, Any] = {}
         try:
             existing_raw = path.read_text()

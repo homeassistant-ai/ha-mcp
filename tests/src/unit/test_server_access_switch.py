@@ -6,7 +6,10 @@ entity platform; only the server bring-up / teardown are replaced.
 
 from __future__ import annotations
 
+import builtins
 import json
+import logging
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,13 +17,18 @@ import pytest
 from homeassistant.components.switch.const import DATA_COMPONENT
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant.common import async_fire_time_changed
 
 from custom_components.ha_mcp_tools import switch as switch_platform
 from custom_components.ha_mcp_tools.const import (
     DATA_ACCESS_ENABLED,
     SERVER_CONFIG_SUBDIR,
 )
+from custom_components.ha_mcp_tools.embedded_read_only import set_read_only_mode
+from ha_mcp.read_only import read_only_remedy_hint
 
 from ._server_entry import add_server_entry, replace_server, set_up
 
@@ -68,6 +76,40 @@ def _shown(hass: HomeAssistant, entity_id: str) -> str:
     state = hass.states.get(entity_id)
     assert state is not None
     return state.state
+
+
+def test_read_only_write_never_cold_imports_the_server_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The HA executor must not join a worker's in-progress ha_mcp import."""
+    real_import = builtins.__import__
+
+    def reject_server_import(name: str, *args: object, **kwargs: object):
+        if name == "ha_mcp" or name.startswith("ha_mcp."):
+            raise AssertionError(f"component write imported {name}")
+        return real_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as import_guard:
+        import_guard.setattr(builtins, "__import__", reject_server_import)
+        set_read_only_mode(tmp_path, True)
+    assert json.loads((tmp_path / "feature_flags.json").read_text()) == {
+        "read_only_mode": True
+    }
+
+
+def test_embedded_remedy_names_the_device_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "ha_mcp.read_only.get_global_settings",
+        lambda: SimpleNamespace(read_only_mode=True),
+    )
+    monkeypatch.setattr("ha_mcp.read_only.is_embedded_mode", lambda: True)
+
+    hint = read_only_remedy_hint()
+
+    assert "HA-MCP Server device" in hint
+    assert "Read Only Mode switch" in hint
 
 
 async def test_the_server_entry_gets_one_access_switch(
@@ -163,6 +205,21 @@ async def test_read_only_mode_reads_the_panel_setting(
     assert _shown(hass, registered.entity_id) == STATE_ON
 
 
+async def test_read_only_mode_matches_server_integer_override(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entity_registry_enabled_by_default: None,
+    server: SimpleNamespace,
+) -> None:
+    path = _feature_flags_path(hass)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"read_only_mode": 1}), encoding="utf-8")
+
+    registered = await _read_only_mode_entry(hass, entity_registry)
+
+    assert _shown(hass, registered.entity_id) == STATE_ON
+
+
 async def test_turning_read_only_mode_on_preserves_other_settings(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
@@ -197,11 +254,81 @@ async def test_read_only_mode_refreshes_after_a_panel_change(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"read_only_mode": True}), encoding="utf-8")
 
-    entity = hass.data[DATA_COMPONENT].get_entity(registered.entity_id)
-    assert entity is not None
-    await entity.async_update_ha_state(force_refresh=True)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=31))
+    await hass.async_block_till_done()
 
     assert _shown(hass, registered.entity_id) == STATE_ON
+
+
+@pytest.mark.parametrize("payload", [b"\xff", b"[]", b"{not json"])
+async def test_read_only_mode_refuses_to_replace_an_invalid_override(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entity_registry_enabled_by_default: None,
+    server: SimpleNamespace,
+    payload: bytes,
+) -> None:
+    path = _feature_flags_path(hass)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(payload)
+    registered = await _read_only_mode_entry(hass, entity_registry)
+    entity = hass.data[DATA_COMPONENT].get_entity(registered.entity_id)
+    assert entity is not None
+
+    with pytest.raises(HomeAssistantError, match="Could not change Read Only Mode"):
+        await entity.async_turn_on()
+
+    assert path.read_bytes() == payload
+
+
+async def test_read_only_mode_environment_lock_is_friendly_and_removable(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entity_registry_enabled_by_default: None,
+    server: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("READ_ONLY_MODE", "y")
+    registered = await _read_only_mode_entry(hass, entity_registry)
+    path = _feature_flags_path(hass)
+
+    with pytest.raises(HomeAssistantError, match="locked by the READ_ONLY_MODE"):
+        await hass.services.async_call(
+            "switch", "turn_off", {"entity_id": registered.entity_id}, blocking=True
+        )
+    assert not path.exists()
+
+    monkeypatch.delenv("READ_ONLY_MODE")
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": registered.entity_id}, blocking=True
+    )
+    assert json.loads(path.read_text(encoding="utf-8"))["read_only_mode"] is False
+
+
+async def test_unreadable_read_only_mode_warns_only_on_transition(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entity_registry_enabled_by_default: None,
+    server: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    path = _feature_flags_path(hass)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\xff")
+    caplog.set_level(logging.WARNING, logger=switch_platform.__name__)
+    registered = await _read_only_mode_entry(hass, entity_registry)
+
+    for seconds in (31, 62):
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=seconds))
+        await hass.async_block_till_done()
+
+    warnings = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Cannot read embedded Read Only Mode")
+    ]
+    assert len(warnings) == 1
+    assert _shown(hass, registered.entity_id) == "unavailable"
 
 
 async def test_turning_the_switch_on_shows_on(

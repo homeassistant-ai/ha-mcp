@@ -165,8 +165,12 @@ def test_read_only_mode_disabled_by_default():
         ("true", True),
         ("TRUE", True),
         ("1", True),
+        ("t", True),
+        ("y", True),
         ("false", False),
         ("0", False),
+        ("f", False),
+        ("n", False),
     ],
 )
 def test_read_only_mode_env_var_coercion_accepted(env_value, expected):

@@ -17,6 +17,7 @@ from ha_mcp.config_registry import (
     RegistryFieldType,
 )
 from ha_mcp.config_settings import Settings
+from hamcp_runtime_config import coerce_feature_flag_bool
 
 # All config modules log under the ``ha_mcp.config`` logger name.
 logger = logging.getLogger("ha_mcp.config")
@@ -183,14 +184,15 @@ def _coerce_feature_flag_value(
     applying it. Mirrors the original inline ``continue`` behavior.
     """
     if ftype is bool:
-        if not isinstance(raw, bool | int):
+        ok, bool_coerced = coerce_feature_flag_bool(raw)
+        if not ok:
             logger.warning(
                 "Override for %r is %s; expected bool — ignoring.",
                 field_name,
                 type(raw).__name__,
             )
             return False, None
-        return True, bool(raw)
+        return True, bool_coerced
     elif ftype is int:
         if isinstance(raw, bool) or not isinstance(raw, int):
             logger.warning(

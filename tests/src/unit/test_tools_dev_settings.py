@@ -17,8 +17,8 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from ha_mcp import settings_transfer as transfer
 from custom_components.ha_mcp_tools.embedded_read_only import set_read_only_mode
+from ha_mcp import settings_transfer as transfer
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -304,12 +304,16 @@ class TestSettingsMatrix:
             assert await asyncio.to_thread(write_started.wait, 5)
             first.cancel()
             await asyncio.sleep(0)
+            first.cancel()
             second = asyncio.create_task(
                 asyncio.to_thread(set_read_only_mode, get_data_dir(), True)
             )
             await asyncio.sleep(0.05)
 
-            assert not first.done()
+            # Repeated cancellation may finish the awaiting task immediately;
+            # correctness comes from the worker retaining the file lock until
+            # its atomic replace completes.
+            assert first.cancelled()
             assert not second.done()
         finally:
             release_write.set()
