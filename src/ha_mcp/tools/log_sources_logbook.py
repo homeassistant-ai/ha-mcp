@@ -581,15 +581,19 @@ class LogbookLogSourceMixin:
 
     async def _page_total(
         self,
-        command: dict[str, Any],
         page: dict[str, Any],
         start: datetime,
         end: datetime,
     ) -> int:
         total = 0
         for lo, hi in logbook_windows(start, end):
+            # Constrain Core's own Recorder statement, independently of whether
+            # the DB pushes the outer range predicate through its event/state UNION.
+            # Core excludes both endpoints; include the shared boundary once.
+            native_start = lo - timedelta(microseconds=1) if lo > start else lo
             counted = await self._required_component_page(
-                command, {**page, "count_range": [lo.timestamp(), hi.timestamp()]}
+                {"start_time": native_start.isoformat(), "end_time": hi.isoformat()},
+                {**page, "count_range": [lo.timestamp(), hi.timestamp()]},
             )
             total += counted["total"]
         return total
@@ -669,7 +673,7 @@ class LogbookLogSourceMixin:
         if cursor and cursor.total is not None:
             total = cursor.total
         elif total is None:
-            total = await self._page_total(command, request, start, end)
+            total = await self._page_total(request, start, end)
         else:
             total += before
         while (

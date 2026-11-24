@@ -494,14 +494,19 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
     assert actual == (names if order == "oldest" else names[::-1])
     if component_enabled:
         rest.assert_not_awaited()
-        pages = [
-            call.args[0]["page"]
+        commands = [
+            call.args[0]
             for call in sent.await_args_list
             if call.args[0]["type"] == COMPONENT_COMMAND
         ]
-        counts = [page["count_range"] for page in pages if "count_range" in page]
+        assert all("page" in cmd for cmd in commands)
+        counts = [cmd for cmd in commands if "count_range" in cmd["page"]]
         assert len(counts) == 3  # The cursor carries the total on subsequent pages.
-        assert all(hi - lo == 3600 for lo, hi in counts)
+        for cmd in counts:
+            span = datetime.fromisoformat(cmd["end_time"]) - datetime.fromisoformat(
+                cmd["start_time"]
+            )
+            assert span <= timedelta(hours=1, microseconds=1)
     else:
         assert rest.await_count >= 3
         for call in rest.await_args_list:
