@@ -484,7 +484,7 @@ async def test_dense_logbook_pages_return_each_tied_event_once(
     await async_wait_recording_done(hass)
     monkeypatch.setattr(websocket_client, "MAX_WS_MESSAGE_BYTES", 8192)
     params = call_kwargs(source="logbook", limit=3, order=order, search="page marker")
-    actual = []
+    actual: list[str] = []
     with rest_reads(component_core_client) as rest:
         for _ in range(len(names)):
             data = (await LogTools(component_core_client).get_logs(**params))["data"]
