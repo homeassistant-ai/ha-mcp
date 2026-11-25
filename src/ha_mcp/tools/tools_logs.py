@@ -323,7 +323,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description=(
-                    "Keyword filter on entries/lines. For source='system' it "
+                    "Keyword filter on entries/lines. Logbook searches the displayed "
+                    "name and message together (e.g. 'Home Assistant started'), "
+                    "and the entity ID. For source='system' it "
                     "matches message, name and exception text; for the raw "
                     "error_log path it matches any line of a record, so a "
                     "traceback frame brings back its header and siblings. "

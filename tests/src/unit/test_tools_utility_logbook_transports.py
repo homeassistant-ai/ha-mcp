@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Iterator
 from contextlib import AsyncExitStack, contextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -169,8 +169,12 @@ async def test_component_receives_the_entity_and_device_filters(
 
 
 @pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("search", [None, "Kitchen Light"])
 async def test_component_that_lost_the_command_falls_back_to_rest(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient, sent: AsyncMock
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    search: str | None,
 ) -> None:
     """An older component answers ``unknown_command``: the read still succeeds
     through Core's REST view."""
@@ -181,7 +185,7 @@ async def test_component_that_lost_the_command_falls_back_to_rest(
     del hass.data[websocket_api.DOMAIN][COMPONENT_COMMAND]
     sent.reset_mock()
     with rest_reads(component_core_client) as rest:
-        result = await tools.get_logs(**call_kwargs(source="logbook"))
+        result = await tools.get_logs(**call_kwargs(source="logbook", search=search))
 
     assert COMPONENT_COMMAND in sent_types(sent)
     rest.assert_awaited()
@@ -524,6 +528,133 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
 
 
 @pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("order", ["oldest", "newest"])
+async def test_phrase_pages_fill_across_raw_batches(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    order: str,
+) -> None:
+    from custom_components.ha_mcp_tools.websocket_api import logbook_page
+
+    monkeypatch.setattr(logbook_page, "RAW_PAGE_ROWS", 2)
+    stamp = dt_util.utcnow().timestamp() - 60
+    for i in range(12):
+        hass.bus.async_fire(
+            "logbook_entry",
+            {"name": "Home Assistant" if i % 3 == 0 else "noise", "message": "started"},
+            time_fired=stamp + i,
+        )
+    await async_wait_recording_done(hass)
+    params = call_kwargs(
+        source="logbook", search="Home Assistant started", limit=3, order=order
+    )
+    tools = LogTools(component_core_client)
+    first = (await tools.get_logs(**params))["data"]
+    # One hourly count locates every match. Only the selected keys need a
+    # second component command, regardless of how many raw batches separate them.
+    pages = [
+        call.args[0]["page"]
+        for call in sent.await_args_list
+        if call.args[0]["type"] == COMPONENT_COMMAND
+    ]
+    assert len(pages) == 2
+    assert pages[0]["collect_keys"] == 3
+    assert len(pages[1]["keys"]) == 3
+    assert first["total_entries"] == 4
+    assert first["returned_entries"] == 3
+    sent.reset_mock()
+    last = (await tools.get_logs(**(params | {"offset": first["next_offset"]})))["data"]
+    assert last["returned_entries"] == 1
+    assert not last["has_more"]
+    times = [
+        datetime.fromisoformat(row["when"])
+        for row in first["entries"] + last["entries"]
+    ]
+    expected = [datetime.fromtimestamp(stamp + i, UTC) for i in (0, 3, 6, 9)]
+    assert times == sorted(expected, reverse=order == "newest")
+    assert not any(
+        "count_range" in c.args[0].get("page", {}) for c in sent.await_args_list
+    )
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("change", ["rename", "purge"])
+async def test_selected_matches_change_before_render(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    change: str,
+) -> None:
+    entities = [f"light.selection_{i}" for i in range(4)]
+    for entity in entities:
+        for state in ("off", "on"):
+            hass.states.async_set(entity, state, {"friendly_name": "selection race"})
+    await async_wait_recording_done(hass)
+    handler, schema = hass.data[websocket_api.DOMAIN][COMPONENT_COMMAND]
+
+    @websocket_api.async_response
+    async def change_before_render(
+        core: HomeAssistant, conn: Any, message: dict[str, Any]
+    ) -> None:
+        if message.get("page", {}).get("keys"):
+            if change == "rename":
+                for entity in entities[:2]:
+                    hass.states.async_set(entity, "on", {"friendly_name": "renamed"})
+            else:
+                await hass.services.async_call(
+                    "recorder",
+                    "purge_entities",
+                    {"entity_id": entities[:2]},
+                    blocking=True,
+                )
+            await async_wait_recording_done(hass)
+        handler(core, conn, message)
+
+    params = call_kwargs(
+        source="logbook", order="oldest", limit=2, search="selection race"
+    )
+    websocket_api.async_register_command(
+        hass, COMPONENT_COMMAND, change_before_render, schema
+    )
+    try:
+        page = (await LogTools(component_core_client).get_logs(**params))["data"]
+    finally:
+        websocket_api.async_register_command(hass, COMPONENT_COMMAND, handler, schema)
+    assert page["total_entries"] == 4
+    assert [entry["entity_id"] for entry in page["entries"]] == entities[2:]
+    assert not page["has_more"]
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("order", ["oldest", "newest"])
+async def test_deep_numeric_offset_inside_one_tied_timestamp(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient, order: str
+) -> None:
+    stamp = dt_util.utcnow().timestamp() - 10
+    names = [f"tied match {i}" for i in range(520)]
+    for name in names:
+        hass.bus.async_fire(
+            "logbook_entry", {"name": name, "message": "offset"}, time_fired=stamp
+        )
+    await async_wait_recording_done(hass)
+    params = call_kwargs(
+        source="logbook", search="tied match", order=order, offset=508, limit=8
+    )
+    tools = LogTools(component_core_client)
+    first = (await tools.get_logs(**params))["data"]
+    second = (await tools.get_logs(**(params | {"offset": first["next_offset"]})))[
+        "data"
+    ]
+    expected = names if order == "oldest" else list(reversed(names))
+    assert first["total_entries"] == 520
+    assert first["offset"] == 508
+    assert [r["name"] for r in first["entries"]] == expected[508:516]
+    assert [r["name"] for r in second["entries"]] == expected[516:]
+    assert not second["has_more"]
+
+
+@pytest.mark.usefixtures("logbook")
 async def test_cursor_reads_matches_committed_after_the_initial_count(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
@@ -556,7 +687,9 @@ async def test_cursor_reads_matches_committed_after_the_initial_count(
     record("late", 3)
     await async_wait_recording_done(hass)
     params["offset"] = first["next_offset"]
-    second = (await tools.get_logs(**params))["data"]
+    with patch("ha_mcp.tools.log_sources_logbook.datetime", wraps=datetime) as clock:
+        clock.now.return_value = end + timedelta(seconds=1)
+        second = (await tools.get_logs(**params))["data"]
     assert second["total_entries"] == 2
     assert [row["name"] for row in second["entries"]] == ["second"]
     assert second["has_more"]
