@@ -528,8 +528,9 @@ async def test_cursor_reads_matches_committed_after_the_initial_count(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
 ) -> None:
-    end = dt_util.utcnow()
-    start = end.timestamp() - 60
+    # Only a window that ends in the future can still gain matches.
+    end = dt_util.utcnow() + timedelta(minutes=2)
+    start = dt_util.utcnow().timestamp() - 60
 
     def record(name: str, offset: int) -> None:
         hass.bus.async_fire(
@@ -585,12 +586,21 @@ async def test_oversized_component_reply_never_repeats_the_read_over_rest(
 
 @pytest.mark.usefixtures("logbook")
 @pytest.mark.parametrize("order", ["oldest", "newest"])
+@pytest.mark.parametrize(("limit", "page_bytes"), [(3, None), (10, 8192)])
 async def test_dense_logbook_pages_return_each_tied_event_once(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     order: str,
+    limit: int,
+    page_bytes: int | None,
 ) -> None:
+    """With a byte budget at the transport limit, a page of large entries ends
+    early instead of closing the WebSocket, and the cursor still visits each once."""
+    from custom_components.ha_mcp_tools.websocket_api import logbook_page
+
+    if page_bytes is not None:
+        monkeypatch.setattr(logbook_page, "PAGE_BYTES", page_bytes)
     stamp = dt_util.utcnow().timestamp() - 5
     names = [f"page marker {i:02d}" for i in range(41)]
     for name in names:
@@ -601,13 +611,15 @@ async def test_dense_logbook_pages_return_each_tied_event_once(
         )
     await async_wait_recording_done(hass)
     monkeypatch.setattr(websocket_client, "MAX_WS_MESSAGE_BYTES", 8192)
-    params = call_kwargs(source="logbook", limit=3, order=order, search="page marker")
+    params = call_kwargs(
+        source="logbook", limit=limit, order=order, search="page marker"
+    )
     actual: list[str] = []
     with rest_reads(component_core_client) as rest:
         for _ in range(len(names)):
             data = (await LogTools(component_core_client).get_logs(**params))["data"]
             assert data["total_entries"] == len(names)
-            assert len(data["entries"]) <= 3
+            assert len(data["entries"]) <= limit
             actual.extend(row["name"] for row in data["entries"])
             if not data["has_more"]:
                 break
@@ -671,9 +683,11 @@ async def test_sparse_search_across_context_and_page_boundaries(
     assert len(expected) == 1 and expected[0]["context_service"] == "turn_on"
     monkeypatch.setattr(logbook_page, "RAW_PAGE_ROWS", 2)
     actual = []
+    pages = 0
     with rest_reads(core_client) as rest:
         for _ in range(20):
             result = await LogTools(core_client).get_logs(**params)
+            pages += 1
             data = result["data"]
             actual.extend(data["entries"])
             if not data["has_more"]:
@@ -684,6 +698,8 @@ async def test_sparse_search_across_context_and_page_boundaries(
             params["offset"] = data["next_offset"]
         else:
             pytest.fail("Sparse search did not terminate")
+    # The page holding the only match says nothing more follows.
+    assert pages == 1
     if not component_enabled:
         assert any("context" in warning.lower() for warning in result["warnings"])
         assert "context_service" not in actual[0]

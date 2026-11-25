@@ -103,7 +103,9 @@ def _read_rows(
     chosen: list[RowKey] = []
     used = 0
     for stamp, kind, row_id in candidates[:RAW_PAGE_ROWS]:
-        chars = sizes[(stamp, kind, row_id)]
+        # A purge can remove a probed row before its size is read.
+        if (chars := sizes.get((stamp, kind, row_id))) is None:
+            continue
         if chosen and used + chars * 4 > PAGE_BYTES:
             break
         chosen.append((stamp, kind, row_id))

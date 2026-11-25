@@ -450,7 +450,9 @@ class LogbookLogSourceMixin:
         self, exc: HomeAssistantConnectionError, command: dict[str, Any]
     ) -> None:
         if _wrapped_timeout(exc):
-            self._raise_logbook_timeout(command["start_time"], command["end_time"])
+            self._raise_logbook_timeout(
+                command["start_time"], command.get("end_time") or ""
+            )
         if isinstance(exc, HomeAssistantResponseTooLarge):
             raise_tool_error(
                 create_error_response(
@@ -682,18 +684,19 @@ class LogbookLogSourceMixin:
                     start, end, offset, limit, order, search, compact
                 )
             )
-        total = page["total"]
-        if cursor and cursor.total is not None:
-            total = cursor.total
-        elif total is None:
+        total = cursor.total if cursor else page["total"]
+        if total is None:
             total = await self._page_total(request, start, end)
-        else:
-            total += before
-        # An initial count of zero already searched the whole window. Once a
-        # cursor exists, Recorder can commit further matches after its anchor.
+        # An initial count of zero already searched the whole window.
         if cursor is None and total == 0 and not page["entries"]:
             page["after"] = None
-        while not page["entries"] and page.get("after"):
+        # Only a window that ends in the future can gain matches after the count.
+        open_window = end > datetime.now(UTC)
+        while (
+            not page["entries"]
+            and page.get("after")
+            and (open_window or before + page["matched"] < total)
+        ):
             before += page["matched"]
             page = await self._required_component_page(
                 command, {**request, "after": page["after"], "skip": page["skip"]}
@@ -704,7 +707,9 @@ class LogbookLogSourceMixin:
             offset, before + page.get("matched", len(entries)) - len(entries)
         )
         more = (
-            position + len(entries) < total if page.get("legacy") else after is not None
+            position + len(entries) < total
+            if page.get("legacy")
+            else after is not None and (open_window or position + len(entries) < total)
         )
         hours = (end - start) // timedelta(hours=1)
         data: dict[str, Any] = {

@@ -48,11 +48,17 @@ def _validate_offset_token(source: str, token: str) -> str:
                 log_level=TOOL_ERROR_LOG_LEVEL,
             )
         parse = parse_cursor_token
+    elif source == "logbook":
+        raise ToolError(
+            "Invalid 'offset' token for source='logbook'; pass an integer or "
+            "the 'next_offset' value a previous response returned",
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        )
     else:
         raise ToolError(
-            "Cursor tokens only apply to source='error_log', 'supervisor' "
-            f"and 'system_service'; source='{source}' takes a non-negative "
-            "integer offset",
+            "Cursor tokens only apply to source='error_log', 'supervisor', "
+            "'system_service' and 'logbook'; "
+            f"source='{source}' takes a non-negative integer offset",
             log_level=TOOL_ERROR_LOG_LEVEL,
         )
     try:

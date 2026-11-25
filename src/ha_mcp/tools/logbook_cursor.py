@@ -11,7 +11,7 @@ LOGBOOK_CURSOR_PREFIX = "logbook:"
 
 class LogbookCursor(BaseModel):
     hours_back: int = Field(default=1, ge=1)
-    total: int | None = Field(default=None, ge=0)
+    total: int = Field(ge=0)
     end: datetime
     order: Literal["newest", "oldest"]
     search: str | None
