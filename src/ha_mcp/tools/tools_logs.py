@@ -30,13 +30,16 @@ from .log_sources import _SYSTEM_LOG_MESSAGE_CAP, CoreLogSourcesMixin
 from .log_sources_fault import FaultLogSourceMixin
 from .log_sources_logbook import LogbookLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
+from .logbook_cursor import LOGBOOK_CURSOR_PREFIX, LogbookCursor
 from .tool_hints import read_only_hints
 
 
 def _validate_offset_token(source: str, token: str) -> str:
     """Check ``token`` is a ``next_offset`` value ``source`` itself returns."""
-    if source in ("supervisor", "system_service"):
-        parse: Callable[[str], object] = parse_window_token
+    if source == "logbook" and token.startswith(LOGBOOK_CURSOR_PREFIX):
+        parse: Callable[[str], object] = LogbookCursor.parse
+    elif source in ("supervisor", "system_service"):
+        parse = parse_window_token
     elif source == "error_log":
         if not is_cursor_token(token):
             raise ToolError(
@@ -45,11 +48,17 @@ def _validate_offset_token(source: str, token: str) -> str:
                 log_level=TOOL_ERROR_LOG_LEVEL,
             )
         parse = parse_cursor_token
+    elif source == "logbook":
+        raise ToolError(
+            "Invalid 'offset' token for source='logbook'; pass an integer or "
+            "the 'next_offset' value a previous response returned",
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        )
     else:
         raise ToolError(
-            "Cursor tokens only apply to source='error_log', 'supervisor' "
-            f"and 'system_service'; source='{source}' takes a non-negative "
-            "integer offset",
+            "Cursor tokens only apply to source='error_log', 'supervisor', "
+            "'system_service' and 'logbook'; "
+            f"source='{source}' takes a non-negative integer offset",
             log_level=TOOL_ERROR_LOG_LEVEL,
         )
     try:
@@ -118,13 +127,13 @@ class LogTools(
         numeric_offset = offset if isinstance(offset, int) else 0
         if source == "logbook":
             return await self._get_logbook(
-                hours_back=hours_back if hours_back is not None else 1,
+                hours_back=hours_back,
                 entity_id=entity_id,
                 device_id=device_id,
                 context_id=context_id,
                 end_time=end_time,
                 limit=limit,
-                offset=numeric_offset,
+                offset=offset,
                 search=search,
                 compact=compact,
                 order=chosen,
@@ -350,7 +359,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ge=1,
                 description=(
                     "How many hours back to read. Logbook (default 1), "
-                    "supervisor and system_service. For the last two, only "
+                    "supervisor and system_service. For Logbook continuation see offset. "
+                    "For the journal sources, only "
                     "when given: the journal serves that window, from its "
                     "start to the journal's end, one page at a time, "
                     "oldest-first (see offset); has_more says more of it remains. With search "
@@ -398,6 +408,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | str,
             Field(
                 description=(
+                    "For a whole-instance Logbook cursor, pass next_offset as offset with the same "
+                    "search and order. The cursor pins the window and its first-page match count. "
+                    "For an integer next_offset, reuse the original hours_back and returned end_time. "
+                    "Scoped Logbook reads provide pagination_hint with those arguments. "
                     "Page deeper into source='logbook', 'error_log', "
                     "'fault_log', and supervisor/system_service on a page "
                     "read: hours_back and no search (ignored otherwise). "
