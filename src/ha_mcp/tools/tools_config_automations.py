@@ -37,6 +37,7 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import automation_backup_target, with_auto_backup
+from .automation_action_validation import action_contains_scene_create
 from .automation_errors import (
     core_rejection_text,
     failed_section_from_core,
@@ -44,6 +45,7 @@ from .automation_errors import (
     section_from_status,
 )
 from .automation_registry_details import core_related, registry_details
+from .automation_write_helpers import strip_redundant_identifier_echo
 from .best_practice_checker import (
     BestPracticeCheckResult,
 )
@@ -130,44 +132,6 @@ class _Target(NamedTuple):
     # The component's lookup reply; None when the component did not answer or
     # was not asked (``with_entity=False``).
     lookup: dict[str, Any] | None
-
-
-def _scene_create_in_choose(action: dict[str, Any]) -> bool:
-    """True if any ``choose`` option's sequence contains scene.create."""
-    opts = action.get("choose")
-    if not isinstance(opts, list):
-        return False
-    for opt in opts:
-        if isinstance(opt, dict) and isinstance(opt.get("sequence"), list):
-            for sub in opt["sequence"]:
-                if _action_contains_scene_create(sub):
-                    return True
-    return False
-
-
-def _action_contains_scene_create(action: Any) -> bool:
-    """True if the action — or any nested action under HA's wrapper keys —
-    invokes ``scene.create``.
-
-    Walks the standard wrappers: ``sequence``, ``parallel``, ``choose``
-    (with options' inner ``sequence``), ``default``, and the ``then``/
-    ``else`` siblings of ``if``. Returns True on the first hit, so a deep
-    misroute is caught before the upsert reaches HA.
-    """
-    if not isinstance(action, dict):
-        return False
-    # 'service:' is the legacy key, 'action:' the modern HA service-call
-    # key (HA 2024.8+). Both reach scene.create.
-    if "scene.create" in (action.get("service"), action.get("action")):
-        return True
-    # Wrappers whose value is a list of nested actions.
-    for nested_key in ("sequence", "parallel", "default", "then", "else"):
-        nested = action.get(nested_key)
-        if isinstance(nested, list):
-            for sub in nested:
-                if _action_contains_scene_create(sub):
-                    return True
-    return _scene_create_in_choose(action)
 
 
 def _validate_automation_entity_id(entity_id: str | None) -> None:
@@ -267,22 +231,6 @@ async def _set_automation_enabled(client: Any, entity_id: str, enabled: bool) ->
     """Set an automation's runtime enabled state through Home Assistant."""
     service = "turn_on" if enabled else "turn_off"
     return await client.call_service("automation", service, {"entity_id": entity_id})
-
-
-def _strip_redundant_identifier_echo(
-    result: dict[str, Any],
-    *,
-    extra_excludes: tuple[str, ...] = (),
-) -> dict[str, Any]:
-    """Strip the REST client's ``identifier`` echo from a write's result.
-
-    ``automation_id`` (the resolved entity_id, else the input entity_id, else
-    the config id) already names the automation. ``extra_excludes`` drops
-    other keys the caller sets itself. Never exclude ``unique_id``: callers
-    track the config id for cleanup (E2E test_duplicate_automation_prevention).
-    """
-    excluded = {"identifier", *extra_excludes}
-    return {k: v for k, v in result.items() if k not in excluded}
 
 
 class AutomationConfigTools:
@@ -456,8 +404,7 @@ class AutomationConfigTools:
     ) -> dict[str, Any]:
         """Get only the stored automation config hash for optimistic locking.
 
-        Accepts an automation entity_id or config id, like
-        ha_config_get_automation. The hash matches that tool and can be passed
+        The hash matches ha_config_get_automation and can be passed
         to ha_config_set_automation. No configuration or reference details are
         returned; use the full read when those are needed.
         """
@@ -1249,7 +1196,7 @@ class AutomationConfigTools:
             "config_hash": new_config_hash,
             "python_expression": python_transform,
             "message": f"Automation {entity_id} updated via Python transform",
-            **_strip_redundant_identifier_echo(result, extra_excludes=("success",)),
+            **strip_redundant_identifier_echo(result, extra_excludes=("success",)),
         }
         if bp_warnings:
             response["best_practice_warnings"] = list(bp_warnings)
@@ -1372,7 +1319,7 @@ class AutomationConfigTools:
             # The upsert always sets unique_id, so this conditional is a guard
             # only: automation_id=None would lie about resolvability.
             **({"automation_id": automation_id} if automation_id else {}),
-            **_strip_redundant_identifier_echo(result),
+            **strip_redundant_identifier_echo(result),
         }
         if detached_blueprint:
             response["took_control_of_blueprint"] = detached_blueprint
@@ -1590,7 +1537,7 @@ class AutomationConfigTools:
             config_dict.get("actions", config_dict.get("action"))
         )
         scene_create_indices = [
-            i for i, a in enumerate(actions_list) if _action_contains_scene_create(a)
+            i for i, a in enumerate(actions_list) if action_contains_scene_create(a)
         ]
         if scene_create_indices:
             raise_tool_error(
@@ -1692,7 +1639,7 @@ class AutomationConfigTools:
                 "success": True,
                 "action": "delete",
                 "automation_id": target.entity_id or entity_id,
-                **_strip_redundant_identifier_echo(result),
+                **strip_redundant_identifier_echo(result),
             }
         except ToolError:
             raise

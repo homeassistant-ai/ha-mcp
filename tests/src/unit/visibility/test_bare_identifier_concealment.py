@@ -66,6 +66,33 @@ def _register_rows(
 
 
 class TestBareIdentifierConcealment:
+    async def test_hidden_registry_disabled_automation_hash_is_concealed(
+        self,
+        hass: HomeAssistant,
+        entity_registry: er.EntityRegistry,
+        core_client: HomeAssistantClient,
+        set_config: Callable[..., VisibilityConfig],
+    ) -> None:
+        """A disabled automation's config ID must not expose its hash."""
+        entity_id = "automation.hidden_disabled"
+        register_entity(hass, entity_registry, entity_id, "1700000000001", "automation")
+        entity_registry.async_update_entity(
+            entity_id, disabled_by=er.RegistryEntryDisabler.USER
+        )
+        hass.states.async_remove(entity_id)
+        enforce_hiding(set_config, entity_id)
+        mw = _ChainedEnforcement(lambda: core_client)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_config_get_automation_hash", {"entity_id": "1700000000001"}
+                ),
+                unreached_call_next,
+            )
+
+        assert error_code(exc) == "ENTITY_NOT_FOUND"
+
     @pytest.mark.parametrize(
         ("tool", "args", "row"),
         [
