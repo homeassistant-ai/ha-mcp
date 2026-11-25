@@ -591,9 +591,12 @@ async def test_selected_matches_change_before_render(
         for state in ("off", "on"):
             hass.states.async_set(entity, state, {"friendly_name": "selection race"})
     await async_wait_recording_done(hass)
-    send = component_core_client.send_websocket_message
+    handler, schema = hass.data[websocket_api.DOMAIN][COMPONENT_COMMAND]
 
-    async def change_before_render(message: dict[str, Any], **kwargs: Any) -> Any:
+    @websocket_api.async_response
+    async def change_before_render(
+        core: HomeAssistant, conn: Any, message: dict[str, Any]
+    ) -> None:
         if message.get("page", {}).get("keys"):
             if change == "rename":
                 for entity in entities[:2]:
@@ -606,18 +609,18 @@ async def test_selected_matches_change_before_render(
                     blocking=True,
                 )
             await async_wait_recording_done(hass)
-        return await send(message, **kwargs)
+        handler(core, conn, message)
 
-    tools = LogTools(component_core_client)
     params = call_kwargs(
         source="logbook", order="oldest", limit=2, search="selection race"
     )
-    with patch.object(
-        component_core_client,
-        "send_websocket_message",
-        side_effect=change_before_render,
-    ):
-        page = (await tools.get_logs(**params))["data"]
+    websocket_api.async_register_command(
+        hass, COMPONENT_COMMAND, change_before_render, schema
+    )
+    try:
+        page = (await LogTools(component_core_client).get_logs(**params))["data"]
+    finally:
+        websocket_api.async_register_command(hass, COMPONENT_COMMAND, handler, schema)
     assert page["total_entries"] == 4
     assert [entry["entity_id"] for entry in page["entries"]] == entities[2:]
     assert not page["has_more"]
