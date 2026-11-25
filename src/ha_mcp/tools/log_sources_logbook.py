@@ -40,7 +40,12 @@ from .component_api import (
 )
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import _coerce_limit, _compact_logbook_entries
-from .logbook_cursor import LogbookCursor, logbook_windows, read_matched_page
+from .logbook_cursor import (
+    LogbookCursor,
+    fill_logbook_page,
+    logbook_windows,
+    read_matched_page,
+)
 from .response_helpers import add_timezone_metadata, require_ha_timezone
 
 # The component command serving Core's own logbook processor in-process, and
@@ -676,22 +681,27 @@ class LogbookLogSourceMixin:
     ) -> dict[str, Any]:
         caps = await get_component_caps(self._client)
         match_keys = component_supports(caps, "logbook_match_keys")
-        if match_keys and not cursor and search:
-            return await read_matched_page(
-                self._required_component_page, command, request, start, end, cursor
-            )
+        page: dict[str, Any] | list[Any] | None
         if cursor:
             page = await self._required_component_page(command, request)
+        elif match_keys and (search or offset > limit):
+            page = await read_matched_page(
+                self._fetch_logbook_component,
+                self._required_component_page,
+                command,
+                request,
+                start,
+                end,
+            )
         else:
-            result = await self._fetch_logbook_component(command, request)
-            if not isinstance(result, dict):
-                return await self._legacy_window_page(
-                    start, end, offset, limit, order, search, compact
-                )
-            page = result
-        if match_keys and page.get("after") and len(page["entries"]) < limit:
-            return await read_matched_page(
-                self._required_component_page, command, request, start, end, cursor
+            page = await self._fetch_logbook_component(command, request)
+        if not isinstance(page, dict):
+            return await self._legacy_window_page(
+                start, end, offset, limit, order, search, compact
+            )
+        if match_keys:
+            return await fill_logbook_page(
+                self._required_component_page, command, request, page, cursor
             )
         return page
 

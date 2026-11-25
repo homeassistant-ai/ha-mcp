@@ -350,6 +350,8 @@ def _render_keys(
     newest = page["order"] == "newest"
     pending = sorted({tuple(key) for key in page["keys"]}, reverse=newest)
     entries: list[dict[str, Any]] = []
+    last_selected = pending[-1]
+    needle = page.get("search", "").lower()
     used = 0
     after = None
     while pending:
@@ -370,15 +372,22 @@ def _render_keys(
                 ) < _key(row):
                     lookup[row[pos]] = origin
             for entry in processor.humanify([row]):
+                if not _matches(entry, needle):
+                    continue
                 size = len(json_bytes(entry))
                 if entries and used + size > PAGE_BYTES:
-                    return {"entries": entries, "after": after}
+                    return {
+                        "entries": entries,
+                        "after": after,
+                        "used_bytes": used,
+                        "byte_limited": True,
+                    }
                 entries.append(entry)
                 used += size
             after = _key(row)
         last = _key(rows[0] if newest else rows[-1])
         pending = [key for key in pending if (key < last if newest else key > last)]
-    return {"entries": entries, "after": after}
+    return {"entries": entries, "after": last_selected, "used_bytes": used}
 
 
 def _select_page(
@@ -395,14 +404,16 @@ def _select_page(
     ]
     total = None if more else sum(entry is not None for _, entry in candidates)
     skip = page["skip"]
-    matched = used = 0
+    matched = 0
+    used = page.get("used_bytes", 0)
+    byte_limited = False
     after = None
     for row, entry in candidates:
         if entry is not None:
             size = len(json_bytes(entry))
-            if not skip and (
-                len(entries) == page["limit"] or (entries and used + size > PAGE_BYTES)
-            ):
+            byte_limited = bool(not skip and used and used + size > PAGE_BYTES)
+            if not skip and (len(entries) == page["limit"] or byte_limited):
+                after = after or page.get("after")
                 more = True
                 break
             matched += 1
@@ -418,4 +429,6 @@ def _select_page(
         "total": total,
         "skip": skip,
         "after": after if more else None,
+        "used_bytes": used,
+        "byte_limited": byte_limited,
     }

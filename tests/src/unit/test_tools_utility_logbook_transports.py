@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Iterator
 from contextlib import AsyncExitStack, contextmanager
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -169,8 +169,12 @@ async def test_component_receives_the_entity_and_device_filters(
 
 
 @pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("search", [None, "Kitchen Light"])
 async def test_component_that_lost_the_command_falls_back_to_rest(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient, sent: AsyncMock
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    search: str | None,
 ) -> None:
     """An older component answers ``unknown_command``: the read still succeeds
     through Core's REST view."""
@@ -181,7 +185,7 @@ async def test_component_that_lost_the_command_falls_back_to_rest(
     del hass.data[websocket_api.DOMAIN][COMPONENT_COMMAND]
     sent.reset_mock()
     with rest_reads(component_core_client) as rest:
-        result = await tools.get_logs(**call_kwargs(source="logbook"))
+        result = await tools.get_logs(**call_kwargs(source="logbook", search=search))
 
     assert COMPONENT_COMMAND in sent_types(sent)
     rest.assert_awaited()
@@ -508,7 +512,6 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
         assert counts
         assert all(
             "count_range" not in call.args[0].get("page", {})
-            or "collect_keys" in call.args[0]["page"]
             for call in sent.await_args_list[first_page_calls:]
         )
         for cmd in counts:
@@ -561,12 +564,63 @@ async def test_phrase_pages_fill_across_raw_batches(
     assert len(pages[1]["keys"]) == 3
     assert first["total_entries"] == 4
     assert first["returned_entries"] == 3
+    sent.reset_mock()
     last = (await tools.get_logs(**(params | {"offset": first["next_offset"]})))["data"]
     assert last["returned_entries"] == 1
     assert not last["has_more"]
-    times = [row["when"] for row in first["entries"] + last["entries"]]
-    assert len(set(times)) == 4
-    assert times == sorted(times, reverse=order == "newest")
+    times = [
+        datetime.fromisoformat(row["when"])
+        for row in first["entries"] + last["entries"]
+    ]
+    expected = [datetime.fromtimestamp(stamp + i, UTC) for i in (0, 3, 6, 9)]
+    assert times == sorted(expected, reverse=order == "newest")
+    assert not any(
+        "count_range" in c.args[0].get("page", {}) for c in sent.await_args_list
+    )
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("change", ["rename", "purge"])
+async def test_selected_matches_change_before_render(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    change: str,
+) -> None:
+    entities = [f"light.selection_{i}" for i in range(4)]
+    for entity in entities:
+        for state in ("off", "on"):
+            hass.states.async_set(entity, state, {"friendly_name": "selection race"})
+    await async_wait_recording_done(hass)
+    send = component_core_client.send_websocket_message
+
+    async def change_before_render(message: dict[str, Any], **kwargs: Any) -> Any:
+        if message.get("page", {}).get("keys"):
+            if change == "rename":
+                for entity in entities[:2]:
+                    hass.states.async_set(entity, "on", {"friendly_name": "renamed"})
+            else:
+                await hass.services.async_call(
+                    "recorder",
+                    "purge_entities",
+                    {"entity_id": entities[:2]},
+                    blocking=True,
+                )
+            await async_wait_recording_done(hass)
+        return await send(message, **kwargs)
+
+    tools = LogTools(component_core_client)
+    params = call_kwargs(
+        source="logbook", order="oldest", limit=2, search="selection race"
+    )
+    with patch.object(
+        component_core_client,
+        "send_websocket_message",
+        side_effect=change_before_render,
+    ):
+        page = (await tools.get_logs(**params))["data"]
+    assert page["total_entries"] == 4
+    assert [entry["entity_id"] for entry in page["entries"]] == entities[2:]
+    assert not page["has_more"]
 
 
 @pytest.mark.usefixtures("logbook")

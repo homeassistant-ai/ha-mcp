@@ -1,7 +1,7 @@
 """Continuation for a component-backed whole-instance Recorder page."""
 
 from collections.abc import Awaitable, Callable, Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, FiniteFloat
@@ -45,38 +45,28 @@ def logbook_windows(
             start = boundary
 
 
+type PageFetch = Callable[[dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
 async def read_matched_page(
-    fetch: Callable[[dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]],
+    first_fetch: Callable[
+        [dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any] | list[Any] | None]
+    ],
+    fetch: PageFetch,
     command: dict[str, Any],
     request: dict[str, Any],
     start: datetime,
     end: datetime,
-    cursor: LogbookCursor | None,
-) -> dict[str, Any]:
-    """Collect matching identities during the count; hydrate only this page."""
+) -> dict[str, Any] | None:
+    """Collect matching identities during the initial count; hydrate only this page."""
     newest = request["order"] == "newest"
     limit = request["limit"]
     skip = request["skip"]
     keys: list[Any] = []
     total = 0
-    remaining_hours = False
-    overlap = timedelta(microseconds=1)
-    scan_start, scan_end = start, end
-    if cursor:
-        anchor = datetime.fromtimestamp(cursor.after[0], UTC)
-        if newest:
-            scan_end = min(end, anchor + overlap)
-        else:
-            scan_start = max(start, anchor - overlap)
-    for lo, hi in logbook_windows(scan_start, scan_end, newest=newest):
-        if (
-            cursor
-            and len(keys) == limit
-            and (not cursor.open_at_count or total > request["skip"] + limit)
-        ):
-            remaining_hours = True
-            break
-        native_start = lo - overlap if lo > start else lo
+    for index, (lo, hi) in enumerate(logbook_windows(start, end, newest=newest)):
+        native_start = lo - timedelta(microseconds=1) if lo > start else lo
+        window = {"start_time": native_start.isoformat(), "end_time": hi.isoformat()}
         page = {
             **request,
             "count_range": [lo.timestamp(), hi.timestamp()],
@@ -84,28 +74,59 @@ async def read_matched_page(
         }
         if len(keys) < limit:
             page["collect_keys"] = limit - len(keys)
-        batch = await fetch(
-            {
-                "start_time": native_start.isoformat(),
-                "end_time": hi.isoformat(),
-            },
-            page,
-        )
+        batch = await (fetch if index else first_fetch)(window, page)
+        if not isinstance(batch, dict):
+            return None
         total += batch["total"]
         skip = max(0, skip - batch["total"])
         keys.extend(batch["keys"])
     skipped = request["skip"] - skip
-    entries: list[Any] = []
-    after = None
-    if keys:
-        rendered = await fetch(command, {**request, "keys": keys})
-        entries = rendered["entries"]
-        if remaining_hours or total > skipped + len(entries):
-            after = rendered["after"]
+    rendered = (
+        await fetch(command, {**request, "keys": keys}) if keys else {"entries": []}
+    )
+    if not rendered.get("byte_limited") and total <= skipped + len(keys):
+        rendered["after"] = None
     return {
-        "entries": entries,
-        "after": after,
+        **rendered,
+        "matched": skipped + len(rendered["entries"]),
         "total": total,
-        "matched": skipped + len(entries),
         "skip": skip,
     }
+
+
+async def fill_logbook_page(
+    fetch: PageFetch,
+    command: dict[str, Any],
+    request: dict[str, Any],
+    page: dict[str, Any],
+    cursor: LogbookCursor | None,
+) -> dict[str, Any]:
+    """Resume after the last examined identity until the public page is full."""
+    total = cursor.total if cursor else page["total"]
+    matched = page["matched"]
+    entries = page["entries"]
+    while (
+        len(entries) < request["limit"]
+        and page.get("after")
+        and not page.get("byte_limited")
+        and not (
+            cursor
+            and not cursor.open_at_count
+            and cursor.seen + matched >= cursor.total
+        )
+    ):
+        page = await fetch(
+            command,
+            {
+                **request,
+                "after": page["after"],
+                "skip": page["skip"],
+                "limit": request["limit"] - len(entries),
+                "used_bytes": page["used_bytes"],
+            },
+        )
+        matched += page["matched"]
+        entries.extend(page["entries"])
+    if total is None and page.get("after") is None:
+        total = matched
+    return {**page, "entries": entries, "total": total, "matched": matched}
