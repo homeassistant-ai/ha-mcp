@@ -384,9 +384,10 @@ class ConfigScriptTools:
     ) -> tuple[dict[str, Any], str | None]:
         """Parse and validate script config, returning (config_dict, effective_category).
 
-        Parses JSON string config, validates it is a dict, checks for required
-        fields (sequence or use_blueprint), extracts category, and strips empty
-        blueprint fields.
+        Parses JSON string config, validates it is a dict, extracts category,
+        drops an empty ``sequence`` beside ``use_blueprint`` and refuses a
+        ``sequence`` sent as ``{"item": ...}`` or ``""``. Core's config API
+        judges the rest.
         """
         # Parse JSON config if provided as string
         try:
@@ -426,22 +427,9 @@ class ConfigScriptTools:
         config_category = config_dict.pop("category", None)
         effective_category = category if category is not None else config_category
 
-        # Validate required fields based on script type
-        # Blueprint scripts only need use_blueprint, regular scripts need sequence
         if "use_blueprint" in config_dict:
             # Strip empty sequence array that would override blueprint
             config_dict = _strip_empty_script_fields(config_dict)
-        elif "sequence" not in config_dict:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "config must include either 'sequence' field (for regular scripts) or 'use_blueprint' field (for blueprint-based scripts)",
-                    context={
-                        "script_id": script_id,
-                        "required_fields": ["sequence OR use_blueprint"],
-                    },
-                )
-            )
 
         return config_dict, effective_category
 
@@ -732,7 +720,6 @@ class ConfigScriptTools:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
         except Exception as e:  # noqa: BLE001
             suggestions = [
-                "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
                 "For blueprint scripts, use ha_manage_blueprints(action='list', domain='script') to list available blueprints",
                 "Validate sequence actions syntax for regular scripts",
                 "Check entity_ids exist if using service calls",
@@ -847,12 +834,10 @@ class ConfigScriptTools:
     ) -> tuple[dict[str, Any], str | None]:
         """Validate + run a script python_transform.
 
-        Returns ``(transformed_config, resolved_id)``. Extracted verbatim from
-        ``ha_config_set_script``'s python_transform branch (the pre-
-        ``_check_best_practices`` head): enforces config_hash, fetches +
-        hash-verifies, executes the sandboxed transform, and validates the
-        result still has a sequence or blueprint. Raises a structured ToolError
-        on any violation.
+        Returns ``(transformed_config, resolved_id)``. Enforces config_hash,
+        fetches + hash-verifies and executes the sandboxed transform, and
+        refuses a transformed ``sequence`` shaped ``{"item": ...}`` or ``""``.
+        Raises a structured ToolError on any violation.
         """
         if config_hash is None:
             raise_tool_error(
@@ -898,25 +883,6 @@ class ConfigScriptTools:
             {"action": "python_transform", "script_id": script_id},
             source="python_transform",
         )
-        # Validate transformed config
-        if (
-            "sequence" not in transformed_config
-            and "use_blueprint" not in transformed_config
-        ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_FAILED,
-                    "Transformed config must include either 'sequence' or 'use_blueprint'",
-                    suggestions=[
-                        "The transform may have removed required fields",
-                        "Ensure the config still has a 'sequence' or 'use_blueprint' key",
-                    ],
-                    context={
-                        "action": "python_transform",
-                        "script_id": script_id,
-                    },
-                )
-            )
         return transformed_config, resolved_id
 
     async def _finalize_script_write(
@@ -1096,10 +1062,9 @@ class ConfigScriptTools:
 
         EXAMPLE: ha_config_remove_script("old_script")
 
-        Only scripts created via the Home Assistant UI can be deleted. Scripts
-        defined in YAML configuration files (scripts.yaml or configuration.yaml)
-        cannot be deleted through the API and return a 405 Method Not Allowed
-        error; edit the configuration file directly instead.
+        Deletes a script from Home Assistant's editable script storage
+        (``scripts.yaml``, as the UI and ha_config_set_script write it); a
+        script defined elsewhere in YAML is not found there.
 
         WARNING: Deleting a script that is used by automations may cause those automations to fail.
         """

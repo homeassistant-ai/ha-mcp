@@ -217,16 +217,17 @@ async def test_connection_lost_during_wait_keeps_the_write_successful(
     assert (await _stored(hass))[KEY]["sequence"] == NEW_SEQUENCE
 
 
-async def test_config_without_sequence_or_blueprint_is_refused(
+async def test_config_without_sequence_or_blueprint_gets_cores_refusal(
     hass: HomeAssistant, tools: ConfigScriptTools
 ) -> None:
+    """Core's config API judges the script; the tool passes its reason on."""
     body = await rejected_call_body(
         tools.ha_config_set_script(script_id=KEY, config={"alias": "Test Script"})
     )
 
-    assert body["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
-    assert "sequence" in body["error"]["message"]
-    assert "use_blueprint" in body["error"]["message"]
+    assert body["error"]["code"] == "VALIDATION_FAILED"
+    assert "required key not provided" in body["error"]["message"]
+    assert not any("use_blueprint" in s for s in body["error"]["suggestions"])
     assert await _stored(hass) == {KEY: BODY}
 
 

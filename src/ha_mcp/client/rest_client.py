@@ -9,6 +9,7 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Any, NoReturn, cast
+from urllib.parse import quote
 
 import httpx
 
@@ -1319,7 +1320,7 @@ class HomeAssistantClient:
 
         try:
             response = await self._request(
-                "GET", f"/config/automation/config/{unique_id}"
+                "GET", self.config_path("automation", unique_id)
             )
             return response
         except HomeAssistantAPIError as e:
@@ -1395,7 +1396,7 @@ class HomeAssistantClient:
 
         try:
             response = await self._request(
-                "POST", f"/config/automation/config/{unique_id}", json=config
+                "POST", self.config_path("automation", unique_id), json=config
             )
 
             actual_entity_id = None
@@ -1486,7 +1487,7 @@ class HomeAssistantClient:
 
         try:
             response = await self._request(
-                "DELETE", f"/config/automation/config/{unique_id}"
+                "DELETE", self.config_path("automation", unique_id)
             )
             return {
                 "identifier": identifier,
@@ -1982,7 +1983,7 @@ class HomeAssistantClient:
         """A script's config by script_id; ``resolved_id`` is a known key."""
         resolved_id = resolved_id or await self._resolve_script_id(script_id)
         try:
-            endpoint = f"config/script/config/{resolved_id}"
+            endpoint = self.config_path("script", resolved_id)
             response = await self._request("GET", endpoint)
 
             return {"success": True, "script_id": resolved_id, "config": response}
@@ -2020,20 +2021,13 @@ class HomeAssistantClient:
             else await self._resolve_script_id(script_id)
         )
         try:
-            endpoint = f"config/script/config/{write_id}"
+            endpoint = self.config_path("script", write_id)
 
             # Default a missing alias from the CALLER's ``script_id`` (not
             # ``write_id``) so a renamed script's user-visible name is preserved
             # instead of being reset to the storage key.
             if "alias" not in config:
                 config["alias"] = script_id.removeprefix("script.")
-
-            # Validate that either sequence or use_blueprint is present
-            if "sequence" not in config and "use_blueprint" not in config:
-                raise ValueError(
-                    "Script configuration must include either 'sequence' (regular scripts) "
-                    "or 'use_blueprint' (blueprint-based scripts)"
-                )
 
             response = await self._request("POST", endpoint, json=config)
 
@@ -2051,7 +2045,7 @@ class HomeAssistantClient:
         bare = not script_id.startswith("script.")
         resolved_id = script_id if bare else await self._resolve_script_id(script_id)
         try:
-            endpoint = f"config/script/config/{resolved_id}"
+            endpoint = self.config_path("script", resolved_id)
             response = await self._request("DELETE", endpoint)
 
             return {
@@ -2066,21 +2060,6 @@ class HomeAssistantClient:
                 if resolved_id != script_id:
                     msg += f" (resolved storage key: {resolved_id})"
                 raise HomeAssistantAPIError(msg, status_code=404) from e
-            elif e.status_code == 405:
-                raise HomeAssistantAPIError(
-                    f"Cannot delete script '{script_id}': The HTTP DELETE method is blocked. "
-                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
-                    f"the Supervisor ingress proxy only allows GET and POST requests. "
-                    f"It may also occur if the script is defined in YAML configuration files. "
-                    f"WORKAROUNDS: "
-                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
-                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
-                    f"(3) If the script is YAML-defined, edit the configuration file directly. "
-                    f"(4) As a fallback, disable the script and rename it with a 'DELETE_' prefix "
-                    f"(e.g., 'DELETE_{script_id}') so you can identify and manually delete it later "
-                    f"via the Home Assistant UI (Settings > Automations & Scenes > Scripts).",
-                    status_code=405,
-                ) from e
             raise
 
     async def _resolve_scene(self, identifier: str) -> SceneResolution:
@@ -2154,10 +2133,16 @@ class HomeAssistantClient:
             result, f"Could not look up {entity_id}: {result.get('error')}"
         )
 
+    @staticmethod
+    def config_path(domain: str, key: str) -> str:
+        """Core's config API path for ``key``, with every ``/`` in it encoded
+        so the key cannot reach another endpoint."""
+        return f"config/{domain}/config/{quote(key, safe='')}"
+
     async def _config_exists(self, domain: str, storage_key: str) -> bool:
         """Whether Core's config API holds a ``domain`` config under ``storage_key``."""
         try:
-            await self._request("GET", f"config/{domain}/config/{storage_key}")
+            await self._request("GET", self.config_path(domain, storage_key))
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
                 return False
@@ -2256,7 +2241,7 @@ class HomeAssistantClient:
             resolution = await self._resolve_scene(scene_id)
             resolved_id = resolution.storage_key
         try:
-            endpoint = f"config/scene/config/{resolved_id}"
+            endpoint = self.config_path("scene", resolved_id)
             response = await self._request("GET", endpoint)
 
             return {"success": True, "scene_id": resolved_id, "config": response}
@@ -2291,7 +2276,7 @@ class HomeAssistantClient:
             else await self.resolve_scene_id(scene_id)
         )
         try:
-            endpoint = f"config/scene/config/{write_id}"
+            endpoint = self.config_path("scene", write_id)
 
             # Default a name when missing from the CALLER's ``scene_id`` (not
             # ``write_id``) — mirrors the script upsert behaviour so a bare
@@ -2341,7 +2326,7 @@ class HomeAssistantClient:
             resolution = await self._resolve_scene(scene_id)
             resolved_id = resolution.storage_key
         try:
-            endpoint = f"config/scene/config/{resolved_id}"
+            endpoint = self.config_path("scene", resolved_id)
             response = await self._request("DELETE", endpoint)
 
             return {

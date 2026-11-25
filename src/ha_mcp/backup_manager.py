@@ -2099,7 +2099,7 @@ async def _fetch_script(client: Any, entity_id: str) -> Any:
     # A bare id is a storage key: its snapshot holds only the script stored there.
     try:
         if not entity_id.startswith("script."):
-            return await client._request("GET", f"config/script/config/{entity_id}")
+            return await client._request("GET", client.config_path("script", entity_id))
         result = await client.get_script_config(entity_id)
     except HomeAssistantError as err:
         if getattr(err, "status_code", None) == 404:
