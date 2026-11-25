@@ -39,5 +39,3 @@ def action_contains_scene_create(action: Any) -> bool:
                 if action_contains_scene_create(sub):
                     return True
     return _scene_create_in_choose(action)
-
-
