@@ -2608,7 +2608,7 @@
         },
         "search": {
           "type": "str | None",
-          "description": "Keyword filter on entries/lines. For source='system' it matches message, name and exception text; for the raw error_log path it matches any line of a record, so a traceback frame brings back its header and siblings. Structured error_log mode matches message and logger name only; source='logger' matches the integration domain.",
+          "description": "Keyword filter on entries/lines. Logbook searches the displayed name and message together (e.g. 'Home Assistant started'), and the entity ID. For source='system' it matches message, name and exception text; for the raw error_log path it matches any line of a record, so a traceback frame brings back its header and siblings. Structured error_log mode matches message and logger name only; source='logger' matches the integration domain.",
           "default": null
         },
         "order": {
