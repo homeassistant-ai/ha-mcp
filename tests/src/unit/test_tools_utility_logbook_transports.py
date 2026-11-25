@@ -508,6 +508,7 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
         assert counts
         assert all(
             "count_range" not in call.args[0].get("page", {})
+            or "collect_keys" in call.args[0]["page"]
             for call in sent.await_args_list[first_page_calls:]
         )
         for cmd in counts:
@@ -521,6 +522,79 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
             start = datetime.fromisoformat(call.kwargs["start_time"])
             finish = datetime.fromisoformat(call.kwargs["end_time"])
             assert finish - start <= timedelta(hours=1, microseconds=2)
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("order", ["oldest", "newest"])
+async def test_phrase_pages_fill_across_raw_batches(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    sent: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    order: str,
+) -> None:
+    from custom_components.ha_mcp_tools.websocket_api import logbook_page
+
+    monkeypatch.setattr(logbook_page, "RAW_PAGE_ROWS", 2)
+    stamp = dt_util.utcnow().timestamp() - 60
+    for i in range(12):
+        hass.bus.async_fire(
+            "logbook_entry",
+            {"name": "Home Assistant" if i % 3 == 0 else "noise", "message": "started"},
+            time_fired=stamp + i,
+        )
+    await async_wait_recording_done(hass)
+    params = call_kwargs(
+        source="logbook", search="Home Assistant started", limit=3, order=order
+    )
+    tools = LogTools(component_core_client)
+    first = (await tools.get_logs(**params))["data"]
+    # One hourly count locates every match. Only the selected keys need a
+    # second component command, regardless of how many raw batches separate them.
+    pages = [
+        call.args[0]["page"]
+        for call in sent.await_args_list
+        if call.args[0]["type"] == COMPONENT_COMMAND
+    ]
+    assert len(pages) == 2
+    assert pages[0]["collect_keys"] == 3
+    assert len(pages[1]["keys"]) == 3
+    assert first["total_entries"] == 4
+    assert first["returned_entries"] == 3
+    last = (await tools.get_logs(**(params | {"offset": first["next_offset"]})))["data"]
+    assert last["returned_entries"] == 1
+    assert not last["has_more"]
+    times = [row["when"] for row in first["entries"] + last["entries"]]
+    assert len(set(times)) == 4
+    assert times == sorted(times, reverse=order == "newest")
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("order", ["oldest", "newest"])
+async def test_deep_numeric_offset_inside_one_tied_timestamp(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient, order: str
+) -> None:
+    stamp = dt_util.utcnow().timestamp() - 10
+    names = [f"tied match {i}" for i in range(520)]
+    for name in names:
+        hass.bus.async_fire(
+            "logbook_entry", {"name": name, "message": "offset"}, time_fired=stamp
+        )
+    await async_wait_recording_done(hass)
+    params = call_kwargs(
+        source="logbook", search="tied match", order=order, offset=508, limit=8
+    )
+    tools = LogTools(component_core_client)
+    first = (await tools.get_logs(**params))["data"]
+    second = (await tools.get_logs(**(params | {"offset": first["next_offset"]})))[
+        "data"
+    ]
+    expected = names if order == "oldest" else list(reversed(names))
+    assert first["total_entries"] == 520
+    assert first["offset"] == 508
+    assert [r["name"] for r in first["entries"]] == expected[508:516]
+    assert [r["name"] for r in second["entries"]] == expected[516:]
+    assert not second["has_more"]
 
 
 @pytest.mark.usefixtures("logbook")
@@ -556,7 +630,9 @@ async def test_cursor_reads_matches_committed_after_the_initial_count(
     record("late", 3)
     await async_wait_recording_done(hass)
     params["offset"] = first["next_offset"]
-    second = (await tools.get_logs(**params))["data"]
+    with patch("ha_mcp.tools.log_sources_logbook.datetime", wraps=datetime) as clock:
+        clock.now.return_value = end + timedelta(seconds=1)
+        second = (await tools.get_logs(**params))["data"]
     assert second["total_entries"] == 2
     assert [row["name"] for row in second["entries"]] == ["second"]
     assert second["has_more"]

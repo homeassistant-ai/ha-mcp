@@ -40,7 +40,7 @@ from .component_api import (
 )
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import _coerce_limit, _compact_logbook_entries
-from .logbook_cursor import LogbookCursor, logbook_windows
+from .logbook_cursor import LogbookCursor, logbook_windows, read_matched_page
 from .response_helpers import add_timezone_metadata, require_ha_timezone
 
 # The component command serving Core's own logbook processor in-process, and
@@ -171,6 +171,8 @@ class LogbookLogSourceMixin:
                 and (
                     search_lower in str(e.get("name", "")).lower()
                     or search_lower in str(e.get("message", "")).lower()
+                    or search_lower
+                    in f"{e.get('name') or ''} {e.get('message') or ''}".strip().lower()
                     or search_lower in str(e.get("entity_id", "")).lower()
                 )
             ]
@@ -659,6 +661,40 @@ class LogbookLogSourceMixin:
             "warnings": warnings,
         }
 
+    async def _read_logbook_page(
+        self,
+        command: dict[str, Any],
+        request: dict[str, Any],
+        cursor: LogbookCursor | None,
+        offset: int,
+        start: datetime,
+        end: datetime,
+        order: Literal["oldest", "newest"],
+        search: str | None,
+        limit: int,
+        compact: bool,
+    ) -> dict[str, Any]:
+        caps = await get_component_caps(self._client)
+        match_keys = component_supports(caps, "logbook_match_keys")
+        if match_keys and not cursor and search:
+            return await read_matched_page(
+                self._required_component_page, command, request, start, end, cursor
+            )
+        if cursor:
+            page = await self._required_component_page(command, request)
+        else:
+            result = await self._fetch_logbook_component(command, request)
+            if not isinstance(result, dict):
+                return await self._legacy_window_page(
+                    start, end, offset, limit, order, search, compact
+                )
+            page = result
+        if match_keys and page.get("after") and len(page["entries"]) < limit:
+            return await read_matched_page(
+                self._required_component_page, command, request, start, end, cursor
+            )
+        return page
+
     async def _format_logbook_page(
         self,
         request: dict[str, Any],
@@ -672,18 +708,11 @@ class LogbookLogSourceMixin:
         compact: bool,
     ) -> dict[str, Any]:
         command = {"start_time": start.isoformat(), "end_time": end.isoformat()}
+        open_window = cursor.open_at_count if cursor else end > datetime.now(UTC)
         before = cursor.seen if cursor else 0
-        if cursor:
-            page = await self._required_component_page(command, request)
-        else:
-            response = await self._fetch_logbook_component(command, request)
-            page = (
-                response
-                if isinstance(response, dict)
-                else await self._legacy_window_page(
-                    start, end, offset, limit, order, search, compact
-                )
-            )
+        page = await self._read_logbook_page(
+            command, request, cursor, offset, start, end, order, search, limit, compact
+        )
         total = cursor.total if cursor else page["total"]
         if total is None:
             total = await self._page_total(request, start, end)
@@ -691,7 +720,6 @@ class LogbookLogSourceMixin:
         if cursor is None and total == 0 and not page["entries"]:
             page["after"] = None
         # Only a window that ends in the future can gain matches after the count.
-        open_window = end > datetime.now(UTC)
         while (
             not page["entries"]
             and page.get("after")
@@ -759,6 +787,7 @@ class LogbookLogSourceMixin:
                 after=after,
                 seen=before + page["matched"],
                 skip=page["skip"],
+                open_at_count=open_window,
             ).token()
             data["pagination_hint"] = (
                 "Pass next_offset as offset with the same search and order to continue this Logbook window."

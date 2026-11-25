@@ -331,6 +331,7 @@ class HomeAssistantWebSocketClient:
         if not self.websocket:
             raise HomeAssistantConnectionError("WebSocket not connected")
         error_type = HomeAssistantConnectionError
+        # Keep the close details for callers waiting on a pending command.
         close_reason: str | None = None
         try:
             async for message in self.websocket:
@@ -344,6 +345,8 @@ class HomeAssistantWebSocketClient:
                     logger.error(f"Error processing message: {e}")
         except ConnectionClosed as e:
             error_type = websocket_close_error_type(e)
+            # A frame exceeding max_size sends Close(1009) locally; the peer
+            # may never send a close frame back. Preserve that local reason.
             close = e.rcvd if e.rcvd is not None else e.sent
             if close is not None:
                 verb = "received" if e.rcvd is not None else "sent"
