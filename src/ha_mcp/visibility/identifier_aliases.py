@@ -34,7 +34,6 @@ BARE_IDENTIFIER_ARGS: dict[str, tuple[str, str]] = {
     "ha_config_set_scene": ("scene_id", "scene"),
     "ha_config_remove_scene": ("scene_id", "scene"),
     "ha_config_get_automation": ("entity_id", "automation"),
-    "ha_config_get_automation_hash": ("entity_id", "automation"),
     "ha_config_set_automation": ("entity_id", "automation"),
     "ha_config_remove_automation": ("entity_id", "automation"),
 }

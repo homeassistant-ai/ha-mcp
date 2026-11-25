@@ -129,6 +129,24 @@ class TestGetAutomation:
         assert result["automation_id"] == ENTITY_ID
         assert "identifier" not in result
 
+    async def test_hash_only_matches_full_read_without_registry_details(
+        self, tools: AutomationConfigTools
+    ) -> None:
+        full = await tools.ha_config_get_automation(entity_id=CONFIG_ID)
+        with patch(
+            "ha_mcp.tools.tools_config_automations.registry_details",
+            side_effect=AssertionError("hash-only read fetched registry details"),
+        ):
+            compact = await tools.ha_config_get_automation(
+                entity_id=CONFIG_ID, hash_only=True
+            )
+
+        assert compact == {
+            "success": True,
+            "automation_id": ENTITY_ID,
+            "config_hash": full["config_hash"],
+        }
+
     async def test_an_entity_id_reads_as_itself(
         self, tools: AutomationConfigTools
     ) -> None:

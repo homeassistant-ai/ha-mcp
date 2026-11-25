@@ -45,7 +45,6 @@ from .automation_errors import (
     section_from_status,
 )
 from .automation_registry_details import core_related, registry_details
-from .automation_write_helpers import strip_redundant_identifier_echo
 from .best_practice_checker import (
     BestPracticeCheckResult,
 )
@@ -233,6 +232,22 @@ async def _set_automation_enabled(client: Any, entity_id: str, enabled: bool) ->
     return await client.call_service("automation", service, {"entity_id": entity_id})
 
 
+def _strip_redundant_identifier_echo(
+    result: dict[str, Any],
+    *,
+    extra_excludes: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Strip the REST client's ``identifier`` echo from a write's result.
+
+    ``automation_id`` (the resolved entity_id, else the input entity_id, else
+    the config id) already names the automation. ``extra_excludes`` drops
+    other keys the caller sets itself. Never exclude ``unique_id``: callers
+    track the config id for cleanup (E2E test_duplicate_automation_prevention).
+    """
+    excluded = {"identifier", *extra_excludes}
+    return {k: v for k, v in result.items() if k not in excluded}
+
+
 class AutomationConfigTools:
     """Configuration management tools for Home Assistant automations."""
 
@@ -308,6 +323,10 @@ class AutomationConfigTools:
                 "or its config id"
             ),
         ],
+        hash_only: Annotated[
+            bool,
+            Field(description="Return only the automation ID and config hash"),
+        ] = False,
     ) -> dict[str, Any]:
         """
         Get a Home Assistant automation's stored configuration.
@@ -350,6 +369,12 @@ class AutomationConfigTools:
             config, config_hash, target = await self._get_automation_config_internal(
                 entity_id
             )
+            if hash_only:
+                return {
+                    "success": True,
+                    "automation_id": target.entity_id or entity_id,
+                    "config_hash": config_hash,
+                }
             warnings: list[str] = []
             entity, validation, references = await registry_details(
                 self._client, target.lookup, target.entity_id, warnings
@@ -385,53 +410,6 @@ class AutomationConfigTools:
                     "Verify automation exists using ha_search(domain_filter='automation')",
                     "Check Home Assistant connection",
                     "Use ha_get_skill_guide for help",
-                ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
-
-    @tool(
-        name="ha_config_get_automation_hash",
-        tags={"Automations"},
-        annotations=read_only_hints("Get Automation Config Hash", open_world=False),
-    )
-    @log_tool_usage
-    async def ha_config_get_automation_hash(
-        self,
-        entity_id: Annotated[
-            str,
-            Field(description="Automation entity_id or config id"),
-        ],
-    ) -> dict[str, Any]:
-        """Get only the stored automation config hash for optimistic locking.
-
-        The hash matches ha_config_get_automation and can be passed
-        to ha_config_set_automation. No configuration or reference details are
-        returned; use the full read when those are needed.
-        """
-        try:
-            validate_identifier_not_empty(
-                entity_id,
-                "entity_id",
-                suggestions=[
-                    "Pass an automation entity_id or config id",
-                    "Use ha_search(domain_filter='automation') to list automations",
-                ],
-            )
-            _, config_hash, target = await self._get_automation_config_internal(entity_id)
-            return {
-                "success": True,
-                "automation_id": target.entity_id or entity_id,
-                "config_hash": config_hash,
-            }
-        except ToolError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
-                e,
-                context={"automation_id": entity_id, "action": "get"},
-                suggestions=[
-                    "Verify automation exists using ha_search(domain_filter='automation')",
-                    "Check Home Assistant connection",
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
@@ -1196,7 +1174,7 @@ class AutomationConfigTools:
             "config_hash": new_config_hash,
             "python_expression": python_transform,
             "message": f"Automation {entity_id} updated via Python transform",
-            **strip_redundant_identifier_echo(result, extra_excludes=("success",)),
+            **_strip_redundant_identifier_echo(result, extra_excludes=("success",)),
         }
         if bp_warnings:
             response["best_practice_warnings"] = list(bp_warnings)
@@ -1319,7 +1297,7 @@ class AutomationConfigTools:
             # The upsert always sets unique_id, so this conditional is a guard
             # only: automation_id=None would lie about resolvability.
             **({"automation_id": automation_id} if automation_id else {}),
-            **strip_redundant_identifier_echo(result),
+            **_strip_redundant_identifier_echo(result),
         }
         if detached_blueprint:
             response["took_control_of_blueprint"] = detached_blueprint
@@ -1639,7 +1617,7 @@ class AutomationConfigTools:
                 "success": True,
                 "action": "delete",
                 "automation_id": target.entity_id or entity_id,
-                **strip_redundant_identifier_echo(result),
+                **_strip_redundant_identifier_echo(result),
             }
         except ToolError:
             raise

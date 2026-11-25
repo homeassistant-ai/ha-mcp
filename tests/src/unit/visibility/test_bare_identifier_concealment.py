@@ -86,7 +86,8 @@ class TestBareIdentifierConcealment:
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
                 make_context(
-                    "ha_config_get_automation_hash", {"entity_id": "1700000000001"}
+                    "ha_config_get_automation",
+                    {"entity_id": "1700000000001", "hash_only": True},
                 ),
                 unreached_call_next,
             )
@@ -398,23 +399,8 @@ def _takes_bare_identifier(tool_name: str, param_name: str) -> bool:
     return (
         param_name == "entity_id"
         and tool_name.startswith("ha_config_")
-        and (tool_name.endswith("_automation") or "_automation_" in tool_name)
+        and tool_name.endswith("_automation")
     )
-
-
-@pytest.mark.parametrize(
-    ("tool_name", "expected"),
-    [
-        ("ha_config_get_automation", True),
-        ("ha_config_get_automation_hash", True),
-        ("ha_config_get_script", False),
-        ("ha_get_automation_hash", False),
-    ],
-)
-def test_discovery_of_automation_config_identifier(
-    tool_name: str, expected: bool
-) -> None:
-    assert _takes_bare_identifier(tool_name, "entity_id") is expected
 
 
 def test_every_bare_identifier_tool_is_concealed_by_enforce_mode() -> None:

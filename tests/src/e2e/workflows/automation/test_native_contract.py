@@ -676,28 +676,35 @@ async def test_hash_only_read_matches_full_read_and_locks_writes(mcp_client) -> 
                 "ha_config_get_automation", {"entity_id": entity_id}
             )
             compact = await mcp.call_tool_success(
-                "ha_config_get_automation_hash", {"entity_id": entity_id}
+                "ha_config_get_automation", {"entity_id": entity_id, "hash_only": True}
             )
             assert set(compact) == {"success", "automation_id", "config_hash"}
             assert compact["automation_id"] == entity_id
             assert compact["config_hash"] == full["config_hash"]
             by_id = await mcp.call_tool_success(
-                "ha_config_get_automation_hash", {"entity_id": full["config"]["id"]}
+                "ha_config_get_automation",
+                {"entity_id": full["config"]["id"], "hash_only": True},
             )
             assert by_id["config_hash"] == compact["config_hash"]
             await mcp.call_tool_success(
                 "ha_config_set_automation",
-                {"entity_id": entity_id, "config_hash": compact["config_hash"],
-                 "python_transform": "config['mode'] = 'restart'"},
+                {
+                    "entity_id": entity_id,
+                    "config_hash": compact["config_hash"],
+                    "python_transform": "config['mode'] = 'restart'",
+                },
             )
             changed = await mcp.call_tool_success(
-                "ha_config_get_automation_hash", {"entity_id": entity_id}
+                "ha_config_get_automation", {"entity_id": entity_id, "hash_only": True}
             )
             assert changed["config_hash"] != compact["config_hash"]
             await mcp.call_tool_failure(
                 "ha_config_set_automation",
-                {"entity_id": entity_id, "config_hash": compact["config_hash"],
-                 "python_transform": "config['mode'] = 'single'"},
+                {
+                    "entity_id": entity_id,
+                    "config_hash": compact["config_hash"],
+                    "python_transform": "config['mode'] = 'single'",
+                },
             )
         finally:
             if entity_id:
@@ -708,5 +715,6 @@ async def test_hash_only_read_rejects_unknown_automation(mcp_client) -> None:
     """An unknown automation cannot produce a misleading lock."""
     async with MCPAssertions(mcp_client) as mcp:
         await mcp.call_tool_failure(
-            "ha_config_get_automation_hash", {"entity_id": f"missing_{_tag()}"}
+            "ha_config_get_automation",
+            {"entity_id": f"missing_{_tag()}", "hash_only": True},
         )
