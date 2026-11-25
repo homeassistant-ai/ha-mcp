@@ -442,6 +442,54 @@ class AutomationConfigTools:
             return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
+        name="ha_config_get_automation_hash",
+        tags={"Automations"},
+        annotations=read_only_hints("Get Automation Config Hash", open_world=False),
+    )
+    @log_tool_usage
+    async def ha_config_get_automation_hash(
+        self,
+        entity_id: Annotated[
+            str,
+            Field(description="Automation entity_id or config id"),
+        ],
+    ) -> dict[str, Any]:
+        """Get only the stored automation config hash for optimistic locking.
+
+        Accepts an automation entity_id or config id, like
+        ha_config_get_automation. The hash matches that tool and can be passed
+        to ha_config_set_automation. No configuration or reference details are
+        returned; use the full read when those are needed.
+        """
+        try:
+            validate_identifier_not_empty(
+                entity_id,
+                "entity_id",
+                suggestions=[
+                    "Pass an automation entity_id or config id",
+                    "Use ha_search(domain_filter='automation') to list automations",
+                ],
+            )
+            _, config_hash, target = await self._get_automation_config_internal(entity_id)
+            return {
+                "success": True,
+                "automation_id": target.entity_id or entity_id,
+                "config_hash": config_hash,
+            }
+        except ToolError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
+                e,
+                context={"automation_id": entity_id, "action": "get"},
+                suggestions=[
+                    "Verify automation exists using ha_search(domain_filter='automation')",
+                    "Check Home Assistant connection",
+                ],
+            )
+            return None  # unreachable: exception_to_structured_error always raises
+
+    @tool(
         name="ha_config_set_automation",
         tags={"Automations"},
         annotations=write_hints(
