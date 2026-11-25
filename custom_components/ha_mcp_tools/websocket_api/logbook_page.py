@@ -45,7 +45,7 @@ def _columns(source: Subquery) -> tuple[Any, Any, Any]:
 
 def _branches(source: Subquery) -> Sequence[Select[Any]]:
     """Core's whole-instance Logbook statement is the UNION of events and states."""
-    union = cast("CompoundSelect[Any]", source.element)
+    union = cast(CompoundSelect[Any], source.element)
     return cast("Sequence[Select[Any]]", union.selects)
 
 
