@@ -30,7 +30,7 @@ def _make_tool(
     return Tool.from_function(fn=noop, name=name, annotations=annotations)
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("name", "arguments"),
     [

@@ -93,6 +93,7 @@ def serve_repository(
         f"{repo}/releases": [
             {
                 "tag_name": tag,
+                "body": f"Release notes for {tag}",
                 "name": tag,
                 "draft": False,
                 "prerelease": False,

@@ -226,16 +226,17 @@ async def test_empty_entity_area_blocks_fallback_to_device_area(
     entity_registry: er.EntityRegistry,
     config_entry: MockConfigEntry,
 ) -> None:
-    """An entity whose own area_id is present but empty (Core's registry and
-    its update command both store ``""``) is not silently placed in its
-    device's area."""
+    """An entity in the area whose id is "" must not be placed in its device's
+    area."""
+    area = area_registry.async_create("")
+    assert area.id == ""
     _child_device_sensor(
         hass,
         area_registry,
         device_registry,
         entity_registry,
         config_entry,
-        entity_area_id="",
+        entity_area_id=area.id,
     )
 
     result = await _search(core_client, "office")

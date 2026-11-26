@@ -1,5 +1,7 @@
 """Guard shared HAOS workflow contracts without restructuring proven lanes."""
 
+import ast
+import json
 import os
 import re
 import subprocess
@@ -565,7 +567,7 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:  # noqa
 
 
 def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
-    """The container beta lanes mirror the HAOS beta trigger shape (#2361).
+    """The container beta lanes run the current beta Core image (#2361).
 
     One resolver job reads the beta Core version and every test job pins its
     HA image to that job's output, so all five lanes test the same image and
@@ -576,10 +578,13 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     workflow = _workflow(path)
 
     triggers = workflow[True]
-    assert "pull_request" not in triggers, (
-        "beta compatibility runs after changes land on master, not on every "
-        "push to an open PR"
-    )
+    pr_jobs = _workflow(_WORKFLOW_DIR / "pr.yml")["jobs"]
+    caller = pr_jobs["e2e-validation-beta"]
+    assert caller["uses"] == "./.github/workflows/e2e-beta-tests.yml"
+    assert caller["with"] == {"pr_lane": True}
+    assert caller["if"] == pr_jobs["e2e-validation"]["if"]
+    assert caller["needs"] == "changes"
+    assert triggers["workflow_call"]["inputs"]["pr_lane"]["type"] == "boolean"
     assert triggers["push"] == {"branches": ["master"]}, (
         "no paths filter: a nightly must run regardless of the last commit"
     )
@@ -588,13 +593,7 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
         "pytest_args",
         "pytest_paths",
     }
-    assert workflow["concurrency"] == {
-        "group": (
-            "${{ github.workflow }}-${{ github.event_name == "
-            "'workflow_dispatch' && github.run_id || 'full' }}"
-        ),
-        "cancel-in-progress": True,
-    }
+    assert workflow["concurrency"]["cancel-in-progress"] is True
     assert "changes" not in workflow["jobs"]
     assert "HA_IMAGE_GHCR" not in workflow.get("env", {}), (
         "the beta workflow must not carry the stable image pin"
@@ -610,11 +609,10 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
         "the container lanes want the multi-arch docker tag, not qemux86-64"
     )
     assert "image=ghcr.io/home-assistant/home-assistant:$core_version" in resolve["run"]
-    assert resolver["outputs"] == {
-        "core_version": "${{ steps.versions.outputs.core_version }}",
-        "image": "${{ steps.versions.outputs.image }}",
-        "superfluous": "${{ steps.versions.outputs.superfluous }}",
-    }
+    assert resolver["outputs"]["core_version"] == (
+        "${{ steps.versions.outputs.core_version }}"
+    )
+    assert resolver["outputs"]["image"] == "${{ steps.versions.outputs.image }}"
     # The skip compares against the image the E2E fixtures actually build
     # from (tests/test_constants.HA_TEST_IMAGE's default), not stable.json:
     # while the Renovate bump lags a release, beta equals the new stable and
@@ -669,16 +667,8 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
         "e2e-tests-embedded-server-only",
         "e2e-tests-update-path",
     }, "the beta workflow mirrors e2e-tests.yml job for job"
-    skip_guard = (
-        "github.event_name == 'workflow_dispatch' || "
-        "needs.resolve-beta.outputs.superfluous != 'true'"
-    )
     for job_id, job in test_jobs.items():
         assert job["needs"] == "resolve-beta", job_id
-        assert job["if"] == skip_guard, (
-            f"{job_id} must be skipped when beta equals the stable pin, except "
-            "on a manual dispatch"
-        )
         assert job["env"]["HA_IMAGE_GHCR"] == image_ref, job_id
         assert job["env"]["HA_TEST_IMAGE"] == image_ref, (
             f"{job_id}: the E2E fixtures build their container from "
@@ -689,6 +679,133 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
             "version.home-assistant.io/beta.json" in str(step.get("run", ""))
             for step in _job_steps(job)
         ), f"{job_id} must not resolve the beta version a second time"
+
+
+@pytest.mark.parametrize(
+    ("channel", "pin", "active", "duplicate"),
+    [
+        ("2026.12.0b1", "2026.11.3", "true", "false"),
+        ("2026.12.0", "2026.11.3", "false", "false"),
+        ("2026.12.0", "2026.12.0", "false", "true"),
+        ("2027.1.0b1", "2026.12.0", "true", "false"),
+        ("2027.1.0.dev202612010300", "2026.12.0", "true", "false"),
+    ],
+)
+def test_container_beta_resolver_across_stable_promotion(
+    tmp_path: Path, channel: str, pin: str, active: str, duplicate: str
+) -> None:
+    """Pull requests run the beta Docker job only for an actual beta, and the
+    full lanes skip only the image the stable lanes already run, through the
+    weeks a stable release spends in the beta channel."""
+    workflow = _workflow(_WORKFLOW_DIR / _CONTAINER_BETA_WORKFLOW)
+    steps = _job_steps(workflow["jobs"]["resolve-beta"])
+    resolver = next(step["run"] for step in steps if step.get("id") == "versions")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_constants.py").write_text(
+        f'_DEFAULT_HA_TEST_IMAGE = "ghcr.io/home-assistant/home-assistant:{pin}"\n'
+    )
+    output = tmp_path / "output"
+    subprocess.run(
+        ["bash", "-ec", 'curl() { echo "$CHANNEL"; }\n' + resolver],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "CHANNEL": json.dumps({"homeassistant": {"default": channel}}),
+            "GITHUB_OUTPUT": str(output),
+        },
+        check=True,
+    )
+    assert dict(line.split("=", 1) for line in output.read_text().splitlines()) == {
+        "core_version": channel,
+        "image": f"ghcr.io/home-assistant/home-assistant:{channel}",
+        "active_beta": active,
+        "superfluous": duplicate,
+    }
+
+
+def _actions_value(node: ast.expr, context: dict[str, Any]) -> Any:
+    """One node of a GitHub Actions expression, parsed as Python."""
+    if isinstance(node, ast.BoolOp):
+        value = _actions_value(node.values[0], context)
+        for operand in node.values[1:]:
+            if bool(value) == isinstance(node.op, ast.Or):
+                return value
+            value = _actions_value(operand, context)
+        return value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return not _actions_value(node.operand, context)
+    if isinstance(node, ast.Compare) and isinstance(node.ops[0], ast.Eq):
+        left, right = node.left, node.comparators[0]
+        return _actions_value(left, context) == _actions_value(right, context)
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return context.get(node.id)
+    raise AssertionError(f"unsupported expression node {ast.dump(node)}")
+
+
+def _actions_expression(text: str, context: dict[str, Any]) -> Any:
+    """Evaluate the expressions these workflows use (``&&``, ``||``, ``!``,
+    ``==``, quoted strings and dotted context names; a name not in
+    ``context`` is null, as an unset input is)."""
+    names: dict[str, str] = {}
+
+    def name(match: re.Match[str]) -> str:
+        return names.setdefault(match.group(), f"v{len(names)}")
+
+    body = text.strip().removeprefix("${{").removesuffix("}}")
+    body = re.sub(r"(?<!')\b[A-Za-z_][\w-]*(?:\.[\w-]+)+", name, body)
+    body = body.replace("&&", " and ").replace("||", " or ")
+    body = re.sub(r"!(?!=)", " not ", body)
+    values = {alias: context.get(dotted) for dotted, alias in names.items()}
+    return _actions_value(ast.parse(body.strip(), mode="eval").body, values)
+
+
+@pytest.mark.parametrize(
+    ("event", "pr_lane", "active", "duplicate", "running"),
+    [
+        ("pull_request", True, "true", "false", {"e2e-tests"}),
+        ("pull_request", True, "false", "false", set()),
+        ("pull_request", True, "true", "true", set()),
+        ("workflow_dispatch", True, "true", "false", {"e2e-tests"}),
+        ("push", None, "true", "false", "all"),
+        ("schedule", None, "false", "false", "all"),
+        ("push", None, "false", "true", set()),
+        ("workflow_dispatch", None, "false", "true", "all"),
+    ],
+)
+def test_container_beta_jobs_a_pull_request_and_a_full_run_start(
+    event: str, pr_lane: bool | None, active: str, duplicate: str, running: Any
+) -> None:
+    """A pull request runs only the external Docker job and only for an
+    actual beta the stable lanes do not run; push, nightly and dispatch runs
+    keep the whole suite, and a pull request's run cancels only its own."""
+    workflow = _workflow(_WORKFLOW_DIR / _CONTAINER_BETA_WORKFLOW)
+    context: dict[str, Any] = {
+        "github.event_name": event,
+        "github.run_id": "4242",
+        "inputs.pr_lane": pr_lane,
+        "steps.versions.outputs.active_beta": active,
+        "steps.versions.outputs.superfluous": duplicate,
+    }
+    outputs = workflow["jobs"]["resolve-beta"]["outputs"]
+    for output in ("run_full", "run_pr_lane"):
+        value = _actions_expression(outputs[output], context)
+        context[f"needs.resolve-beta.outputs.{output}"] = str(value).lower()
+    jobs = {
+        job_id
+        for job_id, job in workflow["jobs"].items()
+        if job_id != "resolve-beta" and _actions_expression(job["if"], context)
+    }
+    test_jobs = set(workflow["jobs"]) - {"resolve-beta"}
+    assert jobs == (test_jobs if running == "all" else running)
+
+    group = workflow["concurrency"]["group"]
+    prefix, expression = group.split("${{", 1)
+    full_run = event in ("push", "schedule")
+    assert prefix + str(_actions_expression(expression, context)) == (
+        f"{prefix}full" if full_run else f"{prefix}4242"
+    )
 
 
 def test_pr_unit_beta_lane_runs_the_suites_on_the_beta_core() -> None:

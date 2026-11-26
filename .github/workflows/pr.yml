@@ -617,12 +617,12 @@ jobs:
           [ "$RESULT" = "success" ]
 
   # The unit suite, on two runners, and the app (add-on) suite, on the first
-  # of them, against the current beta Core, the same
-  # beta e2e-beta-tests.yml resolves, but on every pull request: these suites
-  # take minutes, unlike the post-merge E2E beta lanes. Not a required check,
-  # so a beta Core change reports here without blocking a merge. While beta
-  # equals the dev group's Core pin, which Unit Tests just ran, every step
-  # after the resolver is skipped (a manual dispatch always runs).
+  # of them, against the current beta Core, the same beta e2e-beta-tests.yml
+  # resolves. Not a required check, so a beta Core change reports here without
+  # blocking a merge. While beta equals the dev group's Core pin, which Unit
+  # Tests just ran, every step after the resolver is skipped (a manual
+  # dispatch always runs); unlike the beta Docker job below, a stable release
+  # ahead of that pin still runs here.
   unit-tests-beta:
     name: Unit Tests (beta Core, ${{ matrix.shard }})
     runs-on: ubuntu-latest
@@ -702,6 +702,14 @@ jobs:
           echo "::error::PyPI has no installable homeassistant and pytest-homeassistant $BETA_CORE"
           exit 1
         fi
+        # The integrations the unit tests run, at the beta's manifest pins; the
+        # script reads them from the beta just installed, and restating Core's
+        # pins keeps -r from moving it.
+        uv run --no-sync python scripts/sync_dev_integration_pins.py --installed-requirements > "$RUNNER_TEMP/beta-requirements.txt"
+        if ! uv pip install "homeassistant==$BETA_CORE" "pytest-homeassistant==$BETA_CORE" -r "$RUNNER_TEMP/beta-requirements.txt"; then
+          echo "::error::Core $BETA_CORE's integration requirements do not install over the locked environment"
+          exit 1
+        fi
         uv run --no-sync python -c \
           'import os; from homeassistant.const import __version__ as v; assert v == os.environ["BETA_CORE"], v'
 
@@ -723,6 +731,8 @@ jobs:
     - name: Run unit tests on the beta Core
       if: github.event_name == 'workflow_dispatch' || steps.beta.outputs.superfluous != 'true'
       env:
+        # Tells the pin-sync tests that the Core differs from the pin on purpose.
+        BETA_CORE: ${{ steps.beta.outputs.version }}
         UNIT_TEST_SHARD: ${{ matrix.shard }}
       run: uv run --no-sync pytest tests/src/unit/ -n logical --tb=short -q -rf
 
@@ -731,6 +741,16 @@ jobs:
       run: >-
         uv run --no-sync pytest tests/addon/ -n logical --tb=short -q -rf
         --ignore=tests/addon/test_addon_startup.py
+
+  # The external Docker E2E job against the current beta Core, while one is
+  # out; not part of the E2E Validation Gate.
+  e2e-validation-beta:
+    name: Beta Docker
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    uses: ./.github/workflows/e2e-beta-tests.yml
+    with:
+      pr_lane: true
 
   # Comprehensive E2E validation for all PRs
   e2e-validation:
@@ -821,12 +841,9 @@ jobs:
       run: |
         echo "🚀 Running full E2E test suite with ${{ matrix.pytest_workers }} workers..."
         cd tests
-        # The combined x64 row audits both tool-entry states: --maxfail=0
-        # overrides pyproject.toml's --maxfail=3 so it reports every failure.
         uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
-          ${{ matrix.combine_topologies == '1' && '--maxfail=0' || '' }} \
           --tb=short \
           -v
         echo "✅ Full E2E test suite passed"
@@ -933,12 +950,9 @@ jobs:
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
         cd tests
-        # The combined x64 row audits both tool-entry states: --maxfail=0
-        # overrides pyproject.toml's --maxfail=3 so it reports every failure.
         uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
-          ${{ matrix.combine_topologies == '1' && '--maxfail=0' || '' }} \
           --tb=short \
           -v
         echo "✅ Full E2E test suite (embedded backend) passed"

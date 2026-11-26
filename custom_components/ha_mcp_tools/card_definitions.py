@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -33,14 +34,17 @@ WS_DASHBOARD_CARDS = "ha_mcp_tools/dashboard_cards"
 CAPABILITIES = ("dashboard_cards",)
 
 # A module factory takes (module, exports, require), trailing ones omitted when unused.
-_MOD_RE = re.compile(r"[{,](\d+)\([\w$]+(?:,[\w$]+){0,2}\)\{")
+_MODULE_ID = r"\d+(?:e\d+)?"
+_MOD_RE = re.compile(r"[{,](" + _MODULE_ID + r")\([\w$]+(?:,[\w$]+){0,2}\)\{")
 # Entrypoints end their registry with the module cache and require function.
 _ENTRYPOINT_END_RE = re.compile(r"\},[\w$]+=\{\};function [\w$]+\(")
 # The element registration, ``(0,x.EM)("hui-tile-card")``; never a createElement.
 _TAG_RE = re.compile(r'\)\("(hui-[a-z0-9-]+-card(?:-editor)?)"\)')
 _EDITOR_REF_RE = re.compile(r'"(hui-[a-z0-9-]+-card-editor)"')
 # ``m=a(80140)``, or ``_=(a(47551),a(20541))`` where the last id is the binding.
-_ALIAS_RE = re.compile(r"([\w$]+)=\(?(?:[\w$]+\(\d+\),)*[\w$]+\((\d+)\)")
+_ALIAS_RE = re.compile(
+    rf"([\w$]+)=\(?(?:[\w$]+\({_MODULE_ID}\),)*[\w$]+\(({_MODULE_ID})\)"
+)
 # The editor asserts its struct on the raw config; an editor that migrates the
 # config first is skipped, since the raw config would draw false warnings.
 _STRUCT_RE = re.compile(
@@ -193,6 +197,15 @@ function engine(op, p) {
 """
 
 
+def _module_id(literal: str) -> str:
+    """JavaScript indexes a factory written as 95e3 by the key 95000."""
+    return str(int(Decimal(literal))) if "e" in literal else literal
+
+
+def _aliases(body: str) -> dict[str, str]:
+    return {name: _module_id(key) for name, key in _ALIAS_RE.findall(body)}
+
+
 def _balanced_end(s: str, i: int) -> int:
     """Index just past the bracket group that opens at ``s[i]``."""
     pairs = {"(": ")", "[": "]", "{": "}"}
@@ -239,11 +252,18 @@ def _expr_end(s: str, i: int) -> int:
     return j
 
 
+# An async module reads its dependency inline, ``(t=(i.then?(await i)():i)[0])``;
+# the engine settles dependencies synchronously, so that is the binding ``t``.
+_ASYNC_DEPENDENCY_RE = re.compile(
+    r"\(([\w$]+)=\(([\w$]+)\.then\?\(await \2\)\(\):\2\)\[0\]\)"
+)
+
+
 def _local_definition(body: str, name: str) -> str | None:
-    m = re.search(r"[,;\s{(]" + re.escape(name) + r"=(?!=)", body)
+    m = re.search(r"[,;\s{(]" + re.escape(name) + r"=(?![=>])", body)
     if not m:
         return None
-    return body[m.end() : _expr_end(body, m.end())]
+    return _ASYNC_DEPENDENCY_RE.sub(r"\1", body[m.end() : _expr_end(body, m.end())])
 
 
 _STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|`(?:\\.|[^`\\])*`')
@@ -371,7 +391,7 @@ class CardDefinitions:
             body = pending.pop()
             if re.search(r"setConfig\([\w$]+\)\{", body):
                 return True
-            aliases = dict(_ALIAS_RE.findall(body))
+            aliases = _aliases(body)
             for alias in re.findall(r"\bextends ([\w$]+)\.[\w$]+", body):
                 module_id = aliases.get(alias)
                 if module_id is not None and module_id not in seen:
@@ -385,7 +405,9 @@ class CardDefinitions:
         files = sorted(self._dir.glob("*.js"), key=lambda p: p.stat().st_size)
         for path in files:
             text = path.read_text(encoding="utf-8")
-            starts = [(m.start(), m.group(1)) for m in _MOD_RE.finditer(text)]
+            starts = [
+                (m.start(), _module_id(m.group(1))) for m in _MOD_RE.finditer(text)
+            ]
             for _, module_id in starts:
                 self._module_file.setdefault(module_id, path)
             for m in _TAG_RE.finditer(text):
@@ -425,9 +447,11 @@ class CardDefinitions:
         form = re.search(r"getConfigForm\(\)\{", card)
         if form:
             end = _balanced_end(card, form.end() - 1)
-            module = re.search(r"\.bind\([\w$]+,(\d+)\)", card[form.end() : end])
+            module = re.search(
+                rf"\.bind\([\w$]+,({_MODULE_ID})\)", card[form.end() : end]
+            )
             if module:
-                return self._module_body(module.group(1))
+                return self._module_body(_module_id(module.group(1)))
         return ""
 
     def _editor(self, card_type: str) -> str:
@@ -465,7 +489,7 @@ class CardDefinitions:
         self, op: str, body: str, expr: str, key: str = "", depth: int = 0
     ) -> Any:
         """Run ``expr`` from ``body``, binding the module's imports and locals."""
-        aliases = dict(_ALIAS_RE.findall(body))
+        aliases = _aliases(body)
         if depth > 10:
             raise ValueError("export dependency depth exceeded")
         # Functions retain their import bindings even when invoked later by a
@@ -765,7 +789,9 @@ def _explain_message(
 
 
 def _schema_expressions(body: str) -> list[str]:
-    """The editor's form: a memoized ``_schema`` function or a module constant."""
+    """The editor's form: a memoized ``_schema`` function, a module constant,
+    or else the first inline ``schema`` list (a form object's, or the fields
+    of a layout group wrapping the whole form)."""
     found = []
     for m in _SCHEMA_FN_RE.finditer(body):
         end = _balanced_end(body, m.end() - 1)
@@ -777,6 +803,9 @@ def _schema_expressions(body: str) -> list[str]:
         definition = _local_definition(body, m.group(1) or m.group(2))
         if definition and definition.startswith("["):
             found.append(definition)
+    inline = re.search(r"(?<=[{,])schema:(?=\[)", body)
+    if not found and inline:
+        found.append(body[inline.end() : _balanced_end(body, inline.end())])
     return found
 
 

@@ -37,7 +37,7 @@ async def _list_tools(
         return await client.list_tools()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "flags",
     [(), _ALL_FLAGS, ("ENABLE_TOOL_SEARCH",)],
@@ -65,7 +65,7 @@ async def test_every_tool_declares_all_hints_and_a_title(
     assert not missing, f"tools with undeclared metadata: {missing}"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_read_only_tools_are_not_advertised_as_destructive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
