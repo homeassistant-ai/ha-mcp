@@ -395,3 +395,94 @@ async def read_matter_network(ws_client: Any) -> dict[str, Any]:
     if max(len(nodes), len(connections)) > MATTER_TOPOLOGY_LIMIT:
         section["topology"]["truncated"] = True
     return section
+
+
+def parse_includes(include: str | None) -> set[str]:
+    """Parse the comma-separated include parameter into a set of section names."""
+    if not include:
+        return set()
+    return {s.strip().lower() for s in include.split(",") if s.strip()}
+
+
+def warn_unknown_includes(result: dict[str, Any], includes: set[str]) -> None:
+    """Append a warning to ``result`` for any unrecognized include sections.
+
+    Extracted verbatim from ``ha_get_system_health``.
+    """
+    VALID_INCLUDES = {
+        "repairs",
+        "zha_network",
+        "zha_network_full",
+        "zwave_network",
+        "thread_network",
+        "matter_network",
+        "integration_startup",
+        "database_usage",
+        "supervisor",
+        "config_check",
+        "dead_entities",
+    }
+    unknown = includes - VALID_INCLUDES
+    if unknown:
+        result.setdefault("warnings", []).append(
+            f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
+        )
+    for section, replacement in (
+        ("diagnostics", "ha_get_integration(include_diagnostics=True)"),
+        ("themes", "ha_manage_theme(action='list')"),
+    ):
+        if section in unknown:
+            result["warnings"].append(f"'{section}' moved to {replacement}")
+
+
+def stub_ws_unavailable(
+    result: dict[str, Any],
+    includes: set[str],
+    ws_backed: set[str],
+    *,
+    want_repairs: bool,
+    want_zha: bool,
+    want_zwave: bool,
+    want_thread: bool,
+    want_matter: bool,
+    want_startup: bool,
+    want_database_usage: bool,
+) -> None:
+    """Stub each requested WS-backed section as an error and add a summary
+    warning when the health WebSocket is unavailable.
+
+    Extracted verbatim from ``ha_get_system_health``.
+    """
+    ws_error = "requires the system_health WebSocket, which is unavailable"
+    if want_repairs:
+        result["repairs"] = {"error": ws_error}
+    if want_zha:
+        result["zha_network"] = {"error": ws_error}
+    if want_zwave:
+        result["zwave_network"] = {"error": ws_error}
+    if want_thread:
+        result["thread_network"] = {"error": ws_error}
+    if want_matter:
+        result["matter_network"] = {"error": ws_error}
+    if want_startup:
+        result["integration_startup"] = {"error": ws_error}
+    if want_database_usage:
+        result["database_usage"] = {"error": ws_error}
+    unavailable = sorted(includes & ws_backed)
+    if unavailable:
+        result.setdefault("warnings", []).append(
+            "These sections require the system_health WebSocket, "
+            f"which is unavailable: {', '.join(unavailable)}"
+        )
+
+
+async def add_ha_mcp_update(result: dict[str, Any]) -> None:
+    """Surface the MCP server's own update status so the model can relay it in
+    chat. ``get_update_field`` is best-effort, thread-offloaded, and never
+    raises (omits the field on any hiccup); see ha_mcp.update_check for
+    gating/throttle details."""
+    from ..update_check import get_update_field
+
+    mcp_update = await get_update_field()
+    if mcp_update is not None:
+        result["ha_mcp_update"] = mcp_update

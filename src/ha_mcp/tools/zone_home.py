@@ -7,18 +7,16 @@ integration then moves ``zone.home``. Nothing else of the home zone can be set.
 
 from __future__ import annotations
 
-import asyncio
-import time
 from typing import Any
 
 from ..errors import create_validation_error
 from .helpers import raise_core_refusal, raise_tool_error
+from .ws_waiters import wait_for_state_attributes
 
 HOME_ZONE = "zone.home"
 HOME_ZONE_FIELDS = ("latitude", "longitude", "radius")
 # Core moves zone.home in a listener of its config update, after the reply.
 READBACK_TIMEOUT_S = 5.0
-READBACK_INTERVAL_S = 0.2
 
 
 def is_home_zone_id(zone_id: str) -> bool:
@@ -53,7 +51,14 @@ async def set_home_zone(
         raise_core_refusal(
             "Failed to update the home zone", result, {"zone_id": zone_id}
         )
-    state, moved = await _read_home_zone(client, given, wait=wait)
+    moved = (
+        await wait_for_state_attributes(
+            client, HOME_ZONE, given, timeout=READBACK_TIMEOUT_S
+        )
+        if wait
+        else None
+    )
+    state = moved or await client.get_entity_state(HOME_ZONE)
     response: dict[str, Any] = {
         "success": True,
         "zone_data": state.get("attributes") or {},
@@ -62,24 +67,10 @@ async def set_home_zone(
         "message": "Successfully updated the home zone",
         "updated_fields": sorted(given),
     }
-    if not moved:
+    attributes = response["zone_data"]
+    if any(attributes.get(key) != value for key, value in given.items()):
         response["warnings"] = [
             "Home Assistant took the new location, but zone.home did not show "
             "it yet when read back"
         ]
     return response
-
-
-async def _read_home_zone(
-    client: Any, given: dict[str, Any], *, wait: bool
-) -> tuple[dict[str, Any], bool]:
-    """``zone.home``'s state, and whether it shows every given value."""
-    deadline = time.monotonic() + (READBACK_TIMEOUT_S if wait else 0)
-    while True:
-        state = await client.get_entity_state(HOME_ZONE)
-        attributes = state.get("attributes") or {}
-        if all(attributes.get(key) == value for key, value in given.items()):
-            return state, True
-        if time.monotonic() >= deadline:
-            return state, False
-        await asyncio.sleep(READBACK_INTERVAL_S)

@@ -44,14 +44,18 @@ from .helpers import (
 )
 from .system_health_sections import (
     add_database_usage,
+    add_ha_mcp_update,
     add_health_labels,
     add_repair_data,
     add_repair_texts,
+    parse_includes,
     read_integration_startup,
     read_matter_network,
     read_supervisor,
     read_system_health,
     reraise_if_fatal,
+    stub_ws_unavailable,
+    warn_unknown_includes,
 )
 from .system_restart import restart_home_assistant
 from .tool_hints import read_only_hints, write_hints
@@ -533,7 +537,8 @@ class SystemTools:
         - ha_get_system_health(include="repairs,zha_network,zwave_network,config_check")
         - ha_get_system_health(include="supervisor,integration_startup")
         """
-        includes = self._parse_includes(include)
+        includes = parse_includes(include)
+        include_dismissed_repairs_bool = bool(include_dismissed_repairs)
 
         # Sections that require the system_health WebSocket connection;
         # config_check, supervisor and dead_entities do not.
@@ -592,7 +597,7 @@ class SystemTools:
             await add_health_labels(self._client, result)
 
             # Warn about unrecognized include values
-            self._warn_unknown_includes(result, includes)
+            warn_unknown_includes(result, includes)
 
             # Fetch optional sections concurrently. The ws_client serialises
             # outgoing writes via its internal `_send_lock`, but per-message
@@ -618,7 +623,18 @@ class SystemTools:
                 # sub-dict under its own key (same shape the section carries when
                 # the baseline is up but the fetch fails), plus a summary
                 # warning, then skip them so the other sections below still run.
-                self._stub_ws_unavailable(result, includes, ws_backed)
+                stub_ws_unavailable(
+                    result,
+                    includes,
+                    ws_backed,
+                    want_repairs=want_repairs,
+                    want_zha=want_zha,
+                    want_zwave=want_zwave,
+                    want_thread=want_thread,
+                    want_matter=want_matter,
+                    want_startup=want_startup,
+                    want_database_usage="database_usage" in includes,
+                )
                 want_repairs = want_zha = want_zwave = want_thread = want_matter = (
                     want_startup
                 ) = False
@@ -646,7 +662,7 @@ class SystemTools:
             sections = self._build_ws_sections(
                 ws_client,
                 snapshot,
-                bool(include_dismissed_repairs),
+                include_dismissed_repairs_bool,
                 zha_full,
                 want_repairs=want_repairs,
                 want_zha=want_zha,
@@ -671,16 +687,7 @@ class SystemTools:
 
             await self._run_dead_entities_section(result, snapshot, want_dead_entities)
 
-            # Surface the MCP server's own update status so the model can relay
-            # it in chat. ``get_update_field`` is best-effort, thread-offloaded,
-            # and never raises (omits the field on any hiccup); see
-            # ha_mcp.update_check for gating/throttle details.
-            from ..update_check import get_update_field
-
-            mcp_update = await get_update_field()
-            if mcp_update is not None:
-                result["ha_mcp_update"] = mcp_update
-
+            await add_ha_mcp_update(result)
             return result
 
         except ToolError:
@@ -696,53 +703,6 @@ class SystemTools:
             return None  # unreachable: exception_to_structured_error always raises
         finally:
             await self._safe_disconnect(ws_client)
-
-    @staticmethod
-    def _warn_unknown_includes(result: dict[str, Any], includes: set[str]) -> None:
-        """Append a warning to ``result`` for any unrecognized include sections.
-
-        Extracted verbatim from ``ha_get_system_health``.
-        """
-        VALID_INCLUDES = {
-            "repairs",
-            "zha_network",
-            "zha_network_full",
-            "zwave_network",
-            "thread_network",
-            "matter_network",
-            "integration_startup",
-            "database_usage",
-            "supervisor",
-            "config_check",
-            "dead_entities",
-        }
-        unknown = includes - VALID_INCLUDES
-        if unknown:
-            result.setdefault("warnings", []).append(
-                f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
-            )
-        for section, replacement in (
-            ("diagnostics", "ha_get_integration(include_diagnostics=True)"),
-            ("themes", "ha_manage_theme(action='list')"),
-        ):
-            if section in unknown:
-                result["warnings"].append(f"'{section}' moved to {replacement}")
-
-    @staticmethod
-    def _stub_ws_unavailable(
-        result: dict[str, Any], includes: set[str], ws_backed: set[str]
-    ) -> None:
-        """Stub each requested WS-backed section as an error and add a summary
-        warning when the health WebSocket is unavailable."""
-        ws_error = "requires the system_health WebSocket, which is unavailable"
-        unavailable = sorted(includes & ws_backed)
-        for section in unavailable:
-            result[section.removesuffix("_full")] = {"error": ws_error}
-        if unavailable:
-            result.setdefault("warnings", []).append(
-                "These sections require the system_health WebSocket, "
-                f"which is unavailable: {', '.join(unavailable)}"
-            )
 
     def _build_ws_sections(
         self,
@@ -890,13 +850,6 @@ class SystemTools:
         if section_warnings:
             result.setdefault("warnings", []).extend(section_warnings)
         result["dead_entities"] = dead_section
-
-    @staticmethod
-    def _parse_includes(include: str | None) -> set[str]:
-        """Parse the comma-separated include parameter into a set of section names."""
-        if not include:
-            return set()
-        return {s.strip().lower() for s in include.split(",") if s.strip()}
 
     @staticmethod
     async def _safe_disconnect(ws_client: Any) -> None:

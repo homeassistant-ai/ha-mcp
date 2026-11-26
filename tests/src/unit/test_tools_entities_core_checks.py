@@ -56,16 +56,17 @@ async def test_core_refuses_an_unknown_area_itself(
     assert stored is not None and stored.area_id is None
 
 
+# The sensor converts with the integration's device class (temperature), so
+# a device class set in the registry or by the same call changes nothing.
 @pytest.mark.parametrize(
     ("own", "call", "unit", "refused"),
     [
         (None, None, "°F", False),
         (None, None, "kWh", True),
-        ("energy", None, "kWh", False),
-        (None, "energy", "kWh", False),
-        (None, "energy", "°F", True),
+        ("energy", None, "kWh", True),
+        (None, "energy", "kWh", True),
     ],
-    ids=["listed", "not-listed", "entry-class", "call-class", "call-class-refused"],
+    ids=["listed", "not-listed", "registry-class", "call-class"],
 )
 async def test_a_unit_core_does_not_list_for_the_device_class_is_refused(
     hass: HomeAssistant,
@@ -76,8 +77,7 @@ async def test_a_unit_core_does_not_list_for_the_device_class_is_refused(
     unit: str,
     refused: bool,
 ) -> None:
-    """Core keeps a unit it cannot convert to and ignores it; the units come
-    from Core's list for the device class the sensor ends up with."""
+    """The units come from Core's list for the integration's device class."""
     assert await async_setup_component(hass, "sensor", {})
     entry = entity_registry.async_get_or_create(
         "sensor", "demo", "temp", original_device_class="temperature"
@@ -99,4 +99,5 @@ async def test_a_unit_core_does_not_list_for_the_device_class_is_refused(
     assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert body["unit_of_measurement"] == unit
     assert body["convertible_units"] and unit not in body["convertible_units"]
+    assert body["device_class"] == "temperature"
     assert "sensor" not in _options(entity_registry, entry.entity_id)

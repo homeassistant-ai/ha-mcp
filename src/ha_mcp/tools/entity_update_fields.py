@@ -47,34 +47,34 @@ async def automatic_entity_id(
     return str(automatic)
 
 
+CONVERTIBLE_UNITS = "sensor/device_class_convertible_units"
+
+
 async def reject_unconvertible_unit(
     client: Any,
     entity_id: str,
     options: dict[str, dict[str, Any]] | None,
-    device_class: str | None,
     fetch_entity: Callable[[str], Awaitable[dict[str, Any]]],
 ) -> None:
     """Refuse a sensor unit Core does not list for the sensor's device class.
 
-    Core stores any unit in the sensor options and then ignores one it cannot
-    convert to; the units come from ``sensor/device_class_convertible_units``,
-    the list the entity settings dialog offers. The device class is the one
-    this call sets, else the entry's own, else the integration's.
+    The units come from ``sensor/device_class_convertible_units``, the list
+    the entity settings dialog offers. The device class is the integration's
+    (``original_device_class``): the sensor converts with its own device
+    class, not one set in the registry.
     """
     unit = ((options or {}).get("sensor") or {}).get("unit_of_measurement")
     if unit is None or not entity_id.lower().startswith("sensor."):
         return
-    effective = clearable_value(device_class, "device_class")
-    if effective is None:
-        try:
-            entry = await fetch_entity(entity_id)
-        except NotInRegistry:
-            return  # Core refuses options for an entity it does not register
-        effective = entry.get("device_class") or entry.get("original_device_class")
+    try:
+        entry = await fetch_entity(entity_id)
+    except NotInRegistry:
+        return  # Core refuses options for an entity it does not register
+    device_class = entry.get("original_device_class")
     units: list[str] = []
-    if effective:
+    if device_class:
         reply = await client.send_websocket_message(
-            {"type": "sensor/device_class_convertible_units", "device_class": effective}
+            {"type": CONVERTIBLE_UNITS, "device_class": device_class}
         )
         if not reply.get("success"):
             return  # unchecked: Core stores the unit as before
@@ -84,14 +84,14 @@ async def reject_unconvertible_unit(
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"Home Assistant does not convert {entity_id} "
-            f"(device class {effective or 'none'}) to {unit!r}: it keeps the "
-            "unit option but ignores it",
+            f"{unit!r} is not among the units Home Assistant lists for "
+            f"{entity_id}'s device class ({device_class or 'none'})",
             context={
                 "entity_id": entity_id,
                 "unit_of_measurement": unit,
-                "device_class": effective,
+                "device_class": device_class,
                 "convertible_units": units,
+                "checked_with": CONVERTIBLE_UNITS,
             },
             suggestions=[
                 f"Use one of: {', '.join(units)}"

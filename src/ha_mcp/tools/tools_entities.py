@@ -870,6 +870,9 @@ class EntityTools:
             # Save original entity_id before potential rename
             original_entity_id = entity_id
 
+            await reject_unconvertible_unit(
+                self._client, entity_id, parsed_options, self._fetch_entity
+            )
             # Issue #2159: validate cross-registry references immediately before
             # the write — the narrowest window against a concurrent registry
             # deletion (#2160 placed the area check here for the same reason).
@@ -877,13 +880,6 @@ class EntityTools:
             # For label add, only the added IDs are checked: the merged
             # set may legitimately carry pre-existing dangling labels, whose
             # cleanup path (label_operation="remove") must stay open.
-            await reject_unconvertible_unit(
-                self._client,
-                entity_id,
-                parsed_options,
-                device_class,
-                self._fetch_entity,
-            )
             await validate_registry_write_ids(
                 self._client,
                 message.get("area_id"),  # normalized by build_name_visibility_fields
@@ -1245,8 +1241,8 @@ class EntityTools:
                     "Per-domain entity registry options (e.g. sensor 'display_precision', "
                     "weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, "
                     'e.g. {"sensor": {"display_precision": 2}}. A sensor '
-                    "'unit_of_measurement' must be one Home Assistant converts "
-                    "to for the device class; others are refused with its list. "
+                    "'unit_of_measurement' must be one Home Assistant lists for "
+                    "the integration's device class; others are refused with it. "
                     "For 'Show As' use device_class; for "
                     "voice-assistant exposure use expose_to, not "
                     "options.<assistant>.should_expose."

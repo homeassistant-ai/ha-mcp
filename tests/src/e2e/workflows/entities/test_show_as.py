@@ -124,6 +124,7 @@ class TestShowAs:
                 "config": {
                     "state": "{{ 1.234 }}",
                     "unit_of_measurement": "kWh",
+                    "device_class": "energy",
                 },
             },
         )
@@ -155,8 +156,8 @@ class TestShowAs:
                 == 2
             )
 
-            # A unit comes from Core's list for the device class the call sets.
-            unit_call = {"entity_id": entity_id, "device_class": "energy"}
+            # A unit comes from Core's list for the sensor's own device class.
+            unit_call = {"entity_id": entity_id}
             async with MCPAssertions(mcp_client) as mcp:
                 refused = await mcp.call_tool_failure(
                     "ha_set_entity",
