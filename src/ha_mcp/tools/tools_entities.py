@@ -1244,7 +1244,9 @@ class EntityTools:
                 description=(
                     "Per-domain entity registry options (e.g. sensor 'display_precision', "
                     "weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, "
-                    'e.g. {"sensor": {"display_precision": 2}}. '
+                    'e.g. {"sensor": {"display_precision": 2}}. A sensor '
+                    "'unit_of_measurement' must be one Home Assistant converts "
+                    "to for the device class; others are refused with its list. "
                     "For 'Show As' use device_class; for "
                     "voice-assistant exposure use expose_to, not "
                     "options.<assistant>.should_expose."
