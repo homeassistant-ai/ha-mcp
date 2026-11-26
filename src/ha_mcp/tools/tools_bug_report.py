@@ -48,6 +48,7 @@ from .bug_report_sources import (
     collect_known_identifiers,
     detect_platform,
     fetch_ha_install,
+    llm_connection_route,
 )
 from .bug_report_templates import (
     REPORT_END_MARKER,
@@ -65,6 +66,7 @@ from .bug_report_templates import (
     _generate_search_keywords,
     _ReportText,
     _suggested_title,
+    format_websockets_dependency_value,
 )
 from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_api import InfoResult, read_component_version, read_info, webhook_auth
@@ -203,34 +205,6 @@ def _instance_identity() -> dict[str, Any]:
     }
 
 
-def format_websockets_dependency_value(diagnostic_info: dict[str, Any]) -> str:
-    """Render the websockets probe for the human-pasteable report.
-
-    Mirrors the sibling ``_format_*_value`` helpers: a degraded probe stays
-    visibly degraded instead of disappearing — for the #2135/#2146 failure
-    class this line IS the diagnosis, so it must survive into the report a
-    user pastes.
-    """
-    state = diagnostic_info.get("websockets_dependency") or {}
-    if not state:
-        return "not probed"
-    if state.get("vendored_import_ok"):
-        value = f"vendored {state.get('vendored_version') or 'unknown'}"
-        if state.get("vendored_c_speedups") is False:
-            value += " (pure-Python)"
-    else:
-        value = (
-            f"vendored BROKEN: {state.get('vendored_import_error', 'import failed')}"
-        )
-    if (error := state.get("shared_metadata_error")) is not None:
-        shared = f"metadata unreadable: {error}"
-    elif (version := state.get("shared_metadata_version")) is not None:
-        shared = f"{version} per dist metadata"
-    else:
-        shared = "absent"
-    return f"{value} | shared env copy: {shared}"
-
-
 def websockets_dependency_state() -> dict[str, Any]:
     """Report the vendored websockets copy plus the shared copy's state.
 
@@ -319,12 +293,6 @@ def _tool_policy_summary() -> str:
     count = len(policy.rules)
     rules = "1 rule" if count == 1 else f"{count} rules"
     return f"{rules}, rule_effect={policy.rule_effect}"
-
-
-def _http_user_agent() -> str:
-    """The request's ``User-Agent``, or ``""`` outside an HTTP request."""
-    value = get_http_headers(include={"user-agent"}).get("user-agent", "")
-    return str(value).strip()
 
 
 def detect_mcp_transport() -> str:
@@ -451,6 +419,11 @@ def _build_formatted_report(
         f"Entity Count: {diagnostic_info['entity_count']}",
         f"websockets Dependency: {format_websockets_dependency_value(diagnostic_info)}",
     ]
+    if route := diagnostic_info.get("mcp_connection_route"):
+        report_lines.append(f"MCP Connection Route: {route}")
+        report_lines.extend(
+            filter(None, [diagnostic_info.get("mcp_connection_warning")])
+        )
     if "location_name" in diagnostic_info:
         report_lines.append(f"Location Name: {diagnostic_info['location_name']}")
     if "time_zone" in diagnostic_info:
@@ -823,7 +796,11 @@ class BugReportTools:
             if mcp_transport == "stdio"
             else {}
         )
-        user_agent = _http_user_agent()
+        headers = get_http_headers(include={"user-agent", "x-ha-mcp-llm-caller"})
+        user_agent = headers.get("user-agent", "").strip()
+        route, route_warning = llm_connection_route(
+            headers.get("x-ha-mcp-llm-caller"), user_agent
+        )
         installed_version = await asyncio.to_thread(detect_installed_version)
         # One read_info call, so the version and the auth mode share an answer.
         component_info = await read_info(self._client)
@@ -849,6 +826,8 @@ class BugReportTools:
             "mcp_client_capabilities": mcp_capabilities,
             "mcp_client_host": client_host,
             "http_user_agent": user_agent,
+            "mcp_connection_route": route,
+            "mcp_connection_warning": route_warning,
             "config_toggles": config_toggles,
             "ignored_disabled_tools": config_toggles.get("ignored_disabled_tools"),
             "tool_config_warnings": config_toggles.get("tool_config_warnings"),
@@ -979,6 +958,7 @@ class BugReportTools:
                 "missing_tool_hint": MISSING_TOOL_HINT,
                 "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,
                 "instructions": (
+                    "Show any connection warning to the user before filing.\n\n"
                     "WORKFLOW FOR FILING A REPORT:\n\n"
                     "0. **PRE-CHECK — missing tool or unknown parameter?** If the "
                     "user's issue is that a tool they expected is missing, cannot be "
@@ -1075,8 +1055,10 @@ class BugReportTools:
                     "CRITICAL: Always ANONYMIZE before showing or filing the report!"
                 ),
             }
-            if identifier_warning:
-                result["warnings"] = [identifier_warning]
+            if warnings := [
+                warning for warning in (route_warning, identifier_warning) if warning
+            ]:
+                result["warnings"] = warnings
             return project_fields(result, parsed_fields)
 
 
