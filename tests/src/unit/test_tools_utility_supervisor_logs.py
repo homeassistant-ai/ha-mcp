@@ -226,6 +226,21 @@ class TestTheSlugParameter:
         assert all(service in listed for service in SERVICES)
         assert app_route.supervisor.requests == []
 
+    @pytest.mark.parametrize("slug", ["x/../../../states?", "a/b", ".", ".."])
+    async def test_an_app_slug_that_could_leave_its_path_is_refused_before_asking(
+        self, route: Route, slug: str
+    ):
+        """The slug is one segment of the app's log path, checked as the app tools
+        check theirs: on the proxy route Core would read ``x/../../../states?``
+        as its states, answer ``a/b`` with 401 and forward ``.`` to Supervisor."""
+        route.supervisor.reply("app line\n")
+
+        with pytest.raises(ToolError) as refused:
+            await ask(route.client, APP, slug=slug)
+
+        assert error_body(refused)["error"]["code"] == "VALIDATION_FAILED"
+        assert route.supervisor.requests == []
+
     async def test_a_service_log_with_no_slug_is_refused_before_asking(
         self, app_route: Route
     ):

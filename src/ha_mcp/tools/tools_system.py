@@ -363,16 +363,16 @@ class SystemTools:
     async def _reload_config_entry(self, entry_id: str) -> dict[str, Any]:
         """Reload a single config entry via the REST config-entries endpoint.
 
-        POSTs to ``/config/config_entries/entry/{entry_id}/reload`` through the
-        REST client's generic request method — the ``/entry/`` path segment the
-        hand-rolled workaround in issue #1813 was easy to get wrong. A 404
-        surfaces as a not-found error naming the ``entry_id``; other failures
-        route through the shared exception classifier. Returns the tool's
-        standard envelope plus ``reloaded``/``entry_id``.
+        POSTs to ``/config/config_entries/entry/{entry_id}/reload``, with the id
+        kept to one path segment so it reaches no other endpoint. A 404 is a
+        not-found error naming ``entry_id``, a 403 means the integration cannot
+        reload, and other failures go to the shared exception classifier.
+        Returns the standard envelope plus ``reloaded``/``entry_id``.
         """
         try:
             resp = await self._client._request(
-                "POST", f"/config/config_entries/entry/{entry_id}/reload"
+                "POST",
+                f"/config/config_entries/entry/{self._client.path_segment(entry_id)}/reload",
             )
         except ToolError:
             raise

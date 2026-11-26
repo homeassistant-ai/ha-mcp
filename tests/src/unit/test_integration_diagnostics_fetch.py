@@ -132,6 +132,33 @@ class TestFetch:
         assert result["data"]["data"] == {"device": "info"}
         assert "error" not in result
 
+    @pytest.mark.parametrize(
+        ("entry_id", "device_id"),
+        [
+            ("x/../../../states?", None),
+            (None, "x/../../../../../states?"),
+            (None, ".."),
+        ],
+    )
+    async def test_an_id_that_climbs_its_path_returns_no_other_endpoints_answer(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        diagnosed: Diagnosed,
+        entry_id: str | None,
+        device_id: str | None,
+    ) -> None:
+        """Each id is one path segment: one climbing to Core's states, or a bare
+        ``..`` device id climbing to the entry's own dump, returns no diagnostics."""
+        hass.states.async_set("light.a", "on")
+
+        result = await fetch_integration_diagnostics(
+            core_client, entry_id or diagnosed.entry.entry_id, device_id
+        )
+
+        assert "data" not in result
+        assert "error" in result
+
     @pytest.mark.parametrize("entry_id", ["", None])
     async def test_missing_entry_id_asks_for_it_without_a_request(
         self, core_client: HomeAssistantClient, entry_id: str | None

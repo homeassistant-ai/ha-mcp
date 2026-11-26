@@ -151,7 +151,8 @@ async def fetch_integration_diagnostics(
 
     Args:
         client: REST client exposing an async ``_request(method, endpoint,
-            *, timeout)`` method that returns the decoded JSON body.
+            *, timeout)`` method that returns the decoded JSON body, and
+            ``path_segment`` to keep each id to one path segment.
         config_entry_id: Config-entry id of the integration. Required;
             ``None`` / empty string short-circuits with a structured error
             sub-dict and no backend call.
@@ -200,9 +201,9 @@ async def fetch_integration_diagnostics(
         )
         return result
 
-    endpoint = f"/diagnostics/config_entry/{config_entry_id}"
+    endpoint = f"/diagnostics/config_entry/{client.path_segment(config_entry_id)}"
     if device_id:
-        endpoint += f"/device/{device_id}"
+        endpoint += f"/device/{client.path_segment(device_id)}"
 
     await _fetch_raw_diagnostics(client, endpoint, timeout_seconds, device_id, result)
 

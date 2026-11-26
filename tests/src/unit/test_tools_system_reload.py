@@ -290,6 +290,23 @@ async def _reloadable_entry(hass: HomeAssistant, *, unloads: bool = True) -> lis
     return setups
 
 
+async def test_an_entry_id_that_climbs_its_path_reloads_nothing_else(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The id is one path segment: one climbing to Core's event endpoint is
+    refused and fires no event there."""
+    assert await async_setup_component(hass, "config", {})
+    fired = async_capture_events(hass, "climbed")
+
+    with pytest.raises(ToolError):
+        await SystemTools(core_client).ha_reload_core(
+            entry_id="x/../../../../events/climbed?"
+        )
+    await hass.async_block_till_done()
+
+    assert fired == []
+
+
 @pytest.mark.usefixtures("probe_flow")
 async def test_entry_id_reloads_that_entry_and_no_subsystem(
     hass: HomeAssistant, core_client: HomeAssistantClient

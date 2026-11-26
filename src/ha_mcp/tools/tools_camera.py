@@ -3,7 +3,6 @@
 import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any, NoReturn
-from urllib.parse import quote
 
 from pydantic import Field
 
@@ -141,7 +140,7 @@ class CameraTools:
     ) -> tuple[bytes, str]:
         """Stream the Core proxy response up to HA-MCP's inline image limit."""
         limit = MAX_IMAGE_PAYLOAD_BYTES
-        endpoint = f"/{domain}_proxy/{quote(entity_id, safe='')}"
+        endpoint = f"/{domain}_proxy/{self._client.path_segment(entity_id)}"
         async with self._client.httpx_client.stream(
             "GET", endpoint, params=params
         ) as response:

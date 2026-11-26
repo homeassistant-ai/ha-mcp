@@ -2134,20 +2134,23 @@ class HomeAssistantClient:
         )
 
     @staticmethod
+    def path_segment(value: str) -> str:
+        """``value`` as one path segment, so a caller's id reaches no other endpoint:
+        every reserved character encoded (``/``, ``?`` and ``#`` among them), and a
+        bare ``.`` or ``..`` too, which the HTTP client resolves as a dot segment."""
+        if value in (".", ".."):
+            return value.replace(".", "%2E")
+        return quote(value, safe="")
+
+    @staticmethod
     def state_path(entity_id: str) -> str:
-        """Core's state API path for ``entity_id``, kept to one segment so the
-        id cannot reach another endpoint: every reserved character in it
-        encoded (``/``, ``?`` and ``#`` among them), and a bare ``.`` or ``..``
-        too, which the HTTP client would resolve as a dot segment."""
-        if entity_id in (".", ".."):
-            return f"states/{entity_id.replace('.', '%2E')}"
-        return f"states/{quote(entity_id, safe='')}"
+        """Core's state API path for ``entity_id``, kept to one segment."""
+        return f"states/{HomeAssistantClient.path_segment(entity_id)}"
 
     @staticmethod
     def config_path(domain: str, key: str) -> str:
-        """Core's config API path for ``key``, with every ``/`` in it encoded
-        so the key cannot reach another endpoint."""
-        return f"config/{domain}/config/{quote(key, safe='')}"
+        """Core's config API path for ``key``, kept to one segment."""
+        return f"config/{domain}/config/{HomeAssistantClient.path_segment(key)}"
 
     async def _config_exists(self, domain: str, storage_key: str) -> bool:
         """Whether Core's config API holds a ``domain`` config under ``storage_key``."""
