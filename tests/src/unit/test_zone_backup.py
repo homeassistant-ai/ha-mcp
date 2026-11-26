@@ -158,6 +158,25 @@ async def test_snapshot_is_of_the_zone_the_tool_changes(
     assert await changed_zone(zones, core_client, target) == (expected, expected)
 
 
+async def test_a_home_zone_write_is_backed_up_and_restored(
+    hass: HomeAssistant, core_client: HomeAssistantClient, zones: bm.BackupManager
+) -> None:
+    """The home zone is not stored: its snapshot is the general settings'
+    location and radius, and the restore writes them back."""
+    assert await async_setup_component(hass, "config", {})
+    before = (hass.config.latitude, hass.config.longitude, hass.config.radius)
+
+    await ZoneTools(core_client).ha_set_zone(
+        zone_id="zone.home", latitude=48.1, radius=250, wait=False
+    )
+    (row,) = zones.list_snapshots(domain="zone")
+    snapshot = zones.read_snapshot(row["name"])["config"]
+    await handler_for(zones, "zone").restore(core_client, "zone.home", snapshot)
+
+    after = (hass.config.latitude, hass.config.longitude, hass.config.radius)
+    assert after == before != (48.1, before[1], 250)
+
+
 async def test_a_zone_without_a_registry_entry_is_the_zone_backed_up(
     core_client: HomeAssistantClient,
     zones: bm.BackupManager,

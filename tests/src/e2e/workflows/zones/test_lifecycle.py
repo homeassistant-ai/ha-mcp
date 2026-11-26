@@ -17,6 +17,7 @@ import logging
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.cleanup import CleanupSteps
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -452,15 +453,32 @@ class TestZoneLifecycle:
                 await safe_call_tool(mcp_client, "ha_remove_zone", {"zone_id": zone_id})
 
     async def test_home_zone_is_listed_as_not_stored(self, mcp_client):
-        """The home zone comes from the general settings, not the zone storage."""
+        """The home zone comes from the general settings, not the zone storage;
+        its radius is written there and read back from zone.home."""
         async with MCPAssertions(mcp_client) as mcp:
             listed = await mcp.call_tool_success(
                 "ha_get_zone", {"zone_id": "zone.home"}
             )
-        zone = listed["zone"]
-        assert zone["entity_id"] == "zone.home", zone
-        assert zone["editable"] is False, zone
-        assert zone["source"] == "yaml", zone
+            zone = listed["zone"]
+            assert zone["entity_id"] == "zone.home", zone
+            assert zone["editable"] is False, zone
+            assert zone["source"] == "yaml", zone
+
+            radius = zone["radius"]
+            try:
+                moved = await mcp.call_tool_success(
+                    "ha_set_zone", {"zone_id": "zone.home", "radius": radius + 50}
+                )
+                assert moved["zone_data"]["radius"] == radius + 50, moved
+                refused = await mcp.call_tool_failure(
+                    "ha_set_zone", {"zone_id": "zone.home", "name": "Castle"}
+                )
+                assert refused["refused_fields"] == ["name"], refused
+            finally:
+                with CleanupSteps() as cleanup, cleanup.step():
+                    await mcp.call_tool_success(
+                        "ha_set_zone", {"zone_id": "zone.home", "radius": radius}
+                    )
 
     async def test_home_zone_is_refused_as_not_stored(self, mcp_client):
         """Removing the home zone is refused before anything is sent."""

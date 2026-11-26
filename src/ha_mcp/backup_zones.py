@@ -11,6 +11,10 @@ window gets back its entity_id (if still free), registry name, area, labels
 and icon; otherwise, or under another id (the zone was renamed since it was
 created, or its slug was taken), it gets a new entry. Either way the recorded
 registry icon is written on top.
+
+The home zone is not stored: its snapshot is the location and radius of Home
+Assistant's general settings, under ``home_zone``, restored with
+``config/core/update`` as ``ha_set_zone`` writes them.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from typing import Any
 from .backup_entity_ids import _manager, restore_registry_icon, with_registry_icon
 from .backup_helper_target import stored_target
 from .client.rest_client import HomeAssistantCommandError
+from .tools.zone_home import HOME_ZONE_FIELDS, is_home_zone_id
 
 
 async def fetch_zone(client: Any, zone_id: str) -> Any:
@@ -36,6 +41,9 @@ async def fetch_zone(client: Any, zone_id: str) -> Any:
         "zone", zone_id, stored, await bm._entity_registry_rows(client)
     )
     zone = stored.get(storage_id) if storage_id else None
+    if zone is None and is_home_zone_id(zone_id):
+        config = await client.get_config()
+        return {"home_zone": {key: config.get(key) for key in HOME_ZONE_FIELDS}}
     return await with_registry_icon(client, "zone", zone) if zone is not None else None
 
 
@@ -74,6 +82,11 @@ async def restore_zone(client: Any, zone_id: str, payload: dict[str, Any]) -> An
     writes it, after the restore's safety backup of it.
     """
     bm = _manager()
+    if "home_zone" in payload:
+        await bm._ws_send(
+            client, {"type": "config/core/update", **payload["home_zone"]}
+        )
+        return payload["home_zone"]
     recorded = "registry_icon" in payload
     registry_icon = payload.pop("registry_icon", None)
     try:

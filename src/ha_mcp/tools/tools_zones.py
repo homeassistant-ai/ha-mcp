@@ -43,6 +43,7 @@ from .helpers import (
 )
 from .tool_hints import read_only_hints, write_hints
 from .ws_waiters import wait_for_entity_removed
+from .zone_home import HOME_ZONE, set_home_zone
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +211,8 @@ class ZoneTools:
         Zones outside the zone storage, the home zone (from the general
         settings) and YAML zones, are listed with ``editable=false`` /
         ``source="yaml"``; editable means ha_set_zone and ha_remove_zone can
-        change the zone. Each zone carries its entity_id.
+        change the zone. The home zone's latitude, longitude and radius can
+        still be changed with ha_set_zone. Each zone carries its entity_id.
 
         A stored zone's ``icon`` is the one stored in the zone, which the
         Zones editor shows. ``entity_icon`` is an icon override in the zone
@@ -481,9 +483,12 @@ class ZoneTools:
             )
         return state
 
-    async def _resolve_zone(self, zone_id: str) -> tuple[str | None, str]:
+    async def _resolve_zone(
+        self, zone_id: str, *, allow_home: bool = False
+    ) -> tuple[str | None, str | None]:
         """The entity_id and storage zone_id of a stored zone, given its
-        entity_id or zone_id.
+        entity_id or zone_id; with ``allow_home``, ``(zone.home, None)`` for
+        the home zone, which is not stored.
 
         Resolved as ``stored_target`` resolves it, and so as the zone backups
         do: a bare ``zone_id`` is a storage id from ``zone/list``, and
@@ -521,17 +526,21 @@ class ZoneTools:
         # A registry entry links a stored zone, so only a state without one is
         # a YAML or the home zone.
         linked = any(entry.get("entity_id") == entity_id for entry in entries)
+        if allow_home and not linked and entity_id == HOME_ZONE:
+            return entity_id, None
         if not linked and await self._zone_state(entity_id) is not None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     f"Zone {entity_id} is not a stored zone: it is defined in YAML "
                     "or, for the default zone.home, by the home location in the "
-                    "general settings, so the zone tools cannot change or remove it.",
+                    "general settings, so the zone tools cannot remove it or, "
+                    "but for the home zone's location and radius, change it.",
                     context={"zone_id": zone_id, "entity_id": entity_id},
                     suggestions=[
                         "Edit a YAML zone in configuration.yaml",
-                        "Change the home location under Settings > System > General",
+                        "Move the home zone with ha_set_zone(zone_id='zone.home', "
+                        "latitude=..., longitude=..., radius=...)",
                     ],
                 )
             )
@@ -622,12 +631,15 @@ class ZoneTools:
 
         Omit zone_id to create a new zone (name, latitude, longitude required).
         Provide zone_id to update an existing zone (only specified fields change).
-        Zones defined in YAML, and the home zone, cannot be changed here.
+        The home zone (zone_id 'zone.home', or 'home' when no stored zone has
+        that id) takes only latitude, longitude and radius, which Home
+        Assistant keeps in its general settings. YAML zones cannot be changed.
 
         EXAMPLES:
         - Create: ha_set_zone(name="Office", latitude=40.7128, longitude=-74.0060, radius=150, icon="mdi:briefcase")
         - Update: ha_set_zone(zone_id="office", radius=200)
         - Update by entity_id: ha_set_zone(zone_id="zone.office", radius=200)
+        - Move the home zone: ha_set_zone(zone_id="zone.home", radius=250)
         """
         operation = "create"
         try:
@@ -682,7 +694,22 @@ class ZoneTools:
                             context={"zone_id": zone_id},
                         )
                     )
-                entity_id, storage_id = await self._resolve_zone(zone_id)
+                entity_id, storage_id = await self._resolve_zone(
+                    zone_id, allow_home=True
+                )
+                if storage_id is None:
+                    given = {
+                        "name": name,
+                        "icon": icon,
+                        "passive": passive,
+                        **fields,
+                    }
+                    return await set_home_zone(
+                        self._client,
+                        zone_id,
+                        {k: v for k, v in given.items() if v is not None},
+                        wait=wait,
+                    )
                 # The helper write path takes the storage id first.
                 result = await _execute_update_simple_helper(
                     self._client,
