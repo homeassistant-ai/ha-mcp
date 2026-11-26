@@ -230,6 +230,8 @@ still an active administrator. No token or secret ever appears in a URL,
 and the secret path stays on the loopback side of the proxy, except in the
 settings export file an administrator downloads on purpose.
 
+Open **Advanced integration settings** from the Tools tab, then select the gear next to **HA-MCP Server** to see the connection URL, change how clients connect, or turn off the startup notification. The startup notification also links directly to that integration page.
+
 ## Independent from the app
 
 The in-process server and the Home Assistant MCP Server app are completely

@@ -184,12 +184,23 @@
   <button class="restart-btn" id="restartBtn" style="display:none" data-i18n="actions.restart_addon">Restart App (add-on)</button>
 </div>
 <div class="panel active" id="panel-tools" role="tabpanel" aria-labelledby="tab-tools" tabindex="0">
-  <div class="readonly-notice" data-i18n-html="notice.shared_settings">
-    Server-wide features (Tool Search, YAML config editing, filesystem
-    tools, etc.) appear in both the <strong>Server Settings</strong>
-    tab and the App (add-on) Configuration page; they're the same settings
-    either way. Either surface stays in sync with the other after the
-    App (add-on) restarts. Changes require HA-MCP to be restarted.
+  <div class="readonly-notice" id="sharedSettingsNotice">
+    <span data-i18n-html="notice.shared_settings">
+      Server-wide features (Tool Search, YAML config editing, filesystem tools, etc.) appear in both the
+      <strong>Server Settings</strong> tab and the app (add-on) Configuration page; they're the same settings
+      either way. Either surface stays in sync with the other after the app (add-on) restarts.
+      Changes require HA-MCP to be restarted.
+    </span>
+    <span hidden data-i18n-html="notice.embedded_settings">
+      Manage server-wide features such as Tool Search, YAML config editing, and filesystem tools in
+      <strong>Server Settings</strong>. Restart HA-MCP to apply changes. For connection settings and the
+      startup notification, open the integration page and select the gear next to <strong>HA-MCP Server</strong>.
+    </span>
+    <div>
+      <a id="integrationSettingsLink" role="link" aria-disabled="true" target="_blank" rel="noreferrer"
+         data-i18n="notice.integration_settings_link">Advanced integration settings</a>
+      <span data-i18n="notice.integration_settings_embedded_only">(embedded installations only)</span>
+    </div>
   </div>
   <div class="pin-notice show" id="pinNotice" data-i18n-html="notice.env_pins">
     Tools listed in the <code>DISABLED_TOOLS</code> or <code>PINNED_TOOLS</code>

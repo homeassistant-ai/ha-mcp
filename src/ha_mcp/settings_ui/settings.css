@@ -250,6 +250,8 @@
     margin-bottom: 16px;
     background: color-mix(in srgb, var(--accent) 12%, transparent);
   }
+  .readonly-notice a { color: var(--accent-text); }
+  .readonly-notice a[aria-disabled="true"] { color: var(--text-secondary); cursor: not-allowed; }
   .readonly-notice::before {
     background-color: var(--accent);
     -webkit-mask-image: var(--icon-info); mask-image: var(--icon-info);

@@ -129,8 +129,9 @@ set, so names, context fields and the row shape come from Core instead of a
 copied `EntityNameCache`. The server prefers the bridge and keeps Core's REST
 (`/api/logbook`) and WebSocket (`logbook/get_events`) reads as the explicit
 component-absent fallbacks — a `device_id` request needs the WebSocket path
-there because REST has no device filter, and a bridge timeout surfaces rather
-than re-running the recorder query on another transport.
+there because REST has no device filter. If a native read times out or its
+reply exceeds the transport limit, surface the error without repeating the
+Recorder query on another transport.
 
 `ha_restart` forwards Core's restart schema (`safe_mode`) and leaves the
 refusals to Core. The embedded server is the exception: it replies before the

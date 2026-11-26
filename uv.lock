@@ -1467,7 +1467,7 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "9.2.0"
+version = "9.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
@@ -1505,6 +1505,7 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
     { name = "tzdata" },
+    { name = "ulid-transform" },
     { name = "uncalled-for" },
     { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
     { name = "watchfiles" },
@@ -1604,6 +1605,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.13.0" },
     { name = "typing-inspection", specifier = ">=0.4.1" },
     { name = "tzdata", specifier = ">=2024.1" },
+    { name = "ulid-transform", specifier = ">=2.2.9,<3" },
     { name = "uncalled-for", specifier = ">=0.4.0" },
     { name = "uvicorn", marker = "sys_platform != 'emscripten'", specifier = ">=0.35" },
     { name = "watchfiles", specifier = ">=1.0.0" },

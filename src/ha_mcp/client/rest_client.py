@@ -47,7 +47,7 @@ from .exceptions import (
 from .exceptions import (
     HomeAssistantError as HomeAssistantError,
 )
-from .exceptions import SceneIdNotAnEntityError
+from .exceptions import SceneIdNotAnEntityError, websocket_close_error_type
 from .models import ErrorLogPage
 from .service_identifiers import service_rest_path
 from .supervisor_client import make_supervisor_httpx_client
@@ -1834,16 +1834,15 @@ class HomeAssistantClient:
             return result
         except _NO_ANSWER_ERRORS as e:
             # One error channel for "no answer came back" (#1947): the caller
-            # decides the policy. ``send_command`` re-raises the original
-            # ``ConnectionClosed`` / ``ConnectionResetError`` to keep writes
-            # at-most-once, so those arrive untranslated.
+            # decides the policy. A raw close during send can carry the same
+            # size error as a close observed by the socket reader.
             # A caller that waits zero seconds sent a command Core never answers.
             log = logger.debug if message.get("_wait_timeout") == 0 else logger.error
             log(f"WebSocket transport failed ({message.get('type')}): {e}")
             if isinstance(e, HomeAssistantConnectionError):
                 # Re-raised unchanged so subtypes and the traceback survive.
                 raise
-            raise HomeAssistantConnectionError(str(e)) from e
+            raise websocket_close_error_type(e)(str(e)) from e
         except Exception as e:  # noqa: BLE001  # an answer or local bug is an envelope
             # Home Assistant's own answer (or a proxy's), or a local bug.
             error_str = str(e)
