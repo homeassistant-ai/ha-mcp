@@ -168,10 +168,33 @@ function _applyVersionFooter(info) {
   if (fEl) fEl.textContent = 'ha-mcp ' + info.version + installation;
 }
 
+function applyIntegrationSettings(isEmbedded) {
+  const notice = document.getElementById('sharedSettingsNotice');
+  if (!notice) return;
+  notice.querySelector('[data-i18n-html="notice.shared_settings"]').hidden = isEmbedded;
+  notice.querySelector('[data-i18n-html="notice.embedded_settings"]').hidden = !isEmbedded;
+  notice.querySelector('[data-i18n="notice.integration_settings_embedded_only"]').hidden = isEmbedded;
+  const link = document.getElementById('integrationSettingsLink');
+  if (isEmbedded) {
+    // The sidebar proxy and HA webhooks share the frontend origin. A direct
+    // server port has no HA frontend, so use Home Assistant's instance picker.
+    const haRoute = location.pathname.startsWith('/api/ha_mcp_tools/ui/app/') ||
+      location.pathname.startsWith('/api/webhook/');
+    link.href = haRoute
+      ? '/config/integrations/integration/ha_mcp_tools'
+      : 'https://my.home-assistant.io/redirect/integration/?domain=ha_mcp_tools';
+    link.removeAttribute('aria-disabled');
+  } else {
+    link.removeAttribute('href');
+    link.setAttribute('aria-disabled', 'true');
+  }
+}
+
 async function applyInfoChrome() {
   try {
     const infoResp = await fetch('./api/settings/info');
     const info = await infoResp.json();
+    applyIntegrationSettings(info.deployment_mode === 'embedded');
     _applyRestartChrome(info);
     _applyVersionFooter(info);
   } catch (e) {
