@@ -706,7 +706,10 @@ jobs:
         # script reads them from the beta just installed, and restating Core's
         # pins keeps -r from moving it.
         uv run --no-sync python scripts/sync_dev_integration_pins.py --installed-requirements > "$RUNNER_TEMP/beta-requirements.txt"
-        uv pip install "homeassistant==$BETA_CORE" "pytest-homeassistant==$BETA_CORE" -r "$RUNNER_TEMP/beta-requirements.txt"
+        if ! uv pip install "homeassistant==$BETA_CORE" "pytest-homeassistant==$BETA_CORE" -r "$RUNNER_TEMP/beta-requirements.txt"; then
+          echo "::error::Core $BETA_CORE's integration requirements do not install over the locked environment"
+          exit 1
+        fi
         uv run --no-sync python -c \
           'import os; from homeassistant.const import __version__ as v; assert v == os.environ["BETA_CORE"], v'
 
