@@ -266,9 +266,9 @@ def _build_sentinel_wheel(dest_dir: Path) -> tuple[Path, str]:
 def _seed_config(config_path: Path, component_src: Path) -> None:
     """Install the RELEASED component + seed a server entry that installs from PyPI.
 
-    The seeded ``pip_spec`` is EMPTY: ``_resolve_pip_spec`` then resolves the bare
-    ``ha-mcp`` distribution, so the first bring-up installs the newest PyPI stable
-    — exactly a fresh production install, and the starting point for the update.
+    The seeded ``pip_spec`` is EMPTY (no override), so the first bring-up
+    installs what the component resolves without one, from PyPI — exactly a
+    fresh production install, and the starting point for the update.
     """
     shutil.copytree(_INITIAL_STATE, config_path, dirs_exist_ok=True)
 

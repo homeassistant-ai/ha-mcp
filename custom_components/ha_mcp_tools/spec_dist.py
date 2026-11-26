@@ -51,19 +51,32 @@ async def async_paired_server_requirement(hass: HomeAssistant) -> str | None:
     return next(iter(server_pins(integration.requirements)), None)
 
 
+def effective_pip_spec(override: str, pin: str | None) -> str:
+    """Return the server requirement bring-up installs.
+
+    An explicit override wins (any pip requirement string — a version pin,
+    a GitHub tarball URL, a ``file://`` wheel — for PR or pre-release
+    testing). Otherwise the requirement this component release pins in its
+    manifest, so the server that runs is the one the Marketplace delivered
+    with the component. A hand-edited manifest without a pin falls back to the
+    bare ``ha-mcp`` distribution (``DEFAULT_PIP_SPEC``).
+
+    ``override`` is :func:`pip_spec_override`'s result ("" for none). ``pin`` is
+    None when the manifest pins no server or has not been read.
+    """
+    return override or pin or DEFAULT_PIP_SPEC
+
+
 async def async_effective_pip_spec(
     hass: HomeAssistant, options: Mapping[str, Any]
 ) -> str:
-    """Return the spec bring-up resolves: the override, else the manifest pin.
+    """Return :func:`effective_pip_spec` for ``options`` and the manifest pin.
 
-    Without a pin, bare ``ha-mcp`` (``DEFAULT_PIP_SPEC``). Must match
-    ``EmbeddedServerManager._resolve_pip_spec``: ``server_entry``'s
-    ``install_pending`` compares this string with the one bring-up recorded.
+    ``server_entry``'s ``install_pending`` compares it with the spec bring-up
+    recorded.
     """
-    return (
-        pip_spec_override(options)
-        or await async_paired_server_requirement(hass)
-        or DEFAULT_PIP_SPEC
+    return effective_pip_spec(
+        pip_spec_override(options), await async_paired_server_requirement(hass)
     )
 
 

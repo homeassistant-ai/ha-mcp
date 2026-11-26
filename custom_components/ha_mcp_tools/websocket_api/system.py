@@ -238,9 +238,10 @@ async def _server_entry_prep(
     """Whether the server entry's configured spec is still to be installed.
 
     Compares the spec bring-up resolves now (the override, else the manifest
-    pin, read async) with the one the component recorded after its last
-    completed package step (``entry.data[DATA_LAST_PIP_SPEC]``, its own
-    bookkeeping, reported only as this boolean). True while a changed spec
+    pin, read async, else bare ``ha-mcp``) with the one the component
+    recorded after its last completed package step
+    (``entry.data[DATA_LAST_PIP_SPEC]``, its own bookkeeping, reported only
+    as this boolean). True while a changed spec
     waits for its install, after a deferred or failed install of it, and
     before the entry's first bring-up (also while its access is off). It
     compares spec strings, so a reinstall of an unchanged spec (a URL spec,
