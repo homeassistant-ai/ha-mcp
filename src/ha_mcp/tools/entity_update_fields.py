@@ -47,6 +47,64 @@ async def automatic_entity_id(
     return str(automatic)
 
 
+async def reject_unconvertible_unit(
+    client: Any,
+    entity_id: str,
+    options: dict[str, dict[str, Any]] | None,
+    device_class: str | None,
+    fetch_entity: Callable[[str], Awaitable[dict[str, Any]]],
+) -> None:
+    """Refuse a sensor unit Core does not list for the sensor's device class.
+
+    Core stores any unit in the sensor options and then ignores one it cannot
+    convert to; the units come from ``sensor/device_class_convertible_units``,
+    the list the entity settings dialog offers. The device class is the one
+    this call sets, else the entry's own, else the integration's.
+    """
+    unit = ((options or {}).get("sensor") or {}).get("unit_of_measurement")
+    if unit is None or not entity_id.lower().startswith("sensor."):
+        return
+    if device_class is not None:
+        effective = clearable_value(device_class, "device_class")
+    else:
+        effective = None
+    if effective is None:
+        try:
+            entry = await fetch_entity(entity_id)
+        except NotInRegistry:
+            return  # Core refuses options for an entity it does not register
+        effective = entry.get("device_class") or entry.get("original_device_class")
+    units: list[str] = []
+    if effective:
+        reply = await client.send_websocket_message(
+            {"type": "sensor/device_class_convertible_units", "device_class": effective}
+        )
+        if not reply.get("success"):
+            return  # unchecked: Core stores the unit as before
+        units = (reply.get("result") or {}).get("units") or []
+    if unit in units:
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Home Assistant does not convert {entity_id} "
+            f"(device class {effective or 'none'}) to {unit!r}: it keeps the "
+            "unit option but ignores it",
+            context={
+                "entity_id": entity_id,
+                "unit_of_measurement": unit,
+                "device_class": effective,
+                "convertible_units": units,
+            },
+            suggestions=[
+                f"Use one of: {', '.join(units)}"
+                if units
+                else "Home Assistant lists no units this sensor converts to"
+            ],
+        )
+    )
+
+
 def reject_name_with_use_device_name(
     name: str | None, use_device_name: bool | None
 ) -> None:

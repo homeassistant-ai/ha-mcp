@@ -820,6 +820,63 @@ class TestShowAsAndOptions:
         assert stored.device_class == "temperature"
         assert sent_types(sent) == [_UPDATE]
 
+    @pytest.mark.parametrize(
+        ("own", "call", "unit", "refused"),
+        [
+            (None, None, "°F", False),
+            (None, None, "kWh", True),
+            ("energy", None, "kWh", False),
+            (None, "energy", "kWh", False),
+            (None, "energy", "°F", True),
+        ],
+        ids=[
+            "listed",
+            "not-listed",
+            "entry-class",
+            "call-class",
+            "call-class-not-listed",
+        ],
+    )
+    async def test_a_unit_core_does_not_list_for_the_device_class_is_refused(
+        self,
+        hass: HomeAssistant,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        own: str | None,
+        call: str | None,
+        unit: str,
+        refused: bool,
+    ) -> None:
+        """Core keeps a unit it cannot convert to and ignores it; the units
+        come from Core's list for the device class the sensor ends up with."""
+        assert await async_setup_component(hass, "sensor", {})
+        entry = entity_registry.async_get_or_create(
+            "sensor", "demo", "temp", original_device_class="temperature"
+        )
+        entity_registry.async_update_entity(entry.entity_id, device_class=own)
+        options = {"sensor": {"unit_of_measurement": unit}}
+
+        if not refused:
+            await tools.ha_set_entity(
+                entity_id=entry.entity_id, options=options, device_class=call
+            )
+            assert (
+                _stored(entity_registry, entry.entity_id).options["sensor"]
+                == (options["sensor"])
+            )
+            return
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id=entry.entity_id, options=options, device_class=call
+            )
+
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["unit_of_measurement"] == unit
+        assert unit not in body["convertible_units"]
+        assert body["convertible_units"]
+        assert "sensor" not in _stored(entity_registry, entry.entity_id).options
+
     async def test_options_for_two_domains_are_all_stored(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:

@@ -83,6 +83,7 @@ from .entity_update_fields import (
     build_state_tag_fields,
     ensure_use_device_name_allowed,
     reject_name_with_use_device_name,
+    reject_unconvertible_unit,
 )
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
@@ -876,6 +877,13 @@ class EntityTools:
             # For label add, only the added IDs are checked: the merged
             # set may legitimately carry pre-existing dangling labels, whose
             # cleanup path (label_operation="remove") must stay open.
+            await reject_unconvertible_unit(
+                self._client,
+                entity_id,
+                parsed_options,
+                device_class,
+                self._fetch_entity,
+            )
             await validate_registry_write_ids(
                 self._client,
                 message.get("area_id"),  # normalized by build_name_visibility_fields
