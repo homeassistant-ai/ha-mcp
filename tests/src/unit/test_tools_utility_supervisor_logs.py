@@ -232,7 +232,8 @@ class TestTheSlugParameter:
     ):
         """The slug is one segment of the app's log path, checked as the app tools
         check theirs: on the proxy route Core would read ``x/../../../states?``
-        as its states, answer ``a/b`` with 401 and forward ``.`` to Supervisor."""
+        as its states and answer ``a/b`` and ``.`` with 401; on the app route
+        Supervisor would get ``.`` as ``/addons/logs``."""
         route.supervisor.reply("app line\n")
 
         with pytest.raises(ToolError) as refused:
