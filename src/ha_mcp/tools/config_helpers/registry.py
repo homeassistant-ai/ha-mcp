@@ -9,7 +9,7 @@ from ...client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
-from ...error_wording import registry_unknown_reference
+from ...error_wording import registry_unknown_area
 from ...errors import ErrorCode, create_auth_error, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_api import COMPONENT_INSTALL_HINT, ask_component
@@ -391,12 +391,14 @@ async def validate_registry_ids(
         )
 
 
-async def _core_checks_area_and_labels(client: Any) -> bool:
-    """Whether Core refuses an unknown area or added label on an entity or
-    device registry write (``_validate_area_and_labels``, 2026.12).
+async def _core_checks_area(client: Any) -> bool:
+    """Whether Core refuses an unknown area on an entity or device registry
+    write (``_validate_area_and_labels``, 2026.12).
 
     Both Cores accept the same write and only 2026.12 answers ``invalid_info``,
-    so nothing but the version tells them apart before the write.
+    so nothing but the version tells them apart before the write. Labels stay
+    HA-MCP's check: both Cores' ``update`` commands drop an unknown label id
+    before the registry sees it, and answer success.
     """
     try:
         version = str((await client.get_config()).get("version"))
@@ -413,19 +415,19 @@ async def validate_registry_write_ids(
     categories: dict[str, str | None] | None,
 ) -> None:
     """``validate_registry_ids`` (fail closed) for an entity or device registry
-    write. Where Core checks the area and labels itself, only the categories
-    are checked here, and Core's refusal reaches the caller."""
-    if await _core_checks_area_and_labels(client):
-        area_id, labels = None, None
+    write. Where Core checks the area itself, the area is left to it and
+    Core's refusal reaches the caller."""
+    if await _core_checks_area(client):
+        area_id = None
     await validate_registry_ids(client, area_id, labels, categories, fail_closed=True)
 
 
 def registry_refusal_hints(result: dict[str, Any]) -> list[str] | None:
-    """The hints for an area or labels Core refused a registry write for."""
+    """The hints for an area Core refused a registry write for."""
     if result.get("error_code") != "invalid_info":
         return None
-    reference = registry_unknown_reference(str(result.get("error", "")))
-    return list(REGISTRY_ID_HINTS[reference]) if reference else None
+    unknown_area = registry_unknown_area(str(result.get("error", "")))
+    return list(REGISTRY_ID_HINTS["area_id"]) if unknown_area else None
 
 
 class _NameCheckSkipped(Exception):

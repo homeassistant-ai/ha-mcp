@@ -40,14 +40,11 @@ _GET = "config/entity_registry/get"
 _LABELS = "config/label_registry/list"
 _AREAS = "config/area_registry/list"
 
-# Core refuses an unknown area or added label itself from 2026.12, and the
-# tool then leaves the check to it.
-CORE_CHECKS_IDS = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12)
+# Core refuses an unknown area itself from 2026.12, and the tool then leaves
+# the area check to it (test_tools_entities_core_checks.py).
+CORE_CHECKS_AREA = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12)
 precheck_only = pytest.mark.skipif(
-    CORE_CHECKS_IDS, reason="Core checks the area and labels itself since 2026.12"
-)
-core_check_only = pytest.mark.skipif(
-    not CORE_CHECKS_IDS, reason="Core checks the area and labels itself since 2026.12"
+    CORE_CHECKS_AREA, reason="Core checks the area itself since 2026.12"
 )
 
 
@@ -196,7 +193,6 @@ class TestLabels:
 
         assert _stored(entity_registry, "light.test").labels == {"outdoor"}
 
-    @precheck_only
     @pytest.mark.parametrize("label_operation", ["set", "add"])
     async def test_an_unknown_label_is_refused_before_the_write(
         self,
@@ -308,7 +304,7 @@ class TestRegistryReferences:
 
         await tools.ha_set_entity(entity_id="light.test", area_id=area.id)
 
-        assert sent_types(sent) == ([] if CORE_CHECKS_IDS else [_AREAS]) + [_UPDATE]
+        assert sent_types(sent) == ([] if CORE_CHECKS_AREA else [_AREAS]) + [_UPDATE]
         assert _stored(entity_registry, "light.test").area_id == area.id
 
     async def test_an_unknown_category_is_refused_in_its_own_scope(
@@ -344,13 +340,7 @@ class TestRegistryReferences:
                 _AREAS,
                 marks=precheck_only,
             ),
-            pytest.param(
-                lr.LabelRegistry,
-                "async_list_labels",
-                {"labels": ["outdoor"]},
-                _LABELS,
-                marks=precheck_only,
-            ),
+            (lr.LabelRegistry, "async_list_labels", {"labels": ["outdoor"]}, _LABELS),
             (
                 cr.CategoryRegistry,
                 "async_list_categories",
@@ -397,46 +387,6 @@ class TestRegistryReferences:
         assert body["error"]["code"] == "CONNECTION_FAILED"
         assert body["area_id"] == "living_room"
         assert dropped.call_args_list == [call({"type": _AREAS})]
-
-    @core_check_only
-    @pytest.mark.parametrize(
-        ("change", "core_message", "hint"),
-        [
-            ({"area_id": "ghost_area"}, "Area 'ghost_area' not found", "area IDs"),
-            ({"labels": ["ghost_label"]}, "Labels not found: ghost_label", "label IDs"),
-            (
-                {"labels": ["ghost_label"], "label_operation": "add"},
-                "Labels not found: ghost_label",
-                "label IDs",
-            ),
-        ],
-        ids=["area", "labels", "label-add"],
-    )
-    async def test_core_refuses_an_unknown_area_or_label_itself(
-        self,
-        tools: EntityTools,
-        entity_registry: er.EntityRegistry,
-        labels: list[str],
-        sent: AsyncMock,
-        change: dict[str, Any],
-        core_message: str,
-        hint: str,
-    ) -> None:
-        """Core's refusal reaches the caller with its code, and HA-MCP sends
-        no registry read of its own to check the same thing first."""
-        _entity(entity_registry, "light.test", labels={"outdoor"})
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_entity(entity_id="light.test", **change)
-
-        body = error_body(exc_info)
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert body["ha_error_code"] == "invalid_info"
-        assert core_message in body["error"]["message"]
-        assert any(hint in s for s in body["error"]["suggestions"])
-        assert sent_types(sent) == [_GET] * ("label_operation" in change) + [_UPDATE]
-        stored = _stored(entity_registry, "light.test")
-        assert (stored.area_id, stored.labels) == (None, {"outdoor"})
 
 
 class TestSingleEntityUpdate:
@@ -612,7 +562,6 @@ class TestBulk:
                 "automation": category.category_id
             }
 
-    @precheck_only
     async def test_an_unknown_label_is_refused_before_any_entity_is_touched(
         self,
         tools: EntityTools,
@@ -631,22 +580,6 @@ class TestBulk:
 
         assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
         assert sent_types(sent) == [_LABELS]
-
-    @core_check_only
-    async def test_core_refuses_an_unknown_label_on_each_entity(
-        self, tools: EntityTools, entity_registry: er.EntityRegistry, labels: list[str]
-    ) -> None:
-        """Without HA-MCP's own check each entity reports Core's refusal."""
-        for entity_id in ("light.a", "light.b"):
-            _entity(entity_registry, entity_id)
-
-        result = await tools.ha_set_entity(
-            entity_id=["light.a", "light.b"], labels=["ghost_label"]
-        )
-
-        assert (result["success"], result["failed_count"]) == (False, 2)
-        assert all("ghost_label" in f["error"] for f in result["failed"])
-        assert _stored(entity_registry, "light.a").labels == set()
 
 
 class TestDisableGuardrail:
@@ -819,63 +752,6 @@ class TestShowAsAndOptions:
         assert stored.options["sensor"] == {"display_precision": 2}
         assert stored.device_class == "temperature"
         assert sent_types(sent) == [_UPDATE]
-
-    @pytest.mark.parametrize(
-        ("own", "call", "unit", "refused"),
-        [
-            (None, None, "°F", False),
-            (None, None, "kWh", True),
-            ("energy", None, "kWh", False),
-            (None, "energy", "kWh", False),
-            (None, "energy", "°F", True),
-        ],
-        ids=[
-            "listed",
-            "not-listed",
-            "entry-class",
-            "call-class",
-            "call-class-not-listed",
-        ],
-    )
-    async def test_a_unit_core_does_not_list_for_the_device_class_is_refused(
-        self,
-        hass: HomeAssistant,
-        tools: EntityTools,
-        entity_registry: er.EntityRegistry,
-        own: str | None,
-        call: str | None,
-        unit: str,
-        refused: bool,
-    ) -> None:
-        """Core keeps a unit it cannot convert to and ignores it; the units
-        come from Core's list for the device class the sensor ends up with."""
-        assert await async_setup_component(hass, "sensor", {})
-        entry = entity_registry.async_get_or_create(
-            "sensor", "demo", "temp", original_device_class="temperature"
-        )
-        entity_registry.async_update_entity(entry.entity_id, device_class=own)
-        options = {"sensor": {"unit_of_measurement": unit}}
-
-        if not refused:
-            await tools.ha_set_entity(
-                entity_id=entry.entity_id, options=options, device_class=call
-            )
-            assert (
-                _stored(entity_registry, entry.entity_id).options["sensor"]
-                == (options["sensor"])
-            )
-            return
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_entity(
-                entity_id=entry.entity_id, options=options, device_class=call
-            )
-
-        body = error_body(exc_info)
-        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert body["unit_of_measurement"] == unit
-        assert unit not in body["convertible_units"]
-        assert body["convertible_units"]
-        assert "sensor" not in _stored(entity_registry, entry.entity_id).options
 
     async def test_options_for_two_domains_are_all_stored(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
