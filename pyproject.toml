@@ -314,7 +314,7 @@ strict_config = true
 addopts = [
     "--verbose",
     "--tb=short",
-    "--maxfail=3",
+    "--continue-on-collection-errors",
     "-ra",
     "--durations=10",
     # Core's test plugin (pytest-homeassistant, dev group) blocks sockets,
@@ -423,6 +423,8 @@ log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 # Treat warnings as errors to enforce clean tests
 filterwarnings = [
     "error",
+    # Preserve pytest's failure summary when syrupy reports incomplete collection.
+    "default:syrupy.*selected test.*missing from collected items:UserWarning",
     # Allow specific non-critical warnings that don't affect functionality
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
