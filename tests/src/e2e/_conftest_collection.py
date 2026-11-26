@@ -58,7 +58,8 @@ def _run_async_tests_on_session_loop(session: Any, items: list[Any]) -> None:
         source = inspect.getsourcefile(func)
         if source and Path(source).is_relative_to(e2e_dir):
             # Class fixture attributes live on the underlying function.
-            getattr(func, "__func__", func)._loop_scope = "session"
+            fixture_function: Any = getattr(func, "__func__", func)
+            fixture_function._loop_scope = "session"
 
 
 def _move_haos_tls_items_last(items: list[Any]) -> None:
