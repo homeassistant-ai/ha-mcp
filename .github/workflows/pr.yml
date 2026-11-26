@@ -619,7 +619,7 @@ jobs:
   # The unit suite, on two runners, and the app (add-on) suite, on the first
   # of them, against the current beta Core, the same
   # beta e2e-beta-tests.yml resolves, but on every pull request: these suites
-  # take minutes, unlike the post-merge E2E beta lanes. Not a required check,
+  # take minutes. Not a required check,
   # so a beta Core change reports here without blocking a merge. While beta
   # equals the dev group's Core pin, which Unit Tests just ran, every step
   # after the resolver is skipped (a manual dispatch always runs).
@@ -736,6 +736,14 @@ jobs:
         --ignore=tests/addon/test_addon_startup.py
 
   # Comprehensive E2E validation for all PRs
+  e2e-validation-beta:
+    name: Beta Docker
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    uses: ./.github/workflows/e2e-beta-tests.yml
+    with:
+      pr_lane: true
+
   e2e-validation:
     name: E2E Validation (${{ matrix.os }})
     needs: changes

@@ -1,5 +1,6 @@
 """Guard shared HAOS workflow contracts without restructuring proven lanes."""
 
+import json
 import os
 import re
 import subprocess
@@ -576,10 +577,13 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     workflow = _workflow(path)
 
     triggers = workflow[True]
-    assert "pull_request" not in triggers, (
-        "beta compatibility runs after changes land on master, not on every "
-        "push to an open PR"
-    )
+    pr_jobs = _workflow(_WORKFLOW_DIR / "pr.yml")["jobs"]
+    caller = pr_jobs["e2e-validation-beta"]
+    assert caller["uses"] == "./.github/workflows/e2e-beta-tests.yml"
+    assert caller["with"] == {"pr_lane": True}
+    assert caller["if"] == pr_jobs["e2e-validation"]["if"]
+    assert caller["needs"] == "changes"
+    assert triggers["workflow_call"]["inputs"]["pr_lane"]["type"] == "boolean"
     assert triggers["push"] == {"branches": ["master"]}, (
         "no paths filter: a nightly must run regardless of the last commit"
     )
@@ -590,8 +594,8 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     }
     assert workflow["concurrency"] == {
         "group": (
-            "${{ github.workflow }}-${{ github.event_name == "
-            "'workflow_dispatch' && github.run_id || 'full' }}"
+            "container-beta-${{ (inputs.pr_lane || github.event_name == "
+            "'workflow_dispatch') && github.run_id || 'full' }}"
         ),
         "cancel-in-progress": True,
     }
@@ -613,7 +617,8 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     assert resolver["outputs"] == {
         "core_version": "${{ steps.versions.outputs.core_version }}",
         "image": "${{ steps.versions.outputs.image }}",
-        "superfluous": "${{ steps.versions.outputs.superfluous }}",
+        "run_full": "${{ !inputs.pr_lane && (github.event_name == 'workflow_dispatch' || steps.versions.outputs.superfluous == 'false') }}",
+        "run_pr_lane": "${{ inputs.pr_lane && steps.versions.outputs.active_beta == 'true' && steps.versions.outputs.superfluous == 'false' }}",
     }
     # The skip compares against the image the E2E fixtures actually build
     # from (tests/test_constants.HA_TEST_IMAGE's default), not stable.json:
@@ -669,16 +674,11 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
         "e2e-tests-embedded-server-only",
         "e2e-tests-update-path",
     }, "the beta workflow mirrors e2e-tests.yml job for job"
-    skip_guard = (
-        "github.event_name == 'workflow_dispatch' || "
-        "needs.resolve-beta.outputs.superfluous != 'true'"
-    )
+    full = "needs.resolve-beta.outputs.run_full == 'true'"
+    pr_lane = "needs.resolve-beta.outputs.run_pr_lane == 'true'"
     for job_id, job in test_jobs.items():
         assert job["needs"] == "resolve-beta", job_id
-        assert job["if"] == skip_guard, (
-            f"{job_id} must be skipped when beta equals the stable pin, except "
-            "on a manual dispatch"
-        )
+        assert job["if"] == (f"{full} || {pr_lane}" if job_id == "e2e-tests" else full)
         assert job["env"]["HA_IMAGE_GHCR"] == image_ref, job_id
         assert job["env"]["HA_TEST_IMAGE"] == image_ref, (
             f"{job_id}: the E2E fixtures build their container from "
@@ -689,6 +689,44 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
             "version.home-assistant.io/beta.json" in str(step.get("run", ""))
             for step in _job_steps(job)
         ), f"{job_id} must not resolve the beta version a second time"
+
+
+@pytest.mark.parametrize(
+    ("channel", "pin", "active", "duplicate"),
+    [
+        ("2026.12.0b1", "2026.11.3", "true", "false"),
+        ("2026.12.0", "2026.11.3", "false", "false"),
+        ("2026.12.0", "2026.12.0", "false", "true"),
+        ("2027.1.0b1", "2026.12.0", "true", "false"),
+    ],
+)
+def test_container_beta_resolver_across_stable_promotion(
+    tmp_path: Path, channel: str, pin: str, active: str, duplicate: str
+) -> None:
+    workflow = _workflow(_WORKFLOW_DIR / _CONTAINER_BETA_WORKFLOW)
+    steps = _job_steps(workflow["jobs"]["resolve-beta"])
+    resolver = next(step["run"] for step in steps if step.get("id") == "versions")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_constants.py").write_text(
+        f'_DEFAULT_HA_TEST_IMAGE = "ghcr.io/home-assistant/home-assistant:{pin}"\n'
+    )
+    output = tmp_path / "output"
+    subprocess.run(
+        ["bash", "-ec", 'curl() { echo "$CHANNEL"; }\n' + resolver],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "CHANNEL": json.dumps({"homeassistant": {"default": channel}}),
+            "GITHUB_OUTPUT": str(output),
+        },
+        check=True,
+    )
+    assert dict(line.split("=", 1) for line in output.read_text().splitlines()) == {
+        "core_version": channel,
+        "image": f"ghcr.io/home-assistant/home-assistant:{channel}",
+        "active_beta": active,
+        "superfluous": duplicate,
+    }
 
 
 def test_pr_unit_beta_lane_runs_the_suites_on_the_beta_core() -> None:

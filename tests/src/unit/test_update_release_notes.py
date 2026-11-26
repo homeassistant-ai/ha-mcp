@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from homeassistant.components import update as update_component
 from homeassistant.components.update import UpdateEntityFeature
+from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -90,49 +91,61 @@ async def core_analysis(client: HomeAssistantClient) -> dict[str, Any]:
 class TestReleaseNotes:
     """``get`` returns an update's release notes from the first source that has them."""
 
-    async def test_notes_come_from_the_update_entity_first(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    @pytest.mark.parametrize(
+        "notes", ["Faster startup", None], ids=["notes", "no-notes"]
+    )
+    @pytest.mark.parametrize(
+        "has_warning", [False, True], ids=["no-warning", "warning"]
+    )
+    async def test_update_entity_release_notes_and_messages(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        web: Web,
+        notes: str | None,
+        has_warning: bool,
     ) -> None:
-        notes = "## 1.1.0\n- Faster startup"
-        update = SoftwareUpdate(
-            "update.thing",
-            features=UpdateEntityFeature.RELEASE_NOTES,
-            release_url=RELEASE_URL,
-            notes=notes,
-        )
-
-        result = await get_update(hass, core_client, update)
-
-        assert (result["release_notes"], result["release_notes_source"]) == (
-            notes,
-            "websocket",
-        )
-        assert web.requested == []
-
-    async def test_update_warning_survives_when_the_entity_has_no_notes(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
-    ) -> None:
-        warning = getattr(
-            update_component, "RELEASE_NOTES_MESSAGE_DO_NOT_INTERRUPT", None
-        )
-        if warning is None:
-            pytest.skip("Core 2026.11 has no release notes messages")
+        if has_warning and (MAJOR_VERSION, MINOR_VERSION) < (2026, 12):
+            pytest.skip("Core added update messages in 2026.12")
 
         class FirmwareUpdate(SoftwareUpdate):
             @property
             def release_notes_messages(self) -> tuple[Any, ...]:
+                if not has_warning:
+                    return ()
+                warning = getattr(
+                    update_component, "RELEASE_NOTES_MESSAGE_DO_NOT_INTERRUPT", None
+                )
+                assert warning is not None
                 return (warning,)
 
+        github = "https://api.github.com/repos/owner/repo/releases/tags/v1.0.0"
+        web.serve(github, json={"body": "Published changelog"})
         entity = FirmwareUpdate(
-            "update.firmware", features=UpdateEntityFeature.RELEASE_NOTES
+            "update.firmware",
+            features=UpdateEntityFeature.RELEASE_NOTES,
+            notes=notes,
+            release_url=RELEASE_URL,
         )
         result = await get_update(hass, core_client, entity)
-        assert "release_notes" not in result
-        assert "release_notes_hint" in result
-        [message] = result["release_notes_messages"]
-        assert message["severity"] == "warning"
-        assert message["message"]
-        assert web.requested == []
+        if notes:
+            assert (result["release_notes"], result["release_notes_source"]) == (
+                notes,
+                "websocket",
+            )
+            assert web.requested == []
+        else:
+            assert (result["release_notes"], result["release_notes_source"]) == (
+                "Published changelog",
+                "github_api",
+            )
+            assert github in web.requested
+        if has_warning:
+            [message] = result["release_notes_messages"]
+            assert message["severity"] == "warning"
+            assert message["message"]
+        else:
+            assert "release_notes_messages" not in result
 
     async def test_an_update_core_has_no_notes_for_gets_its_github_release(
         self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web

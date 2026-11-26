@@ -5,6 +5,7 @@ Core cannot be made to refuse is one Core function raising Core's own
 exception; a dropped connection is the client getting no answer at all.
 """
 
+import json
 from collections.abc import Mapping
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call
@@ -16,7 +17,9 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
+from homeassistant.helpers.json import json_bytes
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import RegistryEntryWithDefaults
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
@@ -203,29 +206,42 @@ class TestLabels:
         assert _UPDATE not in sent_types(sent)
         assert _stored(entity_registry, "light.test").labels == {"outdoor"}
 
+
+class TestStoredLabels:
+    @pytest.fixture
+    def hass_storage(self, hass_storage: dict[str, Any]) -> dict[str, Any]:
+        """Restore an entity saved before its missing label was cleaned up."""
+        entry = RegistryEntryWithDefaults(
+            entity_id="light.test",
+            platform="demo",
+            unique_id="test",
+            labels={"ghost_label", "outdoor"},
+        )
+        hass_storage[er.STORAGE_KEY] = {
+            "key": er.STORAGE_KEY,
+            "version": er.STORAGE_VERSION_MAJOR,
+            "minor_version": er.STORAGE_VERSION_MINOR,
+            "data": {
+                "settings": {"entity_id_parts": None},
+                "entities": [json.loads(json_bytes(entry.as_storage_fragment))],
+                "deleted_entities": [],
+            },
+        }
+        return hass_storage
+
     async def test_a_dangling_label_can_still_be_removed(
         self,
         tools: EntityTools,
-        hass: HomeAssistant,
         label_registry: lr.LabelRegistry,
-        monkeypatch: pytest.MonkeyPatch,
         entity_registry: er.EntityRegistry,
         labels: list[str],
         sent: AsyncMock,
     ) -> None:
-        """Removing a label that is gone from the label registry is the cleanup
-        path; checking it against that registry would block it."""
-        ghost = label_registry.async_create("Ghost label")
-        _entity(entity_registry, "light.test", labels={ghost.label_id, "outdoor"})
-        # Model an interrupted cleanup after deleting the label.
-        with monkeypatch.context() as patch:
-            patch.setattr(
-                entity_registry, "async_clear_label_id", lambda label_id: None
-            )
-            label_registry.async_delete(ghost.label_id)
-            await hass.async_block_till_done()
-        assert label_registry.async_get_label(ghost.label_id) is None
-        assert ghost.label_id in _stored(entity_registry, "light.test").labels
+        assert label_registry.async_get_label("ghost_label") is None
+        assert _stored(entity_registry, "light.test").labels == {
+            "ghost_label",
+            "outdoor",
+        }
 
         result = await tools.ha_set_entity(
             entity_id="light.test", labels=["ghost_label"], label_operation="remove"

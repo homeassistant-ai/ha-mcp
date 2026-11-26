@@ -241,7 +241,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `pr.yml` | Pull request or manual | Fast checks and validation orchestration, plus the non-required beta Core unit lane. |
+| `pr.yml` | Pull request or manual | Fast checks and validation orchestration, including the beta Core unit lanes and the external Docker E2E lane during an active beta. |
 | `renovate.yml` | Hourly, human dashboard/PR checkbox edit, or manual | Refresh dependency discovery and process eligible updates. |
 | `renovate-validation.yml` | Relevant pull request or manual | Validate configuration with the scanner’s pinned Renovate engine, without credentials. |
 | `renovate-auto-merge.yml` | Renovate enables auto-merge or updates its PR | Approve the verified current head with the separate maintainer account; GitHub enforces merge requirements. |
@@ -250,7 +250,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `haos-e2e-tests.yml` | Pull request or manual | External, embedded and app HAOS lanes against a baked qcow2; embedded and app cover both tool-entry states. A dispatch picks one `lane` and can keep the tools entry absent (`topology: without-tools`). |
 | `haos-e2e-stdio.yml` | Manual | The HAOS lane over the installed `ha-mcp` command's stdio transport. |
 | `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
-| `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
+| `e2e-beta-tests.yml` | PR validation (external Docker lane), push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
 | `publish-dev.yml` | Push to `master`, or manual; this repository only | Development `<next>.devN` release, published as `ha-mcp-dev`; its GitHub pre-release tags a commit with the component stamped to pin that build, for the Marketplace, and the mirror sync pins the same build via its `dev-version` artifact. |
 | `sync-integration-mirror.yml` | `workflow_run` after SemVer Release or Publish Dev Channel; docs pushes; manual | Distribution mirror releases: the component with its version and server pin (`ha-mcp` stable, `ha-mcp-dev` pre-release), tagged once PyPI serves the pinned build. |
 | `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
@@ -359,8 +359,8 @@ Renovate moves those pins only to stable releases. `pr.yml`'s
 `Unit Tests (beta Core, ...)` job covers the beta: it reads the current beta
 Core from `beta.json`, installs its integration manifest requirements alongside `homeassistant` and `pytest-homeassistant`
 over the locked environment, and runs the unit suite on two runners, split
-the way the stable unit job is, and the app suite on the first. Unlike the E2E
-beta lanes it runs on every pull request, because these suites take minutes.
+the way the stable unit job is, and the app suite on the first. The external Docker E2E lane also runs for code changes during an active beta.
+The other beta E2E lanes run after merge, nightly, or on manual dispatch.
 It is not a required check, so a beta Core change reports without blocking
 a merge, and it skips while beta equals the dev group's pin.
 
