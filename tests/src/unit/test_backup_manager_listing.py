@@ -375,3 +375,62 @@ class TestDefaultDir:
         manager = bm.BackupManager(backup_settings, core_client)
 
         assert manager.backup_dir == standalone_env / "backups"
+
+
+def _group_and_namesake(directory: Path) -> tuple[set[str], str]:
+    """The snapshots of the group ``lights`` under both its id forms, and an
+    automation ``lights`` snapshot."""
+    group = {
+        place_snapshot(
+            directory, name, held_id, domain="group", held={}, text=False
+        ).name
+        for name, held_id in (
+            ("group.lights.20260903_120000.yaml", "lights"),
+            ("group.group.lights.20260903_110000.yaml", "group.lights"),
+        )
+    }
+    automation = place_snapshot(
+        directory,
+        "automation.lights.20260903_120000.yaml",
+        "lights",
+        domain="automation",
+        held={"id": "lights"},
+        text=False,
+    )
+    return group, automation.name
+
+
+@pytest.mark.parametrize(
+    ("wanted", "domain", "lists_the_automation"),
+    [
+        ("lights", "group", False),
+        ("group.lights", "group", False),
+        ("lights", None, True),
+        ("group.lights", None, False),
+    ],
+)
+def test_a_group_is_listed_by_its_id_with_or_without_the_prefix(
+    snapshot_manager: bm.BackupManager,
+    wanted: str,
+    domain: str | None,
+    lists_the_automation: bool,
+) -> None:
+    """A group snapshot matches both forms; another domain's matches its own id."""
+    group, automation = _group_and_namesake(snapshot_manager.backup_dir)
+
+    listed = snapshot_manager.list_snapshots(domain=domain, entity_id=wanted)
+
+    expected = group | {automation} if lists_the_automation else group
+    assert {row["name"] for row in listed} == expected
+
+
+@pytest.mark.parametrize("wanted", ["lights", "group.lights"])
+def test_a_bulk_delete_takes_every_snapshot_the_group_listing_shows(
+    snapshot_manager: bm.BackupManager, wanted: str
+) -> None:
+    group, automation = _group_and_namesake(snapshot_manager.backup_dir)
+
+    result = snapshot_manager.delete_bulk(domain="group", entity_id=wanted)
+
+    assert set(result["deleted"]) == group
+    assert [p.name for p in snapshot_manager.backup_dir.iterdir()] == [automation]

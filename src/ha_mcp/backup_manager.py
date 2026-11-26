@@ -119,9 +119,8 @@ from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
 from .backup_scenes import fetch_scene, restore_scene, scene_key
 from .backup_snapshot_identity import (
-    entity_id_aliases as _entity_id_aliases,
-)
-from .backup_snapshot_identity import (
+    listing_aliases,
+    listing_ids,
     matches_listing_identity,
     might_name_multiple_stems,
 )
@@ -812,7 +811,7 @@ class BackupManager:
         )
         if handler is None:
             return None
-
+        entity_id = entity_id.removeprefix("group.") if domain == "group" else entity_id
         if _is_flow_helper_domain(domain) and "." in entity_id:
             config = await self._fetch_config_for_snapshot(
                 handler,
@@ -1250,10 +1249,11 @@ class BackupManager:
                 for name in self._entry_identity_cache.keys() - names:
                     del self._entry_identity_cache[name]
         else:
-            for safe in _entity_id_aliases(entity_id):
+            for safe in listing_aliases(entity_id, domain):
                 candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
+        ids = listing_ids(entity_id, domain)
         files = sorted(
-            (p for p in candidates if self._payload_entity_id(p) == entity_id),
+            (p for p in candidates if self._payload_entity_id(p) in ids),
             key=_snapshot_order,
         )
         excess = len(files) - self.retain_per_entity
@@ -1288,18 +1288,16 @@ class BackupManager:
         if not self._dir.exists():
             return []
         # ``entity_id`` comparison: filenames hold the sanitized form (see
-        # ``_safe_entity_id`` — any char outside ``[A-Za-z0-9._-]`` becomes
-        # ``_``), so composite IDs like ``area:foo`` / ``automation:UUID``
-        # would otherwise never match a filter passed in original form.
-        # Sanitize the filter once up front so the per-file comparison is
-        # symmetric: filter and ``meta["entity_id"]`` both come from the
-        # same sanitization function. The stem only narrows the candidates:
-        # sanitising is lossy in both directions (``user/motion.yaml``'s
-        # pre-digest stem IS ``user_motion.yaml``'s current stem), so each
-        # stem match is confirmed against the id the payload stores before it
-        # counts as this entity's.
+        # ``_safe_entity_id``: any char outside ``[A-Za-z0-9._-]`` becomes ``_``),
+        # so composite IDs like ``area:foo`` would otherwise never match a filter
+        # passed in original form; a group snapshot's id matches with and without
+        # its ``group.`` prefix (``listing_ids``). The stem only narrows the
+        # candidates: sanitising is lossy in both directions (``user/motion.yaml``'s
+        # pre-digest stem IS ``user_motion.yaml``'s current stem), so each stem
+        # match is confirmed against the id the payload stores before it counts
+        # as this entity's.
         safe_filter = (
-            set(_entity_id_aliases(entity_id))
+            set(listing_aliases(entity_id, domain))
             if entity_id and not might_name_multiple_stems(entity_id)
             else None
         )
@@ -1348,7 +1346,7 @@ class BackupManager:
         # listing and is left out of a filtered one.
         payload_id = self._payload_entity_id(path)
         if entity_id and not matches_listing_identity(
-            payload_id, entity_id, meta["entity_id"]
+            payload_id, entity_id, meta["entity_id"], meta["domain"]
         ):
             return None
         if payload_id is not None:
@@ -1423,7 +1421,9 @@ class BackupManager:
                 raise ValueError("older_than_days must be >= 0")
             cutoff = time.time() - (older_than_days * 86400)
         for meta in self.list_snapshots(domain=domain, entity_id=entity_id):
-            if entity_id and meta["entity_id"] != entity_id:
+            if entity_id and meta["entity_id"] not in listing_ids(
+                entity_id, meta["domain"]
+            ):
                 continue
             if cutoff is not None and meta["mtime"] >= cutoff:
                 continue

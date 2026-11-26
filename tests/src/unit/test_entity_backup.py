@@ -551,3 +551,20 @@ async def test_a_bulk_call_backs_up_no_entity(
 
     assert after_bulk == []
     assert [name.split(".20")[0] for name in after_single] == ["entity.light.desk"]
+
+
+async def test_an_entity_snapshot_of_a_group_keeps_its_entity_id(
+    entity_manager: bm.BackupManager, entity_registry: er.EntityRegistry
+) -> None:
+    """Only the group domain keeps a group under its object id; an entity
+    snapshot is restored by the entity id it names."""
+    entity_registry.async_get_or_create(
+        "group", "test", "lights", suggested_object_id="lights"
+    )
+
+    path = await entity_manager.maybe_snapshot(
+        "entity", "group.lights", force=True, mandatory=True
+    )
+
+    assert path is not None
+    assert entity_manager.read_snapshot(path.name)["entity_id"] == "group.lights"
