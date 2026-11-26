@@ -5,7 +5,46 @@ from typing import Any
 
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
 from .entity_registry_reads import NotInRegistry
-from .helpers import clearable_value, raise_tool_error
+from .helpers import clearable_value, raise_core_refusal, raise_tool_error
+
+
+async def automatic_entity_id(
+    client: Any, entity_id: str, name: str | None, area_id: str | None
+) -> str:
+    """The entity_id Core would generate for the entry (the UI's restore),
+    with the call's unsaved ``name`` and ``area_id`` as Core 2026.12's
+    ``overrides``; a Core that refuses them answers for the stored ones."""
+    request: dict[str, Any] = {
+        "type": "config/entity_registry/get_automatic_entity_ids",
+        "entity_ids": [entity_id],
+    }
+    overrides = {
+        key: clearable_value(value, key)
+        for key, value in (("name", name), ("area_id", area_id))
+        if value is not None
+    }
+    result = await client.send_websocket_message(
+        {**request, "overrides": {entity_id: overrides}} if overrides else request,
+        expected_error_codes=frozenset({"invalid_format"}),
+    )
+    if overrides and result.get("error_code") == "invalid_format":
+        result = await client.send_websocket_message(request)
+    what = f"No automatic entity_id for {entity_id}"
+    context = {"entity_id": entity_id}
+    if not result.get("success"):
+        raise_core_refusal(what, result, context)
+    # Core lowercases the ids it is sent and keys its reply so.
+    automatic = (result.get("result") or {}).get(entity_id.lower())
+    if not automatic:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.ENTITY_NOT_FOUND,
+                f"{what}: not in the entity registry",
+                context=context,
+                suggestions=["Use ha_search() to find valid entity IDs"],
+            )
+        )
+    return str(automatic)
 
 
 def reject_name_with_use_device_name(

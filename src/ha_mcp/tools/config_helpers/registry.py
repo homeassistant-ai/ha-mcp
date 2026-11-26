@@ -9,6 +9,7 @@ from ...client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
+from ...error_wording import registry_unknown_reference
 from ...errors import ErrorCode, create_auth_error, create_error_response
 from ...utils.registry_update_lock import registry_update_lock
 from ..component_api import COMPONENT_INSTALL_HINT, ask_component
@@ -419,19 +420,12 @@ async def validate_registry_write_ids(
     await validate_registry_ids(client, area_id, labels, categories, fail_closed=True)
 
 
-def registry_refusal_hints(
-    result: dict[str, Any], message: dict[str, Any]
-) -> list[str] | None:
-    """The hints for the area or labels a refused registry write carried."""
+def registry_refusal_hints(result: dict[str, Any]) -> list[str] | None:
+    """The hints for an area or labels Core refused a registry write for."""
     if result.get("error_code") != "invalid_info":
         return None
-    hints = [
-        h
-        for key in REGISTRY_ID_HINTS
-        if message.get(key)
-        for h in REGISTRY_ID_HINTS[key]
-    ]
-    return hints or None
+    reference = registry_unknown_reference(str(result.get("error", "")))
+    return list(REGISTRY_ID_HINTS[reference]) if reference else None
 
 
 class _NameCheckSkipped(Exception):

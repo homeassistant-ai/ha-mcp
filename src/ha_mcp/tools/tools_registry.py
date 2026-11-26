@@ -667,7 +667,7 @@ class RegistryTools:
                     {"device_id": device_id},
                     ["Verify the device_id exists using ha_get_device()"]
                     if unknown
-                    else registry_refusal_hints(result, message),
+                    else registry_refusal_hints(result),
                 )
             return {
                 "success": True,

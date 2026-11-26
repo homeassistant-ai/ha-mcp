@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
@@ -50,6 +51,61 @@ async def test_auto_takes_the_id_core_generates(
 
     assert result["entity_id"] == generated
     assert registry.async_get(generated) is not None
+
+
+CORE_TAKES_OVERRIDES = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12)
+
+
+@pytest.mark.skipif(
+    not CORE_TAKES_OVERRIDES, reason="Core takes unsaved values since 2026.12"
+)
+async def test_auto_with_a_rename_takes_the_id_the_new_name_gives(
+    hass: HomeAssistant, core_client: HomeAssistantClient, lamp: str
+) -> None:
+    """The id comes from the name this call writes, not the stored one."""
+    registry = er.async_get(hass)
+    entry = registry.async_get(lamp)
+    assert entry is not None
+    renamed = registry.async_regenerate_entity_id(entry, name="Reading Lamp")
+    assert renamed != registry.async_regenerate_entity_id(entry)
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=lamp, name="Reading Lamp", new_entity_id="auto"
+    )
+
+    assert result["entity_id"] == renamed
+    stored = registry.async_get(renamed)
+    assert stored is not None
+    assert stored.name == "Reading Lamp"
+
+
+@pytest.mark.skipif(
+    CORE_TAKES_OVERRIDES, reason="Core takes unsaved values since 2026.12"
+)
+async def test_auto_with_a_rename_on_an_older_core_takes_the_stored_names_id(
+    hass: HomeAssistant, core_client: HomeAssistantClient, lamp: str, sent: AsyncMock
+) -> None:
+    """An older Core refuses the unsaved values; asked again without them it
+    answers for the stored name, as before."""
+    registry = er.async_get(hass)
+    entry = registry.async_get(lamp)
+    assert entry is not None
+    generated = registry.async_regenerate_entity_id(entry)
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=lamp, name="Reading Lamp", new_entity_id="auto"
+    )
+
+    assert result["entity_id"] == generated
+    automatic = [
+        c.args[0]
+        for c in sent.call_args_list
+        if c.args[0]["type"] == "config/entity_registry/get_automatic_entity_ids"
+    ]
+    assert [request.get("overrides") for request in automatic] == [
+        {lamp: {"name": "Reading Lamp"}},
+        None,
+    ]
 
 
 async def test_auto_on_a_mixed_case_id_takes_the_id_core_generates(
