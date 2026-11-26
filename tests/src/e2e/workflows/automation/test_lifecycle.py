@@ -20,7 +20,9 @@ from ...utilities.assertions import (
     safe_call_tool,
     wait_for_automation,
 )
+from ...utilities.core_version import core_at_least
 from ...utilities.entity_finders import find_test_light_entity
+from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import (
     wait_for_entity_state,
     wait_for_ha_event,
@@ -438,7 +440,7 @@ class TestAutomationLifecycle:
         logger.info("🗑️ Automation cleaned up")
 
     async def test_automation_yaml_validation(
-        self, mcp_client, cleanup_tracker, test_data_factory
+        self, mcp_client, ha_client, cleanup_tracker, test_data_factory
     ):
         """
         Test: Automation YAML configuration validation
@@ -530,6 +532,11 @@ class TestAutomationLifecycle:
         assert "Invalid trigger 'battery.low' specified" in message, message
         assert rejected["failed_section"] == "triggers", rejected
         assert "battery.became_low" in rejected["closest_matches"], rejected
+        # Core's own POST (no component) lists each error with its path (2026.12)
+        if not component_surface_available() and await core_at_least(
+            ha_client, (2026, 12)
+        ):
+            assert rejected["errors"][0]["path"][:2] == ["triggers", 0], rejected
         logger.info("✅ Invalid configuration rejected with Core's text")
 
         # Clean up valid automation

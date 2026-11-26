@@ -30,6 +30,7 @@ from ...utilities.assertions import (
     MCPAssertions,
     safe_call_tool,
 )
+from ...utilities.core_version import core_at_least
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -1002,7 +1003,7 @@ class TestScriptOrchestration:
                     f"⚠️ Failed to delete scripts: {[s[1] for s in failed_deletions]}"
                 )
 
-    async def test_script_error_handling(self, mcp_client, cleanup_tracker):
+    async def test_script_error_handling(self, mcp_client, ha_client, cleanup_tracker):
         """
         Test: Script error handling and validation
 
@@ -1066,6 +1067,19 @@ class TestScriptOrchestration:
                 },
             )
             logger.info("✅ Invalid sequence type properly rejected")
+
+            # 6. TEST: Core's refusal lists each error with its path (2026.12)
+            refused = await mcp.call_tool_failure(
+                "ha_config_set_script",
+                {
+                    "script_id": "test_invalid_delay",
+                    "config": {"alias": "Bad delay", "sequence": [{"delay": "nope"}]},
+                },
+            )
+            if await core_at_least(ha_client, (2026, 12)):
+                assert [e["path"][0] for e in refused["errors"]] == ["sequence"]
+            else:
+                assert "errors" not in refused
 
             logger.info("✅ All error handling tests passed")
 
