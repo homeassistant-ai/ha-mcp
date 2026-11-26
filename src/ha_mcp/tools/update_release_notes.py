@@ -45,16 +45,31 @@ def http_problem(what: str, response: httpx.Response) -> str:
     return problem
 
 
+def unpack_entity_release_notes(result: Any) -> tuple[str | None, list[dict[str, str]]]:
+    """Core 2026.12 includes translated messages. Stable 2026.11 returns only text."""
+    if isinstance(result, dict):
+        return result["release_notes"], result["messages"]
+    return result, []
+
+
 async def release_notes_fields(
     client: Any, entity_id: str, attributes: dict[str, Any], *, is_core: bool
 ) -> dict[str, Any]:
     """Core's release notes for the entity, else GitHub's, else a hint; Core's
     refusal (other than having no notes) as ``release_notes_error`` either way."""
     reply = await _core_release_notes(client, entity_id)
-    if reply and reply.get("success") and reply.get("result"):
-        return {"release_notes": reply["result"], "release_notes_source": "websocket"}
-
     fields: dict[str, Any] = {}
+    if reply and reply.get("success"):
+        notes, messages = unpack_entity_release_notes(reply.get("result"))
+        if messages:
+            fields["release_notes_messages"] = messages
+        if notes:
+            return {
+                **fields,
+                "release_notes": notes,
+                "release_notes_source": "websocket",
+            }
+
     if (
         reply
         and not reply.get("success")

@@ -38,7 +38,7 @@ def _run_async_tests_on_session_loop(session: Any, items: list[Any]) -> None:
     session-scoped fixture through the session's hook relay, which leaves out
     this tree's conftest.
     """
-    fixturedefs = set()
+    fixturedefs: set[pytest.FixtureDef[Any]] = set()
     for item in items:
         if is_async_test(item):
             item.add_marker(_SESSION_LOOP, append=False)

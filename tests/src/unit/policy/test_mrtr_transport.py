@@ -42,7 +42,7 @@ def server(monkeypatch: pytest.MonkeyPatch) -> ApprovalServer:
 
 
 @pytest.mark.usefixtures("tool_search_default")
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.parametrize("proxy", [False, True])
 async def test_wire_continuation_is_bound_and_single_use(
     server: ApprovalServer, proxy: bool
@@ -110,7 +110,7 @@ async def test_wire_continuation_is_bound_and_single_use(
         assert executed == ["original"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_sdk_automatically_resumes_pending_approval(
     server: ApprovalServer,
 ) -> None:
@@ -132,7 +132,7 @@ async def test_sdk_automatically_resumes_pending_approval(
     assert executed == ["approved"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_legacy_wire_call_uses_normal_error_and_manual_retry(
     server: ApprovalServer,
 ) -> None:
@@ -150,7 +150,7 @@ async def test_legacy_wire_call_uses_normal_error_and_manual_retry(
         assert executed == ["approved"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_modern_client_without_elicitation_gets_normal_error(
     server: ApprovalServer,
 ) -> None:

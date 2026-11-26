@@ -280,7 +280,7 @@ class TestExemptionRules:
         assert (rule(args) is None) is allowed
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestMiddleware:
     async def test_flag_off_passes_everything(self, read_only_off):
         mw = make_middleware()
@@ -591,7 +591,7 @@ class TestMiddleware:
         list_tools.assert_not_called()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestTransform:
     async def test_flag_off_returns_catalog_unchanged(self, read_only_off):
         transform = ReadOnlyToolsTransform()
@@ -1004,7 +1004,7 @@ class TestExemptPredicateSchemaDrift:
         )
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestLiveFlip:
     """One middleware + one transform, flipping the live flag through a
     mutable holder — exercises the no-restart standalone-mode path."""
@@ -1044,7 +1044,7 @@ class TestLiveFlip:
         assert await mw.on_call_tool(write_ctx(), call_next) == "ok-again"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestRaisingCatalog:
     async def test_catalog_lookup_raise_blocks_call_fail_closed(self, read_only_on):
         """If the unfiltered-catalog lookup raises, the middleware must
@@ -1059,7 +1059,7 @@ class TestRaisingCatalog:
         call_next.assert_not_called()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestStringEnvelopeProxy:
     """The proxy tolerates ``arguments`` as a JSON string and parses it
     after this middleware runs, so the middleware must coerce it too."""
@@ -1124,7 +1124,7 @@ class TestStringEnvelopeProxy:
         assert result == "proxy-validation-error"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestLateRegistration:
     async def test_rebuild_on_miss_blocks_late_registered_write_tool(
         self, read_only_on

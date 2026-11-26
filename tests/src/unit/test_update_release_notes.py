@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from homeassistant.components import update as update_component
 from homeassistant.components.update import UpdateEntityFeature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -106,6 +107,31 @@ class TestReleaseNotes:
             notes,
             "websocket",
         )
+        assert web.requested == []
+
+    async def test_update_warning_survives_when_the_entity_has_no_notes(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    ) -> None:
+        warning = getattr(
+            update_component, "RELEASE_NOTES_MESSAGE_DO_NOT_INTERRUPT", None
+        )
+        if warning is None:
+            pytest.skip("Core 2026.11 has no release notes messages")
+
+        class FirmwareUpdate(SoftwareUpdate):
+            @property
+            def release_notes_messages(self) -> tuple[Any, ...]:
+                return (warning,)
+
+        entity = FirmwareUpdate(
+            "update.firmware", features=UpdateEntityFeature.RELEASE_NOTES
+        )
+        result = await get_update(hass, core_client, entity)
+        assert "release_notes" not in result
+        assert "release_notes_hint" in result
+        [message] = result["release_notes_messages"]
+        assert message["severity"] == "warning"
+        assert message["message"]
         assert web.requested == []
 
     async def test_an_update_core_has_no_notes_for_gets_its_github_release(

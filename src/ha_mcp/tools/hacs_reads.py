@@ -23,6 +23,7 @@ from .hacs_backend import (
     store_state_warning,
 )
 from .helpers import safe_progress
+from .update_release_notes import unpack_entity_release_notes
 
 # The row values a query word is looked for in.
 _SEARCHED = (
@@ -180,7 +181,11 @@ async def _releases(
                 _wait_timeout=GITHUB_COMMAND_TIMEOUT,
                 entity_id=info["update_entity_id"],
             )
-            out["release_notes"] = reply.get("result")
+            out["release_notes"], messages = unpack_entity_release_notes(
+                reply.get("result")
+            )
+            if messages:
+                out["release_notes_messages"] = messages
         except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as err:
             warnings.append(f"Release notes unavailable: {err}")
     return out, warnings
