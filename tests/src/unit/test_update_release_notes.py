@@ -105,6 +105,8 @@ class TestReleaseNotes:
         notes: str | None,
         has_warning: bool,
     ) -> None:
+        """Core 2026.12 answers an object: its notes must come back as text, and
+        its translated warnings must survive the GitHub fallback for notes."""
         if has_warning and (MAJOR_VERSION, MINOR_VERSION) < (2026, 12):
             pytest.skip("Core added update messages in 2026.12")
 
