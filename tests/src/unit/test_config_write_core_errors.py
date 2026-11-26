@@ -12,6 +12,7 @@ import pytest
 from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 
+from custom_components.ha_mcp_tools import websocket_api
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 
@@ -34,11 +35,17 @@ def _paths(body: dict[str, Any]) -> list[list[str | int]]:
     return [e["path"] for e in errors]
 
 
+@pytest.mark.parametrize("with_component", [False, True], ids=["core", "component"])
 async def test_a_refused_automation_lists_every_error_core_found(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
+    with_component: bool,
 ) -> None:
+    """Without the component Core's config view refuses the write; with it the
+    component's validator refuses it first, with the same list."""
+    if with_component:
+        websocket_api.async_register_commands(hass)
     tools = await automation_tools(hass, core_client, monkeypatch)
 
     with pytest.raises(ToolError) as exc_info:

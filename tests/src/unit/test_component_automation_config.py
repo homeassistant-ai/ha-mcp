@@ -17,6 +17,7 @@ import probatio
 import pytest
 from homeassistant.components import automation as automation_core
 from homeassistant.components.automation import config as automation_core_config
+from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import condition, trigger
@@ -126,10 +127,36 @@ async def test_validation_reports_what_cores_repair_issue_says(
 
     got = await _command(component_ws, action="validate", config=_BAD_TRIGGER)
 
-    assert got == {
+    # Core 2026.12 also lists each error with its path (tested below).
+    assert {key: got[key] for key in ("status", "error")} == {
         "status": "failed_triggers",
         "error": issue.translation_placeholders["error"],
     }
+
+
+@pytest.mark.skipif(
+    (MAJOR_VERSION, MINOR_VERSION) < (2026, 12),
+    reason="Core lists located validation errors since 2026.12",
+)
+async def test_a_failed_config_lists_every_error_with_its_path(
+    component_ws: MockHAClientWebSocket,
+) -> None:
+    """Two broken actions, one nested in a choose: each error comes back with
+    its path in the config, as Core's config view lists them."""
+    config = {
+        "triggers": [{"trigger": "event", "event_type": "x"}],
+        "actions": [
+            {"delay": "not a time"},
+            {"choose": [{"conditions": [], "sequence": [{"delay": "nope"}]}]},
+        ],
+    }
+
+    got = await _command(component_ws, action="validate", config=config)
+
+    paths = [error["path"] for error in got["errors"]]
+    assert all(path[0] == "actions" for path in paths)
+    assert {path[1] for path in paths} == {0, 1}
+    assert ["actions", 1, "choose", 0, "sequence", 0] in [p[:6] for p in paths]
 
 
 async def test_validation_leaves_the_callers_config_unchanged(

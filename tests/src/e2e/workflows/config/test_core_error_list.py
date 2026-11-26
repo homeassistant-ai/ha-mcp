@@ -6,7 +6,6 @@ import pytest
 
 from ...utilities.assertions import MCPAssertions
 from ...utilities.core_version import core_at_least
-from ...utilities.topology import component_surface_available
 
 
 @pytest.mark.asyncio
@@ -32,8 +31,8 @@ async def test_a_refused_script_lists_the_errors_core_found(
 async def test_a_refused_automation_lists_the_errors_core_found(
     mcp_client, ha_client
 ) -> None:
-    """Without the component Core's config view refuses the write; the
-    component's validator refuses it first and gives no list."""
+    """Without the component Core's config view refuses the write; with it
+    the component's validator refuses it first, with the same list."""
     async with MCPAssertions(mcp_client) as mcp:
         refused = await mcp.call_tool_failure(
             "ha_config_set_automation",
@@ -46,7 +45,7 @@ async def test_a_refused_automation_lists_the_errors_core_found(
             },
         )
     assert refused["error"]["code"] == "VALIDATION_FAILED", refused
-    if not component_surface_available() and await core_at_least(ha_client, (2026, 12)):
+    if await core_at_least(ha_client, (2026, 12)):
         assert refused["errors"][0]["path"][:2] == ["triggers", 0], refused
     else:
         assert "errors" not in refused, refused

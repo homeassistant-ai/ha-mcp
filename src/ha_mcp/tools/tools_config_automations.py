@@ -43,6 +43,7 @@ from .automation_errors import (
     failed_section_from_core,
     raise_core_rejection,
     section_from_status,
+    verdict_errors,
 )
 from .automation_registry_details import core_related, registry_details
 from .best_practice_checker import BestPracticeCheckResult
@@ -776,7 +777,7 @@ class AutomationConfigTools:
             str(verdict.get("error") or status),
             config,
             failed_section=section_from_status(status),
-            context={"entity_id": entity_id},
+            context={"entity_id": entity_id, **verdict_errors(verdict)},
             bp_warnings=bp_warnings,
         )
 

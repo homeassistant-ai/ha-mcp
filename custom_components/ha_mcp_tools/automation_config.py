@@ -16,6 +16,7 @@ A Core without one of these parts, or one that fails unexpectedly, answers
 from __future__ import annotations
 
 import copy
+import importlib
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -89,6 +90,25 @@ def core_parts() -> SimpleNamespace:
     )
 
 
+async def _located_errors(
+    hass: HomeAssistant, core: SimpleNamespace, config: Any
+) -> dict[str, Any]:
+    """``{"errors": [...]}``: every error of a failed config with its path, as
+    Core's config view answers them (2026.12, ``validation_errors_as_dicts`` of
+    what the public validator raises); empty on a Core without them."""
+    try:
+        located = importlib.import_module("homeassistant.helpers.validation_errors")
+    except ModuleNotFoundError:
+        return {}
+    if core.validate_or_raise is None:
+        return {}
+    try:
+        await core.validate_or_raise(hass, "", copy.deepcopy(config))
+    except core.invalid as err:
+        return {"errors": located.validation_errors_as_dicts(err)}
+    return {}
+
+
 async def _validate(
     hass: HomeAssistant, core: SimpleNamespace, msg: dict[str, Any]
 ) -> dict[str, Any]:
@@ -106,11 +126,20 @@ async def _validate(
     except core.invalid as err:
         # Raised by the public validator on any failure, and by the private one
         # when even the id/alias/description check fails.
-        return {"status": "failed_schema", "error": str(err)}
+        verdict = {"status": "failed_schema", "error": str(err)}
+        if core.validate is None:
+            return verdict
+        return {**verdict, **await _located_errors(hass, core, msg["config"])}
     status = getattr(checked, "validation_status", None)
     if status is None:
         return _unavailable("Home Assistant's automation validator gave no status")
-    return {"status": str(status), "error": getattr(checked, "validation_error", None)}
+    verdict = {
+        "status": str(status),
+        "error": getattr(checked, "validation_error", None),
+    }
+    if verdict["status"] == "ok":
+        return verdict
+    return {**verdict, **await _located_errors(hass, core, msg["config"])}
 
 
 async def _describe(
