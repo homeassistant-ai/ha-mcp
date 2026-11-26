@@ -1,6 +1,6 @@
 {
   "custom_components/ha_mcp_tools/__init__.py": 3472,
-  "custom_components/ha_mcp_tools/embedded_server.py": 2378,
+  "custom_components/ha_mcp_tools/embedded_server.py": 2364,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py": 1146,
   "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth.py": 1269,
   "homeassistant-addon-webhook-proxy-dev/start.py": 1892,
@@ -21,7 +21,7 @@
   "src/ha_mcp/tools/tools_config_dashboards.py": 3753,
   "src/ha_mcp/tools/tools_config_scenes.py": 1400,
   "src/ha_mcp/tools/tools_config_scripts.py": 1151,
-  "src/ha_mcp/tools/tools_dev.py": 2333,
+  "src/ha_mcp/tools/tools_dev.py": 2293,
   "src/ha_mcp/tools/tools_entities.py": 2023,
   "src/ha_mcp/tools/tools_filesystem.py": 1011,
   "src/ha_mcp/tools/tools_integrations.py": 2796,
