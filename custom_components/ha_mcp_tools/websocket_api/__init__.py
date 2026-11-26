@@ -188,10 +188,15 @@ the info handshake carries no capability entry:
   ``visibility_warnings`` carried by the response so filtering is not silently
   incomplete.
 * ``ha_mcp_tools/server_entry`` — the component locates its OWN server config
-  entry (``entry.data[CONF_ENTRY_TYPE] == server``, the one marker key it reads
-  from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
-  pip_spec from ``entry.options``), so ``ha_dev_manage_server`` need not probe
-  every ``ha_mcp_tools``-domain entry's options-flow schema from the outside.
+  entry (``entry.data[CONF_ENTRY_TYPE] == server``) and returns
+  ``{entry_id, pip_spec, install_pending}`` (pip_spec from ``entry.options``;
+  install_pending, gated by ``server_entry_install_pending``, compares the spec
+  bring-up resolves with the one the component recorded after its last
+  completed, non-deferred package step, ``_server_entry_prep``), so
+  ``ha_dev_manage_server`` need not probe every ``ha_mcp_tools``-domain entry's
+  options-flow schema from the outside. The type marker and that record are
+  the two ``entry.data`` keys this package reads, the data-minimization
+  exception: neither is returned, install_pending is only a boolean or null.
 * ``ha_mcp_tools/server_entry_update`` — the WRITE counterpart of ``server_entry``:
   applies a ``channel`` / ``pip_spec`` delta to the server entry via
   ``hass.config_entries.async_update_entry`` DIRECTLY (what core's finish-flow
@@ -450,6 +455,7 @@ from .system import (
     _do_server_entry_update,
     _do_system_snapshot,
     _do_template_diagnose,
+    _server_entry_prep,
     _server_entry_update_prep,
     _template_diagnose_prep,
     do_info,
@@ -540,7 +546,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         # Core's live trace store: one in-process pass matches a run's own
         # context or a triggering parent context across every stored item.
         (_trace_context_schema(), _do_trace_context, _trace_context_prep),
-        (_server_entry_schema(), _do_server_entry, None),
+        (_server_entry_schema(), _do_server_entry, _server_entry_prep),
         # The WRITE counterpart of server_entry: the deferred ``async_update_entry``
         # scheduling is inherently async, so it lives in ``_server_entry_update_prep``
         # and ``_do_server_entry_update`` is a pure formatter (same seam as the
