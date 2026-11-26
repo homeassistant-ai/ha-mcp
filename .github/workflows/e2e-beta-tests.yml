@@ -17,10 +17,16 @@ on:
   # nightly so deliberate upstream beta changes that require an ha-mcp
   # adaptation surface before stable release.
   #
-  # Do not run on pull_request pushes: the stable container lanes cover PR
-  # changes, while maintainers own beta compatibility fixes after changes land.
-  # No paths filter either — a nightly run must happen regardless of what the
-  # last master commit touched.
+  # pr.yml calls this with pr_lane: true, which runs only the component-enabled
+  # Docker job and only while beta.json names an actual beta. A stable release
+  # ahead of the pin reaches pull requests with its Renovate bump; push and
+  # nightly runs cover it until then.
+  workflow_call:
+    inputs:
+      pr_lane:
+        description: Run the existing external Docker lane for PR validation
+        type: boolean
+        required: true
   push:
     branches: [master]
   schedule:
@@ -45,9 +51,12 @@ permissions:
 
 # Push and scheduled runs are full compatibility checks, so a newer one
 # supersedes an older one. Manual dispatches may target only part of the suite;
-# give each one a unique group so it cannot cancel or replace a full run.
+# give each one a unique group so it cannot cancel or replace a full run. A
+# pull request's call gets its run's group too, so one pull request cannot
+# cancel another's. The prefix is literal: in a called workflow,
+# github.workflow names the caller.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'full' }}
+  group: container-beta-${{ (inputs.pr_lane || github.event_name == 'workflow_dispatch') && github.run_id || 'full' }}
   cancel-in-progress: true
 
 env:
@@ -74,7 +83,8 @@ jobs:
     outputs:
       core_version: ${{ steps.versions.outputs.core_version }}
       image: ${{ steps.versions.outputs.image }}
-      superfluous: ${{ steps.versions.outputs.superfluous }}
+      run_full: ${{ !inputs.pr_lane && (github.event_name == 'workflow_dispatch' || steps.versions.outputs.superfluous == 'false') }}
+      run_pr_lane: ${{ inputs.pr_lane && steps.versions.outputs.active_beta == 'true' && steps.versions.outputs.superfluous == 'false' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -115,6 +125,13 @@ jobs:
             echo "::error::Could not read the stable HA image pin from tests/test_constants.py"
             exit 1
           fi
+          active_beta=false
+          if [[ "$core_version" =~ (b|[.]dev)[0-9]+$ ]]; then
+            active_beta=true
+          else
+            echo "::notice::Core $core_version is not a beta; pull-request calls skip the beta Docker job"
+          fi
+          echo "active_beta=$active_beta" >> "$GITHUB_OUTPUT"
           superfluous=false
           if [ "$core_version" = "$stable_pin" ]; then
             superfluous=true
@@ -129,7 +146,7 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     needs: resolve-beta
-    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
+    if: needs.resolve-beta.outputs.run_full == 'true' || needs.resolve-beta.outputs.run_pr_lane == 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}
@@ -221,7 +238,7 @@ jobs:
     name: E2E Tests (No Component)
     runs-on: ubuntu-latest
     needs: resolve-beta
-    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
+    if: needs.resolve-beta.outputs.run_full == 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}
@@ -284,16 +301,13 @@ jobs:
     - name: Run full E2E test suite (no component)
       run: |
         echo "🚀 Running full E2E test suite without the ha_mcp_tools component with 3 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
         cd tests
         # shellcheck disable=SC2086
         uv run pytest $PYTEST_PATHS \
           -n3 \
           --dist loadscope \
           --tb=short \
-          -v \
-          --maxfail=0 $PYTEST_ARGS
+          -v $PYTEST_ARGS
         echo "✅ Full E2E test suite (no component) passed"
       env:
         PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
@@ -316,7 +330,7 @@ jobs:
     name: E2E Tests (Embedded Server, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs: resolve-beta
-    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
+    if: needs.resolve-beta.outputs.run_full == 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}
@@ -420,7 +434,7 @@ jobs:
     name: E2E Tests (Embedded Server, server entry only)
     runs-on: ubuntu-latest
     needs: resolve-beta
-    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
+    if: needs.resolve-beta.outputs.run_full == 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}
@@ -483,16 +497,13 @@ jobs:
     - name: Run full E2E test suite (embedded backend, server entry only)
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server with only the server entry (no tools entry) with 2 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
         cd tests
         # shellcheck disable=SC2086
         uv run pytest $PYTEST_PATHS \
           -n2 \
           --dist loadscope \
           --tb=short \
-          -v \
-          --maxfail=0 $PYTEST_ARGS
+          -v $PYTEST_ARGS
         echo "✅ Full E2E test suite (embedded backend, server entry only) passed"
       env:
         PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
@@ -516,7 +527,7 @@ jobs:
     name: E2E Tests (Update Path)
     runs-on: ubuntu-latest
     needs: resolve-beta
-    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
+    if: needs.resolve-beta.outputs.run_full == 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}

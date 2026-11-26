@@ -1467,7 +1467,7 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "9.2.0"
+version = "9.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },

@@ -396,6 +396,7 @@ def _logbook_events_schema() -> dict[Any, Any]:
     # message instead of raising inside Core's processor.
     from homeassistant.helpers import config_validation as cv
 
+    row_key = vol.ExactSequence([vol.Coerce(float), vol.In((0, 1)), int])
     return {
         vol.Required("type"): WS_LOGBOOK_EVENTS,
         vol.Required("start_time"): str,
@@ -411,9 +412,10 @@ def _logbook_events_schema() -> dict[Any, Any]:
             vol.Optional("count_range"): vol.ExactSequence(
                 [vol.Coerce(float), vol.Coerce(float)]
             ),
-            vol.Optional("after"): vol.ExactSequence(
-                [vol.Coerce(float), vol.In((0, 1)), int]
-            ),
+            vol.Optional("after"): row_key,
+            vol.Optional("used_bytes"): vol.All(int, vol.Range(min=0)),
+            vol.Optional("collect_keys"): vol.All(int, vol.Range(min=1, max=500)),
+            vol.Optional("keys"): vol.All([row_key], vol.Length(min=1, max=500)),
         },
     }
 

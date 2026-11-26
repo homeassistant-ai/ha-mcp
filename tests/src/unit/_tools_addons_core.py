@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import timedelta
 from ipaddress import IPv4Address
 from typing import Any
@@ -40,6 +40,7 @@ from aiohasupervisor.models.addons import (
     InstalledAddon,
     SupervisorRole,
 )
+from aiohasupervisor.models.ingress import Session
 from aiohttp import WSMsgType, web
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -284,8 +285,9 @@ class Supervisor:
         answer = self._next_answer(request.method, path)
         if answer is None:
             if (request.method, path) == ("POST", "/ingress/session"):
-                self.sessions.append(f"session-{len(self.sessions) + 1}")
-                return web.json_response(supervisor_ok({"session": self.sessions[-1]}))
+                session = Session(session=f"session-{len(self.sessions) + 1}")
+                self.sessions.append(session.session)
+                return web.json_response(supervisor_ok(session.to_dict()))
             return web.json_response(
                 supervisor_error(f"No answer for {path}"), status=404
             )
@@ -310,7 +312,14 @@ class Supervisor:
 def app_info(slug: str = SLUG, **changes: Any) -> dict[str, Any]:
     """``GET /addons/<slug>/info`` as Supervisor answers it: a started app with
     ingress, built from aiohasupervisor's model; ``changes`` replace its fields."""
+    # The aiohasupervisor release Core 2026.12 pins requires log_format; the
+    # one 2026.11 pins has no such field. Drop this check once the stable Core
+    # pin moves off 2026.11.
+    log_fields: dict[str, Any] = {}
+    if any(spec.name == "log_format" for spec in fields(InstalledAddonComplete)):
+        log_fields["log_format"] = "plain"
     info = InstalledAddonComplete(
+        **log_fields,
         apparmor=AppArmor.DEFAULT,
         auth_api=False,
         docker_api=False,

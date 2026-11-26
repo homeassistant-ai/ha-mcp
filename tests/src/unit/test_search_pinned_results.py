@@ -41,7 +41,7 @@ async def _search(
     return list(result.data)
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reverse_catalog", [False, True])
 async def test_cached_search_uses_current_tool_schema(reverse_catalog: bool) -> None:
     """A schema-only update must reach search even when ranking is cached."""
@@ -85,7 +85,7 @@ async def test_cached_search_uses_current_tool_schema(reverse_catalog: bool) -> 
     assert "[]" in after.data[0]["params"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_pinned_tool_that_matches_is_returned_as_a_stub_without_its_schema() -> (
     None
 ):
@@ -109,7 +109,7 @@ async def test_pinned_tool_that_matches_is_returned_as_a_stub_without_its_schema
     assert "directly" in stub["execute_via"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_hidden_hit_is_compact_next_to_a_stub() -> None:
     """A hidden hit names its params and proxy without the full schema;
     the schema comes from the ``tools=`` second hop."""
@@ -130,7 +130,7 @@ async def test_hidden_hit_is_compact_next_to_a_stub() -> None:
     assert "ha_call_read_tool" in hit["execute_via"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_pinned_stub_does_not_take_a_result_slot_from_hidden_tools() -> None:
     """``max_results`` counts hidden tools only; a stub rides along."""
     results = await _search(
@@ -150,7 +150,7 @@ async def test_pinned_stub_does_not_take_a_result_slot_from_hidden_tools() -> No
     assert len([n for n in names if n.startswith("hidden_")]) == 2
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_pinned_tool_ranked_below_the_page_adds_no_stub() -> None:
     """A weak match on a pinned tool must not stub every page."""
     results = await _search(
@@ -167,7 +167,7 @@ async def test_pinned_tool_ranked_below_the_page_adds_no_stub() -> None:
     assert [entry["name"] for entry in results] == ["hidden_one", "hidden_two"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_unmatched_query_returns_nothing_even_with_pinned_tools() -> None:
     results = await _search(
         [noop_tool("ha_get_state", "get entity state")],
@@ -200,7 +200,7 @@ async def _hidden_hits(
     return [entry["name"] for entry in result.data if not entry.get("pinned")]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "query",
     [
@@ -220,7 +220,7 @@ async def test_entity_state_queries_rank_ha_get_state_first(
     assert hidden[0] == "ha_get_state", hidden
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.parametrize("query", ["turn off lights", "switch off all lights"])
 async def test_control_queries_do_not_lead_with_the_state_reader(
     toolsearch_server: server_module.HomeAssistantSmartMCPServer, query: str

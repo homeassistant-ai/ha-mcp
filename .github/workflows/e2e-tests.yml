@@ -178,15 +178,12 @@ jobs:
     - name: Run full E2E test suite (no component)
       run: |
         echo "🚀 Running full E2E test suite without the ha_mcp_tools component with 3 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
         cd tests
         uv run pytest src/e2e/ \
           -n3 \
           --dist loadscope \
           --tb=short \
-          -v \
-          --maxfail=0
+          -v
         echo "✅ Full E2E test suite (no component) passed"
       env:
         E2E_NO_TOOLS_ENTRY: "1"
@@ -361,15 +358,12 @@ jobs:
     - name: Run full E2E test suite (embedded backend, server entry only)
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server with only the server entry (no tools entry) with 2 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
         cd tests
         uv run pytest src/e2e/ \
           -n2 \
           --dist loadscope \
           --tb=short \
-          -v \
-          --maxfail=0
+          -v
         echo "✅ Full E2E test suite (embedded backend, server entry only) passed"
       env:
         E2E_BACKEND: "embedded"

@@ -24,6 +24,7 @@ import importlib.util
 import re
 import shlex
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -251,16 +252,6 @@ _SELECTABLE_LANES: dict[tuple[str, str], dict[str, str]] = {
     (_HAOS, "haos-e2e-inaddon"): {"HAOS_TEST_MODE": "inaddon"},
 }
 
-# The container no-tools lanes are whole-topology audits: pyproject.toml's
-# --maxfail=3 would stop them after three failures, which is exactly the run
-# that needs the full list. (The HAOS lanes already carry --maxfail=0 for their
-# own triage reasons, stated in their step comments.)
-_AUDIT_LANES: tuple[tuple[str, str], ...] = (
-    (_E2E, "e2e-tests-no-component"),
-    (_E2E, "e2e-tests-embedded-server-only"),
-    (_CBETA, "e2e-tests-no-component"),
-    (_CBETA, "e2e-tests-embedded-server-only"),
-)
 
 _SELECTOR_NAMES = ("E2E_BACKEND", "HAOS_TEST_MODE")
 
@@ -441,27 +432,6 @@ def _resolve(text: str, context: dict[str, str]) -> str:
     return resolved
 
 
-def _pytest_arguments(run: str) -> list[str]:
-    """The arguments of the step's ``uv run pytest`` command, continuations
-    joined and a trailing shell comment dropped, as bash would."""
-    commands = _uncommented(run).replace("\\\n", " ").splitlines()
-    command = next(line for line in commands if "uv run pytest" in line)
-    return shlex.split(command, comments=True)
-
-
-def _failure_cap(arguments: list[str]) -> str | None:
-    """The ``--maxfail`` pytest applies: the last of ``--maxfail`` and ``-x``."""
-    cap = None
-    for index, argument in enumerate(arguments):
-        if argument.startswith("--maxfail="):
-            cap = argument.partition("=")[2]
-        elif argument == "--maxfail":
-            cap = arguments[index + 1]
-        elif argument in ("-x", "--exitfirst"):
-            cap = "1"
-    return cap
-
-
 @pytest.mark.parametrize("job_id", ["e2e-validation", "e2e-validation-embedded"])
 def test_pull_requests_run_the_suite_in_both_tool_entry_states(
     monkeypatch: pytest.MonkeyPatch, job_id: str
@@ -469,9 +439,7 @@ def test_pull_requests_run_the_suite_in_both_tool_entry_states(
     """Pull requests have no whole-run no-tools container lane any more.
 
     A combined row must cover the absent state, a component-present row must
-    keep running the general suite with the entry, and the combined row lifts
-    pyproject.toml's --maxfail=3 so one phase's failures cannot hide the
-    other's.
+    keep running the general suite with the entry.
     """
     step = _pytest_step(_PR, job_id)
     states = set()
@@ -483,11 +451,6 @@ def test_pull_requests_run_the_suite_in_both_tool_entry_states(
         )
         combined = topology.combined_topologies()
         states.add(combined)
-        if combined:
-            arguments = _pytest_arguments(_resolve(str(step["run"]), context))
-            assert _failure_cap(arguments) == "0", (
-                f"{job_id} {row['os']} stops after three failures"
-            )
     assert states == {True, False}, f"{job_id} covers only combined={states}"
 
 
@@ -534,16 +497,35 @@ def test_stdio_lane_never_allocates_a_pull_request_runner() -> None:
     assert set(data[True]) == {"workflow_dispatch"}
 
 
-@pytest.mark.parametrize(("workflow", "job_id"), _AUDIT_LANES, ids=lambda v: v)
-def test_container_audit_lane_reports_the_full_failure_surface(
-    workflow: str, job_id: str
-) -> None:
-    """Override pyproject.toml's failure cap for whole-topology audits."""
-    run = str(_pytest_step(workflow, job_id).get("run", ""))
-    assert "--maxfail=0" in run, (
-        f"{workflow}::{job_id} stops after pyproject.toml's --maxfail=3, "
-        "so a topology audit reports three failures instead of the full surface"
-    )
+def _failure_cap(arguments: list[str]) -> str | None:
+    """The ``--maxfail`` pytest applies: the last of ``--maxfail`` and ``-x``."""
+    cap = None
+    for index, argument in enumerate(arguments):
+        if argument.startswith("--maxfail="):
+            cap = argument.partition("=")[2]
+        elif argument == "--maxfail":
+            cap = arguments[index + 1]
+        elif argument in ("-x", "--exitfirst"):
+            cap = "1"
+    return cap
+
+
+def test_no_run_stops_before_reporting_every_failure() -> None:
+    """A failure cap ends a run after its first failures, so a topology audit
+    or a locale sweep reports a few of them and hides the rest."""
+    pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text("utf-8"))
+    assert _failure_cap(pyproject["tool"]["pytest"]["ini_options"]["addopts"]) is None
+    for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
+        jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
+        for job_id, job in jobs.items():
+            for step in job.get("steps", []):
+                body = _uncommented(str(step.get("run", ""))).replace("\\\n", " ")
+                for line in body.splitlines():
+                    if "uv run pytest" in line:
+                        arguments = shlex.split(line, comments=True)
+                        assert _failure_cap(arguments) in (None, "0"), (
+                            f"{path.name}::{job_id}: {line.strip()}"
+                        )
 
 
 def _discover_e2e_lanes(directory: Path | None = None) -> set[tuple[str, str]]:

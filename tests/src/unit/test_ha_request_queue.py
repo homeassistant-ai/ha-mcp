@@ -17,16 +17,11 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 HomeAssistantRequestQueueMiddleware = queue_module.HomeAssistantRequestQueueMiddleware
 
 
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
-
-
 def make_context(name: str) -> MiddlewareContext[CallToolRequestParams]:
     return MiddlewareContext(message=CallToolRequestParams(name=name, arguments={}))
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_concurrent_outer_calls_are_serialized() -> None:
     middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
     first_entered = anyio.Event()
@@ -70,7 +65,7 @@ async def test_concurrent_outer_calls_are_serialized() -> None:
     assert second_entered.is_set()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_nested_redispatch_does_not_reacquire_the_queue() -> None:
     middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
 
@@ -92,7 +87,7 @@ async def test_nested_redispatch_does_not_reacquire_the_queue() -> None:
     assert result == "ha_get_state"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outer_name", ["ha_call_read_tool", "ha_manage_custom_tool"])
 async def test_dispatch_envelope_defers_queue_slot_until_inner_dispatch(
     outer_name: str,
@@ -144,7 +139,7 @@ async def test_dispatch_envelope_defers_queue_slot_until_inner_dispatch(
     assert inner_entered.is_set()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_slot_and_depth_are_released_when_call_raises() -> None:
     middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
 
@@ -168,7 +163,7 @@ async def test_slot_and_depth_are_released_when_call_raises() -> None:
     assert result == "ha_get_overview"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_nested_depth_is_restored_when_inner_call_raises() -> None:
     middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
 
@@ -239,7 +234,7 @@ async def test_nested_depth_is_restored_when_inner_call_raises() -> None:
     assert recovered_entered.is_set()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_queue_wait_reports_progress_warns_and_times_out(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -282,7 +277,7 @@ async def test_queue_wait_reports_progress_warns_and_times_out(
     assert "timed out waiting for slot tool=ha_get_overview" in caplog.text
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_internal_fanout_is_not_throttled_by_outer_queue() -> None:
     middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
     both_entered = anyio.Event()
@@ -308,7 +303,7 @@ async def test_internal_fanout_is_not_throttled_by_outer_queue() -> None:
     assert entered == 2
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_local_tool_search_bypasses_outer_queue() -> None:
     middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
     first_entered = anyio.Event()
@@ -342,7 +337,7 @@ async def test_local_tool_search_bypasses_outer_queue() -> None:
         release_first.set()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_approval_management_bypasses_outer_queue() -> None:
     middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
     first_entered = anyio.Event()
