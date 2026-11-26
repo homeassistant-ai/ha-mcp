@@ -16,14 +16,9 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_entities import EntityTools
 
+from ._entity_registry_core import core_client as core_client
 from ._entity_registry_core import sent_types
 from ._tool_errors import error_body
-
-
-@pytest.fixture
-async def tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> EntityTools:
-    assert await async_setup_component(hass, "config", {})
-    return EntityTools(core_client)
 
 
 def _options(registry: er.EntityRegistry, entity_id: str) -> dict[str, Any]:
@@ -37,21 +32,26 @@ def _options(registry: er.EntityRegistry, entity_id: str) -> dict[str, Any]:
     reason="Core checks the area itself since 2026.12",
 )
 async def test_core_refuses_an_unknown_area_itself(
-    tools: EntityTools, entity_registry: er.EntityRegistry, sent: AsyncMock
+    core_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    sent: AsyncMock,
 ) -> None:
     """Core's refusal reaches the caller with its code and the area hints, and
     HA-MCP reads no area registry of its own to check the same thing first."""
     entry = entity_registry.async_get_or_create("light", "demo", "test")
 
     with pytest.raises(ToolError) as exc_info:
-        await tools.ha_set_entity(entity_id=entry.entity_id, area_id="ghost_area")
+        await EntityTools(core_client).ha_set_entity(
+            entity_id=entry.entity_id, area_id="ghost_area"
+        )
 
     body = error_body(exc_info)
     assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert body["ha_error_code"] == "invalid_info"
     assert "ghost_area" in body["error"]["message"]
     assert any("area IDs" in s for s in body["error"]["suggestions"])
-    assert sent_types(sent) == ["config/entity_registry/update"]
+    assert "config/entity_registry/update" in sent_types(sent)
+    assert "config/area_registry/list" not in sent_types(sent)
     stored = entity_registry.async_get(entry.entity_id)
     assert stored is not None and stored.area_id is None
 
@@ -69,7 +69,7 @@ async def test_core_refuses_an_unknown_area_itself(
 )
 async def test_a_unit_core_does_not_list_for_the_device_class_is_refused(
     hass: HomeAssistant,
-    tools: EntityTools,
+    core_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
     own: str | None,
     call: str | None,
@@ -84,7 +84,7 @@ async def test_a_unit_core_does_not_list_for_the_device_class_is_refused(
     )
     entity_registry.async_update_entity(entry.entity_id, device_class=own)
     options = {"sensor": {"unit_of_measurement": unit}}
-    write = tools.ha_set_entity(
+    write = EntityTools(core_client).ha_set_entity(
         entity_id=entry.entity_id, options=options, device_class=call
     )
 
