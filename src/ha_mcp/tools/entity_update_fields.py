@@ -64,10 +64,7 @@ async def reject_unconvertible_unit(
     unit = ((options or {}).get("sensor") or {}).get("unit_of_measurement")
     if unit is None or not entity_id.lower().startswith("sensor."):
         return
-    if device_class is not None:
-        effective = clearable_value(device_class, "device_class")
-    else:
-        effective = None
+    effective = clearable_value(device_class, "device_class")
     if effective is None:
         try:
             entry = await fetch_entity(entity_id)
