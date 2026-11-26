@@ -60,6 +60,8 @@ async def desk(
 
     The integration names it, so an area of its own needs no name of its own.
     """
+    lr.async_get(hass).async_create("X")
+    lr.async_get(hass).async_create("Work")
     config_entry = MockConfigEntry(domain="hue")
     config_entry.add_to_hass(hass)
     device = device_registry.async_get_or_create(
@@ -428,7 +430,8 @@ async def test_the_servers_restore_is_written_by_the_component(
     values Core's own update command refuses (``integration``)."""
     assert await async_setup_component(hass, "config", {})
     assert await async_setup_component(hass, "homeassistant", {})
-    work = label_registry.async_create("Work")
+    work = label_registry.async_get_label("work")
+    assert work is not None
     lights = category_registry.async_create(scope="automation", name="Lights")
     snapshot = {
         "id": desk.id,

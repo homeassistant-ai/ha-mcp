@@ -94,7 +94,7 @@ def test_describe_reads_the_request() -> None:
     }
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_debug_log_line_per_tool_call(caplog: pytest.LogCaptureFixture) -> None:
     middleware = McpClientDebugLogMiddleware()
     context = SimpleNamespace(
@@ -111,7 +111,7 @@ async def test_debug_log_line_per_tool_call(caplog: pytest.LogCaptureFixture) ->
     assert "elicitation.form" in caplog.text
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_no_description_built_when_debug_is_off(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:

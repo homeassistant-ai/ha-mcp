@@ -40,7 +40,7 @@ class TestCategorizedCallDispatch:
         )
         return t
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_proxy_happy_path(self, transform):
         """Correct read tool via read proxy succeeds."""
         ctx = _make_ctx(call_tool_return={"state": "on"})
@@ -51,7 +51,7 @@ class TestCategorizedCallDispatch:
             "ha_get_state", {"entity_id": "light.kitchen"}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_proxy_admits_a_mixed_tools_read_action(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -75,7 +75,7 @@ class TestCategorizedCallDispatch:
             "ha_manage_blueprints", {"action": "list"}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_proxy_refuses_a_mixed_tools_write_action(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -103,7 +103,7 @@ class TestCategorizedCallDispatch:
         assert body["correct_proxy"] == "ha_call_write_tool"
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_proxy_refuses_a_manage_tool_outside_the_read_only_table(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -125,7 +125,7 @@ class TestCategorizedCallDispatch:
         assert body["correct_proxy"] == "ha_call_write_tool"
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_proxy_reports_an_exempt_tool_missing_from_the_catalog(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -142,7 +142,7 @@ class TestCategorizedCallDispatch:
         assert error["code"] == "RESOURCE_NOT_FOUND"
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_write_proxy_runs_every_action_of_a_manage_tool(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -168,7 +168,7 @@ class TestCategorizedCallDispatch:
             assert await fn("ha_manage_blueprints", arguments, ctx) == {"success": True}
         assert ctx.fastmcp.call_tool.await_count == 3
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_delete_proxy_runs_every_action_of_a_manage_tool(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -197,7 +197,7 @@ class TestCategorizedCallDispatch:
             assert await fn(name, arguments, ctx) == {"success": True}
         assert ctx.fastmcp.call_tool.await_count == 4
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_delete_proxy_refuses_a_plain_write_tool(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -212,7 +212,7 @@ class TestCategorizedCallDispatch:
         assert body["correct_proxy"] == "ha_call_write_tool"
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_proxy_refuses_a_plain_write_tool(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -225,7 +225,7 @@ class TestCategorizedCallDispatch:
             await fn("ha_config_set_automation", {"config": {}}, ctx)
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_proxy_adapts_a_retired_blueprint_call(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -247,7 +247,7 @@ class TestCategorizedCallDispatch:
             "ha_manage_blueprints", {"action": "list", "domain": "script"}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_proxy_dispatches_a_renamed_tool_under_its_current_name(
         self, transform
     ):
@@ -274,7 +274,7 @@ class TestCategorizedCallDispatch:
             "ha_manage_app", {"slug": "core_ssh"}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_write_proxy_happy_path(self, transform):
         """Correct write tool via write proxy succeeds."""
         ctx = _make_ctx(call_tool_return={"success": True})
@@ -285,7 +285,7 @@ class TestCategorizedCallDispatch:
             "ha_config_set_automation", {"config": {}}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_delete_proxy_happy_path(self, transform):
         """Correct delete tool via delete proxy succeeds."""
         ctx = _make_ctx(call_tool_return={"success": True})
@@ -295,7 +295,7 @@ class TestCategorizedCallDispatch:
         )
         assert result == {"success": True}
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_wrong_category_rejected_write_via_read(self, transform):
         """Write tool via read proxy is rejected with correct proxy suggestion."""
         ctx = _make_ctx()
@@ -307,7 +307,7 @@ class TestCategorizedCallDispatch:
         assert "ha_call_write_tool" in error["error"]["message"]
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_wrong_category_rejected_read_via_write(self, transform):
         """Read tool via write proxy is rejected."""
         ctx = _make_ctx()
@@ -318,7 +318,7 @@ class TestCategorizedCallDispatch:
         assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "ha_call_read_tool" in error["error"]["message"]
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_wrong_category_rejected_delete_via_read(self, transform):
         """Delete tool via read proxy is rejected."""
         ctx = _make_ctx()
@@ -328,7 +328,7 @@ class TestCategorizedCallDispatch:
         error = json.loads(str(exc_info.value))
         assert "ha_call_delete_tool" in error["error"]["message"]
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_unknown_tool_returns_not_found(self, transform):
         """Tool not in any category returns RESOURCE_NOT_FOUND."""
         ctx = _make_ctx()
@@ -339,7 +339,7 @@ class TestCategorizedCallDispatch:
         assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert "ha_nonexistent_tool" in error["error"]["message"]
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_none_arguments_defaults_to_empty(self, transform):
         """Calling with arguments=None still works."""
         ctx = _make_ctx(call_tool_return="ok")
@@ -370,7 +370,7 @@ class TestDoubleUnwrap:
         )
         return t
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_double_wrapped_read_unwraps_correctly(self, transform):
         """Double-wrapped read tool via read proxy unwraps and succeeds."""
         ctx = _make_ctx(call_tool_return={"state": "on"})
@@ -387,7 +387,7 @@ class TestDoubleUnwrap:
             "ha_get_state", {"entity_id": "x"}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_double_wrapped_renamed_tool_unwraps_under_its_current_name(
         self, transform
     ):
@@ -419,7 +419,7 @@ class TestDoubleUnwrap:
             "ha_manage_app", {"slug": "core_ssh"}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_double_wrapped_consolidated_tool_gets_its_action(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -450,7 +450,7 @@ class TestDoubleUnwrap:
             "ha_manage_blueprints", {"action": "list", "domain": "script"}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("nested", "code"),
         [
@@ -482,7 +482,7 @@ class TestDoubleUnwrap:
         assert payload["error"]["code"] == code
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_double_wrapped_json_string_arguments_are_parsed(
         self, transform: CategorizedSearchTransform
     ) -> None:
@@ -502,7 +502,7 @@ class TestDoubleUnwrap:
             "ha_get_state", {"entity_id": "light.kitchen"}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_double_wrapped_wrong_category_still_rejected(self, transform):
         """Double-wrapped write tool via read proxy is rejected after unwrapping."""
         ctx = _make_ctx()
@@ -519,7 +519,7 @@ class TestDoubleUnwrap:
         assert "ha_call_write_tool" in error["error"]["message"]
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_no_unwrap_when_name_not_proxy(self, transform):
         """Non-proxy name with name/arguments keys is NOT unwrapped."""
         ctx = _make_ctx(call_tool_return="ok")
@@ -562,7 +562,7 @@ class TestArgumentsAsString:
         )
         return t
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_json_string_arguments_parsed_and_forwarded(self, transform):
         """A JSON-object string is parsed to a dict and forwarded."""
         ctx = _make_ctx(call_tool_return={"state": "on"})
@@ -573,7 +573,7 @@ class TestArgumentsAsString:
             "ha_get_state", {"entity_id": "light.kitchen"}
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_invalid_json_string_rejected(self, transform):
         """Non-JSON string raises with INVALID_JSON and does not dispatch."""
         ctx = _make_ctx()
@@ -584,7 +584,7 @@ class TestArgumentsAsString:
         assert error["error"]["code"] == "VALIDATION_INVALID_JSON"
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_deeply_nested_json_string_rejected(self, transform):
         """A JSON string nested past the interpreter's recursion limit makes
         ``json.loads`` raise ``RecursionError``, not ``JSONDecodeError``; it
@@ -598,7 +598,7 @@ class TestArgumentsAsString:
         assert error["error"]["code"] == "VALIDATION_INVALID_JSON"
         ctx.fastmcp.call_tool.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_json_string_not_object_rejected(self, transform):
         """JSON that parses to a non-object (e.g. array) raises a clear error."""
         ctx = _make_ctx()

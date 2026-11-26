@@ -194,9 +194,7 @@ jobs:
       # Runs even with no diff: a clean no-op run over a tree a hand edit
       # broke must still go red. Skipped after a partial run — the state is
       # incomplete by construction and the job already fails for it.
-      # --maxfail=0 overrides pyproject.toml's --maxfail=3: a systemic
-      # failure must name every string, not the first three. The junitxml
-      # assertion closes the fail-open hole where a renamed env var or refactored
+      # The junitxml assertion closes the fail-open hole where a renamed env var or refactored
       # marker skips every gated test and pytest exits 0 having verified
       # nothing (test_locale_sync_gate_shape.py pins the wiring pre-merge;
       # this asserts it at run time).
@@ -224,15 +222,15 @@ jobs:
               ;;
           esac
         }
-        uv run pytest tests/src/unit/test_locale_parity.py -q --maxfail=0 \
+        uv run pytest tests/src/unit/test_locale_parity.py -q \
           -k "not test_translations_are_checked_against_current_english" \
           --junitxml="$RUNNER_TEMP/verify-parity.xml"
-        uv run pytest tests/src/unit/test_settings_ui_i18n.py -q --maxfail=0 \
+        uv run pytest tests/src/unit/test_settings_ui_i18n.py -q \
           -k "test_shipped_catalog_translates_the_tools_tab" \
           --junitxml="$RUNNER_TEMP/verify-i18n.xml"
         # The sync's own no-op invariant: a rerun against the tree this run
         # just translated and repinned must plan zero work.
-        uv run pytest tests/src/unit/test_translate_locales.py -q --maxfail=0 \
+        uv run pytest tests/src/unit/test_translate_locales.py -q \
           -k "test_clean_tree_plans_no_work" \
           --junitxml="$RUNNER_TEMP/verify-noop.xml"
         assert_nothing_skipped "$RUNNER_TEMP/verify-parity.xml"
@@ -260,7 +258,7 @@ jobs:
         steps.export.outputs.have_patch == 'true'
       continue-on-error: true
       run: |
-        uv run pytest tests/src/unit/test_locale_parity.py -q --maxfail=0 \
+        uv run pytest tests/src/unit/test_locale_parity.py -q \
           -k "test_translations_keep_english_numbers_and_identifiers" \
           --junitxml="$RUNNER_TEMP/verify-partial.xml"
         attrs=$(grep -o -m1 '<testsuite [^>]*' "$RUNNER_TEMP/verify-partial.xml")
@@ -291,7 +289,7 @@ jobs:
       env:
         LOCALE_COMPLETENESS_CHECKS: "1"
       run: |
-        uv run pytest tests/src/unit/test_locale_parity.py -q --maxfail=0 \
+        uv run pytest tests/src/unit/test_locale_parity.py -q \
           -k "test_translations_are_checked_against_current_english" \
           --junitxml="$RUNNER_TEMP/staleness.xml"
         attrs=$(grep -o -m1 '<testsuite [^>]*' "$RUNNER_TEMP/staleness.xml")

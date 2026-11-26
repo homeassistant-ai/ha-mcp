@@ -109,7 +109,7 @@ def toolsearch_server(
     return build_server(monkeypatch, core_client)
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fragment",
     [
@@ -181,13 +181,13 @@ def test_compact_params_renders_each_schema_form(
     assert compact_params({"properties": properties, "required": required}) == params
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_tool_without_parameters_says_none() -> None:
     """An empty string would read as "params unknown", not "no params"."""
     assert (await _entity_hit())["params"] == "none"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_hit_description_is_the_first_paragraph_on_one_line() -> None:
     """The summary line is what the model needs to pick a tool; the
     guidance paragraphs and the BM25 keyword list come with ``tools=``."""
@@ -198,14 +198,14 @@ async def test_hit_description_is_the_first_paragraph_on_one_line() -> None:
     assert entry["description"] == _ENTITY_DESCRIPTION
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_named_hidden_tool_returns_its_full_definition() -> None:
     [entry] = await _call({"tools": ["ha_typed_tool"]})
     assert entry["inputSchema"] == _TYPED.parameters
     assert "ha_call_read_tool" in entry["execute_via"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_named_pinned_tool_returns_the_stub() -> None:
     """The client already holds a pinned tool's schema."""
     [entry] = await _call({"tools": ["ha_get_state"]})
@@ -213,7 +213,7 @@ async def test_named_pinned_tool_returns_the_stub() -> None:
     assert "inputSchema" not in entry
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_unknown_name_alone_is_an_error() -> None:
     """A single hallucinated name is a failed call, not a successful page
     with one failed entry."""
@@ -224,7 +224,7 @@ async def test_unknown_name_alone_is_an_error() -> None:
     assert "search" in error["error"]["suggestion"].lower()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_only_unknown_names_is_an_error_listing_each() -> None:
     error = await rejected_call_body(
         _call({"tools": ["ha_no_such_tool", "ha_nor_this"]})
@@ -233,7 +233,7 @@ async def test_only_unknown_names_is_an_error_listing_each() -> None:
     assert [e["name"] for e in error["results"]] == ["ha_no_such_tool", "ha_nor_this"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_unknown_name_next_to_a_known_one_is_an_error_entry() -> None:
     missing, found = await _call({"tools": ["ha_no_such_tool", "ha_typed_tool"]})
     assert missing["success"] is False
@@ -241,13 +241,13 @@ async def test_unknown_name_next_to_a_known_one_is_an_error_entry() -> None:
     assert found["inputSchema"] == _TYPED.parameters
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_named_tools_come_back_in_the_order_given() -> None:
     names = ["ha_no_such_tool", "ha_get_state", "ha_typed_tool"]
     assert [e["name"] for e in await _call({"tools": names})] == names
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_query_is_ignored_when_tools_are_named() -> None:
     named = await _call({"tools": ["ha_typed_tool"]})
     assert await _call({"query": "entity details", "tools": ["ha_typed_tool"]}) == (
@@ -255,13 +255,13 @@ async def test_query_is_ignored_when_tools_are_named() -> None:
     )
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_call_without_query_or_tools_is_a_validation_error() -> None:
     error = await rejected_call_body(_call({}))
     assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("read_only_on")
 async def test_read_only_mode_explains_a_hidden_write_tool() -> None:
     """The proxies answer a hidden write tool with READ_ONLY_MODE; a
@@ -277,14 +277,14 @@ async def test_read_only_mode_explains_a_hidden_write_tool() -> None:
     assert hidden["error"]["code"] == "READ_ONLY_MODE"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("read_only_on")
 async def test_read_only_mode_still_says_not_found_for_a_made_up_name() -> None:
     error = await rejected_call_body(_call({"tools": ["ha_no_such_tool"]}))
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("read_only_on")
 async def test_mixed_hidden_and_unknown_names_say_only_the_unknown_is_missing() -> None:
     """The top-level message must not tell the model a hidden write tool
@@ -313,7 +313,7 @@ async def _hits_and_full(
     return hits, list(full.data)
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_compact_page_is_smaller_than_the_full_definitions(
     toolsearch_server: server_module.HomeAssistantSmartMCPServer,
 ) -> None:
@@ -324,7 +324,7 @@ async def test_compact_page_is_smaller_than_the_full_definitions(
     assert len(json.dumps(hits)) < len(json.dumps(full))
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_real_hit_carries_the_summary_not_the_docstring(
     toolsearch_server: server_module.HomeAssistantSmartMCPServer,
 ) -> None:
@@ -343,7 +343,7 @@ async def test_real_hit_carries_the_summary_not_the_docstring(
     assert "utility_meter" in by_name["ha_config_set_helper"]["description"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_full_definition_hop_matches_the_compact_hit(
     toolsearch_server: server_module.HomeAssistantSmartMCPServer,
 ) -> None:
@@ -360,7 +360,7 @@ async def test_full_definition_hop_matches_the_compact_hit(
         assert entry["execute_via"] == hit["execute_via"], hit["name"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_real_helper_tool_lists_its_helper_types_inline(
     toolsearch_server: server_module.HomeAssistantSmartMCPServer,
 ) -> None:

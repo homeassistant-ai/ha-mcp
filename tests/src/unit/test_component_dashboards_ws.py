@@ -368,7 +368,17 @@ async def test_yaml_dashboards_the_default_included_are_counted_as_skipped(
     hass: HomeAssistant, component_ws: MockHAClientWebSocket
 ) -> None:
     """A YAML default dashboard has no list row the server could count."""
-    await _lovelace(hass, mode="yaml", dashboards=_yaml_dashboards())
+    await _lovelace(
+        hass,
+        dashboards={
+            **_yaml_dashboards(),
+            "lovelace": {
+                "mode": "yaml",
+                "filename": "ui-lovelace.yaml",
+                "title": "Home",
+            },
+        },
+    )
     await _dashboard(component_ws, "dash-home", body={"views": []})
 
     result = await _search(component_ws, "anything")

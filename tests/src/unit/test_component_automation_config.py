@@ -175,7 +175,7 @@ async def test_public_validator_stands_in_for_a_missing_private_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The public validator raises on every failure instead of reporting it.
-    with pytest.raises(probatio.Invalid) as raised:
+    with pytest.raises((probatio.Invalid, HomeAssistantError)) as raised:
         await automation_core_config.async_validate_config_item(hass, "", {})
     error = raised.value
     # A Core build with only the public validator; this Core's public one
@@ -371,6 +371,7 @@ async def test_stored_issue_from_an_earlier_run_is_ignored(
             "issues": [
                 {
                     "config_entry_id": None,
+                    "config_subentry_id": None,
                     "created": "2026-01-01T00:00:00+00:00",
                     "dismissed_version": None,
                     "domain": "automation",

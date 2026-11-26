@@ -343,6 +343,7 @@ async def test_post_save_validate_failure_remains_visible_without_failing_save(
 async def test_core_save_rejection_is_not_silently_accepted(
     core_client: HomeAssistantClient,
 ) -> None:
+    before = await _core_prefs(core_client)
     with sent_messages(core_client) as spy, pytest.raises(ToolError) as exc_info:
         await EnergyTools(core_client).ha_manage_energy_prefs(
             mode="add_source", source={"type": "future"}
@@ -351,7 +352,7 @@ async def test_core_save_rejection_is_not_silently_accepted(
     assert "Failed to save energy prefs" in str(exc_info.value)
     assert _sent(spy, "energy/save_prefs")
     assert not _sent(spy, "energy/validate")
-    assert await _core_prefs(core_client) == _PREFS
+    assert await _core_prefs(core_client) == before
 
 
 @pytest.mark.usefixtures("energy")
@@ -485,6 +486,7 @@ async def test_source_duplicate_guard_is_a_wrapper_policy(
 async def test_convenience_preview_does_not_write(
     core_client: HomeAssistantClient,
 ) -> None:
+    before = await _core_prefs(core_client)
     with sent_messages(core_client) as spy:
         result = await EnergyTools(core_client).ha_manage_energy_prefs(
             mode="add_device", stat_consumption="sensor.new", dry_run=True
@@ -492,7 +494,7 @@ async def test_convenience_preview_does_not_write(
 
     assert result["new_count"] == 2
     assert result["proposal_validation"]["status"] == "unavailable"
-    assert await _core_prefs(core_client) == _PREFS
+    assert await _core_prefs(core_client) == before
     assert not _sent(spy, "energy/save_prefs")
 
 
