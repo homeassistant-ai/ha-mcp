@@ -66,7 +66,8 @@ async def test_auto_with_a_rename_takes_the_id_the_new_name_gives(
     registry = er.async_get(hass)
     entry = registry.async_get(lamp)
     assert entry is not None
-    renamed = registry.async_regenerate_entity_id(entry, name="Reading Lamp")
+    # Core's id for the name; the stored name would give light.lamp.
+    renamed = "light.reading_lamp"
     assert renamed != registry.async_regenerate_entity_id(entry)
 
     result = await EntityTools(core_client).ha_set_entity(

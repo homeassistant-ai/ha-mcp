@@ -160,7 +160,7 @@ async def test_a_query_matches_the_names_core_gives_the_entity(
     for name in ("a", "b"):
         registry.async_get_or_create("sensor", "demo", name, suggested_object_id=name)
         await import_statistic(hass, f"sensor.{name}", "kWh", "energy", _rows(1, 2, 3))
-    registry.async_update_entity("sensor.b", aliases={"Gas meter"})
+    registry.async_update_entity("sensor.b", aliases=["Gas meter"])
 
     result = await _manage(
         component_client, "recorder/list_statistic_ids", query="gas meter"
