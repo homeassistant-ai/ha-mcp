@@ -39,8 +39,10 @@ async def set_home_zone(
                 context={"zone_id": zone_id, "refused_fields": others},
                 suggestions=[
                     "Pass only latitude, longitude and radius for zone.home",
-                    "The home zone's name is the location name under Settings > "
-                    "System > General",
+                    (
+                        "The home zone's name is the location name under "
+                        "Settings > System > General"
+                    ),
                 ],
             )
         )

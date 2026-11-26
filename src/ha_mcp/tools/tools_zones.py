@@ -539,8 +539,10 @@ class ZoneTools:
                     context={"zone_id": zone_id, "entity_id": entity_id},
                     suggestions=[
                         "Edit a YAML zone in configuration.yaml",
-                        "Move the home zone with ha_set_zone(zone_id='zone.home', "
-                        "latitude=..., longitude=..., radius=...)",
+                        (
+                            "Move the home zone with ha_set_zone(zone_id="
+                            "'zone.home', latitude=..., longitude=..., radius=...)"
+                        ),
                     ],
                 )
             )
@@ -558,6 +560,8 @@ class ZoneTools:
                 ],
             )
         )
+        # CodeQL (py/mixed-returns) reads raise_tool_error as returning.
+        raise AssertionError("unreachable: raise_tool_error always raises")
 
     @tool(
         name="ha_set_zone",

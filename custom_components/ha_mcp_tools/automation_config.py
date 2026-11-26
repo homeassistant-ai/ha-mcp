@@ -126,14 +126,14 @@ async def _validate(
     except core.invalid as err:
         # Raised by the public validator on any failure, and by the private one
         # when even the id/alias/description check fails.
-        verdict = {"status": "failed_schema", "error": str(err)}
+        failed = {"status": "failed_schema", "error": str(err)}
         if core.validate is None:
-            return verdict
-        return {**verdict, **await _located_errors(hass, core, msg["config"])}
+            return failed
+        return {**failed, **await _located_errors(hass, core, msg["config"])}
     status = getattr(checked, "validation_status", None)
     if status is None:
         return _unavailable("Home Assistant's automation validator gave no status")
-    verdict = {
+    verdict: dict[str, Any] = {
         "status": str(status),
         "error": getattr(checked, "validation_error", None),
     }
