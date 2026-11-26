@@ -23,6 +23,7 @@ from homeassistant.components.recorder.statistics import (
 )
 from homeassistant.components.recorder.util import session_scope
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.recorder import get_instance as recorder_instance
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
@@ -123,6 +124,50 @@ async def test_the_statistic_listing_pages_in_statistic_id_order(
     first = await _manage(client, "recorder/list_statistic_ids", limit=1)
 
     assert [row["statistic_id"] for row in first["result"]] == ["sensor.a"]
+
+
+@pytest.mark.parametrize(
+    ("query", "found"),
+    [
+        ("KWH", ["sensor.a", "sensor.b"]),
+        ("kwh sensor.b", ["sensor.b"]),
+        ("m³", ["sensor.water"]),
+        ("gas", []),
+    ],
+)
+async def test_a_query_keeps_the_statistics_every_word_matches(
+    client: HomeAssistantClient, hass: HomeAssistant, query: str, found: list[str]
+) -> None:
+    """Every word must be part of one of the row's values; without the
+    component the entities' aliases are not searched, and the answer says so."""
+    for name in ("a", "b"):
+        await import_statistic(hass, f"sensor.{name}", "kWh", "energy", _rows(1, 2, 3))
+    await import_statistic(hass, "sensor.water", "m³", "volume", _rows(1, 2, 3))
+
+    result = await _manage(client, "recorder/list_statistic_ids", query=query)
+
+    assert [row["statistic_id"] for row in result["result"]] == found
+    assert result["total_count"] == len(found)
+    assert any("aliases" in warning for warning in result["warnings"])
+
+
+async def test_a_query_matches_the_names_core_gives_the_entity(
+    component_client: HomeAssistantClient, hass: HomeAssistant
+) -> None:
+    """A meter is found by the alias of its entity, which its statistic row
+    does not carry."""
+    registry = er.async_get(hass)
+    for name in ("a", "b"):
+        registry.async_get_or_create("sensor", "demo", name, suggested_object_id=name)
+        await import_statistic(hass, f"sensor.{name}", "kWh", "energy", _rows(1, 2, 3))
+    registry.async_update_entity("sensor.b", aliases={"Gas meter"})
+
+    result = await _manage(
+        component_client, "recorder/list_statistic_ids", query="gas meter"
+    )
+
+    assert [row["statistic_id"] for row in result["result"]] == ["sensor.b"]
+    assert "warnings" not in result
 
 
 @pytest.mark.parametrize(
