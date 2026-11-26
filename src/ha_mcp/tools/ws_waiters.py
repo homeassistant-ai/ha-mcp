@@ -676,11 +676,14 @@ async def wait_for_state_attributes(
         except HomeAssistantAPIError as e:
             logger.debug(f"API error sampling {entity_id} attributes: {e}")
             return None
-        attributes = raw.get("attributes") if isinstance(raw, dict) else None
+        if not isinstance(raw, dict):
+            return None
+        state: dict[str, Any] = raw
+        attributes = state.get("attributes")
         if isinstance(attributes, dict) and all(
             attributes.get(key) == value for key, value in expected.items()
         ):
-            return raw
+            return state
         return None
 
     result = await _ws_wait_for_condition(
