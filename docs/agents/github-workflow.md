@@ -357,12 +357,19 @@ of one would only fail that check or the unit tests.
 
 Renovate moves those pins only to stable releases. `pr.yml`'s
 `Unit Tests (beta Core, ...)` job covers the beta: it reads the current beta
-Core from `beta.json`, installs its integration manifest requirements alongside `homeassistant` and `pytest-homeassistant`
-over the locked environment, and runs the unit suite on two runners, split
-the way the stable unit job is, and the app suite on the first. The external Docker E2E lane also runs for code changes during an active beta.
-The other beta E2E lanes run after merge, nightly, or on manual dispatch.
-It is not a required check, so a beta Core change reports without blocking
-a merge, and it skips while beta equals the dev group's pin.
+Core from `beta.json`, installs that `homeassistant` and `pytest-homeassistant`
+with the integration requirements of its manifests over the locked
+environment, and runs the unit suite on two runners, split the way the stable
+unit job is, and the app suite on the first. It is not a required check, so a
+beta Core change reports without blocking a merge, and it skips while beta
+equals the dev group's pin.
+
+For code changes, `pr.yml`'s `Beta Docker` job also calls
+`e2e-beta-tests.yml` with `pr_lane: true`, which runs only its external Docker
+`E2E Tests` job, and only while `beta.json` names a beta (`b` or `.dev`) that
+differs from the E2E image pin. It is not required either and is not part of
+the `E2E Validation Gate`. The other beta E2E lanes run after merge, nightly,
+or on manual dispatch.
 
 Renovate enables GitHub-native squash auto-merge for minor, patch, and digest
 updates, and for its ungrouped vulnerability-alert fixes. Ordinary major

@@ -176,6 +176,7 @@ async def test_stored_integration_secret_stays_out_of_options_form_reads(
                 "password": password,
                 "verify_ssl": False,
             }
+            # Core 2026.12's form dropped the name field that 2026.11 requires.
             if any(field["name"] == "name" for field in step["fields"]):
                 config["name"] = f"redact e2e {password[:8]}"
             created = await mcp.call_tool_success(

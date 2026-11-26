@@ -314,6 +314,8 @@ strict_config = true
 addopts = [
     "--verbose",
     "--tb=short",
+    # A module that fails to import is reported beside the failing tests
+    # instead of stopping the run before any test runs.
     "--continue-on-collection-errors",
     "-ra",
     "--durations=10",
@@ -423,7 +425,8 @@ log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 # Treat warnings as errors to enforce clean tests
 filterwarnings = [
     "error",
-    # Preserve pytest's failure summary when syrupy reports incomplete collection.
+    # Under --continue-on-collection-errors syrupy warns that collection was
+    # incomplete; as an error it would replace pytest's failure summary.
     "default:syrupy.*selected test.*missing from collected items:UserWarning",
     # Allow specific non-critical warnings that don't affect functionality
     "ignore::DeprecationWarning",

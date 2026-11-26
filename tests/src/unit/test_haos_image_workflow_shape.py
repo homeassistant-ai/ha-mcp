@@ -566,7 +566,7 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:  # noqa
 
 
 def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
-    """The container beta lanes mirror the HAOS beta trigger shape (#2361).
+    """The container beta lanes run the current beta Core image (#2361).
 
     One resolver job reads the beta Core version and every test job pins its
     HA image to that job's output, so all five lanes test the same image and
@@ -703,6 +703,9 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
 def test_container_beta_resolver_across_stable_promotion(
     tmp_path: Path, channel: str, pin: str, active: str, duplicate: str
 ) -> None:
+    """Pull requests run the beta Docker job only for an actual beta, and the
+    full lanes skip only the image the stable lanes already run, through the
+    weeks a stable release spends in the beta channel."""
     workflow = _workflow(_WORKFLOW_DIR / _CONTAINER_BETA_WORKFLOW)
     steps = _job_steps(workflow["jobs"]["resolve-beta"])
     resolver = next(step["run"] for step in steps if step.get("id") == "versions")

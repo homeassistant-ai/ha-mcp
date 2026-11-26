@@ -139,10 +139,23 @@ def test_committed_pins_are_what_the_sync_writes_for_the_dev_group_core(
 
 
 def test_installed_integration_dependencies_match_running_core() -> None:
+    """A library left at another pin than the running Core's manifest runs its
+    integration's tests on code that Core never ships with."""
     for text in sync.manifest_requirements(_installed_manifests().values()).values():
         requirement = Requirement(text)
         if requirement.marker is None or requirement.marker.evaluate():
             assert installed_version(requirement.name) in requirement.specifier, text
+
+
+def test_a_domain_the_installed_core_lacks_names_the_list_to_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A beta Core that drops or renames an integration stops the beta unit
+    lane's install; the error names the domain and the list to edit."""
+    monkeypatch.setattr(sync, "INTEGRATIONS", (*sync.INTEGRATIONS, "no_such_domain"))
+
+    with pytest.raises(SystemExit, match=r"'no_such_domain'.*INTEGRATIONS"):
+        sync.main(installed=True)
 
 
 @pytest.mark.usefixtures("stable_core_pin")

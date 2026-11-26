@@ -17,7 +17,10 @@ on:
   # nightly so deliberate upstream beta changes that require an ha-mcp
   # adaptation surface before stable release.
   #
-  # PR validation reuses the component-enabled Docker lane while a beta is available.
+  # pr.yml calls this with pr_lane: true, which runs only the component-enabled
+  # Docker job and only while beta.json names an actual beta. A stable release
+  # ahead of the pin reaches pull requests with its Renovate bump; push and
+  # nightly runs cover it until then.
   workflow_call:
     inputs:
       pr_lane:
@@ -48,7 +51,10 @@ permissions:
 
 # Push and scheduled runs are full compatibility checks, so a newer one
 # supersedes an older one. Manual dispatches may target only part of the suite;
-# give each one a unique group so it cannot cancel or replace a full run.
+# give each one a unique group so it cannot cancel or replace a full run. A
+# pull request's call gets its run's group too, so one pull request cannot
+# cancel another's. The prefix is literal: in a called workflow,
+# github.workflow names the caller.
 concurrency:
   group: container-beta-${{ (inputs.pr_lane || github.event_name == 'workflow_dispatch') && github.run_id || 'full' }}
   cancel-in-progress: true
@@ -122,6 +128,8 @@ jobs:
           active_beta=false
           if [[ "$core_version" =~ (b|[.]dev)[0-9]+$ ]]; then
             active_beta=true
+          else
+            echo "::notice::Core $core_version is not a beta; pull-request calls skip the beta Docker job"
           fi
           echo "active_beta=$active_beta" >> "$GITHUB_OUTPUT"
           superfluous=false

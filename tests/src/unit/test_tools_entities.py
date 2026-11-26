@@ -245,6 +245,8 @@ class TestStoredLabels:
         labels: list[str],
         sent: AsyncMock,
     ) -> None:
+        """Removing a label that is gone from the label registry is the cleanup
+        path; checking it against that registry would block it."""
         assert label_registry.async_get_label("ghost_label") is None
         assert _stored(entity_registry, "light.test").labels == {
             "ghost_label",

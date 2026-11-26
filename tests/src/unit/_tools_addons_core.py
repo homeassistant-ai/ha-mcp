@@ -312,8 +312,9 @@ class Supervisor:
 def app_info(slug: str = SLUG, **changes: Any) -> dict[str, Any]:
     """``GET /addons/<slug>/info`` as Supervisor answers it: a started app with
     ingress, built from aiohasupervisor's model; ``changes`` replace its fields."""
-    # Supervisor's Core 2026.12 client requires log_format. Drop this check
-    # once the stable Core pin moves off 2026.11.
+    # The aiohasupervisor release Core 2026.12 pins requires log_format; the
+    # one 2026.11 pins has no such field. Drop this check once the stable Core
+    # pin moves off 2026.11.
     log_fields: dict[str, Any] = {}
     if any(spec.name == "log_format" for spec in fields(InstalledAddonComplete)):
         log_fields["log_format"] = "plain"

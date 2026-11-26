@@ -226,7 +226,8 @@ async def test_empty_entity_area_blocks_fallback_to_device_area(
     entity_registry: er.EntityRegistry,
     config_entry: MockConfigEntry,
 ) -> None:
-    """An existing empty area must not place an entity in its device's area."""
+    """An entity in the area whose id is "" must not be placed in its device's
+    area."""
     area = area_registry.async_create("")
     assert area.id == ""
     _child_device_sensor(

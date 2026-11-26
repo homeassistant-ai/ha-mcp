@@ -656,7 +656,7 @@ async def test_empty_entity_area_does_not_inherit_its_devices_area(
     office: str,
     search: Any,
 ) -> None:
-    """An existing empty area blocks inheritance from the device."""
+    """The area whose id is "" blocks inheritance from the device."""
     entry = add_test_entry(hass)
     device = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={("test", "device")}

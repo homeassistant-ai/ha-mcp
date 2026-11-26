@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shlex
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -493,6 +495,37 @@ def test_haos_topology_input_selects_the_lane_topology(
 def test_stdio_lane_never_allocates_a_pull_request_runner() -> None:
     data = yaml.safe_load((_WORKFLOW_DIR / _STDIO).read_text(encoding="utf-8"))
     assert set(data[True]) == {"workflow_dispatch"}
+
+
+def _failure_cap(arguments: list[str]) -> str | None:
+    """The ``--maxfail`` pytest applies: the last of ``--maxfail`` and ``-x``."""
+    cap = None
+    for index, argument in enumerate(arguments):
+        if argument.startswith("--maxfail="):
+            cap = argument.partition("=")[2]
+        elif argument == "--maxfail":
+            cap = arguments[index + 1]
+        elif argument in ("-x", "--exitfirst"):
+            cap = "1"
+    return cap
+
+
+def test_no_run_stops_before_reporting_every_failure() -> None:
+    """A failure cap ends a run after its first failures, so a topology audit
+    or a locale sweep reports a few of them and hides the rest."""
+    pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text("utf-8"))
+    assert _failure_cap(pyproject["tool"]["pytest"]["ini_options"]["addopts"]) is None
+    for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
+        jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
+        for job_id, job in jobs.items():
+            for step in job.get("steps", []):
+                body = _uncommented(str(step.get("run", ""))).replace("\\\n", " ")
+                for line in body.splitlines():
+                    if "uv run pytest" in line:
+                        arguments = shlex.split(line, comments=True)
+                        assert _failure_cap(arguments) in (None, "0"), (
+                            f"{path.name}::{job_id}: {line.strip()}"
+                        )
 
 
 def _discover_e2e_lanes(directory: Path | None = None) -> set[tuple[str, str]]:

@@ -617,12 +617,12 @@ jobs:
           [ "$RESULT" = "success" ]
 
   # The unit suite, on two runners, and the app (add-on) suite, on the first
-  # of them, against the current beta Core, the same
-  # beta e2e-beta-tests.yml resolves, but on every pull request: these suites
-  # take minutes. Not a required check,
-  # so a beta Core change reports here without blocking a merge. While beta
-  # equals the dev group's Core pin, which Unit Tests just ran, every step
-  # after the resolver is skipped (a manual dispatch always runs).
+  # of them, against the current beta Core, the same beta e2e-beta-tests.yml
+  # resolves. Not a required check, so a beta Core change reports here without
+  # blocking a merge. While beta equals the dev group's Core pin, which Unit
+  # Tests just ran, every step after the resolver is skipped (a manual
+  # dispatch always runs); unlike the beta Docker job below, a stable release
+  # ahead of that pin still runs here.
   unit-tests-beta:
     name: Unit Tests (beta Core, ${{ matrix.shard }})
     runs-on: ubuntu-latest
@@ -702,6 +702,9 @@ jobs:
           echo "::error::PyPI has no installable homeassistant and pytest-homeassistant $BETA_CORE"
           exit 1
         fi
+        # The integrations the unit tests run, at the beta's manifest pins; the
+        # script reads them from the beta just installed, and restating Core's
+        # pins keeps -r from moving it.
         uv run --no-sync python scripts/sync_dev_integration_pins.py --installed-requirements > "$RUNNER_TEMP/beta-requirements.txt"
         uv pip install "homeassistant==$BETA_CORE" "pytest-homeassistant==$BETA_CORE" -r "$RUNNER_TEMP/beta-requirements.txt"
         uv run --no-sync python -c \
@@ -725,6 +728,7 @@ jobs:
     - name: Run unit tests on the beta Core
       if: github.event_name == 'workflow_dispatch' || steps.beta.outputs.superfluous != 'true'
       env:
+        # Tells the pin-sync tests that the Core differs from the pin on purpose.
         BETA_CORE: ${{ steps.beta.outputs.version }}
         UNIT_TEST_SHARD: ${{ matrix.shard }}
       run: uv run --no-sync pytest tests/src/unit/ -n logical --tb=short -q -rf
@@ -735,7 +739,8 @@ jobs:
         uv run --no-sync pytest tests/addon/ -n logical --tb=short -q -rf
         --ignore=tests/addon/test_addon_startup.py
 
-  # Comprehensive E2E validation for all PRs
+  # The external Docker E2E job against the current beta Core, while one is
+  # out; not part of the E2E Validation Gate.
   e2e-validation-beta:
     name: Beta Docker
     needs: changes
@@ -744,6 +749,7 @@ jobs:
     with:
       pr_lane: true
 
+  # Comprehensive E2E validation for all PRs
   e2e-validation:
     name: E2E Validation (${{ matrix.os }})
     needs: changes

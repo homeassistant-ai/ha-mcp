@@ -10,6 +10,9 @@ Everything between the markers is replaced.
 Usage (after editing ``INTEGRATIONS``):
     python scripts/sync_dev_integration_pins.py
     uv lock
+
+``--installed-requirements`` instead prints the pins of the installed Core's
+manifests and writes nothing; the beta Core unit lane installs them.
 """
 
 from __future__ import annotations
@@ -116,7 +119,10 @@ def _fetch_manifests(version: str) -> list[str] | None:
     return manifests
 
 
-def main(root: Path = _REPO_ROOT) -> int:
+def main(root: Path = _REPO_ROOT, *, installed: bool = False) -> int:
+    if installed:
+        print("\n".join(manifest_requirements(_installed_manifests()).values()))
+        return 0
     pyproject = root / "pyproject.toml"
     dependabot = root / ".github" / "dependabot.yml"
     pyproject_text = pyproject.read_text(encoding="utf-8")
@@ -138,6 +144,23 @@ def main(root: Path = _REPO_ROOT) -> int:
     return 0
 
 
+def _installed_manifests() -> list[str]:
+    from importlib.resources import files
+
+    components = files("homeassistant.components")
+    manifests = []
+    for domain in INTEGRATIONS:
+        try:
+            manifest = components.joinpath(domain, "manifest.json")
+            manifests.append(manifest.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise SystemExit(
+                f"ERROR: the installed Core has no '{domain}' manifest; update "
+                f"INTEGRATIONS in scripts/{Path(__file__).name}"
+            ) from None
+    return manifests
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -145,14 +168,4 @@ if __name__ == "__main__":
         action="store_true",
         help="Print the installed Core's integration pins without updating project files.",
     )
-    if parser.parse_args().installed_requirements:
-        from importlib.resources import files
-
-        components = files("homeassistant.components")
-        manifests = (
-            components.joinpath(domain, "manifest.json").read_text(encoding="utf-8")
-            for domain in INTEGRATIONS
-        )
-        print("\n".join(manifest_requirements(manifests).values()))
-    else:
-        sys.exit(main())
+    sys.exit(main(installed=parser.parse_args().installed_requirements))

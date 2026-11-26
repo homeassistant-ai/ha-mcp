@@ -45,6 +45,7 @@ from ._registry_item_snapshots import _snapshot
 
 @pytest.fixture(autouse=True)
 def diff_labels(label_registry: lr.LabelRegistry) -> None:
+    """Core 2026.12 refuses an entity label the label registry lacks."""
     for name in ("First", "Second", "Third"):
         label_registry.async_create(name)
 
