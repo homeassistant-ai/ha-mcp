@@ -41,7 +41,10 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .config_helpers.registry import validate_registry_ids
+from .config_helpers.registry import (
+    registry_refusal_hints,
+    validate_registry_write_ids,
+)
 from .entity_expose_batch import (
     apply_bulk_expose,
     changed_entity_ids,
@@ -454,7 +457,10 @@ class EntityTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                raise_entity_refusal("Failed to update entity", result, entity_id)
+                hints = registry_refusal_hints(result, message)
+                raise_entity_refusal(
+                    "Failed to update entity", result, entity_id, hints
+                )
 
             core_result = dict(result.get("result") or {})
 
@@ -892,12 +898,11 @@ class EntityTools:
             # For label add, only the added IDs are checked: the merged
             # set may legitimately carry pre-existing dangling labels, whose
             # cleanup path (label_operation="remove") must stay open.
-            await validate_registry_ids(
+            await validate_registry_write_ids(
                 self._client,
                 message.get("area_id"),  # normalized by build_name_visibility_fields
                 parsed_labels if label_operation in ("set", "add") else None,
                 parsed_categories,
-                fail_closed=True,
             )
 
             # Phase 3: Send entity registry update (covers all fields except expose_to)
@@ -1528,12 +1533,11 @@ class EntityTools:
             # entity also revalidates under its lock to catch references deleted
             # while waiting, preserving per-entity partial-progress reporting.
             if is_bulk:
-                await validate_registry_ids(
+                await validate_registry_write_ids(
                     self._client,
                     None,
                     parsed_labels if label_operation in ("set", "add") else None,
                     parsed_categories,
-                    fail_closed=True,
                 )
 
             # Single entity case

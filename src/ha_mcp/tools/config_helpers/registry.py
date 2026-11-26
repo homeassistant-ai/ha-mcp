@@ -20,6 +20,17 @@ from .schemas import SIMPLE_HELPER_TYPES, _simple_helper_error_context
 
 logger = logging.getLogger(__name__)
 
+REGISTRY_ID_HINTS = {
+    "area_id": [
+        "Use ha_list_floors_areas() to list valid area IDs.",
+        'Pass area_id="" to clear the area assignment.',
+    ],
+    "labels": [
+        "Use ha_config_get_label() to list valid label IDs.",
+        "Use ha_config_set_label() to create a new label.",
+    ],
+}
+
 
 async def _ws_registry_lookup(
     client: Any, message: dict[str, Any]
@@ -90,8 +101,7 @@ def _raise_if_unknown_labels(
                 "the label registry.",
                 context={"labels": labels, "unknown_labels": unknown},
                 suggestions=[
-                    "Use ha_config_get_label() to list valid label IDs.",
-                    "Use ha_config_set_label() to create a new label.",
+                    *REGISTRY_ID_HINTS["labels"],
                     f"Available label_ids: {sorted(valid_label_ids)}",
                 ],
             )
@@ -108,8 +118,7 @@ def _raise_if_unknown_area(areas: list[dict[str, Any]], area_id: str) -> None:
                 f"area_id={area_id!r} does not exist in the area registry.",
                 context={"area_id": area_id},
                 suggestions=[
-                    "Use ha_list_floors_areas() to list valid area IDs.",
-                    'Pass area_id="" to clear the area assignment.',
+                    *REGISTRY_ID_HINTS["area_id"],
                     f"Available area_ids: {sorted(valid_area_ids)}",
                 ],
             )
@@ -379,6 +388,50 @@ async def validate_registry_ids(
         _apply_registry_check(
             kind, scope, value, ok, items, exc, error_code, fail_closed
         )
+
+
+async def _core_checks_area_and_labels(client: Any) -> bool:
+    """Whether Core refuses an unknown area or added label on an entity or
+    device registry write (``_validate_area_and_labels``, 2026.12).
+
+    Both Cores accept the same write and only 2026.12 answers ``invalid_info``,
+    so nothing but the version tells them apart before the write.
+    """
+    try:
+        version = str((await client.get_config()).get("version"))
+        release = tuple(int(part) for part in version.split(".")[:2])
+    except HomeAssistantAPIError, HomeAssistantConnectionError, ValueError:
+        return False
+    return release >= (2026, 12)
+
+
+async def validate_registry_write_ids(
+    client: Any,
+    area_id: str | None,
+    labels: list[str] | None,
+    categories: dict[str, str | None] | None,
+) -> None:
+    """``validate_registry_ids`` (fail closed) for an entity or device registry
+    write. Where Core checks the area and labels itself, only the categories
+    are checked here, and Core's refusal reaches the caller."""
+    if await _core_checks_area_and_labels(client):
+        area_id, labels = None, None
+    await validate_registry_ids(client, area_id, labels, categories, fail_closed=True)
+
+
+def registry_refusal_hints(
+    result: dict[str, Any], message: dict[str, Any]
+) -> list[str] | None:
+    """The hints for the area or labels a refused registry write carried."""
+    if result.get("error_code") != "invalid_info":
+        return None
+    hints = [
+        h
+        for key in REGISTRY_ID_HINTS
+        if message.get(key)
+        for h in REGISTRY_ID_HINTS[key]
+    ]
+    return hints or None
 
 
 class _NameCheckSkipped(Exception):

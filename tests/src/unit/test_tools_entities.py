@@ -11,6 +11,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
@@ -38,6 +39,16 @@ _UPDATE = "config/entity_registry/update"
 _GET = "config/entity_registry/get"
 _LABELS = "config/label_registry/list"
 _AREAS = "config/area_registry/list"
+
+# Core refuses an unknown area or added label itself from 2026.12, and the
+# tool then leaves the check to it.
+CORE_CHECKS_IDS = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12)
+precheck_only = pytest.mark.skipif(
+    CORE_CHECKS_IDS, reason="Core checks the area and labels itself since 2026.12"
+)
+core_check_only = pytest.mark.skipif(
+    not CORE_CHECKS_IDS, reason="Core checks the area and labels itself since 2026.12"
+)
 
 
 @pytest.fixture
@@ -185,6 +196,7 @@ class TestLabels:
 
         assert _stored(entity_registry, "light.test").labels == {"outdoor"}
 
+    @precheck_only
     @pytest.mark.parametrize("label_operation", ["set", "add"])
     async def test_an_unknown_label_is_refused_before_the_write(
         self,
@@ -263,6 +275,7 @@ class TestStoredLabels:
 
 
 class TestRegistryReferences:
+    @precheck_only
     async def test_an_unknown_area_is_refused_before_the_write(
         self,
         tools: EntityTools,
@@ -295,7 +308,7 @@ class TestRegistryReferences:
 
         await tools.ha_set_entity(entity_id="light.test", area_id=area.id)
 
-        assert sent_types(sent) == [_AREAS, _UPDATE]
+        assert sent_types(sent) == ([] if CORE_CHECKS_IDS else [_AREAS]) + [_UPDATE]
         assert _stored(entity_registry, "light.test").area_id == area.id
 
     async def test_an_unknown_category_is_refused_in_its_own_scope(
@@ -324,8 +337,20 @@ class TestRegistryReferences:
     @pytest.mark.parametrize(
         ("registry", "method", "kwargs", "lookup"),
         [
-            (ar.AreaRegistry, "async_list_areas", {"area_id": "living_room"}, _AREAS),
-            (lr.LabelRegistry, "async_list_labels", {"labels": ["outdoor"]}, _LABELS),
+            pytest.param(
+                ar.AreaRegistry,
+                "async_list_areas",
+                {"area_id": "living_room"},
+                _AREAS,
+                marks=precheck_only,
+            ),
+            pytest.param(
+                lr.LabelRegistry,
+                "async_list_labels",
+                {"labels": ["outdoor"]},
+                _LABELS,
+                marks=precheck_only,
+            ),
             (
                 cr.CategoryRegistry,
                 "async_list_categories",
@@ -361,6 +386,7 @@ class TestRegistryReferences:
         assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
         assert sent_types(sent) == [lookup]
 
+    @precheck_only
     async def test_a_dropped_area_read_refuses_the_write(
         self, tools: EntityTools, dropped: AsyncMock
     ) -> None:
@@ -371,6 +397,46 @@ class TestRegistryReferences:
         assert body["error"]["code"] == "CONNECTION_FAILED"
         assert body["area_id"] == "living_room"
         assert dropped.call_args_list == [call({"type": _AREAS})]
+
+    @core_check_only
+    @pytest.mark.parametrize(
+        ("change", "core_message", "hint"),
+        [
+            ({"area_id": "ghost_area"}, "Area 'ghost_area' not found", "area IDs"),
+            ({"labels": ["ghost_label"]}, "Labels not found: ghost_label", "label IDs"),
+            (
+                {"labels": ["ghost_label"], "label_operation": "add"},
+                "Labels not found: ghost_label",
+                "label IDs",
+            ),
+        ],
+        ids=["area", "labels", "label-add"],
+    )
+    async def test_core_refuses_an_unknown_area_or_label_itself(
+        self,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+        sent: AsyncMock,
+        change: dict[str, Any],
+        core_message: str,
+        hint: str,
+    ) -> None:
+        """Core's refusal reaches the caller with its code, and HA-MCP sends
+        no registry read of its own to check the same thing first."""
+        _entity(entity_registry, "light.test", labels={"outdoor"})
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(entity_id="light.test", **change)
+
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["ha_error_code"] == "invalid_info"
+        assert core_message in body["error"]["message"]
+        assert any(hint in s for s in body["error"]["suggestions"])
+        assert sent_types(sent) == [_GET] * ("label_operation" in change) + [_UPDATE]
+        stored = _stored(entity_registry, "light.test")
+        assert (stored.area_id, stored.labels) == (None, {"outdoor"})
 
 
 class TestSingleEntityUpdate:
@@ -546,6 +612,7 @@ class TestBulk:
                 "automation": category.category_id
             }
 
+    @precheck_only
     async def test_an_unknown_label_is_refused_before_any_entity_is_touched(
         self,
         tools: EntityTools,
@@ -564,6 +631,22 @@ class TestBulk:
 
         assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
         assert sent_types(sent) == [_LABELS]
+
+    @core_check_only
+    async def test_core_refuses_an_unknown_label_on_each_entity(
+        self, tools: EntityTools, entity_registry: er.EntityRegistry, labels: list[str]
+    ) -> None:
+        """Without HA-MCP's own check each entity reports Core's refusal."""
+        for entity_id in ("light.a", "light.b"):
+            _entity(entity_registry, entity_id)
+
+        result = await tools.ha_set_entity(
+            entity_id=["light.a", "light.b"], labels=["ghost_label"]
+        )
+
+        assert (result["success"], result["failed_count"]) == (False, 2)
+        assert all("ghost_label" in f["error"] for f in result["failed"])
+        assert _stored(entity_registry, "light.a").labels == set()
 
 
 class TestDisableGuardrail:

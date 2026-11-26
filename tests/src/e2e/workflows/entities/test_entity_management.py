@@ -14,6 +14,7 @@ from ...utilities.assertions import (
 from ...utilities.cleanup import (
     TestEntityCleaner as EntityCleaner,
 )
+from ...utilities.core_version import core_at_least
 
 logger = logging.getLogger(__name__)
 
@@ -626,7 +627,8 @@ class TestEntityManagement:
 class TestSetEntityNegativeInputs:
     """Negative-input tests for ha_set_entity.
 
-    All cases exercise MCP-layer pre-flight guards — no WebSocket call is made.
+    All cases but the unknown area or label exercise MCP-layer pre-flight
+    guards — no WebSocket call is made.
     """
 
     async def test_set_entity_empty_list_rejected(self, mcp_client) -> None:
@@ -649,29 +651,30 @@ class TestSetEntityNegativeInputs:
         assert not data.get("success", False)
         assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
-    async def test_set_entity_invalid_area_id_rejected(self, mcp_client) -> None:
-        """Rejects unknown areas instead of creating a dangling assignment."""
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_set_entity",
-            {"entity_id": "light.test", "area_id": "unknown_area_id"},
-        )
+    @pytest.mark.parametrize(
+        ("change", "context_key", "hint"),
+        [
+            ({"area_id": "unknown_area_id"}, "area_id", "ha_list_floors_areas"),
+            ({"labels": ["unknown_label_id"]}, "unknown_labels", "ha_config_get_label"),
+        ],
+        ids=["area", "label"],
+    )
+    async def test_set_entity_unknown_area_or_label_rejected(
+        self, mcp_client, ha_client, change, context_key, hint
+    ) -> None:
+        """Rejects an unknown area or label instead of leaving a dangling
+        assignment: Core refuses it itself from 2026.12, HA-MCP before."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_set_entity", {"entity_id": "sun.sun", **change}
+            )
 
-        assert not data.get("success", False)
         assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert data["area_id"] == "unknown_area_id"
-
-    async def test_set_entity_invalid_label_rejected(self, mcp_client) -> None:
-        """Rejects unknown labels instead of creating a dangling assignment."""
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_set_entity",
-            {"entity_id": "light.test", "labels": ["unknown_label_id"]},
-        )
-
-        assert not data.get("success", False)
-        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert data["unknown_labels"] == ["unknown_label_id"]
+        if await core_at_least(ha_client, (2026, 12)):
+            assert data["ha_error_code"] == "invalid_info"
+            assert any(hint in s for s in data["error"]["suggestions"])
+        else:
+            assert context_key in data
 
     async def test_set_entity_automation_disable_rejected(self, mcp_client) -> None:
         """Rejects registry-disabling an automation entity.

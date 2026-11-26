@@ -5,6 +5,7 @@ handed, so a typo or a since-deleted ID left the device pointing at registry
 entries that do not exist while the tool reported success. The write now
 preflights both against their registries, and fails closed when a registry
 cannot be read — a degraded lookup must not let a dangling reference through.
+From 2026.12 Core refuses them itself, and its refusal reaches the caller.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
@@ -26,6 +28,11 @@ from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnecti
 from ha_mcp.tools.tools_registry import RegistryTools
 
 from ._client_spies import sent_messages
+
+CORE_CHECKS_IDS = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12)
+precheck_only = pytest.mark.skipif(
+    CORE_CHECKS_IDS, reason="Core checks the area and labels itself since 2026.12"
+)
 
 
 @pytest.fixture
@@ -49,6 +56,7 @@ def tools(core_client: HomeAssistantClient) -> RegistryTools:
 class TestSetDeviceRegistryReferences:
     """Unknown area/label IDs must be rejected before the registry write."""
 
+    @precheck_only
     async def test_unknown_area_rejected(
         self,
         tools: RegistryTools,
@@ -68,6 +76,7 @@ class TestSetDeviceRegistryReferences:
         assert stored is not None
         assert stored.area_id is None
 
+    @precheck_only
     async def test_unknown_label_rejected(
         self,
         tools: RegistryTools,
@@ -87,6 +96,7 @@ class TestSetDeviceRegistryReferences:
         assert stored is not None
         assert stored.labels == set()
 
+    @precheck_only
     async def test_registry_lookup_failure_fails_closed(
         self,
         tools: RegistryTools,
@@ -160,6 +170,49 @@ class TestSetDeviceRegistryReferences:
         stored = device_registry.async_get(device.id)
         assert stored is not None
         assert stored.labels == set()
+
+
+@pytest.mark.skipif(
+    not CORE_CHECKS_IDS, reason="Core checks the area and labels itself since 2026.12"
+)
+@pytest.mark.parametrize(
+    ("change", "core_message", "hint"),
+    [
+        ({"area_id": "ghost_area"}, "Area 'ghost_area' not found", "area IDs"),
+        ({"labels": ["ghost_label"]}, "Labels not found: ghost_label", "label IDs"),
+    ],
+    ids=["area", "labels"],
+)
+async def test_core_refuses_an_unknown_area_or_label_itself(
+    tools: RegistryTools,
+    core_client: HomeAssistantClient,
+    device: dr.DeviceEntry,
+    device_registry: dr.DeviceRegistry,
+    change: dict[str, object],
+    core_message: str,
+    hint: str,
+) -> None:
+    """Core's refusal reaches the caller with its code, and HA-MCP sends no
+    registry read of its own to check the same thing first."""
+    with (
+        sent_messages(core_client) as sent,
+        pytest.raises(ToolError) as exc_info,
+    ):
+        await tools.ha_set_device(device_id=device.id, **change)
+
+    error_data = json.loads(str(exc_info.value))
+    assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error_data["ha_error_code"] == "invalid_info"
+    assert core_message in error_data["error"]["message"]
+    assert any(hint in s for s in error_data["error"]["suggestions"])
+    sent_types = [c.args[0]["type"] for c in sent.call_args_list]
+    assert "config/device_registry/update" in sent_types
+    assert not {"config/area_registry/list", "config/label_registry/list"} & set(
+        sent_types
+    )
+    stored = device_registry.async_get(device.id)
+    assert stored is not None
+    assert (stored.area_id, stored.labels) == (None, set())
 
 
 class TestSetDeviceCoreAnswers:
