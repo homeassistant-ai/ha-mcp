@@ -204,10 +204,11 @@ Notes:
   API, whose tools (logs, history, templates, search, integrations, system
   health) overlap some of this toolset. Selecting both on one agent works:
   Core prefixes only tool names that clash, with the API's ID.
-- With Home Assistant's own Model Context Protocol server turned on,
-  **Settings → System → AI** also lists this API's own URL
-  (`/api/mcp/<api id>`). External MCP clients signed in as an administrator
-  can use it, whichever APIs the server entry itself selects.
+- When Home Assistant’s built-in MCP server is enabled, **Settings → System → AI**
+  lists `/api/mcp/<api-id>` for this conversation-agent toolset. Administrators
+  can reach it over MCP, and the **LLM API** toggles determine which tools it
+  exposes for Assist chat and voice. Avoid this URL when setting up an external
+  ha-mcp client. Copy the [connect URL](#connect-urls) from **HA-MCP Server → Configure**.
 
 **Security:** the toolset runs with the server's admin access. Selecting it
 on an agent hands that power to everyone who can talk to that agent,
