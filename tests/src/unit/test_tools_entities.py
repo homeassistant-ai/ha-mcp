@@ -15,7 +15,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import category_registry as cr
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.json import json_bytes
 from homeassistant.setup import async_setup_component
@@ -207,9 +210,12 @@ class TestLabels:
         assert _stored(entity_registry, "light.test").labels == {"outdoor"}
 
 
+@pytest.mark.parametrize("load_registries", [False])
 class TestStoredLabels:
-    @pytest.fixture
-    def hass_storage(self, hass_storage: dict[str, Any]) -> dict[str, Any]:
+    @pytest.fixture(autouse=True)
+    async def restored_registries(
+        self, hass: HomeAssistant, hass_storage: dict[str, Any]
+    ) -> None:
         """Restore an entity saved before its missing label was cleaned up."""
         entry = RegistryEntryWithDefaults(
             entity_id="light.test",
@@ -227,7 +233,9 @@ class TestStoredLabels:
                 "deleted_entities": [],
             },
         }
-        return hass_storage
+        dr.async_setup(hass)
+        for registry in (ar, cr, dr, er, fr, ir, lr):
+            await registry.async_load(hass)
 
     async def test_a_dangling_label_can_still_be_removed(
         self,
