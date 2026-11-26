@@ -116,7 +116,8 @@ const withBase = (path: string) => {
               </tbody>
             </table>
           </div>
-          <p class="text-slate-400 text-sm mt-3">Built-in = operate devices. ha-mcp = administer your system.</p>
+          <p class="text-slate-300 mt-3">Using Home Assistant’s built-in MCP server (<code class="bg-slate-800 px-1 rounded">/api/mcp</code> or <code class="bg-slate-800 px-1 rounded">/api/mcp/&lt;api-id&gt;</code>) to connect an external client to ha-mcp is unsupported. The ha-mcp tools listed under <strong>Settings → System → AI</strong> are intended for Home Assistant conversation agents, including Assist chat and voice.</p>
+          <p class="text-slate-300 mt-3">To connect an external client, use the MCP server URL from the ha-mcp app logs. For the embedded server, copy the connect URL from the <strong>HA-MCP Server</strong> entry’s <strong>Configure</strong> screen.</p>
         </div>
 
         <div class="faq-item" id="tool-settings-page">

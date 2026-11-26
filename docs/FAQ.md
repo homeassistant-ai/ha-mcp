@@ -28,7 +28,9 @@ If you *do* run the app, you don't also need `uvx` — that would be a second, s
 | Dashboards | No | Full dashboard management |
 | Cameras | No | Screenshot and analysis |
 
-Built-in = operate devices. ha-mcp = administer your system.
+Using Home Assistant’s built-in MCP server (`/api/mcp` or `/api/mcp/<api-id>`) to connect an external client to ha-mcp is unsupported. The ha-mcp tools listed under **Settings → System → AI** are intended for Home Assistant conversation agents, including Assist chat and voice.
+
+To connect an external client, use the MCP server URL from the ha-mcp app logs. For the embedded server, copy the connect URL from the **HA-MCP Server** entry’s **Configure** screen.
 
 ### How do I open the ha-mcp settings page?
 
