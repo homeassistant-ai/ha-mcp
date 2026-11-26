@@ -244,13 +244,13 @@ async def _list_gone(client: Any, todo_entity: str) -> bool:
     list as one it has not loaded. A deleted list has neither a state nor a
     registry entry; a disabled one keeps its entry. So does a list without a
     unique id that Home Assistant has not loaded, which is taken as deleted."""
-    state = await _manager()._rest_get_or_none(client, f"states/{todo_entity}")
+    state = await _manager()._rest_get_or_none(client, client.state_path(todo_entity))
     return state is None and await fetch_entity(client, todo_entity) is None
 
 
 async def _require_available(client: Any, todo_entity: str) -> None:
     # Core skips an unavailable list: a write changes nothing and succeeds.
-    state = await _manager()._rest_get_or_none(client, f"states/{todo_entity}")
+    state = await _manager()._rest_get_or_none(client, client.state_path(todo_entity))
     if state is None and await fetch_entity(client, todo_entity) is None:
         raise _not_applied(
             f"Todo list {todo_entity} no longer exists", reason="entity_not_found"

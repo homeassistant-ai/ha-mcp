@@ -27,6 +27,7 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.config import get_global_settings
 from ha_mcp.tools.tools_groups import GroupTools
 
+from ._backup_core import handler_for
 from ._client_spies import sent_messages
 from ._tool_errors import error_of
 
@@ -481,6 +482,37 @@ class TestRemoveGroup:
 
 
 class TestGroupBackupRestore:
+    @pytest.mark.parametrize("entity_id", ["lights", "group.lights"])
+    async def test_a_backup_holds_the_groups_name_icon_and_members(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, entity_id: str
+    ) -> None:
+        await _setup_groups(hass)
+        await _group_set(
+            hass, "lights", name="Lights", icon="mdi:lamp", entities=["light.a"]
+        )
+        handler = handler_for(
+            get_backup_manager(core_client, get_global_settings()), "group"
+        )
+
+        held = await handler.fetch(core_client, entity_id)
+
+        assert held == {
+            "object_id": "lights",
+            "name": "Lights",
+            "icon": "mdi:lamp",
+            "entities": ["light.a"],
+        }
+
+    async def test_a_backup_of_an_unknown_group_holds_nothing(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await _setup_groups(hass)
+        handler = handler_for(
+            get_backup_manager(core_client, get_global_settings()), "group"
+        )
+
+        assert await handler.fetch(core_client, "nope") is None
+
     async def test_restore_clears_members_added_after_the_snapshot(
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:

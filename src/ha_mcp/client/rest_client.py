@@ -600,7 +600,7 @@ class HomeAssistantClient:
             Entity state data
         """
         logger.debug(f"Fetching state for entity: {entity_id}")
-        return await self._request("GET", f"/states/{entity_id}")
+        return await self._request("GET", self.state_path(entity_id))
 
     async def call_service(
         self,
@@ -2132,6 +2132,16 @@ class HomeAssistantClient:
         raise HomeAssistantCommandError.from_reply(
             result, f"Could not look up {entity_id}: {result.get('error')}"
         )
+
+    @staticmethod
+    def state_path(entity_id: str) -> str:
+        """Core's state API path for ``entity_id``, kept to one segment so the
+        id cannot reach another endpoint: every reserved character in it
+        encoded (``/``, ``?`` and ``#`` among them), and a bare ``.`` or ``..``
+        too, which the HTTP client would resolve as a dot segment."""
+        if entity_id in (".", ".."):
+            return f"states/{entity_id.replace('.', '%2E')}"
+        return f"states/{quote(entity_id, safe='')}"
 
     @staticmethod
     def config_path(domain: str, key: str) -> str:

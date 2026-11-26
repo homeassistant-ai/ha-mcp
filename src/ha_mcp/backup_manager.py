@@ -2228,7 +2228,7 @@ def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
 
 async def _fetch_group(client: Any, entity_id: str) -> Any:
     eid = entity_id if entity_id.startswith("group.") else f"group.{entity_id}"
-    state = await _rest_get_or_none(client, f"states/{eid}")
+    state = await _rest_get_or_none(client, client.state_path(eid))
     if state is None:
         return None
     attrs = state.get("attributes", {}) if isinstance(state, dict) else {}
