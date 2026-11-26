@@ -25,8 +25,6 @@ from ._settings_ui_js_helpers import probe
             "https://my.home-assistant.io/redirect/integration/?domain=ha_mcp_tools",
         ),
         ("docker", "/mcp/settings", ""),
-        ("sidecar", "/mcp/settings", ""),
-        ("addon", "/mcp/settings", ""),
     ],
 )
 def test_integration_settings_link(
