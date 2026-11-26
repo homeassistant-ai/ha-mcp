@@ -40,6 +40,7 @@ from aiohasupervisor.models.addons import (
     InstalledAddon,
     SupervisorRole,
 )
+from aiohasupervisor.models.ingress import Session
 from aiohttp import WSMsgType, web
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -284,8 +285,9 @@ class Supervisor:
         answer = self._next_answer(request.method, path)
         if answer is None:
             if (request.method, path) == ("POST", "/ingress/session"):
-                self.sessions.append(f"session-{len(self.sessions) + 1}")
-                return web.json_response(supervisor_ok({"session": self.sessions[-1]}))
+                session = Session(session=f"session-{len(self.sessions) + 1}")
+                self.sessions.append(session.session)
+                return web.json_response(supervisor_ok(session.to_dict()))
             return web.json_response(
                 supervisor_error(f"No answer for {path}"), status=404
             )
