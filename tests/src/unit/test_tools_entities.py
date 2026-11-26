@@ -9,7 +9,6 @@ from collections.abc import Mapping
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
-import attr
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -207,16 +206,26 @@ class TestLabels:
     async def test_a_dangling_label_can_still_be_removed(
         self,
         tools: EntityTools,
+        hass: HomeAssistant,
+        label_registry: lr.LabelRegistry,
+        monkeypatch: pytest.MonkeyPatch,
         entity_registry: er.EntityRegistry,
         labels: list[str],
         sent: AsyncMock,
     ) -> None:
         """Removing a label that is gone from the label registry is the cleanup
         path; checking it against that registry would block it."""
-        row = _entity(entity_registry, "light.test", labels={"outdoor"})
-        entity_registry.entities[row.entity_id] = attr.evolve(
-            row, labels={"ghost_label", "outdoor"}
-        )
+        ghost = label_registry.async_create("Ghost label")
+        _entity(entity_registry, "light.test", labels={ghost.label_id, "outdoor"})
+        # Model an interrupted cleanup after deleting the label.
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                entity_registry, "async_clear_label_id", lambda label_id: None
+            )
+            label_registry.async_delete(ghost.label_id)
+            await hass.async_block_till_done()
+        assert label_registry.async_get_label(ghost.label_id) is None
+        assert ghost.label_id in _stored(entity_registry, "light.test").labels
 
         result = await tools.ha_set_entity(
             entity_id="light.test", labels=["ghost_label"], label_operation="remove"

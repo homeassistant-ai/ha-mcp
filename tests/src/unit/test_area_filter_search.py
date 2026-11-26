@@ -14,7 +14,6 @@ server's own registry resolution (``SmartSearchTools.get_entities_by_area``).
 from typing import Any
 from unittest.mock import AsyncMock
 
-import attr
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
@@ -228,18 +227,16 @@ async def test_empty_entity_area_blocks_fallback_to_device_area(
     config_entry: MockConfigEntry,
 ) -> None:
     """An existing empty area must not place an entity in its device's area."""
+    area = area_registry.async_create("")
+    assert area.id == ""
     _child_device_sensor(
         hass,
         area_registry,
         device_registry,
         entity_registry,
         config_entry,
-        entity_area_id=None,
+        entity_area_id=area.id,
     )
-
-    # A persisted row from before Core validated new area assignments.
-    row = entity_registry.entities["sensor.child"]
-    entity_registry.entities[row.entity_id] = attr.evolve(row, area_id="")
 
     result = await _search(core_client, "office")
 

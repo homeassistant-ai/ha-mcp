@@ -17,11 +17,6 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 HomeAssistantRequestQueueMiddleware = queue_module.HomeAssistantRequestQueueMiddleware
 
 
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
-
-
 def make_context(name: str) -> MiddlewareContext[CallToolRequestParams]:
     return MiddlewareContext(message=CallToolRequestParams(name=name, arguments={}))
 

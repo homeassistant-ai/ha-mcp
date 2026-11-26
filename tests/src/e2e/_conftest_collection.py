@@ -38,24 +38,27 @@ def _run_async_tests_on_session_loop(session: Any, items: list[Any]) -> None:
     session-scoped fixture through the session's hook relay, which leaves out
     this tree's conftest.
     """
+    fixturedefs = set()
     for item in items:
         if is_async_test(item):
             item.add_marker(_SESSION_LOOP, append=False)
+        if isinstance(item, pytest.Function):
+            for name in item.fixturenames:
+                fixturedefs.update(
+                    session._fixturemanager.getfixturedefs(name, item) or ()
+                )
+
     e2e_dir = Path(__file__).parent
-    for fixturedefs in session._fixturemanager._arg2fixturedefs.values():
-        for fixturedef in fixturedefs:
-            func = fixturedef.func
-            if not (
-                inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func)
-            ):
-                continue
-            if getattr(func, "_loop_scope", None) is not None:
-                continue
-            source = inspect.getsourcefile(func)
-            if source and Path(source).is_relative_to(e2e_dir):
-                # A class fixture is a bound method; its attributes live on
-                # the function, which pytest-asyncio's getattr reads through.
-                getattr(func, "__func__", func)._loop_scope = "session"
+    for fixturedef in fixturedefs:
+        func = fixturedef.func
+        if not (inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func)):
+            continue
+        if getattr(func, "_loop_scope", None) is not None:
+            continue
+        source = inspect.getsourcefile(func)
+        if source and Path(source).is_relative_to(e2e_dir):
+            # Class fixture attributes live on the underlying function.
+            getattr(func, "__func__", func)._loop_scope = "session"
 
 
 def _move_haos_tls_items_last(items: list[Any]) -> None:

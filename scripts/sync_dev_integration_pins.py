@@ -14,6 +14,7 @@ Usage (after editing ``INTEGRATIONS``):
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from collections.abc import Iterable
@@ -138,7 +139,13 @@ def main(root: Path = _REPO_ROOT) -> int:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--installed-requirements"]:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--installed-requirements",
+        action="store_true",
+        help="Print the installed Core's integration pins without updating project files.",
+    )
+    if parser.parse_args().installed_requirements:
         from importlib.resources import files
 
         components = files("homeassistant.components")

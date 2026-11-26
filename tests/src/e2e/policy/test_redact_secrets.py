@@ -167,21 +167,23 @@ async def test_stored_integration_secret_stays_out_of_options_form_reads(
         # options form with it, marked by nothing but Secret. Its URL check
         # runs against Home Assistant itself; the query keeps the URL unique.
         step = await mcp.call_tool_success("ha_set_integration", {"domain": "mjpeg"})
-        config = {
-            "mjpeg_url": f"http://127.0.0.1:8123/manifest.json?{password[:8]}",
-            "username": "redact-e2e",
-            "password": password,
-            "verify_ssl": False,
-        }
-        if any(field["name"] == "name" for field in step["fields"]):
-            config["name"] = f"redact e2e {password[:8]}"
-        created = await mcp.call_tool_success(
-            "ha_set_integration",
-            {"domain": "mjpeg", "flow_id": step["flow_id"], "config": config},
-        )
-        entry_id = created["entry_id"]
-        flow_id = None
+        entry_id = None
+        flow_id = step["flow_id"]
         try:
+            config = {
+                "mjpeg_url": f"http://127.0.0.1:8123/manifest.json?{password[:8]}",
+                "username": "redact-e2e",
+                "password": password,
+                "verify_ssl": False,
+            }
+            if any(field["name"] == "name" for field in step["fields"]):
+                config["name"] = f"redact e2e {password[:8]}"
+            created = await mcp.call_tool_success(
+                "ha_set_integration",
+                {"domain": "mjpeg", "flow_id": flow_id, "config": config},
+            )
+            entry_id = created["entry_id"]
+            flow_id = None
             # A server that never saw the value has nothing to scrub it with;
             # only recognising the field keeps it out.
             clear_known_secret_values()
@@ -200,16 +202,18 @@ async def test_stored_integration_secret_stays_out_of_options_form_reads(
             assert password not in json.dumps(described), described
         finally:
             if flow_id:
+                target = {"entry_id": entry_id} if entry_id else {"domain": "mjpeg"}
                 await safe_call_tool(
                     client,
                     "ha_set_integration",
-                    {"entry_id": entry_id, "flow_id": flow_id, "abort": True},
+                    {**target, "flow_id": flow_id, "abort": True},
                 )
-            await safe_call_tool(
-                client,
-                "ha_remove_helpers_integrations",
-                {"target": entry_id, "confirm": True},
-            )
+            if entry_id:
+                await safe_call_tool(
+                    client,
+                    "ha_remove_helpers_integrations",
+                    {"target": entry_id, "confirm": True},
+                )
 
 
 async def _expect_sentinel_rejected(client: Client) -> None:

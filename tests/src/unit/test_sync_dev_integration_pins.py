@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import io
 import json
+import os
 import shutil
 import sys
 import tomllib
@@ -107,8 +108,20 @@ def _manifests(**requirements: list[str]) -> dict[str, str | Exception]:
     }
 
 
+@pytest.fixture(scope="module")
+def stable_core_pin() -> str:
+    version = sync.checker.dev_group_core_version(
+        (_REPO / "pyproject.toml").read_text("utf-8")
+    )
+    installed = installed_version("homeassistant")
+    if installed != version and os.environ.get("BETA_CORE") == installed:
+        pytest.skip("The committed pins follow the stable dev group")
+    assert installed == version
+    return version
+
+
 def test_committed_pins_are_what_the_sync_writes_for_the_dev_group_core(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stable_core_pin: str
 ) -> None:
     # Otherwise the tests run a library the dev group's Core never ships with,
     # and Renovate's next Core bump also carries the correction.
@@ -117,10 +130,7 @@ def test_committed_pins_are_what_the_sync_writes_for_the_dev_group_core(
     synced[1].parent.mkdir()
     for source, target in zip(committed, synced, strict=True):
         shutil.copyfile(source, target)
-    version = sync.checker.dev_group_core_version(committed[0].read_text("utf-8"))
-    if version != installed_version("homeassistant"):
-        pytest.skip("The committed pins follow the stable dev group")
-    _serve(monkeypatch, version, _installed_manifests())
+    _serve(monkeypatch, stable_core_pin, _installed_manifests())
 
     assert sync.main(tmp_path) == 0
 
@@ -135,6 +145,7 @@ def test_installed_integration_dependencies_match_running_core() -> None:
             assert installed_version(requirement.name) in requirement.specifier, text
 
 
+@pytest.mark.usefixtures("stable_core_pin")
 def test_marked_blocks_sit_in_the_dev_group_and_the_uv_ignore_list() -> None:
     # A block anywhere else is rewritten faithfully and does nothing.
     names = set(sync.manifest_requirements(_installed_manifests().values()))

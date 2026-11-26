@@ -287,6 +287,7 @@ async def test_a_childs_empty_area_is_not_replaced_by_its_parents(
     component_ws: MockHAClientWebSocket,
     device_registry: dr.DeviceRegistry,
     config_entry: MockConfigEntry,
+    area_registry: ar.AreaRegistry,
     areas: dict[str, str],
 ) -> None:
     """An empty direct area is invalid placement, not "no area of its own"."""
@@ -296,9 +297,9 @@ async def test_a_childs_empty_area_is_not_replaced_by_its_parents(
         identifiers={("test", "child")},
         parent_device_id=parent.id,
     )
-    # Seed the persisted empty ID accepted before Core validated area writes.
-    with patch.object(ar.AreaRegistry, "async_get_area", return_value=areas["office"]):
-        device_registry.async_update_child_device(child.id, area_id="")
+    area = area_registry.async_create("")
+    assert area.id == ""
+    device_registry.async_update_child_device(child.id, area_id=area.id)
 
     result = await _get(component_ws, child.id)
 

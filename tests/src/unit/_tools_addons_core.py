@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import timedelta
 from ipaddress import IPv4Address
 from typing import Any
@@ -310,7 +310,13 @@ class Supervisor:
 def app_info(slug: str = SLUG, **changes: Any) -> dict[str, Any]:
     """``GET /addons/<slug>/info`` as Supervisor answers it: a started app with
     ingress, built from aiohasupervisor's model; ``changes`` replace its fields."""
+    # Supervisor's Core 2026.12 client requires log_format. Drop this check
+    # once the stable Core pin moves off 2026.11.
+    log_fields: dict[str, Any] = {}
+    if any(spec.name == "log_format" for spec in fields(InstalledAddonComplete)):
+        log_fields["log_format"] = "plain"
     info = InstalledAddonComplete(
+        **log_fields,
         apparmor=AppArmor.DEFAULT,
         auth_api=False,
         docker_api=False,

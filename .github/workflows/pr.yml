@@ -725,6 +725,7 @@ jobs:
     - name: Run unit tests on the beta Core
       if: github.event_name == 'workflow_dispatch' || steps.beta.outputs.superfluous != 'true'
       env:
+        BETA_CORE: ${{ steps.beta.outputs.version }}
         UNIT_TEST_SHARD: ${{ matrix.shard }}
       run: uv run --no-sync pytest tests/src/unit/ -n logical --tb=short -q -rf
 

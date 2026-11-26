@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import attr
 import pytest
 from homeassistant.components import websocket_api
 from homeassistant.components.config import area_registry as config_areas
@@ -664,8 +663,9 @@ async def test_empty_entity_area_does_not_inherit_its_devices_area(
     )
     device_registry.async_update_device(device.id, area_id=office)
     _add(hass, entity_registry, "sensor.probe", "1", "Probe", device_id=device.id)
-    row = entity_registry.entities["sensor.probe"]
-    entity_registry.entities[row.entity_id] = attr.evolve(row, area_id="")
+    empty_area = ar.async_get(hass).async_create("")
+    assert empty_area.id == ""
+    entity_registry.async_update_entity("sensor.probe", area_id=empty_area.id)
 
     data = await search(query="probe", result_fields=["area", "floor"])
 

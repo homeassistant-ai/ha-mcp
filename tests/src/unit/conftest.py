@@ -47,6 +47,12 @@ _SESSION_DATA_DIR = ""
 _PREVIOUS_ENV: dict[str, str | None] = {}
 
 
+@pytest.fixture(scope="session")
+def anyio_backend() -> str:
+    """Share Home Assistant's asyncio backend with session-scoped async fixtures."""
+    return "asyncio"
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Keep collection away from ``~/.ha-mcp`` and the settings sidecar.
 
