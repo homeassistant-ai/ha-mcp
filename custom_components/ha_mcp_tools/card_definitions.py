@@ -252,11 +252,18 @@ def _expr_end(s: str, i: int) -> int:
     return j
 
 
+# An async module reads its dependency inline, ``(t=(i.then?(await i)():i)[0])``;
+# the engine settles dependencies synchronously, so that is the binding ``t``.
+_ASYNC_DEPENDENCY_RE = re.compile(
+    r"\(([\w$]+)=\(([\w$]+)\.then\?\(await \2\)\(\):\2\)\[0\]\)"
+)
+
+
 def _local_definition(body: str, name: str) -> str | None:
-    m = re.search(r"[,;\s{(]" + re.escape(name) + r"=(?!=)", body)
+    m = re.search(r"[,;\s{(]" + re.escape(name) + r"=(?![=>])", body)
     if not m:
         return None
-    return body[m.end() : _expr_end(body, m.end())]
+    return _ASYNC_DEPENDENCY_RE.sub(r"\1", body[m.end() : _expr_end(body, m.end())])
 
 
 _STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|`(?:\\.|[^`\\])*`')
@@ -782,7 +789,9 @@ def _explain_message(
 
 
 def _schema_expressions(body: str) -> list[str]:
-    """The editor's form: a memoized ``_schema`` function or a module constant."""
+    """The editor's form: a memoized ``_schema`` function, a module constant,
+    or else the first inline ``schema`` list (a form object's, or the fields
+    of a layout group wrapping the whole form)."""
     found = []
     for m in _SCHEMA_FN_RE.finditer(body):
         end = _balanced_end(body, m.end() - 1)
@@ -794,6 +803,9 @@ def _schema_expressions(body: str) -> list[str]:
         definition = _local_definition(body, m.group(1) or m.group(2))
         if definition and definition.startswith("["):
             found.append(definition)
+    inline = re.search(r"(?<=[{,])schema:(?=\[)", body)
+    if not found and inline:
+        found.append(body[inline.end() : _balanced_end(body, inline.end())])
     return found
 
 
