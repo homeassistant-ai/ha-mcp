@@ -20,6 +20,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
+from .component_api import is_unknown_command
 from .flow_translations import configured_language, fetch_flow_strings, flow_text
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 # checks give up after 5 seconds.
 HEALTH_DEADLINE_SECONDS = 15.0
 MATTER_TOPOLOGY_LIMIT = 50
+DATABASE_USAGE_LIMIT = 50
 SUPERVISOR_ENDPOINTS = {
     "resolution": "/resolution/info",
     "core_stats": "/core/stats",
@@ -261,6 +263,59 @@ async def read_integration_startup(ws_client: Any, client: Any) -> dict[str, Any
     if warning:
         section["_warnings"] = [warning]
     return section
+
+
+async def add_database_usage(
+    ws_client: Any, result: dict[str, Any], includes: set[str], *, refresh: bool
+) -> None:
+    """Core's ``recorder/database_usage`` report, which the Storage card reads,
+    as ``result["database_usage"]``.
+
+    Without ``refresh`` Core answers the report it cached, ``null`` until it
+    has analyzed the database. The entity and statistic rows are capped at
+    ``DATABASE_USAGE_LIMIT`` each, largest first, with ``entity_count`` and
+    ``statistic_count`` giving the full sizes. A Core without the command
+    (before 2026.12) gets no section, and neither does a call without the
+    health WebSocket, whose sections are already stubbed.
+    """
+    if "database_usage" not in includes or ws_client is None:
+        return
+    try:
+        reply = await ws_client.send_command("recorder/database_usage", refresh=refresh)
+    except HomeAssistantCommandError as exc:
+        if is_unknown_command(exc):
+            result.setdefault("warnings", []).append(
+                "This Home Assistant has no database usage report (added in 2026.12)"
+            )
+            return
+        result["database_usage"] = {"error": str(exc), "error_code": exc.code}
+        return
+    except HomeAssistantCommandTimeout as exc:
+        result["database_usage"] = {"error": f"No database usage report: {exc}"}
+        return
+    usage = reply.get("result")
+    if usage is None:
+        result["database_usage"] = None
+        result.setdefault("warnings", []).append(
+            "Home Assistant has no database usage report yet: it keeps one for an "
+            "hour after analyzing the database. Pass refresh_database_usage=True "
+            "to analyze it now"
+        )
+        return
+    entities = sorted(usage.get("entities") or [], key=lambda row: -row["states"])
+    statistics = sorted(
+        usage.get("statistics") or [],
+        key=lambda row: -(row["statistics"] + row["statistics_short_term"]),
+    )
+    result["database_usage"] = {
+        **usage,
+        "entities": entities[:DATABASE_USAGE_LIMIT],
+        "statistics": statistics[:DATABASE_USAGE_LIMIT],
+        "entity_count": len(entities),
+        "statistic_count": len(statistics),
+    }
+    if max(len(entities), len(statistics)) > DATABASE_USAGE_LIMIT:
+        result["database_usage"]["truncated"] = True
 
 
 async def read_supervisor(client: Any) -> dict[str, Any]:

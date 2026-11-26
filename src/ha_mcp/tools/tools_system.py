@@ -43,6 +43,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .system_health_sections import (
+    add_database_usage,
     add_health_labels,
     add_repair_data,
     add_repair_texts,
@@ -468,6 +469,10 @@ class SystemTools:
                     "unhealthy and unsupported reasons, and the Core and "
                     "Supervisor container stats); 'integration_startup' (each "
                     "integration's setup time in seconds, slowest first); "
+                    "'database_usage' (Home Assistant 2026.12+: the recorder "
+                    "database size per table, entity and statistic, as the "
+                    "Storage card shows it, the 50 largest entities and "
+                    "statistics); "
                     "'config_check' (validate the HA configuration, the "
                     "pre-restart check ha_restart runs automatically; returns "
                     "Core's {result: valid|invalid, errors, warnings}, the "
@@ -489,6 +494,17 @@ class SystemTools:
                     "Include user-dismissed/ignored repairs. Only meaningful when "
                     "'repairs' is in include. Dismiss or restore one with "
                     "ha_manage_updates(action='ignore_repair' / 'unignore_repair')."
+                )
+            ),
+        ] = False,
+        refresh_database_usage: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "Analyze the recorder database now instead of returning the "
+                    "report Home Assistant cached. Only meaningful when "
+                    "'database_usage' is in include; a large database takes a "
+                    "while to analyze."
                 )
             ),
         ] = False,
@@ -518,7 +534,6 @@ class SystemTools:
         - ha_get_system_health(include="supervisor,integration_startup")
         """
         includes = self._parse_includes(include)
-        include_dismissed_repairs_bool = bool(include_dismissed_repairs)
 
         # Sections that require the system_health WebSocket connection;
         # config_check, supervisor and dead_entities do not.
@@ -530,6 +545,7 @@ class SystemTools:
             "thread_network",
             "matter_network",
             "integration_startup",
+            "database_usage",
         }
 
         ws_client = None
@@ -602,17 +618,7 @@ class SystemTools:
                 # sub-dict under its own key (same shape the section carries when
                 # the baseline is up but the fetch fails), plus a summary
                 # warning, then skip them so the other sections below still run.
-                self._stub_ws_unavailable(
-                    result,
-                    includes,
-                    ws_backed,
-                    want_repairs=want_repairs,
-                    want_zha=want_zha,
-                    want_zwave=want_zwave,
-                    want_thread=want_thread,
-                    want_matter=want_matter,
-                    want_startup=want_startup,
-                )
+                self._stub_ws_unavailable(result, includes, ws_backed)
                 want_repairs = want_zha = want_zwave = want_thread = want_matter = (
                     want_startup
                 ) = False
@@ -640,7 +646,7 @@ class SystemTools:
             sections = self._build_ws_sections(
                 ws_client,
                 snapshot,
-                include_dismissed_repairs_bool,
+                bool(include_dismissed_repairs),
                 zha_full,
                 want_repairs=want_repairs,
                 want_zha=want_zha,
@@ -650,6 +656,9 @@ class SystemTools:
                 want_startup=want_startup,
             )
             await self._gather_and_attribute(sections, result)
+            await add_database_usage(
+                ws_client, result, includes, refresh=bool(refresh_database_usage)
+            )
 
             if "supervisor" in includes:
                 result["supervisor"] = await read_supervisor(self._client)
@@ -702,6 +711,7 @@ class SystemTools:
             "thread_network",
             "matter_network",
             "integration_startup",
+            "database_usage",
             "supervisor",
             "config_check",
             "dead_entities",
@@ -720,36 +730,14 @@ class SystemTools:
 
     @staticmethod
     def _stub_ws_unavailable(
-        result: dict[str, Any],
-        includes: set[str],
-        ws_backed: set[str],
-        *,
-        want_repairs: bool,
-        want_zha: bool,
-        want_zwave: bool,
-        want_thread: bool,
-        want_matter: bool,
-        want_startup: bool,
+        result: dict[str, Any], includes: set[str], ws_backed: set[str]
     ) -> None:
         """Stub each requested WS-backed section as an error and add a summary
-        warning when the health WebSocket is unavailable.
-
-        Extracted verbatim from ``ha_get_system_health``.
-        """
+        warning when the health WebSocket is unavailable."""
         ws_error = "requires the system_health WebSocket, which is unavailable"
-        if want_repairs:
-            result["repairs"] = {"error": ws_error}
-        if want_zha:
-            result["zha_network"] = {"error": ws_error}
-        if want_zwave:
-            result["zwave_network"] = {"error": ws_error}
-        if want_thread:
-            result["thread_network"] = {"error": ws_error}
-        if want_matter:
-            result["matter_network"] = {"error": ws_error}
-        if want_startup:
-            result["integration_startup"] = {"error": ws_error}
         unavailable = sorted(includes & ws_backed)
+        for section in unavailable:
+            result[section.removesuffix("_full")] = {"error": ws_error}
         if unavailable:
             result.setdefault("warnings", []).append(
                 "These sections require the system_health WebSocket, "
