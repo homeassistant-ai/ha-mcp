@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
+import attr
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -212,7 +213,10 @@ class TestLabels:
     ) -> None:
         """Removing a label that is gone from the label registry is the cleanup
         path; checking it against that registry would block it."""
-        _entity(entity_registry, "light.test", labels={"ghost_label", "outdoor"})
+        row = _entity(entity_registry, "light.test", labels={"outdoor"})
+        entity_registry.entities[row.entity_id] = attr.evolve(
+            row, labels={"ghost_label", "outdoor"}
+        )
 
         result = await tools.ha_set_entity(
             entity_id="light.test", labels=["ghost_label"], label_operation="remove"

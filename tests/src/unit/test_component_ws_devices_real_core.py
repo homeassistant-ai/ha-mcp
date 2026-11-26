@@ -296,7 +296,9 @@ async def test_a_childs_empty_area_is_not_replaced_by_its_parents(
         identifiers={("test", "child")},
         parent_device_id=parent.id,
     )
-    device_registry.async_update_child_device(child.id, area_id="")
+    # Seed the persisted empty ID accepted before Core validated area writes.
+    with patch.object(ar.AreaRegistry, "async_get_area", return_value=areas["office"]):
+        device_registry.async_update_child_device(child.id, area_id="")
 
     result = await _get(component_ws, child.id)
 

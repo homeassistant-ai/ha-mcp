@@ -138,4 +138,14 @@ def main(root: Path = _REPO_ROOT) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if sys.argv[1:] == ["--installed-requirements"]:
+        from importlib.resources import files
+
+        components = files("homeassistant.components")
+        manifests = (
+            components.joinpath(domain, "manifest.json").read_text(encoding="utf-8")
+            for domain in INTEGRATIONS
+        )
+        print("\n".join(manifest_requirements(manifests).values()))
+    else:
+        sys.exit(main())

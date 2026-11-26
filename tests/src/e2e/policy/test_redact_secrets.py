@@ -166,18 +166,18 @@ async def test_stored_integration_secret_stays_out_of_options_form_reads(
         # Core's mjpeg flow stores the password in the entry and pre-fills its
         # options form with it, marked by nothing but Secret. Its URL check
         # runs against Home Assistant itself; the query keeps the URL unique.
+        step = await mcp.call_tool_success("ha_set_integration", {"domain": "mjpeg"})
+        config = {
+            "mjpeg_url": f"http://127.0.0.1:8123/manifest.json?{password[:8]}",
+            "username": "redact-e2e",
+            "password": password,
+            "verify_ssl": False,
+        }
+        if any(field["name"] == "name" for field in step["fields"]):
+            config["name"] = f"redact e2e {password[:8]}"
         created = await mcp.call_tool_success(
             "ha_set_integration",
-            {
-                "domain": "mjpeg",
-                "config": {
-                    "name": f"redact e2e {password[:8]}",
-                    "mjpeg_url": f"http://127.0.0.1:8123/manifest.json?{password[:8]}",
-                    "username": "redact-e2e",
-                    "password": password,
-                    "verify_ssl": False,
-                },
-            },
+            {"domain": "mjpeg", "flow_id": step["flow_id"], "config": config},
         )
         entry_id = created["entry_id"]
         flow_id = None

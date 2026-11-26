@@ -24,6 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 from starlette.requests import Request
@@ -40,6 +41,12 @@ from ._backup_core import snapshot_manager as snapshot_manager
 from ._backup_restore_helpers import settings_handlers
 from ._command_faults import received, taking
 from ._registry_item_snapshots import _snapshot
+
+
+@pytest.fixture(autouse=True)
+def diff_labels(label_registry: lr.LabelRegistry) -> None:
+    for name in ("First", "Second", "Third"):
+        label_registry.async_create(name)
 
 
 async def _snapshot_reversing(

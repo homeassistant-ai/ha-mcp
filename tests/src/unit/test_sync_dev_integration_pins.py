@@ -18,6 +18,7 @@ import urllib.error
 from collections import Counter
 from collections.abc import Mapping
 from email.message import Message
+from importlib.metadata import version as installed_version
 from pathlib import Path
 
 import homeassistant.components
@@ -117,12 +118,21 @@ def test_committed_pins_are_what_the_sync_writes_for_the_dev_group_core(
     for source, target in zip(committed, synced, strict=True):
         shutil.copyfile(source, target)
     version = sync.checker.dev_group_core_version(committed[0].read_text("utf-8"))
+    if version != installed_version("homeassistant"):
+        pytest.skip("The committed pins follow the stable dev group")
     _serve(monkeypatch, version, _installed_manifests())
 
     assert sync.main(tmp_path) == 0
 
     for source, target in zip(committed, synced, strict=True):
         assert target.read_text("utf-8") == source.read_text("utf-8")
+
+
+def test_installed_integration_dependencies_match_running_core() -> None:
+    for text in sync.manifest_requirements(_installed_manifests().values()).values():
+        requirement = Requirement(text)
+        if requirement.marker is None or requirement.marker.evaluate():
+            assert installed_version(requirement.name) in requirement.specifier, text
 
 
 def test_marked_blocks_sit_in_the_dev_group_and_the_uv_ignore_list() -> None:

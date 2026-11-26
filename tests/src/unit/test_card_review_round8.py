@@ -15,9 +15,9 @@ _FRONTEND = (
     "export const __webpack_modules__={"
     '8(e){(0,e.EM)("hui-tile-card");class A{setConfig(c){}}},'
     '9(e){(0,e.EM)("hui-entities-card");class B{setConfig(c){}}},'
-    '10(m,e,r){(0,e.EM)("hui-tile-card-editor");var s=r(11),'
+    '1e4(m,e,r){(0,e.EM)("hui-tile-card-editor");var s=r(11e3),'
     "v=(0,s.object)({type:1,entity:1});class C{setConfig(c){(0,s.assert)(c,v)}}},"
-    "11(m,e,r){r.d(e,{},{object:(schema)=>({schema,validate:(c)=>{"
+    "11000(m,e,r){r.d(e,{},{object:(schema)=>({schema,validate:(c)=>{"
     "const f=Object.keys(c).filter((k)=>!(k in schema)).map("
     '(k)=>({path:[k],type:"never",message:"never"}));'
     "return f.length?[{failures:()=>f}]:[undefined,c]}})})}};"

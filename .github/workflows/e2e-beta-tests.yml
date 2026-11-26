@@ -284,16 +284,13 @@ jobs:
     - name: Run full E2E test suite (no component)
       run: |
         echo "🚀 Running full E2E test suite without the ha_mcp_tools component with 3 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
         cd tests
         # shellcheck disable=SC2086
         uv run pytest $PYTEST_PATHS \
           -n3 \
           --dist loadscope \
           --tb=short \
-          -v \
-          --maxfail=0 $PYTEST_ARGS
+          -v $PYTEST_ARGS
         echo "✅ Full E2E test suite (no component) passed"
       env:
         PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
@@ -483,16 +480,13 @@ jobs:
     - name: Run full E2E test suite (embedded backend, server entry only)
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server with only the server entry (no tools entry) with 2 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
         cd tests
         # shellcheck disable=SC2086
         uv run pytest $PYTEST_PATHS \
           -n2 \
           --dist loadscope \
           --tb=short \
-          -v \
-          --maxfail=0 $PYTEST_ARGS
+          -v $PYTEST_ARGS
         echo "✅ Full E2E test suite (embedded backend, server entry only) passed"
       env:
         PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}

@@ -702,6 +702,8 @@ jobs:
           echo "::error::PyPI has no installable homeassistant and pytest-homeassistant $BETA_CORE"
           exit 1
         fi
+        uv run --no-sync python scripts/sync_dev_integration_pins.py --installed-requirements > "$RUNNER_TEMP/beta-requirements.txt"
+        uv pip install "homeassistant==$BETA_CORE" "pytest-homeassistant==$BETA_CORE" -r "$RUNNER_TEMP/beta-requirements.txt"
         uv run --no-sync python -c \
           'import os; from homeassistant.const import __version__ as v; assert v == os.environ["BETA_CORE"], v'
 
@@ -821,12 +823,9 @@ jobs:
       run: |
         echo "🚀 Running full E2E test suite with ${{ matrix.pytest_workers }} workers..."
         cd tests
-        # The combined x64 row audits both tool-entry states: --maxfail=0
-        # overrides pyproject.toml's --maxfail=3 so it reports every failure.
         uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
-          ${{ matrix.combine_topologies == '1' && '--maxfail=0' || '' }} \
           --tb=short \
           -v
         echo "✅ Full E2E test suite passed"
@@ -933,12 +932,9 @@ jobs:
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
         cd tests
-        # The combined x64 row audits both tool-entry states: --maxfail=0
-        # overrides pyproject.toml's --maxfail=3 so it reports every failure.
         uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
-          ${{ matrix.combine_topologies == '1' && '--maxfail=0' || '' }} \
           --tb=short \
           -v
         echo "✅ Full E2E test suite (embedded backend) passed"

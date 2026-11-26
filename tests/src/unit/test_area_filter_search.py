@@ -14,6 +14,7 @@ server's own registry resolution (``SmartSearchTools.get_entities_by_area``).
 from typing import Any
 from unittest.mock import AsyncMock
 
+import attr
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
@@ -226,17 +227,19 @@ async def test_empty_entity_area_blocks_fallback_to_device_area(
     entity_registry: er.EntityRegistry,
     config_entry: MockConfigEntry,
 ) -> None:
-    """An entity whose own area_id is present but empty (Core's registry and
-    its update command both store ``""``) is not silently placed in its
-    device's area."""
+    """An existing empty area must not place an entity in its device's area."""
     _child_device_sensor(
         hass,
         area_registry,
         device_registry,
         entity_registry,
         config_entry,
-        entity_area_id="",
+        entity_area_id=None,
     )
+
+    # A persisted row from before Core validated new area assignments.
+    row = entity_registry.entities["sensor.child"]
+    entity_registry.entities[row.entity_id] = attr.evolve(row, area_id="")
 
     result = await _search(core_client, "office")
 

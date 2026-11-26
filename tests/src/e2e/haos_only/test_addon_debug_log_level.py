@@ -50,12 +50,16 @@ from ..utilities.addon_restart import (
     call_tool_fresh as _call_tool_fresh,
 )
 from ..utilities.addon_restart import (
+    get_instance_id,
+    restore_info_level,
+    wait_for_addon_replacement,
+)
+from ..utilities.addon_restart import (
     post_log_level as _post_log_level,
 )
 from ..utilities.addon_restart import (
     restart_self as _restart_self,
 )
-from ..utilities.addon_restart import restore_info_level
 from ..utilities.cleanup import CleanupSteps
 
 LOG = logging.getLogger(__name__)
@@ -176,20 +180,28 @@ async def test_web_ui_debug_log_level_reaches_addon_log(
     )
     slug = dev_addon["slug"]
 
-    # Baseline sanity: at the session's default INFO level the log
-    # window must contain zero DEBUG records — otherwise the positive
-    # signal below would be meaningless.
-    baseline = await _fetch_addon_log(addon_url, slug)
-    assert not _has_debug_record(baseline), (
-        "Addon log already contains DEBUG records at the default INFO "
-        "level — the DEBUG-record signal cannot discriminate. First "
-        "DEBUG line: "
-        + next(ln for ln in baseline.splitlines() if ln.startswith("DEBUG:"))
-    )
+    # Supervisor retains output from earlier app processes across restarts.
+    # The startup collector belongs to just the running process.
+    async def canary_logged() -> bool:
+        report = await _call_tool_fresh(
+            addon_url,
+            "ha_report_issue",
+            {"tool_call_count": 1, "fields": ["startup_logs"]},
+        )
+        records = report["startup_logs"]
+        assert records, report
+        return any(
+            record.get("logger") == "addon_start" and DEBUG_CANARY in record["message"]
+            for record in records
+        )
 
+    baseline_id = await get_instance_id(settings_info)
+    assert not await canary_logged()
     await _post_log_level(settings_advanced, "DEBUG")
     try:
         await _restart_self(settings_restart)
+        await wait_for_addon_replacement(settings_info, addon_url, baseline_id)
+        assert await canary_logged()
         await _await_full_debug_proof(slug)
     finally:
         with CleanupSteps() as cleanup, cleanup.step():
