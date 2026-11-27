@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.components.recorder import Recorder
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -36,6 +39,30 @@ async def logbook(hass: HomeAssistant) -> None:
     hass.states.async_set("light.kitchen", "on", attributes)
     hass.states.async_set("light.hall", "on", hall)
     await async_wait_recording_done(hass)
+
+
+@pytest.fixture
+async def kitchen_device(
+    hass: HomeAssistant,
+    logbook: None,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+) -> str:
+    """The id of a registered device that owns ``light.kitchen``."""
+    entry = MockConfigEntry(domain="test")
+    entry.add_to_hass(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("test", "kitchen")}
+    )
+    entity_registry.async_get_or_create(
+        "light",
+        "test",
+        "kitchen",
+        suggested_object_id="kitchen",
+        device_id=device.id,
+        config_entry=entry,
+    )
+    return device.id
 
 
 @contextmanager
