@@ -48,13 +48,14 @@ def section_from_status(status: str | None) -> str | None:
 
 
 def core_rejection_text(exc: HomeAssistantAPIError) -> str | None:
-    """Core's message for a 400 it answered, None for any other error."""
+    """The config view's verdict ("Key malformed: " / "Message malformed: ")
+    from a write's 400; None for any other error or 400 body."""
     if exc.status_code != 400 or not isinstance(exc.response_data, dict):
         return None
     message = exc.response_data.get("message")
-    return (
-        message if isinstance(message, str) and config_view_rejection(message) else None
-    )
+    if isinstance(message, str) and config_view_rejection(message):
+        return message
+    return None
 
 
 async def failed_section_from_core(
@@ -108,14 +109,16 @@ async def raise_if_core_rejected(
     core_text = core_rejection_text(exc)
     if core_text is None:
         return
+    if config_key_malformed(core_text):
+        # Core refused the key before it judged the config.
+        failed_section: str | None = "id"
+    else:
+        failed_section = await failed_section_from_core(client, config, domain)
     await raise_core_rejection(
         client,
         core_text,
         config,
-        # Core refused the key before it judged the config.
-        failed_section=None
-        if config_key_malformed(core_text)
-        else await failed_section_from_core(client, config, domain),
+        failed_section=failed_section,
         context=context,
         bp_warnings=bp_warnings,
         domain=domain,
@@ -205,6 +208,16 @@ async def raise_core_rejection(
 ) -> NoReturn:
     """Raise VALIDATION_FAILED with Core's text and the hints it supports."""
     error_context: dict[str, Any] = {**context, "failed_section": failed_section}
+    if failed_section == "id":
+        # Nothing in the config is at fault, so no config hint applies.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                f"Home Assistant rejected the {domain}'s id: {core_text}",
+                suggestions=[f"Use the {domain} id Core suggests in its message"],
+                context=error_context,
+            )
+        )
     suggestions = text_suggestions(core_text, config)
     match = invalid_platform_key(core_text)
     if match:

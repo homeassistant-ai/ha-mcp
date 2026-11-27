@@ -65,8 +65,9 @@ _RejectionKind = Literal["misplaced", "undeclared", "other"]
 # (Only these two were measured in BAT runs.) Each holds the fields Core's
 # schema takes, plus `use_blueprint` and, for automations, the singular aliases;
 # a unit test reads the running Core's schema, so a field Core adds fails it.
-# Left out: an automation's `id`, which a model means as `entity_id` and gets
-# that did-you-mean, and a script's `variables`, the tool's own run parameter.
+# Left out: an automation's `id`, which a model means as `entity_id` and, when
+# `entity_id` is not also passed, gets that did-you-mean; and a script's
+# `variables`, the tool's own run parameter.
 _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
     "ha_config_set_automation": {
         "alias",

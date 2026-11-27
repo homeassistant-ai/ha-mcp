@@ -375,8 +375,9 @@ class ConfigScriptTools:
         passed as the write target so the REST client skips the redundant
         entity-registry lookup (issue #1813 Phase 0); ``None`` lets the REST
         client resolve. Passing the caller id separately keeps a renamed
-        script's alias caller-facing (#1935). A 400 carrying Core's message is
-        raised with that text and its hints, as for automations.
+        script's alias caller-facing (#1935). A 400 carrying the config view's
+        verdict is raised with Core's text and its hints, as for automations;
+        any other API error propagates unchanged.
         """
         try:
             result: dict[str, Any] = await self._client.upsert_script_config(
@@ -964,7 +965,7 @@ class ConfigScriptTools:
         wait: bool,
         effective_category: str | None = None,
     ) -> dict[str, Any]:
-        """Upsert, finalize (hash, wait, category), and build the response."""
+        """Validate references, upsert, finalize (hash, wait, category), and build the response."""
         # Save transformed config. ``_fetch_and_verify_hash`` already
         # resolved the storage key; pass it as the write target so the
         # upsert skips the redundant re-resolve (issue #1813 Phase 0).
@@ -1030,7 +1031,7 @@ class ConfigScriptTools:
         *,
         operation: str,
     ) -> dict[str, Any]:
-        """Validate references, upsert, finalize wait/category, and build the response."""
+        """Validate references, upsert, finalize (hash, wait, category), and build the response."""
         references = await ref_check(self._client, config_dict, "script")
         result = await self._upsert_script(
             config_dict, script_id, resolved_key, bp_warnings

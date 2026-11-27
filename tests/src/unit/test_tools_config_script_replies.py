@@ -81,11 +81,11 @@ async def test_a_valid_sequence_in_a_refused_script_names_the_schema(
     assert await stored_scripts(hass) == {KEY: BODY}
 
 
-async def test_a_refused_key_names_no_config_section(
+async def test_a_refused_key_names_the_id_as_what_failed(
     hass: HomeAssistant, tools: ConfigScriptTools
 ) -> None:
     """Core refuses a key that is no slug before it judges the config, so the
-    sequence, invalid as well here, is not named as what failed."""
+    id, not the sequence (invalid as well here), is named as what failed."""
     config = {"alias": "Bad", "sequence": [{"foo": 1}]}
 
     body = await rejected_call_body(
@@ -93,7 +93,12 @@ async def test_a_refused_key_names_no_config_section(
     )
 
     assert body["error"]["code"] == "VALIDATION_FAILED"
-    assert body["failed_section"] is None
+    assert body["failed_section"] == "id"
+    assert (
+        body["error"]["suggestions"][0]
+        == "Use the script id Core suggests in its message"
+    )
+    assert not any("script examples" in s for s in body["error"]["suggestions"])
     assert await stored_scripts(hass) == {KEY: BODY}
 
 

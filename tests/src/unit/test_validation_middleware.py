@@ -525,7 +525,10 @@ def _core_config_keys(schema: Any, *left_out: str) -> list[str]:
             ("ha_config_set_automation", {}, key)
             for key in [
                 *_core_config_keys(AUTOMATION_SCHEMA, "id"),
-                *("use_blueprint", "trigger", "condition", "action"),
+                "use_blueprint",
+                "trigger",
+                "condition",
+                "action",
             ]
         ),
         *(
@@ -541,8 +544,9 @@ async def test_every_field_cores_schema_takes_is_told_to_move_into_config(
     tool: str, arguments: dict[str, Any], key: str
 ) -> None:
     """A field missing from ``_CONFIG_ROOT_KEYS_BY_TOOL`` would get the
-    stale-tool-list hint instead. The keys are read from the Core this suite
-    runs, so a Core that adds one fails here, on the beta Core lane first."""
+    stale-tool-list hint instead. The schema keys are read from the Core this
+    suite runs, so a Core that adds one fails here, on the beta Core lane first;
+    ``use_blueprint`` and the automation singular aliases are added by hand."""
     mcp = _make_config_set_like_mcp()
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool(tool, {**arguments, key: None})
