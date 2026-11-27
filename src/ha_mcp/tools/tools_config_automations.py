@@ -38,9 +38,8 @@ from ..utils.python_sandbox import (
 )
 from .auto_backup import automation_backup_target, with_auto_backup
 from .automation_errors import (
-    core_rejection_text,
-    failed_section_from_core,
     raise_core_rejection,
+    raise_if_core_rejected,
     section_from_status,
 )
 from .automation_registry_details import core_related, registry_details
@@ -810,17 +809,14 @@ class AutomationConfigTools:
                     wait_for_entity=operation == "created",
                 )
             except HomeAssistantAPIError as e:
-                core_text = core_rejection_text(e)
-                if core_text is None:
-                    raise
-                await raise_core_rejection(
+                await raise_if_core_rejected(
                     self._client,
-                    core_text,
+                    e,
                     config,
-                    failed_section=await failed_section_from_core(self._client, config),
                     context={"entity_id": entity_id},
                     bp_warnings=bp_warnings,
                 )
+                raise
             reloaded = await wait_for_reload()
             note_reload_outcome(
                 result, reloaded, domain="automation", requested=enabled is not None

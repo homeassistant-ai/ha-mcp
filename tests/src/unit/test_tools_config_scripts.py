@@ -92,7 +92,22 @@ async def test_wait_follows_a_renamed_script_to_its_current_entity(
 
     assert result["success"] is True
     waited.assert_awaited_once_with(core_client, renamed)
+    assert result["entity_id"] == renamed
     assert not any("not yet queryable" in w for w in result.get("warnings", []))
+
+
+async def test_a_write_by_a_renamed_scripts_entity_id_updates_it(
+    hass: HomeAssistant, tools: ConfigScriptTools, entity_registry: er.EntityRegistry
+) -> None:
+    """The entity id leads to the stored key, so the reply says updated."""
+    renamed = await _rename(hass, entity_registry, "current_name")
+
+    result = await tools.ha_config_set_script(
+        script_id=renamed, config={"alias": "Morning", "sequence": NEW_SEQUENCE}
+    )
+
+    assert result["operation"] == "updated"
+    assert (await stored_scripts(hass))[KEY]["sequence"] == NEW_SEQUENCE
 
 
 @pytest.mark.parametrize("wait", [True, False])

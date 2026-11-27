@@ -29,7 +29,7 @@ async def tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> ConfigScriptTools:
     """The script tools on a ``hass`` whose scripts.yaml holds ``storage_key``."""
-    # The script is registered before each write; one registry read finds it.
+    # storage_key is registered before each write; one registry read finds it.
     monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
     await write_config_files(
         hass,

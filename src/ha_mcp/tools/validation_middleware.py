@@ -55,16 +55,18 @@ _UNKNOWN_ARGUMENT = "unexpected_keyword_argument"
 
 _RejectionKind = Literal["misplaced", "undeclared", "other"]
 
-# Config root keys that models habitually pass as top-level tool arguments on
-# the config-writing tools. When one arrives top-level, the rejection says the
-# key belongs inside `config` instead of only listing the valid tool
-# parameters (issue #2649 section 1).
+# Config root keys that a model may pass as top-level tool arguments on the
+# config-writing tools. When one arrives top-level, the rejection says the key
+# belongs inside `config` instead of only listing the valid tool parameters
+# (issue #2649 section 1).
 #
 # Scoped per tool on purpose: only the config-writing tools take a `config`
 # body, so only their top-level arguments can be misplaced config keys.
-# (Only these two were measured in BAT runs.) Each holds every field Core's
-# schema takes, plus the singular aliases and `use_blueprint`; a unit test reads
-# the running Core's schema, so a field Core adds fails it.
+# (Only these two were measured in BAT runs.) Each holds the fields Core's
+# schema takes, plus `use_blueprint` and, for automations, the singular aliases;
+# a unit test reads the running Core's schema, so a field Core adds fails it.
+# Left out: an automation's `id`, which a model means as `entity_id` and gets
+# that did-you-mean, and a script's `variables`, the tool's own run parameter.
 _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
     "ha_config_set_automation": {
         "alias",
@@ -81,7 +83,6 @@ _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
         "variables",
         "trigger_variables",
         "use_blueprint",
-        "id",
         "trace",
         "initial_state",
         "hide_entity",
@@ -95,7 +96,6 @@ _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
         "max_exceeded",
         "fields",
         "icon",
-        "variables",
         "trace",
         "use_blueprint",
     },

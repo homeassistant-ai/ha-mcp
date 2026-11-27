@@ -508,13 +508,14 @@ async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
     )
 
 
-def _core_config_keys(schema: Any) -> list[str]:
-    """The top-level keys Core's config ``schema`` takes, from the schema itself."""
+def _core_config_keys(schema: Any, *left_out: str) -> list[str]:
+    """The top-level keys Core's config ``schema`` takes, from the schema itself,
+    but for the ``left_out`` keys the middleware's comment names."""
     parts = [schema, *getattr(schema, "validators", [])]
     (fields,) = [
         p.schema for p in parts if isinstance(getattr(p, "schema", None), dict)
     ]
-    return sorted(str(key) for key in fields)
+    return sorted(str(key) for key in fields if str(key) not in left_out)
 
 
 @pytest.mark.parametrize(
@@ -522,19 +523,25 @@ def _core_config_keys(schema: Any) -> list[str]:
     [
         *(
             ("ha_config_set_automation", {}, key)
-            for key in _core_config_keys(AUTOMATION_SCHEMA)
+            for key in [
+                *_core_config_keys(AUTOMATION_SCHEMA, "id"),
+                *("use_blueprint", "trigger", "condition", "action"),
+            ]
         ),
         *(
             ("ha_config_set_script", {"script_id": "blink"}, key)
-            for key in _core_config_keys(SCRIPT_ENTITY_SCHEMA)
+            for key in [
+                *_core_config_keys(SCRIPT_ENTITY_SCHEMA, "variables"),
+                "use_blueprint",
+            ]
         ),
     ],
 )
 async def test_every_field_cores_schema_takes_is_told_to_move_into_config(
     tool: str, arguments: dict[str, Any], key: str
 ) -> None:
-    """A field the tool's list lacks would be called a stale tool list instead
-    (#3204: ``trace`` on scripts). The keys are read from the Core this suite
+    """A field missing from ``_CONFIG_ROOT_KEYS_BY_TOOL`` would get the
+    stale-tool-list hint instead. The keys are read from the Core this suite
     runs, so a Core that adds one fails here, on the beta Core lane first."""
     mcp = _make_config_set_like_mcp()
     with pytest.raises(ToolError) as exc_info:
@@ -553,6 +560,18 @@ async def test_non_config_key_on_config_tool_still_gets_did_you_mean() -> None:
 
     msg = json.loads(str(exc_info.value))["error"]["message"]
     assert "`configg`: unknown parameter, did you mean `config`?" in msg
+    assert "inside `config`" not in msg
+
+
+async def test_a_top_level_automation_id_is_pointed_to_entity_id() -> None:
+    """Core's schema takes ``id``, but a top-level one means the automation to
+    write, so it keeps the did-you-mean instead of moving into ``config``."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_config_set_automation", {"id": "morning"})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "did you mean `entity_id`?" in msg
     assert "inside `config`" not in msg
 
 

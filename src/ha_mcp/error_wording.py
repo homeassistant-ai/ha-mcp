@@ -91,6 +91,20 @@ def invalid_platform_key(text: str) -> re.Match[str] | None:
     return _INVALID_KEY.search(text)
 
 
+# --- Core: components/config/view.py EditKeyBasedConfigView.post -----------
+# The view's 400s for a bad key, checked first, and for a config its validator
+# refused. Another 400 text, such as a proxy's page, is not Core judging the write.
+_KEY_MALFORMED = "Key malformed: "
+
+
+def config_view_rejection(text: str) -> bool:
+    return text.startswith((_KEY_MALFORMED, "Message malformed: "))
+
+
+def config_key_malformed(text: str) -> bool:
+    return text.startswith(_KEY_MALFORMED)
+
+
 # --- Core: websocket_api/commands.py handle_call_service ---------------------
 
 

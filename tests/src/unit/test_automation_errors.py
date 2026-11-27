@@ -124,6 +124,39 @@ async def _core_rejection(
     return text
 
 
+def test_a_400_page_core_did_not_send_is_no_rejection_of_cores() -> None:
+    """A proxy's 400 page, in the shape the client gives a body that is not JSON."""
+    page = "<html><body>400 Bad Request</body></html>"
+    error = HomeAssistantAPIError(
+        f"API error: 400 - {page}", status_code=400, response_data={"message": page}
+    )
+
+    assert core_rejection_text(error) is None
+
+
+async def test_a_missing_blueprint_points_to_the_blueprint_list(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    config = {"use_blueprint": {"path": "missing.yaml", "input": {}}}
+    core_text = await _core_rejection(hass, core_client, config)
+
+    with pytest.raises(ToolError) as exc:
+        await raise_core_rejection(
+            core_client,
+            core_text,
+            config,
+            failed_section="blueprint",
+            context={},
+            bp_warnings=[],
+        )
+
+    suggestions = json.loads(str(exc.value))["error"]["suggestions"]
+    assert any(
+        "ha_manage_blueprints(action='list', domain='automation')" in s
+        for s in suggestions
+    )
+
+
 async def _rejection(
     client: HomeAssistantClient, core_text: str, config: dict[str, Any]
 ) -> dict[str, Any]:

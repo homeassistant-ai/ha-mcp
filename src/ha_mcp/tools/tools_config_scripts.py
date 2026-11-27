@@ -17,6 +17,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    HomeAssistantError,
 )
 from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
@@ -28,11 +29,7 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
-from .automation_errors import (
-    core_rejection_text,
-    failed_section_from_core,
-    raise_core_rejection,
-)
+from .automation_errors import raise_if_core_rejected
 from .best_practice_checker import (
     BestPracticeCheckResult,
 )
@@ -377,30 +374,24 @@ class ConfigScriptTools:
         missing alias). ``resolved_id``, the storage key the tool resolved, is
         passed as the write target so the REST client skips the redundant
         entity-registry lookup (issue #1813 Phase 0); ``None`` lets the REST
-        client resolve. Passing the caller id
-        separately keeps a renamed script's alias caller-facing (#1935).
-        A 400 Core answered is raised with Core's text and its hints, as for
-        automations.
+        client resolve. Passing the caller id separately keeps a renamed
+        script's alias caller-facing (#1935). A 400 carrying Core's message is
+        raised with that text and its hints, as for automations.
         """
         try:
             result: dict[str, Any] = await self._client.upsert_script_config(
                 config, script_id, resolved_id=resolved_id
             )
         except HomeAssistantAPIError as e:
-            core_text = core_rejection_text(e)
-            if core_text is None:
-                raise
-            await raise_core_rejection(
+            await raise_if_core_rejected(
                 self._client,
-                core_text,
+                e,
                 config,
-                failed_section=await failed_section_from_core(
-                    self._client, config, "script"
-                ),
                 context={"script_id": script_id},
                 bp_warnings=bp_warnings,
                 domain="script",
             )
+            raise
         return result
 
     @staticmethod
@@ -534,8 +525,8 @@ class ConfigScriptTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for script to be queryable before returning; with neither this "
-                "nor a category the reply has no entity_id. Set to False for bulk operations.",
+                description="Wait for script to be queryable before returning; entity_id is in the "
+                "reply only with this or a category, once the entity resolves. Set to False for bulk operations.",
                 default=True,
             ),
         ] = True,
@@ -921,13 +912,13 @@ class ConfigScriptTools:
         category: str | None,
     ) -> None:
         """Hash the config Core stored (read by key: no registry read), then
-        resolve, wait, and apply a category; a failed read leaves the write saved."""
+        resolve, wait, and apply a category; a failed read only adds a warning."""
         try:
             readback = await self._client.get_script_config(
                 script_id, result["script_id"]
             )
             result["config_hash"] = compute_config_hash(readback["config"])
-        except (HomeAssistantAPIError, HomeAssistantConnectionError) as e:
+        except HomeAssistantError as e:
             result.setdefault("warnings", []).append(
                 f"Saved; reading it back failed ({e}), re-read it for a config_hash"
             )
@@ -973,7 +964,7 @@ class ConfigScriptTools:
         wait: bool,
         effective_category: str | None = None,
     ) -> dict[str, Any]:
-        """Upsert, refresh the hash, finalize wait/category, and build the response."""
+        """Upsert, finalize (hash, wait, category), and build the response."""
         # Save transformed config. ``_fetch_and_verify_hash`` already
         # resolved the storage key; pass it as the write target so the
         # upsert skips the redundant re-resolve (issue #1813 Phase 0).

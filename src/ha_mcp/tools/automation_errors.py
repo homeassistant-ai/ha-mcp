@@ -1,6 +1,6 @@
 """Errors for an automation or script Home Assistant rejected.
 
-Core's own text leads every rejection, behind one fixed prefix; this module
+Core's own text leads every rejection, behind a prefix naming the kind; this module
 only names the section that failed and adds suggestions. Closest matches for
 an unknown trigger or condition key come from the platforms the running Core
 registered (the component's ``describe``, else the first event of Core's
@@ -20,6 +20,8 @@ from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 from ..client.rest_client import HomeAssistantAPIError, HomeAssistantError
 from ..client.websocket_client import get_websocket_client
 from ..error_wording import (
+    config_key_malformed,
+    config_view_rejection,
     invalid_platform_key,
     unexpected_condition_value,
     variables_not_a_mapping,
@@ -50,7 +52,9 @@ def core_rejection_text(exc: HomeAssistantAPIError) -> str | None:
     if exc.status_code != 400 or not isinstance(exc.response_data, dict):
         return None
     message = exc.response_data.get("message")
-    return message if isinstance(message, str) and message else None
+    return (
+        message if isinstance(message, str) and config_view_rejection(message) else None
+    )
 
 
 async def failed_section_from_core(
@@ -89,6 +93,33 @@ async def failed_section_from_core(
             if (verdicts.get(section) or {}).get("valid") is False:
                 return "sequence" if domain == "script" else section
     return "blueprint" if "use_blueprint" in config else "schema"
+
+
+async def raise_if_core_rejected(
+    client: Any,
+    exc: HomeAssistantAPIError,
+    config: dict[str, Any],
+    *,
+    context: dict[str, Any],
+    bp_warnings: list[str],
+    domain: str = "automation",
+) -> None:
+    """Raise a write's 400 that Core answered as its rejection; return otherwise."""
+    core_text = core_rejection_text(exc)
+    if core_text is None:
+        return
+    await raise_core_rejection(
+        client,
+        core_text,
+        config,
+        # Core refused the key before it judged the config.
+        failed_section=None
+        if config_key_malformed(core_text)
+        else await failed_section_from_core(client, config, domain),
+        context=context,
+        bp_warnings=bp_warnings,
+        domain=domain,
+    )
 
 
 async def _subscription_first_event(client: Any, command: str) -> dict[str, Any] | None:

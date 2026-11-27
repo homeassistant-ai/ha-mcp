@@ -4,6 +4,7 @@ automation tool replies."""
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -13,7 +14,14 @@ from homeassistant.setup import async_setup_component
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
-from ._scripts_core import BODY, KEY, WRITE_MODES, stored_scripts, write_arguments
+from ._scripts_core import (
+    BODY,
+    KEY,
+    NEW_SEQUENCE,
+    WRITE_MODES,
+    stored_scripts,
+    write_arguments,
+)
 from ._scripts_core import tools as tools
 from ._tool_errors import rejected_call_body
 
@@ -38,18 +46,17 @@ async def test_config_without_sequence_or_blueprint_gets_cores_refusal(
 async def test_a_refused_action_names_the_sequence_as_what_failed(
     hass: HomeAssistant, tools: ConfigScriptTools, mode: str
 ) -> None:
-    """Core's 400 names no section; Core's ``validate_config`` on the sequence
-    does, in both write modes."""
-    arguments = (
-        {"config": {"alias": "Morning", "sequence": [{"foo": 1}]}}
-        if mode == "full_config"
-        else {
+    """Core's 400 carries no failed_section field; Core's ``validate_config`` on
+    the sequence supplies it, in both write modes."""
+    arguments: dict[str, Any]
+    if mode == "full_config":
+        arguments = {"config": {"alias": "Morning", "sequence": [{"foo": 1}]}}
+    else:
+        current = await tools.ha_config_get_script(script_id=KEY)
+        arguments = {
             "python_transform": "config['sequence'] = [{'foo': 1}]",
-            "config_hash": (await tools.ha_config_get_script(script_id=KEY))[
-                "config_hash"
-            ],
+            "config_hash": current["config_hash"],
         }
-    )
 
     body = await rejected_call_body(
         tools.ha_config_set_script(script_id=KEY, **arguments)
@@ -57,6 +64,36 @@ async def test_a_refused_action_names_the_sequence_as_what_failed(
 
     assert body["error"]["code"] == "VALIDATION_FAILED"
     assert body["failed_section"] == "sequence"
+    assert await stored_scripts(hass) == {KEY: BODY}
+
+
+async def test_a_valid_sequence_in_a_refused_script_names_the_schema(
+    hass: HomeAssistant, tools: ConfigScriptTools
+) -> None:
+    """Core's ``validate_config`` passes the sequence, so the root failed."""
+    config = {"alias": "Morning", "mode": "bogus", "sequence": NEW_SEQUENCE}
+
+    body = await rejected_call_body(
+        tools.ha_config_set_script(script_id=KEY, config=config)
+    )
+
+    assert body["failed_section"] == "schema"
+    assert await stored_scripts(hass) == {KEY: BODY}
+
+
+async def test_a_refused_key_names_no_config_section(
+    hass: HomeAssistant, tools: ConfigScriptTools
+) -> None:
+    """Core refuses a key that is no slug before it judges the config, so the
+    sequence, invalid as well here, is not named as what failed."""
+    config = {"alias": "Bad", "sequence": [{"foo": 1}]}
+
+    body = await rejected_call_body(
+        tools.ha_config_set_script(script_id="Bad-Key", config=config)
+    )
+
+    assert body["error"]["code"] == "VALIDATION_FAILED"
+    assert body["failed_section"] is None
     assert await stored_scripts(hass) == {KEY: BODY}
 
 
@@ -143,4 +180,4 @@ async def test_a_failed_read_back_keeps_the_write_successful(
     assert result["success"] is True
     assert "config_hash" not in result
     assert any("re-read it for a config_hash" in w for w in result["warnings"])
-    assert (await stored_scripts(hass))[KEY] != BODY
+    assert (await stored_scripts(hass))[KEY]["sequence"] == NEW_SEQUENCE
