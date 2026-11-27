@@ -46,6 +46,7 @@ from .config_entry_flow_introspect import abort_probe_flow
 from .config_helpers.registry import _get_entities_for_config_entry
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES, StorageHelperType
 from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
+from .flow_catalog import integration_catalog
 from .flow_helper_lookup import (
     get_entry_id_for_flow_helper,
     not_stored_reply,
@@ -176,44 +177,15 @@ HelperTypeLiteral = StorageHelperType | Literal["config_subentry"] | str
 async def fetch_entry_options_with_status(
     client: Any, entry_id: str, *, quiet: bool = False
 ) -> tuple[dict[str, Any], bool]:
-    """Read a config entry's ``options`` and report whether the probe succeeded.
+    """Read a config entry's ``options`` from its options flow's first form,
+    and whether that read succeeded.
 
-    Starts the entry's OptionsFlow, harvests ``{name: current_value}`` from
-    its first-step form via :func:`options_from_form_flow` (the persisted
-    option from ``description.suggested_value``, falling back to the schema
-    ``default``), and aborts the flow so it doesn't sit half-open. Returns
-    ``(options, ok)`` so callers can tell a probe *failure* apart from a
-    genuinely-empty options form — both yield ``{}`` for ``options``, but
-    ``ok`` is:
-
-    - ``True`` only when a form first-step was read (even if it harvested no
-      fields: a genuinely-empty options form is a successful read).
-    - ``False`` when the OptionsFlow could not be read into options: the flow
-      raised, or its first step was not a form (a menu / abort / create_entry),
-      so no options could be harvested.
-
-    The flag lets the caller surface degraded reads instead of passing ``{}``
-    off as real options: ``smart_search`` flips ``partial`` when a probe
-    fails mid-search. The abort in ``finally`` is cleanup; a failed abort does
-    not flip ``ok`` (the options were already harvested).
-
-    Home Assistant does not expose ``ConfigEntry.options`` through any
-    read-only REST or WebSocket endpoint — ``/api/config/config_entries/entry``
-    deliberately omits the field. The closest approximation that the HA UI
-    itself uses is the OptionsFlow's first-step ``data_schema``: HA injects
-    the persisted options into each field's ``description.suggested_value``
-    (via ``add_suggested_values_to_schema``), which
-    :func:`options_from_form_flow` prefers over the static schema
-    ``default`` (issue #1575).
-
-    Probe failures log at ``warning`` unless ``quiet=True``, which demotes
-    them to ``debug`` for a bulk fan-out: ``smart_search`` probes one entry
-    per flow helper on every ``ha_search``, and a per-entry warning there
-    would spam the log on routine searches.
-
-    Exposed at module level (not as a method) so
-    ``smart_search._search_flow_helpers`` can probe flow-helper config
-    without instantiating ``IntegrationTools``.
+    Core serves no read of ``ConfigEntry.options`` over REST or WebSocket; the
+    options form carries each persisted value in ``description.suggested_value``
+    (:func:`options_from_form_flow`, issue #1575). ``ok`` is ``False`` when the
+    flow raised or opened with something other than a form, so a failed probe
+    is not taken for an empty options form. The flow is aborted afterwards.
+    ``quiet=True`` logs failures at debug, for ``smart_search``'s fan-out.
     """
     log_probe_failure = logger.debug if quiet else logger.warning
     flow_id: str | None = None
@@ -568,6 +540,30 @@ class IntegrationTools:
                 ge=1,
             ),
         ] = None,
+        catalog: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Instead of configured entries, list the integrations that "
+                    "can be set up (Home Assistant's Add integration dialog), "
+                    "each with its domain, name and categories; query matches "
+                    "the domain, name or brand. Set one up with "
+                    "ha_set_integration(domain=...)."
+                ),
+                default=False,
+            ),
+        ] = False,
+        category: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "catalog only: keep the integrations in this Home Assistant "
+                    "category or its subcategories, e.g. 'energy', "
+                    "'local_services'."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get integration (config entry) information with pagination.
 
@@ -586,6 +582,7 @@ class IntegrationTools:
         - Options flow that opens with a menu: ha_get_integration(entry_id="abc123", include_schema=True) lists menu_options; ha_set_integration(entry_id="abc123", menu_choice="<option>") opens that form
         - List template entries with their options: ha_get_integration(domain="template")
         - Only service integrations: ha_get_integration(integration_type="service")
+        - Integrations that can be set up: ha_get_integration(catalog=True, query="weather")
         - An entry's panel commands: ha_get_integration(entry_id="abc123", include_ws_commands=True)
 
         OPTIONS: with the component, ``options`` are the stored mapping as-is,
@@ -612,19 +609,8 @@ class IntegrationTools:
         """
         try:
             include_opts = include_options
-            include_schema_bool = include_schema
-            include_diagnostics_bool = include_diagnostics
-            include_subentries_bool = include_subentries
-            include_subentry_schema_bool = include_subentry_schema
-            exact_match_bool = exact_match
-            limit_int = limit
-            offset_int = offset
             fields_list = parse_diagnostics_fields(diagnostics_fields)
-            truncate_bytes = diagnostics_truncate_at_bytes
-            data_offset_int = (
-                diagnostics_data_offset if diagnostics_data_offset is not None else 0
-            )
-            data_limit_int = diagnostics_data_limit
+            data_offset_int = diagnostics_data_offset or 0
             # Type-guard ``diagnostics_data_path`` here so a bad caller (dict /
             # list) surfaces as ``VALIDATION_INVALID_PARAMETER`` instead of
             # leaking as ``INTERNAL_ERROR`` from the resolver's ``.strip()``
@@ -646,23 +632,31 @@ class IntegrationTools:
                 validate_identifier_not_empty(domain, "domain")
                 include_opts = True
 
+            if catalog:
+                return await integration_catalog(
+                    self._client,
+                    query=query,
+                    category=category,
+                    limit=limit,
+                    offset=offset,
+                )
             # If entry_id provided, get specific config entry
             if entry_id is not None:
                 resp = await self._get_entry_detail_response(
                     entry_id,
-                    include_schema=include_schema_bool,
-                    include_subentries=include_subentries_bool,
-                    include_subentry_schema=include_subentry_schema_bool,
+                    include_schema=include_schema,
+                    include_subentries=include_subentries,
+                    include_subentry_schema=include_subentry_schema,
                     subentry_type=subentry_type,
                     subentry_id=subentry_id,
-                    include_diagnostics=include_diagnostics_bool,
+                    include_diagnostics=include_diagnostics,
                     include_ws_commands=include_ws_commands,
                     device_id=device_id,
                     fields_list=fields_list,
-                    truncate_bytes=truncate_bytes,
+                    truncate_bytes=diagnostics_truncate_at_bytes,
                     diagnostics_data_path=diagnostics_data_path,
                     data_offset_int=data_offset_int,
-                    data_limit_int=data_limit_int,
+                    data_limit_int=diagnostics_data_limit,
                 )
                 if integration_type is not None:
                     resp.setdefault("warnings", []).append(
@@ -676,23 +670,23 @@ class IntegrationTools:
                 domain,
                 query,
                 include_opts,
-                exact_match_bool,
-                limit_int,
-                offset_int,
+                exact_match,
+                limit,
+                offset,
                 integration_type=integration_type,
             )
             ignored_detail_params = self._ignored_diagnostics_detail_params(
-                include_diagnostics=include_diagnostics_bool,
+                include_diagnostics=include_diagnostics,
                 include_ws_commands=include_ws_commands,
                 device_id=device_id,
                 fields_list=fields_list,
-                truncate_bytes=truncate_bytes,
+                truncate_bytes=diagnostics_truncate_at_bytes,
                 diagnostics_data_path=diagnostics_data_path,
                 data_offset_int=data_offset_int,
-                data_limit_int=data_limit_int,
+                data_limit_int=diagnostics_data_limit,
             ) + self._ignored_subentry_detail_params(
-                include_subentries=include_subentries_bool,
-                include_subentry_schema=include_subentry_schema_bool,
+                include_subentries=include_subentries,
+                include_subentry_schema=include_subentry_schema,
                 subentry_type=subentry_type,
                 subentry_id=subentry_id,
             )
@@ -701,7 +695,7 @@ class IntegrationTools:
                     f"{', '.join(ignored_detail_params)} "
                     "ignored because entry_id was not set (list mode)"
                 )
-            if include_schema_bool:
+            if include_schema:
                 result.setdefault("warnings", []).append(
                     "include_schema was ignored: it describes an entry's "
                     "options flow and needs entry_id. For an integration's "

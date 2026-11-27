@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -36,6 +37,7 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 from homeassistant.helpers.translation import async_get_translations
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import (
     MockConfigEntry,
     MockModule,
@@ -50,11 +52,12 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.read_only import read_only_request
-from ha_mcp.tools.config_entry_flow_introspect import abort_probe_flow
-from ha_mcp.tools.config_helpers.describe import MAX_OPTIONS, describe_helper
+from ha_mcp.tools.config_helpers.describe import MAX_OPTIONS
+from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
+from ha_mcp.tools.tools_search import SearchTools
 
-from ._core_setup import with_config_component
+from ._core_setup import install_custom_helper, with_config_component
 from ._helper_tool_core import create_item, set_up
 from ._template_helper_core import create_template_sensor, state_template
 
@@ -462,7 +465,7 @@ async def test_flow_field_without_help_text_gets_its_ui_label(
     strings = await async_get_translations(hass, "en", "config", ["derivative"])
     step = "component.derivative.config.step.user"
     assert f"{step}.data_description.source" not in strings
-    assert _fields(result)["source"]["description"] == strings[f"{step}.data.source"]
+    assert _fields(result)["source"]["label"] == strings[f"{step}.data.source"]
 
 
 # --- shapes no Core helper has, from a helper integration of the test's own ----
@@ -550,14 +553,21 @@ async def _set_up_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 @pytest.fixture
 async def probe(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> AsyncIterator[HomeAssistantClient]:
-    """``core_client`` on a ``hass`` with the probe helper integration."""
+    hass: HomeAssistant,
+    tools: HelperConfigTools,
+    core_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enable_custom_integrations: None,
+) -> AsyncIterator[HelperConfigTools]:
+    """``tools`` on a ``hass`` with the probe helper integration, which Core
+    lists among its helper flows."""
+    install_custom_helper(tmp_path, monkeypatch, _DOMAIN)
     await with_config_component(hass, core_client)
     mock_integration(hass, MockModule(_DOMAIN, async_setup_entry=_set_up_entry))
     mock_platform(hass, f"{_DOMAIN}.config_flow", None)
     with mock_config_flow(_DOMAIN, _ProbeFlow):
-        yield core_client
+        yield tools
         await hass.async_block_till_done()
 
 
@@ -576,9 +586,9 @@ def guarded_entry(hass: HomeAssistant) -> str:
 
 @pytest.mark.usefixtures("redact_on")
 async def test_current_values_of_a_password_field_are_redacted(
-    probe: HomeAssistantClient, guarded_entry: str
+    probe: HelperConfigTools, guarded_entry: str
 ) -> None:
-    result = await describe_helper(probe, _DOMAIN, helper_id=guarded_entry)
+    result = await _describe(probe, helper_type=_DOMAIN, helper_id=guarded_entry)
     fields = _fields(result)
 
     assert "hunter2" not in str(fields)
@@ -590,19 +600,19 @@ async def test_current_values_of_a_password_field_are_redacted(
     "name", ["password", "api_key"], ids=["serialized", "selector"]
 )
 async def test_core_secret_fields_stay_recognisable_as_secrets(
-    probe: HomeAssistantClient, guarded_entry: str, name: str
+    probe: HelperConfigTools, guarded_entry: str, name: str
 ) -> None:
     """A field Core marks secret (#3002) is shown as one, so the model knows a
     redacted value is withheld rather than empty."""
-    result = await describe_helper(probe, _DOMAIN, helper_id=guarded_entry)
+    result = await _describe(probe, helper_type=_DOMAIN, helper_id=guarded_entry)
 
     assert _fields(result)[name]["secret"] is True
 
 
 async def test_a_menu_choice_that_finishes_the_helper_flow_is_reported_as_saved(
-    hass: HomeAssistant, probe: HomeAssistantClient
+    hass: HomeAssistant, probe: HelperConfigTools
 ) -> None:
-    result = await describe_helper(probe, _DOMAIN, menu_choice="finish")
+    result = await _describe(probe, helper_type=_DOMAIN, menu_choice="finish")
 
     assert result["flow_type"] == "create_entry"
     assert result["menu_choice"] == "finish"
@@ -615,13 +625,13 @@ async def test_a_menu_choice_that_finishes_the_helper_flow_is_reported_as_saved(
     "menu", [["a", "b"], {"a": "Label A", "b": "Label B"}], ids=["list", "labelled"]
 )
 async def test_options_flow_menu_lists_its_choices(
-    hass: HomeAssistant, probe: HomeAssistantClient, menu: Any
+    hass: HomeAssistant, probe: HelperConfigTools, menu: Any
 ) -> None:
     """Core sends a menu as step ids or as ``{step_id: label}``: both list the
     step ids, and the flow opened to read them is not left open."""
     entry_id = _probe_entry(hass, opens_with="menu", menu=menu)
 
-    result = await describe_helper(probe, _DOMAIN, helper_id=entry_id)
+    result = await _describe(probe, helper_type=_DOMAIN, helper_id=entry_id)
 
     assert result["menu_options"] == ["a", "b"]
     assert result["note"].startswith("This helper's options flow opens with a menu")
@@ -629,35 +639,35 @@ async def test_options_flow_menu_lists_its_choices(
 
 
 async def test_an_options_flow_abort_is_reported_with_its_reason(
-    hass: HomeAssistant, probe: HomeAssistantClient
+    hass: HomeAssistant, probe: HelperConfigTools
 ) -> None:
     entry_id = _probe_entry(hass, opens_with="abort")
 
-    result = await describe_helper(probe, _DOMAIN, helper_id=entry_id)
+    result = await _describe(probe, helper_type=_DOMAIN, helper_id=entry_id)
 
     assert (result["flow_type"], result["aborted"]) == ("abort", "not_loaded")
     assert "fields" not in result
 
 
 async def test_an_options_flow_without_a_form_is_an_error(
-    hass: HomeAssistant, probe: HomeAssistantClient
+    hass: HomeAssistant, probe: HelperConfigTools
 ) -> None:
     """A progress step has no form: the call fails, and the flow it opened is
     aborted rather than left running."""
     entry_id = _probe_entry(hass, opens_with="progress")
 
     with pytest.raises(ToolError, match="reached a 'progress' step"):
-        await describe_helper(probe, _DOMAIN, helper_id=entry_id)
+        await _describe(probe, helper_type=_DOMAIN, helper_id=entry_id)
 
     assert hass.config_entries.options.async_progress() == []
 
 
 async def test_long_suggestion_lists_are_truncated_but_say_how_many_remain(
-    probe: HomeAssistantClient,
+    probe: HelperConfigTools,
 ) -> None:
     """A 175-unit dropdown that also takes a custom value must not flood a
     small model's context."""
-    result = await describe_helper(probe, _DOMAIN, menu_choice="selects")
+    result = await _describe(probe, helper_type=_DOMAIN, menu_choice="selects")
     options = _fields(result)["unit_of_measurement"]["options"]
 
     assert len(options) <= MAX_OPTIONS + 1
@@ -667,11 +677,11 @@ async def test_long_suggestion_lists_are_truncated_but_say_how_many_remain(
 
 
 async def test_a_select_that_must_be_answered_from_its_list_shows_every_choice(
-    probe: HomeAssistantClient,
+    probe: HelperConfigTools,
 ) -> None:
     """A statistics helper's 27 characteristics were cut to 12, which hid
     ``mean`` from the agent choosing one."""
-    result = await describe_helper(probe, _DOMAIN, menu_choice="selects")
+    result = await _describe(probe, helper_type=_DOMAIN, menu_choice="selects")
 
     assert _fields(result)["state_characteristic"]["options"] == _CHARACTERISTICS
 
@@ -679,15 +689,68 @@ async def test_a_select_that_must_be_answered_from_its_list_shows_every_choice(
 # --- the probe flow's abort ----------------------------------------------------
 
 
-@pytest.mark.parametrize(("quiet", "level"), [(False, "WARNING"), (True, "DEBUG")])
-async def test_a_failed_probe_abort_logs_at_debug_when_quiet(
-    quiet: bool, level: str, caplog: pytest.LogCaptureFixture
+def _abort_levels(caplog: pytest.LogCaptureFixture, flow_ids: list[str]) -> list[str]:
+    return [
+        r.levelname
+        for r in caplog.records
+        if r.name == "ha_mcp.tools.config_entry_flow_introspect"
+        and any(flow_id in r.getMessage() for flow_id in flow_ids)
+    ]
+
+
+async def test_a_lost_probe_abort_is_a_warning_on_a_describe(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    probe: HelperConfigTools,
+    guarded_entry: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    abort = AsyncMock(side_effect=HomeAssistantConnectionError("ws down"))
+    """The flow a describe opened stays open when its abort gets no answer:
+    the describe still answers, and the log says so at warning level."""
 
-    with caplog.at_level(
-        logging.DEBUG, logger="ha_mcp.tools.config_entry_flow_introspect"
+    with (
+        caplog.at_level(
+            logging.DEBUG, logger="ha_mcp.tools.config_entry_flow_introspect"
+        ),
+        patch.object(
+            core_client,
+            "abort_options_flow",
+            side_effect=HomeAssistantConnectionError("ws down"),
+        ),
     ):
-        await abort_probe_flow(abort, "f1", quiet=quiet)
+        result = await _describe(probe, helper_type=_DOMAIN, helper_id=guarded_entry)
 
-    assert [r.levelname for r in caplog.records if "f1" in r.getMessage()] == [level]
+    assert "name" in _fields(result)
+    opened = [flow["flow_id"] for flow in hass.config_entries.options.async_progress()]
+    assert _abort_levels(caplog, opened) == ["WARNING"]
+
+
+async def test_a_lost_probe_abort_in_a_search_logs_at_debug(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A search opens one options flow per flow helper; a lost abort there is
+    logged at debug, so routine searches do not fill the log."""
+    for domain in ("input_boolean", "input_number", "input_select", "input_text"):
+        assert await async_setup_component(hass, domain, {})
+    entry = await create_template_sensor(hass, "0")
+    tools = SearchTools(core_client, SmartSearchTools(client=core_client))
+
+    with (
+        caplog.at_level(
+            logging.DEBUG, logger="ha_mcp.tools.config_entry_flow_introspect"
+        ),
+        patch.object(
+            core_client,
+            "abort_options_flow",
+            side_effect=HomeAssistantConnectionError("ws down"),
+        ),
+    ):
+        await tools.ha_search(
+            query=entry.title, search_types=["helper"], include_config=True
+        )
+
+    opened = [flow["flow_id"] for flow in hass.config_entries.options.async_progress()]
+    assert opened
+    assert _abort_levels(caplog, opened) == ["DEBUG"] * len(opened)

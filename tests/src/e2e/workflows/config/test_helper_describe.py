@@ -32,6 +32,32 @@ async def test_flow_helper_fields_carry_ha_own_help_text(mcp_client):
     fields = {f["name"]: f for f in data["fields"]}
     assert fields["state"]["required"] is True
     assert fields["state"].get("description"), fields["state"]
+    assert fields["state"].get("label"), fields["state"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.config
+async def test_the_catalogs_list_what_home_assistant_can_create(mcp_client):
+    """The helper types and integrations Home Assistant can set up, each with
+    the categories Core gives it, filtered by a category."""
+    helpers = assert_mcp_success(
+        await mcp_client.call_tool(
+            "ha_config_list_helpers",
+            {"helper_type": "all", "catalog": True, "category": "helpers"},
+        ),
+        "helper catalog",
+    )
+    integrations = assert_mcp_success(
+        await mcp_client.call_tool(
+            "ha_get_integration", {"catalog": True, "query": "met", "limit": 5}
+        ),
+        "integration catalog",
+    )
+
+    rows = {row["helper_type"]: row for row in helpers["catalog"]}
+    assert "helpers.calculate_value" in rows["derivative"]["categories"], rows
+    assert rows["counter"]["config_flow"] is False, rows
+    assert integrations["catalog"][0]["domain"] == "met", integrations
 
 
 @pytest.mark.asyncio
@@ -117,7 +143,8 @@ async def test_a_multi_form_helper_shows_what_follows_its_first_form(mcp_client)
     if "later_forms" in data:
         (presets,) = data["later_forms"]
         assert presets["step_id"] == "presets", data
-        assert "away_temp" in {f["name"] for f in presets["fields"]}, presets
+        away = {f["name"]: f for f in presets["fields"]}["away_temp"]
+        assert away.get("label"), presets
     else:  # a lane without the component
         assert data["more_forms"] == "yes", data
         assert "ha_mcp_tools component" in data["note"], data

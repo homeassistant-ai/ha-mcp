@@ -285,6 +285,17 @@ integration's entry is matched on its title, its config is withheld as
 `options_withheld: custom_integration` (the component's own marker), and the
 result is `partial`.
 
+Where Core ships its own presentation of something a tool returns, the
+component runs it instead of the server copying how Core looks the texts
+up: a flow step's title, field labels and help, errors, menu labels and
+progress, create-entry and abort texts come from Core's flow formatter
+(`homeassistant.components.llm.flow.format_result`, 2026.12) through the
+`ha_mcp_tools/flow_format` bridge (capability `flow_format`), called in
+process and never through Core's LLM API. What it does not present (a
+submit label, menu option descriptions, a select's option labels) is added
+from Core's strings, and a Core without the formatter or an install without
+the component gets the strings lookup it had before.
+
 Home Assistant's flows (config, options, reconfigure, subentry) are answered
 one step per tool call, as the frontend's dialog runs them: the tool returns
 Core's step (a form's fields with Core's help text, or a menu's options) and

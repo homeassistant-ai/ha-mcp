@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .flow_format import format_form
 from .helper_collections import _convert
 
 if TYPE_CHECKING:
@@ -82,10 +83,19 @@ async def async_flow_outline(
     steps = handler.config_flow if msg["flow"] == "config" else handler.options_flow
     if not steps:
         return {"supported": False}
-    return {
-        "supported": True,
-        "steps": [_step(scf, step_id, step) for step_id, step in steps.items()],
-    }
+    described = []
+    for step_id, step in steps.items():
+        out = _step(scf, step_id, step)
+        if isinstance(step, scf.SchemaFlowFormStep) and out.get("data_schema"):
+            # Core's labels and help text; None on 2026.11, which keeps the
+            # bare fields. Remove once the hacs.json minimum is 2026.12.
+            fields = await format_form(
+                hass, domain, msg["flow"], out["step_id"], step.schema
+            )
+            if fields is not None:
+                out["data_schema"] = fields
+        described.append(out)
+    return {"supported": True, "steps": described}
 
 
 def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:

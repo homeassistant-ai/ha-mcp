@@ -11,7 +11,7 @@ storage helper, and the response says so: Core validates the write.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -20,7 +20,12 @@ from ...client.rest_client import HomeAssistantConnectionError
 from ...errors import ErrorCode, create_error_response
 from ...redaction import redact_flow_schema, redaction_enabled
 from ..component_api import COMPONENT_INSTALL_HINT, component_serves
-from ..component_flow import flow_outline, steps_after
+from ..component_flow import (
+    core_field_text,
+    core_flow_step,
+    flow_outline,
+    steps_after,
+)
 from ..component_helper_collections import fetch_helper_schemas, read_helper_item
 from ..config_entry_flow import config_entry_of_domain
 from ..config_entry_flow_errors import (
@@ -45,23 +50,17 @@ MAX_OPTIONS = 12
 
 _Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
-_SELECTOR_KEYS = (
-    "min",
-    "max",
-    "step",
-    "unit_of_measurement",
-    "multiple",
-    "custom_value",
-    "domain",
-    "device_class",
-    "mode",
-    "filter",
-    "read_only",
+# The keys compact_field reads itself; every other key Core sends with a field
+# (a selector's config, a serialized validator's bounds) is passed on as sent.
+_FIELD_KEYS = frozenset(
+    {"name", "required", "optional", "secret", "selector", "schema", "type"}
+    | {"default", "description", "label", "suggested_value", "options"}
 )
-_SERIALIZED_KEYS = ("valueMin", "valueMax", "lengthMin", "lengthMax", "allow_none")
 
 
 def _option_values(options: list[Any], *, suggestions: bool = False) -> list[Any]:
+    """The values of a select's options (``[value, label]`` pairs, Core's
+    ``{"value", "label"}`` rows or plain values), truncated like ``_options``."""
     values = [
         o[0]
         if isinstance(o, list | tuple)
@@ -70,29 +69,43 @@ def _option_values(options: list[Any], *, suggestions: bool = False) -> list[Any
         else o
         for o in options
     ]
-    if not suggestions or len(values) <= MAX_OPTIONS:
-        return values
-    return [*values[:MAX_OPTIONS], f"...{len(values) - MAX_OPTIONS} more"]
+    return _truncated(values) if suggestions else values
+
+
+def _truncated(options: list[Any]) -> list[Any]:
+    if len(options) <= MAX_OPTIONS:
+        return options
+    return [*options[:MAX_OPTIONS], f"...{len(options) - MAX_OPTIONS} more"]
+
+
+def _options(options: Sequence[Any], *, suggestions: bool) -> list[Any]:
+    """A select's options as Core sends them, labels included."""
+    return _truncated(list(options)) if suggestions else list(options)
 
 
 def _compact_selector(selector: dict[str, Any]) -> dict[str, Any]:
     kind, cfg = next(iter(selector.items()))
     cfg = cfg if isinstance(cfg, dict) else {}
     out: dict[str, Any] = {"type": kind}
-    # A text selector's own type (password, email, url) is kept: it is how a
-    # secret field stays recognisable.
-    if isinstance(cfg.get("type"), str):
-        out["input_type"] = cfg["type"]
-    if isinstance(cfg.get("options"), list | tuple):
-        out["options"] = _option_values(
-            cfg["options"], suggestions=bool(cfg.get("custom_value"))
-        )
-    out.update({k: cfg[k] for k in _SELECTOR_KEYS if cfg.get(k) not in (None, False)})
+    for key, value in cfg.items():
+        if key == "type":
+            # A text selector's own type (password, email, url) is kept: it is
+            # how a secret field stays recognisable.
+            if isinstance(value, str):
+                out["input_type"] = value
+        elif value is None or key in out:
+            continue
+        elif key == "options" and isinstance(value, list | tuple):
+            out["options"] = _options(value, suggestions=bool(cfg.get("custom_value")))
+        else:
+            out[key] = value
     return out
 
 
 def compact_field(field: dict[str, Any]) -> dict[str, Any]:
-    """One HA schema field (flow selector or serialized voluptuous) in brief."""
+    """One HA schema field (flow selector or serialized voluptuous) in brief:
+    its name, requiredness, current value, Core's label and help text, and
+    the rest as Core sends it."""
     out: dict[str, Any] = {"name": field.get("name")}
     if field.get("required"):
         out["required"] = True
@@ -107,15 +120,29 @@ def compact_field(field: dict[str, Any]) -> dict[str, Any]:
         if "type" in field:
             out["type"] = field["type"]
         if isinstance(field.get("options"), list | tuple):
-            out["options"] = _option_values(field["options"])
-        out.update({k: field[k] for k in _SERIALIZED_KEYS if k in field})
+            out["options"] = _options(field["options"], suggestions=False)
+    out.update(
+        {k: v for k, v in field.items() if k not in _FIELD_KEYS and k not in out}
+    )
     if field.get("default") is not None:
         out["default"] = field["default"]
+    out.update(_texts_and_current(field))
+    return out
+
+
+def _texts_and_current(field: dict[str, Any]) -> dict[str, Any]:
+    """A field's ``label``, help ``description`` and ``current`` value."""
+    out: dict[str, Any] = {}
+    if isinstance(field.get("label"), str):
+        out["label"] = field["label"]
     description = field.get("description")
     if isinstance(description, str):
         out["description"] = description
     elif isinstance(description, dict) and "suggested_value" in description:
         out["current"] = description["suggested_value"]
+    if "suggested_value" in field:
+        # Core's formatter lifts the current value out of ``description``.
+        out["current"] = field["suggested_value"]
     return out
 
 
@@ -144,12 +171,15 @@ _UNTYPED_NOTE = (
 
 
 def _with_help(
-    fields: list[dict[str, Any]], help_text: dict[str, str], prefix: str = ""
+    fields: list[dict[str, Any]],
+    help_text: dict[str, dict[str, str]],
+    prefix: str = "",
 ) -> None:
+    """Put each field's ``label`` and help ``description`` on it."""
     for field in fields:
         key = f"{prefix}{field['name']}"
-        if key in help_text and "description" not in field:
-            field["description"] = help_text[key]
+        for kind, text in help_text.get(key, {}).items():
+            field.setdefault(kind, text)
         _with_help(field.get("fields", []), help_text, f"{field['name']}.")
 
 
@@ -212,6 +242,36 @@ async def _with_option_labels(
     return None
 
 
+async def _with_field_texts(
+    client: Any,
+    described: dict[str, Any],
+    domain: str | None,
+    path: str,
+    step: dict[str, Any],
+    placeholders: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Put Core's label and help text on ``described["fields"]``, from Home
+    Assistant's flow formatter where it runs, else from Core's strings, which
+    are returned for the later forms."""
+    step_id = step.get("step_id")
+    if not step_id:
+        return None
+    core = await core_flow_step(client, path, step, placeholders)
+    if core is not None:
+        _with_help(described["fields"], core_field_text(core.get("fields") or []))
+        return None
+    if not domain:
+        return None
+    strings = await fetch_flow_strings(client, domain, path.partition(".")[0])
+    if strings is None:
+        described["warnings"] = [strings_unread_warning(domain)]
+        return None
+    filled = {**(placeholders or {}), **(step.get("description_placeholders") or {})}
+    help_text = field_help(strings, domain, path, step_id, filled)
+    _with_help(described["fields"], help_text)
+    return strings
+
+
 async def describe_form(
     client: Any,
     domain: str | None,
@@ -219,30 +279,24 @@ async def describe_form(
     step: dict[str, Any],
     placeholders: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """A flow form in brief: ``fields`` with HA's help text for each (and a
-    select's ``option_labels``), ``more_forms``/``note`` unless the form is
-    the flow's last, and ``warnings`` when Core's strings could not be read.
+    """A flow form in brief: ``fields`` with Core's label and help text for
+    each (and a select's ``option_labels``), ``more_forms``/``note`` unless
+    the form is the flow's last, and ``warnings`` when Core's strings could
+    not be read.
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``,
-    ``config_subentries.<type>`` or ``issues.<key>.fix_flow``. Without a
-    ``domain`` there is no help text to read. The help text is filled with
-    the step's ``description_placeholders``, over ``placeholders`` (a fix
-    flow's issue placeholders), as the frontend fills it.
+    ``config_subentries.<type>`` or ``issues.<key>.fix_flow``. The texts come
+    from Home Assistant's flow formatter where it runs, filled with the step's
+    ``description_placeholders`` over ``placeholders`` (a fix flow's issue
+    placeholders); otherwise from Core's strings, which need a ``domain``.
     """
     fields = compact_schema(step.get("data_schema") or [])
     described: dict[str, Any] = {"fields": fields}
     step_id = step.get("step_id")
-    strings = None
+    strings = await _with_field_texts(
+        client, described, domain, path, step, placeholders
+    )
     if step_id and domain:
-        strings = await fetch_flow_strings(client, domain, path.partition(".")[0])
-        if strings is None:
-            described["warnings"] = [strings_unread_warning(domain)]
-        else:
-            filled = {
-                **(placeholders or {}),
-                **(step.get("description_placeholders") or {}),
-            }
-            _with_help(fields, field_help(strings, domain, path, step_id, filled))
         unread = await _with_option_labels(
             client, domain, fields, step.get("data_schema")
         )
@@ -603,7 +657,7 @@ async def _describe_simple(
     return out
 
 
-async def describe_helper(
+async def _describe_helper(
     client: Any,
     helper_type: str,
     *,
@@ -660,7 +714,7 @@ async def describe_helper_response(
             )
         )
     try:
-        described = await describe_helper(
+        described = await _describe_helper(
             client, helper_type, menu_choice=menu_choice, helper_id=helper_id
         )
     except ToolError:

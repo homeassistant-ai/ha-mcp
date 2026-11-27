@@ -64,6 +64,7 @@ from .config_write_helpers import (
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
 )
+from .flow_catalog import helper_catalog
 from .helper_flows import helper_flow_types, require_helper_type
 from .helpers import (
     clear_or_keep,
@@ -149,6 +150,23 @@ class HelperConfigTools:
                 )
             ),
         ] = None,
+        catalog: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Instead of listing helpers, list the helper types that "
+                    "can be created (Home Assistant's Create helper dialog), "
+                    "each with its name, categories and whether it is set up "
+                    "by a config flow; helper_type 'all' or one type."
+                )
+            ),
+        ] = False,
+        category: Annotated[
+            str | None,
+            Field(
+                description="catalog only: keep the entries in this Home Assistant category or its subcategories, e.g. 'helpers', 'helpers.calculate_value', 'local_services', 'energy'."
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """List Home Assistant helpers of a specific type with their configurations.
 
@@ -182,9 +200,11 @@ class HelperConfigTools:
         COMPONENT_NOT_INSTALLED error rather than a partial or empty list.
 
         describe=True returns each field's name, type, required flag, options,
-        default and (with helper_id) current value, the later_forms of a
-        helper with several forms, or the menu_options a menu-based helper
-        needs a menu_choice from. Call it before ha_config_set_helper.
+        default, Home Assistant's label and help text, the rest of its selector
+        settings as Home Assistant sends them, and (with helper_id) its current
+        value, the later_forms of a helper with several forms, or the
+        menu_options a menu-based helper needs a menu_choice from. Call it
+        before ha_config_set_helper.
 
         EXAMPLES:
         - List all counters: ha_config_list_helpers("counter")
@@ -192,10 +212,16 @@ class HelperConfigTools:
         - Next page: ha_config_list_helpers("input_boolean", offset=100)
         - Fields for a template sensor:
           ha_config_list_helpers("template", describe=True, menu_choice="sensor")
+        - Helper types that calculate a value:
+          ha_config_list_helpers("all", catalog=True, category="helpers.calculate_value")
 
         For detailed helper documentation, use ha_get_skill_guide.
         """
         await require_helper_type(self._client, helper_type, "all")
+        if catalog or category is not None:
+            return await _catalog_response(
+                self._client, helper_type, category, catalog=catalog
+            )
         if describe or menu_choice is not None or helper_id is not None:
             return await describe_helper_response(
                 self._client, helper_type, menu_choice, helper_id, describe=describe
@@ -235,35 +261,8 @@ class HelperConfigTools:
                 # No usable component path and the legacy body cannot serve flow
                 # helpers: hard error rather than an empty or misleading list.
                 _raise_flow_requires_component(helper_type)
-            result = await self._client.send_websocket_message(
-                {"type": f"{helper_type}/list"}
-            )
-            if result.get("success"):
-                # Flatten first: person/list returns {"storage": [...],
-                # "config": [...]} rather than a flat list, so a raw
-                # result["result"] would be a dict here — breaking both the
-                # count and the registry enrichment below (which iterates
-                # records). _flatten_helper_list_result normalises both shapes.
-                items = _flatten_helper_list_result(result)
-                warnings = await _enrich_helpers_with_current_registry(
-                    self._client, helper_type, items
-                )
-                response: dict[str, Any] = {
-                    "success": True,
-                    "helper_type": helper_type,
-                    "count": len(items),
-                    "helpers": items,
-                    "message": f"Found {len(items)} {helper_type} helper(s)",
-                }
-                if warnings:
-                    response["warnings"] = warnings
-                return _paginate_helpers_response(response, offset, limit)
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to list helpers: {result.get('error', 'Unknown error')}",
-                    context={"helper_type": helper_type},
-                )
+            return _paginate_helpers_response(
+                await self._legacy_helper_list(helper_type), offset, limit
             )
         except ToolError:
             raise
@@ -281,7 +280,6 @@ class HelperConfigTools:
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL
             )
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _list_helpers_via_component(
         self, helper_type: str, *, is_flow: bool
@@ -398,13 +396,13 @@ class HelperConfigTools:
         )
 
     async def _legacy_helper_list(self, helper_type: str) -> dict[str, Any]:
-        """Legacy ``{helper_type}/list`` success envelope, for the § 4 #3 fallback.
+        """A storage type's helpers from Core's ``{helper_type}/list``: the
+        listing without the component, and the § 4 #3 fallback.
 
-        A copy of the tool's inline legacy success path, kept separate rather
-        than extracted from that body. It flattens and joins the entity registry
-        (issue #1945) exactly like the inline path, so a renamed helper served on
-        this fallback carries its current entity_id/name; the caller additionally
-        appends a ``warnings[]`` entry flagging that the component path was used.
+        It flattens and joins the entity registry (issue #1945), so a renamed
+        helper carries its current entity_id/name; on the fallback the caller
+        also appends a ``warnings[]`` entry flagging that the component path was
+        used.
         """
         result = await self._client.send_websocket_message(
             {"type": f"{helper_type}/list"}
@@ -417,14 +415,13 @@ class HelperConfigTools:
                     context={"helper_type": helper_type},
                 )
             )
-        # Flatten like the inline body: person/list returns {"storage": [...],
+        # Flatten: person/list returns {"storage": [...],
         # "config": [...]} rather than a flat list, so a raw result["result"]
         # would be a dict here — breaking count, the pagination slice and the
         # all-types merge, which all expect a list of records.
         items = _flatten_helper_list_result(result)
-        # Join the entity registry like the inline body (issue #1945): without
-        # this a renamed helper served on the component-error fallback keeps its
-        # stale storage id/name, the same #1794 staleness the inline path fixes.
+        # Join the entity registry (issue #1945): without it a renamed helper
+        # keeps its stale storage id/name (#1794).
         enrich_warnings = await _enrich_helpers_with_current_registry(
             self._client, helper_type, items
         )
@@ -889,6 +886,28 @@ class HelperConfigTools:
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
             raise_tool_error(error)
+
+
+async def _catalog_response(
+    client: Any, helper_type: str, category: str | None, *, catalog: bool
+) -> dict[str, Any]:
+    if not catalog:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "category applies only with catalog=True.",
+                suggestions=["Pass catalog=True, or drop category"],
+            )
+        )
+    try:
+        catalog_response = await helper_catalog(client, helper_type, category)
+    except ToolError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        exception_to_structured_error(
+            e, context={"operation": "read Home Assistant's helper catalog"}
+        )
+    return catalog_response
 
 
 def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
