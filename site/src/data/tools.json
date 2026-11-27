@@ -431,12 +431,17 @@
   {
     "name": "ha_config_get_automation",
     "title": "Get Automation Config",
-    "description": "Get a Home Assistant automation's stored configuration.\n\n`config` is the body Home Assistant stores, as it stores it; its\n`config_hash` stays the same across reads of an unchanged automation.\n`entity` is the automation's entity registry row, `validation` holds\nHome Assistant's status and error when the automation failed to load\n(None when it loaded), and `references` lists the entities, devices,\nareas, floors, labels and blueprint it uses. `references` is None\nwithout the ha_mcp_tools component's automation_config bridge and\nwhile Home Assistant has not loaded the automation (disabled, or it\nfailed to load); `warnings` says which. Without the bridge, `related`\nholds Home Assistant's Related set for the automation instead, keyed\nby item type: what it uses plus their devices, areas, floors and\nintegrations. `automation_id` is the resolved entity_id, falling back\nto the input.\n\nEXAMPLES:\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by config id: ha_config_get_automation(\"1712345678901\")\n\nFor comprehensive automation documentation, use ha_get_skill_guide.",
+    "description": "Get a Home Assistant automation's stored configuration.\n\n`config` is the body Home Assistant stores, as it stores it; its\n`config_hash` stays the same across reads of an unchanged automation.\n`entity` is the automation's entity registry row, `validation` holds\nHome Assistant's status and error when the automation failed to load\n(None when it loaded), and `references` lists the entities, devices,\nareas, floors, labels and blueprint it uses. `references` is None\nwithout the ha_mcp_tools component's automation_config bridge and\nwhile Home Assistant has not loaded the automation (disabled, or it\nfailed to load); `warnings` says which. Without the bridge, `related`\nholds Home Assistant's Related set for the automation instead, keyed\nby item type: what it uses plus their devices, areas, floors and\nintegrations. `automation_id` is the resolved entity_id, falling back\nto the input.\n\nWith `hash_only=True`, return only the action, resolved automation_id\nand config_hash. Use this hash for `python_transform`, which edits the\nstored body. For a full `config` write, read the full config and base\nthe replacement on it; a hash alone does not prevent lost edits.\n\nEXAMPLES:\n- Get hash for a transform: ha_config_get_automation(\"automation.morning_routine\", hash_only=True)\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by config id: ha_config_get_automation(\"1712345678901\")\n\nFor comprehensive automation documentation, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "entity_id": {
           "type": "str",
           "description": "The automation's entity_id (e.g. 'automation.morning_routine') or its config id"
+        },
+        "hash_only": {
+          "type": "bool",
+          "description": "Return only the resolved entity_id and config hash",
+          "default": false
         }
       },
       "required": [
