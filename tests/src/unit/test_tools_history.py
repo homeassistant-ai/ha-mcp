@@ -102,6 +102,15 @@ async def test_history_resolves_a_target_with_core(
     )
 
 
+async def test_a_target_that_matches_nothing_names_what_core_missed(
+    recorded: None, component_core_client: HomeAssistantClient
+) -> None:
+    error = await _refusal(component_core_client, target={"area_id": "no_such_area"})
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error["missing_areas"] == ["no_such_area"]
+
+
 def _window(days: int) -> dict[str, str]:
     return {
         "start_time": START.isoformat(),

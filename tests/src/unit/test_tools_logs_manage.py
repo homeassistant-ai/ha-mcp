@@ -431,6 +431,7 @@ async def test_a_purge_returns_the_recorders_oldest_state(
         **(await component_client.send_websocket_message({"type": "recorder/info"}))[
             "result"
         ],
+        "enabled": True,
         "purge_keep_days": recorder_mock.keep_days,
         "auto_purge": recorder_mock.auto_purge,
         "oldest_state": datetime.fromtimestamp(oldest, UTC).isoformat(
@@ -438,6 +439,26 @@ async def test_a_purge_returns_the_recorders_oldest_state(
         ),
     }
     assert "warnings" not in result
+
+
+async def test_disabling_the_recorder_reads_back_cores_enabled_flag(
+    component_client: HomeAssistantClient,
+) -> None:
+    """recorder/info's `recording` stays true while the recorder is disabled."""
+    disabled = await _manage(component_client, "recorder.disable")
+    enabled = await _manage(component_client, "recorder.enable")
+
+    assert disabled["recorder"]["enabled"] is False
+    assert disabled["recorder"]["recording"] is True
+    assert enabled["recorder"]["enabled"] is True
+
+
+async def test_a_log_action_returns_no_recorder_status(
+    client: HomeAssistantClient,
+) -> None:
+    result = await _manage(client, "system_log.write", data={"message": "noted"})
+
+    assert "recorder" not in result
 
 
 async def test_without_the_component_the_wait_names_what_it_cannot_see(
