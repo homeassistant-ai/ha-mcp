@@ -17,7 +17,7 @@
   "src/ha_mcp/tools/tools_addons.py": 4031,
   "src/ha_mcp/tools/tools_bug_report.py": 1163,
   "src/ha_mcp/tools/tools_code.py": 1419,
-  "src/ha_mcp/tools/tools_config_automations.py": 1666,
+  "src/ha_mcp/tools/tools_config_automations.py": 1646,
   "src/ha_mcp/tools/tools_config_dashboards.py": 3749,
   "src/ha_mcp/tools/tools_config_scenes.py": 1400,
   "src/ha_mcp/tools/tools_config_scripts.py": 1151,
