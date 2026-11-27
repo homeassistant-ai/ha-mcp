@@ -840,3 +840,13 @@ class TestBetaMasterAutoEnableInDevAddon:
         assert set(self.subflags) == set(BETA_FEATURE_FIELDS), (
             "start.py's beta sub-flags differ from config.BETA_FEATURE_FIELDS"
         )
+
+
+def test_the_webhook_proxy_ships_the_apps_supervisor_transport() -> None:
+    """Both apps send Supervisor requests through one transport module; each
+    image copies its own file, so the two copies must stay the same."""
+    repo = Path(__file__).parents[2]
+    shared = "supervisor_transport.py"
+    assert (repo / "homeassistant-addon" / shared).read_bytes() == (
+        repo / "homeassistant-addon-webhook-proxy-dev" / shared
+    ).read_bytes()

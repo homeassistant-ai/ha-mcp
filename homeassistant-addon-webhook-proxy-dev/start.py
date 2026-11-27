@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, NamedTuple
 from urllib.parse import urlparse
 
 import app_options
+from supervisor_transport import urlopen_supervisor
 
 
 class IntegrationInstall(NamedTuple):
@@ -207,7 +208,7 @@ def _supervisor_get(path: str) -> dict | None:
                 "Content-Type": "application/json",
             },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urlopen_supervisor(req, timeout=10) as resp:
             response_data = json.loads(resp.read())
             if not isinstance(response_data, dict):
                 log_error(
@@ -237,7 +238,7 @@ def _supervisor_post(path: str, data: dict) -> bool:
         data=body,
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urlopen_supervisor(req, timeout=10) as resp:
             status: int = resp.status
             return 200 <= status < 300
     except urllib.error.HTTPError as e:
@@ -268,7 +269,7 @@ def _supervisor_get_text(path: str) -> str | None:
                 "Accept": "text/plain",
             },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urlopen_supervisor(req, timeout=10) as resp:
             text: str = resp.read().decode("utf-8", errors="replace")
             return text
     except urllib.error.HTTPError as e:
