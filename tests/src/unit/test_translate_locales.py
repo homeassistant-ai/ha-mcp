@@ -93,18 +93,26 @@ class TestValidate:
         assert _translate(repo, "Range 1-600.", "Bereich 1-600.") == "Bereich 1-600."
 
     @pytest.mark.parametrize(
-        ("translated", "accepted_locales"),
+        ("english", "translated", "accepted_locales"),
         [
-            ("%90", {"tr"}),
-            ("90 %", {"de", "tr"}),
-            ("90", set()),
-            ("%95", set()),
+            ("90%", "%90", {"tr"}),
+            ("90%", "90 %", {"de", "tr"}),
+            ("90%", "90", set()),
+            ("90%", "%95", set()),
+            ("90.5%", "%90,5", {"tr"}),
+            ("5% and 90.5", "5 ve %90,5", set()),
         ],
     )
     def test_percentage_placement(
-        self, repo: LocaleRepo, translated: str, accepted_locales: set[str]
+        self,
+        repo: LocaleRepo,
+        english: str,
+        translated: str,
+        accepted_locales: set[str],
     ) -> None:
-        repo.write_settings("en", {"saving": "90%"}, native_name="English", tools=False)
+        repo.write_settings(
+            "en", {"saving": english}, native_name="English", tools=False
+        )
         repo.write_settings("tr", {}, native_name="Türkçe")
         repo.engine.reply = lambda request: answer(
             dict.fromkeys(request.strings, translated)
