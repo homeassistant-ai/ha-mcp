@@ -788,6 +788,7 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "include_schema",
         "config",
         "config_hash",
+        "include_suggestions",
     },
     "ha_manage_pipeline": {
         # Selector for action='get' (read) and the blocked write actions.

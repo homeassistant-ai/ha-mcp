@@ -60,15 +60,29 @@ async def integration_commands(client: Any, domain: str) -> dict[str, Any]:
     )
 
 
+async def energy_suggestions(client: Any) -> dict[str, Any]:
+    """The meters Settings > Energy suggests, computed by the installed frontend."""
+    return await _contract_bridge(
+        client,
+        "energy_suggestions",
+        {},
+        "the energy meter suggestions of Settings > Energy",
+        absent_note="Install or update the HA-MCP component to read them.",
+    )
+
+
 async def _contract_bridge(
-    client: Any, capability: str, params: dict[str, Any], feature: str
+    client: Any,
+    capability: str,
+    params: dict[str, Any],
+    feature: str,
+    absent_note: str = "Core still validates actual requests.",
 ) -> dict[str, Any]:
     """Ask the component's ``capability`` bridge; ``feature`` names it in
     the reason and error texts."""
     unavailable = {
         "status": "unavailable",
-        "reason": f"The installed component does not expose {feature}. "
-        "Core still validates actual requests.",
+        "reason": f"The installed component does not expose {feature}. {absent_note}",
     }
     try:
         caps = await get_component_caps(client, strict=True)

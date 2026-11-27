@@ -6,7 +6,7 @@ from typing import Any
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..utils.config_hash import compute_config_hash
-from .core_contract import core_contract
+from .core_contract import core_contract, energy_suggestions
 from .helpers import exception_to_structured_error, raise_core_refusal
 from .statistics_helpers import fetch_statistics_metadata, statistics_unit
 
@@ -52,6 +52,25 @@ async def include_energy_statistics(
     ]
     if warnings:
         result.setdefault("warnings", []).extend(warnings)
+    return result
+
+
+async def include_energy_suggestions(
+    client: Any, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Attach the meters Settings > Energy suggests; a failed read keeps the result."""
+    try:
+        suggestions = dict(await energy_suggestions(client))
+    except ToolError:
+        logger.warning("Energy meter suggestions failed", exc_info=True)
+        suggestions = {
+            "status": "unavailable",
+            "reason": "The HA-MCP component could not compute the energy meter "
+            "suggestions; update it, then read them again.",
+        }
+    if suggestions["status"] == "unavailable":
+        result.setdefault("warnings", []).append(suggestions["reason"])
+    result["energy_suggestions"] = suggestions
     return result
 
 

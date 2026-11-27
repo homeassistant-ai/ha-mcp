@@ -25,6 +25,7 @@ from .energy_preferences import (
     compute_per_key_hashes,
     get_energy_prefs,
     include_energy_statistics,
+    include_energy_suggestions,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -142,6 +143,19 @@ class EnergyTools:
                 description="With mode='get', include native recorder metadata and resolved output units for all configured statistic references. Ignored for other modes."
             ),
         ] = False,
+        include_suggestions: Annotated[
+            bool,
+            Field(
+                description=(
+                    "With mode='get', include the energy, gas and water meters "
+                    "Settings > Energy suggests adding (energy_suggestions): each "
+                    "statisticId with the slots it can fill, the statistics this "
+                    "user dismissed, and editors, which names the source or device "
+                    "kind and field each slot fills. Computed by the installed "
+                    "frontend through the component; Home Assistant 2026.12 and later."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Manage the Home Assistant Energy dashboard preferences: its energy
         sources (grid, solar, battery, gas, water, home) and its device
@@ -157,6 +171,8 @@ class EnergyTools:
         - mode='set' saves top-level keys. To add, change or remove one source
           or device, take its list from mode='get', edit it and send that key
           back with its config_hash_per_key entry, as Settings > Energy does.
+        - include_suggestions=True lists the meters not yet in the dashboard
+          that Settings > Energy suggests, and where each one can go.
 
         RELATED TOOLS: Use ha_get_history(source="statistics") with the returned
         statistic IDs for consumption, totals, and trends. Metadata comes directly
@@ -182,6 +198,8 @@ class EnergyTools:
             result = await get_energy_prefs(self._client)
             if include_schema:
                 await include_core_contract(self._client, result, "energy/save_prefs")
+            if include_suggestions:
+                await include_energy_suggestions(self._client, result)
             return (
                 await include_energy_statistics(self._client, result)
                 if include_statistics
