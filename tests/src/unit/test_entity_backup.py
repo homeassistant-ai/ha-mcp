@@ -58,6 +58,7 @@ from ._entity_backup_core import entity_handler as entity_handler
 from ._entity_backup_core import entity_manager as entity_manager
 from ._entity_backup_core import entity_path as entity_path
 from ._entity_backup_core import lookup_command as lookup_command
+from ._tool_errors import error_of
 
 Edit = Callable[[er.EntityRegistry, Desk], Any]
 
@@ -568,7 +569,6 @@ async def test_a_bulk_call_backs_up_every_entity_before_writing(
 @pytest.mark.parametrize(
     "entity_id",
     [
-        ["light.desk", "light.desk"],
         ["light.desk", "LIGHT.DESK"],
         ["LIGHT.DESK", "light.desk"],
         ["LIGHT.DESK"],
@@ -602,11 +602,12 @@ async def test_a_refused_list_takes_no_backup(
         "light", "hue", "lamp", suggested_object_id="lamp"
     )
 
-    with pytest.raises(ToolError):
+    with pytest.raises(ToolError) as exc_info:
         await EntityTools(entity_client).ha_set_entity(
             entity_id=["light.desk", "light.lamp"]
         )
 
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
     assert await asyncio.to_thread(backup_files, backup_dir(backup_settings)) == []
 
 

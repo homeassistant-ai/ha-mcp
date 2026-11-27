@@ -863,6 +863,8 @@ class TestEntityWriteFailure:
         assert (result["success"], result["partial"]) == (False, True)
         assert [row["entity_id"] for row in result["failed"]] == ids
         for row in result["failed"]:
+            # Which write failed: the registry write in the same row landed.
+            assert "exposure" in row["error"].lower()
             assert row["code"] == code
             assert row.get("write_outcome_unknown", False) is outcome_unknown
             assert row.get("ha_error_code", "absent") == ha_error_code
@@ -912,6 +914,7 @@ class TestEntityWriteFailure:
 
         body = _body(exc_info)
         assert "entity_entry" not in body
+        assert "exposure" in body["error"]["message"].lower()
         assert body["error"]["code"] == code
         assert body.get("write_outcome_unknown", False) is outcome_unknown
         assert body.get("ha_error_code", "absent") == ha_error_code

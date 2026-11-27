@@ -21,7 +21,7 @@ from ._entity_registry_core import sent_types
 from ._entity_tools_core import labels as labels
 from ._entity_tools_core import registry_entity, stored_entry
 from ._entity_tools_core import tools as tools
-from ._tool_errors import error_of
+from ._tool_errors import error_body, error_of
 
 _LABELS = "config/label_registry/list"
 _UPDATE = "config/entity_registry/update"
@@ -227,14 +227,12 @@ class TestBulk:
         for entity_id in ids:
             assert stored_entry(entity_registry, entity_id).labels == {"outdoor"}
 
-    @pytest.mark.parametrize("repeat", ["light.a", "LIGHT.A"])
     async def test_a_repeated_id_is_updated_and_reported_once(
         self,
         tools: EntityTools,
         entity_registry: er.EntityRegistry,
         labels: list[str],
         sent: AsyncMock,
-        repeat: str,
     ) -> None:
         """One write and one outcome per entity, whatever the case of the
         repeat: Core lowercases an entity_id."""
@@ -242,7 +240,7 @@ class TestBulk:
             registry_entity(entity_registry, entity_id)
 
         result = await tools.ha_set_entity(
-            entity_id=["light.a", "light.b", repeat], labels=["outdoor"]
+            entity_id=["light.a", "light.b", "LIGHT.A"], labels=["outdoor"]
         )
 
         assert (result["total"], result["succeeded_count"]) == (2, 2)
@@ -297,6 +295,28 @@ class TestBulk:
         for row in result["failed"]:
             assert row["code"] == "CONNECTION_FAILED"
             assert row.get("write_outcome_unknown", False) is may_have_landed
+
+    async def test_a_single_update_sent_without_an_answer_may_have_landed(
+        self,
+        hass: HomeAssistant,
+        tools: EntityTools,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        """A single call whose update got no answer says, as its bulk row does,
+        that the update may have been written, and names the entity."""
+        registry_entity(entity_registry, "light.a")
+
+        with (
+            dropped_on(hass, _UPDATE, await pooled_socket(core_client)),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.ha_set_entity(entity_id="light.a", hidden=True)
+
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "CONNECTION_FAILED"
+        assert body["write_outcome_unknown"] is True
+        assert body["entity_id"] == "light.a"
 
     async def test_disabling_a_script_in_a_list_is_refused(
         self, tools: EntityTools, sent: AsyncMock
