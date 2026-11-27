@@ -567,9 +567,10 @@ class LogbookLogSourceMixin:
             rows, request["skip"], request["limit"], request["order"]
         )
         caps = await get_component_caps(self._client)
+        label = "WebSocket" if transport == "websocket" else "REST"
         warnings = [
             component_unusable_warning(
-                caps, f"the {transport} Logbook read has no Recorder-side paging"
+                caps, f"the {label} Logbook read loaded its whole window"
             )
         ]
         if transport == "websocket" and any(
