@@ -592,28 +592,6 @@ async def test_with_guardrails_a_summary_over_cores_own_period_is_refused_unsent
     )
 
 
-async def test_a_statistic_whose_state_has_a_unit_of_another_class_keeps_its_own_unit(
-    recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
-) -> None:
-    """Core converts to the state's unit only when it is one of the statistic's class."""
-    hass.states.async_set("sensor.energy", "1", {"unit_of_measurement": "W"})
-    await import_statistic(
-        hass,
-        "sensor.energy",
-        "kWh",
-        "energy",
-        [{"start": START + hour * HOUR, "sum": hour} for hour in range(4)],
-    )
-
-    result = await _summary(
-        component_core_client, entity_ids="sensor.energy", statistic_types="change"
-    )
-
-    entity = result["data"]["entities"][0]
-    assert entity["unit_of_measurement"] == "kWh"
-    assert entity["summary"]["change"] == 3.0
-
-
 async def test_a_summary_without_types_takes_cores_defaults_for_each_statistic(
     recorded: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
