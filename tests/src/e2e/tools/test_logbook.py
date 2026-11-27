@@ -36,8 +36,14 @@ async def test_logbook_basic(mcp_client):
 
     async with MCPAssertions(mcp_client) as mcp:
         raw_data = await mcp.call_tool_success("ha_get_logs", {"hours_back": 1})
+        actions = await mcp.call_tool_success(
+            "ha_get_logs", {"hours_back": 1, "action_calls": True}
+        )
     data = get_logbook_data(raw_data)
     assert_component_path(raw_data)
+    # The action-call view holds actions, not state changes.
+    assert_component_path(actions)
+    assert all("service" in row for row in get_logbook_data(actions)["entries"])
 
     # Verify response structure
     assert "entries" in data, "Response should contain entries"

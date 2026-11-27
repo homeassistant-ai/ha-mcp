@@ -321,9 +321,7 @@ def read_logbook_page(
         rendered = []
         for row in rows:
             for pos in (CONTEXT_ID_BIN_POS, CONTEXT_PARENT_ID_BIN_POS):
-                if (origin := origins.get(row[pos])) is not None and _key(
-                    origin
-                ) < _key(row):
+                if (origin := origins.get(row[pos])) is not None:
                     processor.logbook_run.context_lookup.setdefault(row[pos], origin)
             rendered.append((row, processor.humanify([row], parent_users)))
     if page["order"] == "newest":

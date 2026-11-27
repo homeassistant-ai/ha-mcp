@@ -11,8 +11,8 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import uuid4
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
 from homeassistant.components import websocket_api
