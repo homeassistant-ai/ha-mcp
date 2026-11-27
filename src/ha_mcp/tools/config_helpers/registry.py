@@ -400,6 +400,7 @@ async def _core_checks_area(client: Any) -> bool:
     HA-MCP's check: both Cores' ``update`` commands drop an unknown label id
     before the registry sees it, and answer success.
     """
+    # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
     try:
         version = str((await client.get_config()).get("version"))
         release = tuple(int(part) for part in version.split(".")[:2])

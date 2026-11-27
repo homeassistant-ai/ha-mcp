@@ -118,6 +118,7 @@ async def _core_release_notes(
             message if language is None else {**message, "language": language},
             expected_error_codes=_ANSWERED_CODES | {"invalid_format"},
         )
+        # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
         if language is not None and reply.get("error_code") == "invalid_format":
             # Known from here on, also when the second call gets no answer.
             warnings.append(

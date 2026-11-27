@@ -31,6 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 # Core 2026.12's module that lists a failed config's errors with their paths.
 # Resolved once here, when the integration is imported: the handlers run on the
 # event loop, where Core reports an import as a blocking call.
+# Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
 _VALIDATION_ERRORS: Any
 try:
     _VALIDATION_ERRORS = importlib.import_module(

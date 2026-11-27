@@ -27,6 +27,7 @@ async def automatic_entity_id(
         {**request, "overrides": {entity_id: overrides}} if overrides else request,
         expected_error_codes=frozenset({"invalid_format"}),
     )
+    # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
     if overrides and result.get("error_code") == "invalid_format":
         result = await client.send_websocket_message(request)
     what = f"No automatic entity_id for {entity_id}"

@@ -290,6 +290,7 @@ async def add_database_usage(
             **({"_wait_timeout": DATABASE_REFRESH_TIMEOUT_SECONDS} if refresh else {}),
         )
     except HomeAssistantCommandError as exc:
+        # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
         if is_unknown_command(exc):
             result.setdefault("warnings", []).append(
                 "This Home Assistant has no database usage report (added in 2026.12)"
