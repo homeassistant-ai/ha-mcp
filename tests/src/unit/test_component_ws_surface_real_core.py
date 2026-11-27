@@ -53,6 +53,7 @@ _GATED_COMMANDS: dict[str, dict[str, Any]] = {
     c.WS_DEVICE_GET: {"device_id": "d1"},
     c.WS_DEVICE_LIST: {},
     c.WS_ENTITY_ENRICH: {"entity_ids": []},
+    c.WS_ENTITY_ALIASES: {"entity_ids": []},
     c.WS_EXPOSURE: {},
     c.WS_CONFIG_ENTRIES: {},
     c.WS_REGISTRY_LOOKUP: {"entity_ids": ["light.x"]},

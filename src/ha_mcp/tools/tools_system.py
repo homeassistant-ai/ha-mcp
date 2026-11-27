@@ -43,14 +43,19 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .system_health_sections import (
+    add_database_usage,
+    add_ha_mcp_update,
     add_health_labels,
     add_repair_data,
     add_repair_texts,
+    parse_includes,
     read_integration_startup,
     read_matter_network,
     read_supervisor,
     read_system_health,
     reraise_if_fatal,
+    stub_ws_unavailable,
+    warn_unknown_includes,
 )
 from .system_restart import restart_home_assistant
 from .tool_hints import read_only_hints, write_hints
@@ -468,6 +473,10 @@ class SystemTools:
                     "unhealthy and unsupported reasons, and the Core and "
                     "Supervisor container stats); 'integration_startup' (each "
                     "integration's setup time in seconds, slowest first); "
+                    "'database_usage' (Home Assistant 2026.12+: the recorder "
+                    "database size per table, entity and statistic, as the "
+                    "Storage card shows it, the 50 largest entities and "
+                    "statistics); "
                     "'config_check' (validate the HA configuration, the "
                     "pre-restart check ha_restart runs automatically; returns "
                     "Core's {result: valid|invalid, errors, warnings}, the "
@@ -489,6 +498,17 @@ class SystemTools:
                     "Include user-dismissed/ignored repairs. Only meaningful when "
                     "'repairs' is in include. Dismiss or restore one with "
                     "ha_manage_updates(action='ignore_repair' / 'unignore_repair')."
+                )
+            ),
+        ] = False,
+        refresh_database_usage: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "Analyze the recorder database now instead of returning the "
+                    "report Home Assistant cached. Only meaningful when "
+                    "'database_usage' is in include; a large database takes a "
+                    "while to analyze."
                 )
             ),
         ] = False,
@@ -517,7 +537,7 @@ class SystemTools:
         - ha_get_system_health(include="repairs,zha_network,zwave_network,config_check")
         - ha_get_system_health(include="supervisor,integration_startup")
         """
-        includes = self._parse_includes(include)
+        includes = parse_includes(include)
         include_dismissed_repairs_bool = bool(include_dismissed_repairs)
 
         # Sections that require the system_health WebSocket connection;
@@ -530,6 +550,7 @@ class SystemTools:
             "thread_network",
             "matter_network",
             "integration_startup",
+            "database_usage",
         }
 
         ws_client = None
@@ -576,7 +597,7 @@ class SystemTools:
             await add_health_labels(self._client, result)
 
             # Warn about unrecognized include values
-            self._warn_unknown_includes(result, includes)
+            warn_unknown_includes(result, includes)
 
             # Fetch optional sections concurrently. The ws_client serialises
             # outgoing writes via its internal `_send_lock`, but per-message
@@ -602,7 +623,7 @@ class SystemTools:
                 # sub-dict under its own key (same shape the section carries when
                 # the baseline is up but the fetch fails), plus a summary
                 # warning, then skip them so the other sections below still run.
-                self._stub_ws_unavailable(
+                stub_ws_unavailable(
                     result,
                     includes,
                     ws_backed,
@@ -612,6 +633,7 @@ class SystemTools:
                     want_thread=want_thread,
                     want_matter=want_matter,
                     want_startup=want_startup,
+                    want_database_usage="database_usage" in includes,
                 )
                 want_repairs = want_zha = want_zwave = want_thread = want_matter = (
                     want_startup
@@ -650,6 +672,9 @@ class SystemTools:
                 want_startup=want_startup,
             )
             await self._gather_and_attribute(sections, result)
+            await add_database_usage(
+                ws_client, result, includes, refresh=bool(refresh_database_usage)
+            )
 
             if "supervisor" in includes:
                 result["supervisor"] = await read_supervisor(self._client)
@@ -662,16 +687,7 @@ class SystemTools:
 
             await self._run_dead_entities_section(result, snapshot, want_dead_entities)
 
-            # Surface the MCP server's own update status so the model can relay
-            # it in chat. ``get_update_field`` is best-effort, thread-offloaded,
-            # and never raises (omits the field on any hiccup); see
-            # ha_mcp.update_check for gating/throttle details.
-            from ..update_check import get_update_field
-
-            mcp_update = await get_update_field()
-            if mcp_update is not None:
-                result["ha_mcp_update"] = mcp_update
-
+            await add_ha_mcp_update(result)
             return result
 
         except ToolError:
@@ -687,74 +703,6 @@ class SystemTools:
             return None  # unreachable: exception_to_structured_error always raises
         finally:
             await self._safe_disconnect(ws_client)
-
-    @staticmethod
-    def _warn_unknown_includes(result: dict[str, Any], includes: set[str]) -> None:
-        """Append a warning to ``result`` for any unrecognized include sections.
-
-        Extracted verbatim from ``ha_get_system_health``.
-        """
-        VALID_INCLUDES = {
-            "repairs",
-            "zha_network",
-            "zha_network_full",
-            "zwave_network",
-            "thread_network",
-            "matter_network",
-            "integration_startup",
-            "supervisor",
-            "config_check",
-            "dead_entities",
-        }
-        unknown = includes - VALID_INCLUDES
-        if unknown:
-            result.setdefault("warnings", []).append(
-                f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
-            )
-        for section, replacement in (
-            ("diagnostics", "ha_get_integration(include_diagnostics=True)"),
-            ("themes", "ha_manage_theme(action='list')"),
-        ):
-            if section in unknown:
-                result["warnings"].append(f"'{section}' moved to {replacement}")
-
-    @staticmethod
-    def _stub_ws_unavailable(
-        result: dict[str, Any],
-        includes: set[str],
-        ws_backed: set[str],
-        *,
-        want_repairs: bool,
-        want_zha: bool,
-        want_zwave: bool,
-        want_thread: bool,
-        want_matter: bool,
-        want_startup: bool,
-    ) -> None:
-        """Stub each requested WS-backed section as an error and add a summary
-        warning when the health WebSocket is unavailable.
-
-        Extracted verbatim from ``ha_get_system_health``.
-        """
-        ws_error = "requires the system_health WebSocket, which is unavailable"
-        if want_repairs:
-            result["repairs"] = {"error": ws_error}
-        if want_zha:
-            result["zha_network"] = {"error": ws_error}
-        if want_zwave:
-            result["zwave_network"] = {"error": ws_error}
-        if want_thread:
-            result["thread_network"] = {"error": ws_error}
-        if want_matter:
-            result["matter_network"] = {"error": ws_error}
-        if want_startup:
-            result["integration_startup"] = {"error": ws_error}
-        unavailable = sorted(includes & ws_backed)
-        if unavailable:
-            result.setdefault("warnings", []).append(
-                "These sections require the system_health WebSocket, "
-                f"which is unavailable: {', '.join(unavailable)}"
-            )
 
     def _build_ws_sections(
         self,
@@ -902,13 +850,6 @@ class SystemTools:
         if section_warnings:
             result.setdefault("warnings", []).extend(section_warnings)
         result["dead_entities"] = dead_section
-
-    @staticmethod
-    def _parse_includes(include: str | None) -> set[str]:
-        """Parse the comma-separated include parameter into a set of section names."""
-        if not include:
-            return set()
-        return {s.strip().lower() for s in include.split(",") if s.strip()}
 
     @staticmethod
     async def _safe_disconnect(ws_client: Any) -> None:

@@ -85,7 +85,6 @@ from .backup_diff import (
     json_equal,
 )
 from .backup_entities import (
-    current_entity_id,
     fetch_entity,
     restore_entity,
     restore_locks,
@@ -101,6 +100,7 @@ from .backup_files import (
     _restore_file,
     file_read_error_code,
 )
+from .backup_helper_target import comparison_target as _comparison_target
 from .backup_helper_target import fetch_helper as _fetch_helper
 from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
 from .backup_helper_target import (
@@ -117,7 +117,7 @@ from .backup_registry_items import fetch_label as _fetch_label
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
-from .backup_scenes import fetch_scene, restore_scene, scene_key
+from .backup_scenes import fetch_scene, restore_scene
 from .backup_snapshot_identity import (
     entity_id_aliases as _entity_id_aliases,
 )
@@ -129,7 +129,6 @@ from .backup_snapshot_identity import (
     safe_entity_id as _safe_entity_id,
 )
 from .backup_tags import restore_tag, tag_snapshot
-from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
 from .backup_todo import snapshot_item as todo_snapshot_item
 from .backup_zones import fetch_zone, restore_zone
@@ -1670,17 +1669,6 @@ class BackupManager:
 
     # ----- diff ----------------------------------------------------------
 
-    async def _comparison_target(self, domain: str, data: dict[str, Any]) -> str | None:
-        """The id the item a snapshot holds has now."""
-        target: str = data["entity_id"]
-        if domain == "entity":
-            return await current_entity_id(self._client, target, data["config"])
-        if domain == "todo_item":
-            return todo_current_key(target, data["config"])
-        if domain == "scene":
-            return scene_key(data["config"]) or target
-        return target
-
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
         """Read a snapshot and the live config for its stable target identity.
         The envelope carries the comparison's ``warnings``, never the file's."""
@@ -1696,7 +1684,7 @@ class BackupManager:
         handler = self.handler_for(domain)
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
-        target = await self._comparison_target(domain, data)
+        target = await _comparison_target(self._client, domain, data)
         current = await handler.fetch(self._client, target) if target else None
         if domain == "dashboard":
             _stored, legacy = dashboard_snapshot(data)

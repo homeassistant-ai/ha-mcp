@@ -124,6 +124,7 @@ class TestShowAs:
                 "config": {
                     "state": "{{ 1.234 }}",
                     "unit_of_measurement": "kWh",
+                    "device_class": "energy",
                 },
             },
         )
@@ -154,6 +155,21 @@ class TestShowAs:
                 .get("display_precision")
                 == 2
             )
+
+            # A unit comes from Core's list for the sensor's own device class.
+            unit_call = {"entity_id": entity_id}
+            async with MCPAssertions(mcp_client) as mcp:
+                refused = await mcp.call_tool_failure(
+                    "ha_set_entity",
+                    {**unit_call, "options": {"sensor": {"unit_of_measurement": "°F"}}},
+                )
+                assert "Wh" in refused["convertible_units"], refused
+                converted = await mcp.call_tool_success(
+                    "ha_set_entity",
+                    {**unit_call, "options": {"sensor": {"unit_of_measurement": "Wh"}}},
+                )
+            options = converted["entity_entry"]["options"]["sensor"]
+            assert options["unit_of_measurement"] == "Wh", converted
         finally:
             await _delete_template_helper(mcp_client, entity_id)
 

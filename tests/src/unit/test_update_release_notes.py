@@ -24,6 +24,9 @@ from ha_mcp import update_check
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.helpers import core_error_message
 
+from ._client_spies import sent_messages
+from ._command_faults import pooled_socket
+from ._component_frames import dropped
 from ._core_release_pages import (
     BLOG_202611,
     RELEASES,
@@ -167,6 +170,70 @@ class TestReleaseNotes:
             body,
             "github_api",
         )
+
+    async def test_a_language_reaches_core_or_is_dropped_with_a_warning(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Core 2026.12 takes ``language`` for its messages; an older Core
+        refuses the field, so the notes are read again without it and the
+        caller is told the language was not used."""
+        entity = SoftwareUpdate(
+            "update.firmware",
+            features=UpdateEntityFeature.RELEASE_NOTES,
+            notes="Faster startup",
+        )
+        await set_up_updates(hass, entity)
+
+        with sent_messages(core_client) as sent:
+            result = await manage_updates(
+                core_client,
+                action="get",
+                entity_ids=[entity.entity_id],
+                language="de",
+            )
+
+        assert result["release_notes"] == "Faster startup"
+        requests = [
+            c.args[0]
+            for c in sent.call_args_list
+            if c.args[0]["type"] == "update/release_notes"
+        ]
+        assert requests[0]["language"] == "de"
+        dropped = any("takes no language" in w for w in result.get("warnings", []))
+        if (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12):
+            assert (len(requests), dropped) == (1, False)
+        else:
+            assert (len(requests), dropped) == (2, True)
+            assert "language" not in requests[1]
+
+    @pytest.mark.skipif(
+        (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12),
+        reason="Core takes the language since 2026.12",
+    )
+    async def test_a_refused_language_is_reported_when_the_second_read_is_lost(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Core refused the language; losing the read without it must not
+        hide that from the caller."""
+        entity = SoftwareUpdate(
+            "update.firmware",
+            features=UpdateEntityFeature.RELEASE_NOTES,
+            notes="Faster startup",
+        )
+        await set_up_updates(hass, entity)
+
+        # Core refuses the first read by its schema; only the second reaches
+        # the handler, where the client loses its connection.
+        socket = await pooled_socket(core_client)
+        with dropped(hass, "update/release_notes", socket):
+            result = await manage_updates(
+                core_client,
+                action="get",
+                entity_ids=[entity.entity_id],
+                language="de",
+            )
+
+        assert any("takes no language" in w for w in result.get("warnings", []))
 
     async def test_hint_links_the_release_when_no_changelog_file_exists(
         self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web

@@ -192,7 +192,8 @@ with a new uid, at the place the list gives new items.
 The automation config tools prefer the component's
 `ha_mcp_tools/automation_config` bridge (capability `automation_config`).
 Its `validate` runs Core's own automation validator in process and answers
-Core's validation status and humanized error, so a config Core would refuse
+Core's validation status and humanized error (and, from Core 2026.12, the
+located `errors` list Core's config view returns), so a config Core would refuse
 is refused before the write, naming the section Core failed on. Its
 `describe` returns Core's registered trigger or condition descriptions;
 when Core's error names an unknown trigger or condition key, the closest
