@@ -70,6 +70,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references as ref_check
+from .script_sequence_run import refuse_misused_run_control, run_script_sequence
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import list_visible_registry_ids
 from .ws_waiters import verify_entity_removed, wait_for_entity_registered
@@ -111,8 +112,8 @@ def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _skip_script_run_backup(kwargs: dict[str, Any]) -> bool:
-    """Skip config snapshots for a run start/stop (no config change)."""
-    return kwargs.get("run") is not None
+    """Skip config snapshots for a run (no config change)."""
+    return kwargs.get("run") is not None or kwargs.get("run_sequence") is not None
 
 
 class ConfigScriptTools:
@@ -166,17 +167,10 @@ class ConfigScriptTools:
                 ],
             )
 
-            # The body ALWAYS comes from the REST config endpoint — the
-            # component's in-process ``config_get`` was withdrawn. It served
-            # ``entity.raw_config``, which is only the storage body as of the
-            # last COMPLETED async reload, with no version marker to tell a
-            # fresh body from a stale one. A get racing a reload returned the
-            # pre-edit body and broke the get -> python_transform -> set
-            # round-trip (caught live by the automation/script config e2e on the
-            # arm/HAOS runners). The legacy REST config endpoint reads the config
-            # FILE, which is fresh the instant a write lands, so it stays the
-            # sole path. Scenes were already legacy-only (no storage body in
-            # memory at all); scripts join them here for freshness.
+            # The body ALWAYS comes from the REST config endpoint, which reads
+            # the config file. The entity's in-memory raw_config lags it until
+            # the reload after a write completes, so a get racing that reload
+            # broke the get -> python_transform -> set round-trip.
             return await self._legacy_get_script(script_id)
         except ToolError:
             raise
@@ -233,12 +227,8 @@ class ConfigScriptTools:
         if cat_id:
             actual_config["category"] = cat_id
 
-        # Issue #1334: return the canonical storage key from the
-        # rest_client envelope so callers can thread the result into
-        # subsequent ha_config_*_script calls without re-resolving.
-        # Falls back to the input when the rest_client response omits
-        # the key — a contract violation that we surface via warning
-        # rather than mask silently.
+        # The canonical storage key, for later ha_config_*_script calls; an
+        # envelope without it is a client contract violation, logged.
         canonical_id = config_result.get("script_id")
         if canonical_id is None:
             logger.warning(
@@ -253,13 +243,8 @@ class ConfigScriptTools:
             "success": True,
             "action": "get",
             "script_id": canonical_id,
-            # The script BODY, not the REST envelope. Returning the envelope
-            # here put ``{success, script_id, config}`` under ``config``, so
-            # ``response["config"]["sequence"]`` did not exist and every caller
-            # had to unwrap twice -- the e2e carried a helper to do exactly
-            # that. ``ha_config_get_automation`` returns the body, this
-            # docstring promises the body, and the hash is already computed
-            # over the body.
+            # The script body, not the REST envelope, as the automation get
+            # returns it; the hash is computed over the body too.
             "config": actual_config,
             "config_hash": config_hash_value,
             "entity": entity,
@@ -563,13 +548,26 @@ class ConfigScriptTools:
                 default=None,
             ),
         ] = None,
+        run_sequence: Annotated[
+            list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Run these actions now without storing them, as the script "
+                    "editor's Run on a single action does (Core's execute_script). "
+                    "Used alone with script_id, which is not sent; returns when "
+                    "the run ends, with the response of a `stop` step."
+                ),
+                default=None,
+            ),
+        ] = None,
         variables: Annotated[
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "With run='start': values for the script's fields, passed to "
-                    "the run as its variables."
+                    "With run='start' or run_sequence: the run's variables (for "
+                    "run='start', values for the script's fields)."
                 ),
                 default=None,
             ),
@@ -608,6 +606,8 @@ class ConfigScriptTools:
           variables), 'stop' stops its running executions. Write config changes
           in a separate call first: Home Assistant signals no completion of the
           script reload a write triggers.
+        - run_sequence (alone with script_id): run actions without storing them,
+          e.g. one step of the script, with optional variables.
 
         EXAMPLES:
         - Create: ha_config_set_script(script_id="blink_light", config={"alias": "Light Blink", "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.living_room"}}, {"delay": {"seconds": 2}}, {"action": "light.turn_off", "target": {"entity_id": "light.living_room"}}]})
@@ -634,11 +634,12 @@ class ConfigScriptTools:
                 ],
                 context={"action": "set"},
             )
-            if run is not None or variables is not None:
+            if run is not None or run_sequence is not None or variables is not None:
                 return await self._run_script_control(
                     script_id,
                     run,
                     variables,
+                    run_sequence,
                     has_write=config is not None
                     or python_transform is not None
                     or take_control_of_blueprint,
@@ -798,37 +799,23 @@ class ConfigScriptTools:
         script_id: str,
         run: str | None,
         variables: dict[str, Any] | None,
+        run_sequence: list[dict[str, Any]] | None,
         *,
         has_write: bool,
         category: str | None,
         MandatoryBPS: bool,
     ) -> dict[str, Any]:
-        """Start or stop a script without touching its config."""
-        problem = None
-        if run is None:
-            problem = "variables only apply with run='start'"
-        elif has_write:
-            problem = (
-                "run cannot be combined with config, python_transform or "
-                "take_control_of_blueprint"
-            )
-        elif category is not None:
-            problem = "category requires a config update"
-        elif variables is not None and run != "start":
-            problem = "variables only apply with run='start'"
-        if problem:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    problem,
-                    suggestions=[
-                        "Write the script config in one call, then start or stop "
-                        + "it in a second call with only script_id and run",
-                        "Pass variables together with run='start'",
-                    ],
-                    context={"action": "run", "script_id": script_id, "run": run},
-                )
-            )
+        """Start or stop a script, or run actions, without touching its config."""
+        refuse_misused_run_control(
+            script_id,
+            run,
+            variables,
+            run_sequence,
+            has_write=has_write,
+            category=category,
+        )
+        if run_sequence is not None:
+            return await run_script_sequence(self._client, run_sequence, variables)
         entity_id = await self._run_target(script_id, run)
         # HA's script services are a silent no-op on an unknown entity.
         try:

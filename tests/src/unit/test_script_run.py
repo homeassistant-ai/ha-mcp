@@ -12,8 +12,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant.common import async_capture_events
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.exceptions import HomeAssistantCommandTimeout
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import auto_backup, entity_registration
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
@@ -95,6 +97,9 @@ async def test_run_stop_calls_turn_off(
         {"run": "start", "category": "evening"},
         {"run": "stop", "variables": {"brightness": 50}},
         {"variables": {"brightness": 50}},
+        {"run": "start", "run_sequence": [{"event": "x"}]},
+        {"run_sequence": [{"event": "x"}], "config": {"sequence": []}},
+        {"run_sequence": [{"event": "x"}], "category": "evening"},
     ],
 )
 async def test_run_rejects_invalid_combinations(
@@ -157,6 +162,7 @@ async def test_run_service_failure_raises(
     ("kwargs", "expected"),
     [
         ({"script_id": "morning", "run": "start"}, True),
+        ({"script_id": "morning", "run_sequence": [{"event": "x"}]}, True),
         # No sequence: refused before any write, after the backup decorator ran.
         ({"script_id": "morning", "config": {"alias": "x"}}, False),
     ],
@@ -181,3 +187,82 @@ async def test_script_backup_skips_run(
     await hass.async_block_till_done()
 
     assert settings.called is not expected
+
+
+# --- run_sequence: the script editor's Run on one action -----------------------
+
+
+@pytest.mark.unit
+async def test_run_sequence_runs_the_actions_with_their_variables(
+    hass: HomeAssistant, tools: ConfigScriptTools
+) -> None:
+    ran = async_capture_events(hass, "step_ran")
+
+    result = await tools.ha_config_set_script(
+        script_id="morning",
+        run_sequence=[{"event": "step_ran", "event_data": {"level": "{{ level }}"}}],
+        variables={"level": 3},
+    )
+
+    assert result["action"] == "run_sequence"
+    assert [event.data for event in ran] == [{"level": 3}]
+
+
+@pytest.mark.unit
+async def test_run_sequence_returns_the_response_of_a_stop_step(
+    tools: ConfigScriptTools,
+) -> None:
+    result = await tools.ha_config_set_script(
+        script_id="morning",
+        run_sequence=[
+            {"variables": {"answer": {"ok": True}}},
+            {"stop": "done", "response_variable": "answer"},
+        ],
+    )
+
+    assert result["response"] == {"ok": True}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("sequence", "code"),
+    [
+        # Core's schema refuses it before the run starts.
+        ([{"event": "step_ran"}, {"delay": "not a time"}], "VALIDATION_FAILED"),
+        # The step runs and Core has no such action.
+        ([{"event": "step_ran"}, {"action": "nope.nothing"}], "SERVICE_CALL_FAILED"),
+    ],
+    ids=["refused", "failed-while-running"],
+)
+async def test_run_sequence_reports_cores_refusal_and_what_ran(
+    hass: HomeAssistant,
+    tools: ConfigScriptTools,
+    sequence: list[dict[str, Any]],
+    code: str,
+) -> None:
+    ran = async_capture_events(hass, "step_ran")
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_script(script_id="morning", run_sequence=sequence)
+
+    assert json.loads(str(exc_info.value))["error"]["code"] == code
+    assert len(ran) == (0 if code == "VALIDATION_FAILED" else 1)
+
+
+@pytest.mark.unit
+async def test_run_sequence_without_an_answer_says_it_may_still_run(
+    tools: ConfigScriptTools, core_client: HomeAssistantClient
+) -> None:
+    """Core answers when the run ends; a run past the wait is not a failure,
+    and sending it again would repeat its steps."""
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        AsyncMock(side_effect=HomeAssistantCommandTimeout("Command timeout")),
+    ):
+        result = await tools.ha_config_set_script(
+            script_id="morning", run_sequence=[{"delay": {"minutes": 5}}]
+        )
+
+    assert result["partial"] is True
+    assert "Do not send the actions again" in result["warnings"][0]
