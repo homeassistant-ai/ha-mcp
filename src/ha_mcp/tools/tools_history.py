@@ -323,9 +323,10 @@ class HistoryTools:
         WHEN NOT TO USE:
         For current values, use ha_get_state. To inspect Energy Dashboard
         preferences and configured statistics, use
-        ha_manage_energy_prefs(mode="get", include_statistics=True). To list the
-        recorder's statistics, see Core's issues with them, or change recorded
-        data, use ha_manage_logs.
+        ha_manage_energy_prefs(mode="get", include_statistics=True). To list or
+        search the recorder's statistics (a meter's statistic ID by name or
+        alias), see Core's issues with them, or change recorded data, use
+        ha_manage_logs.
 
         WHEN TO USE:
         Use source="history" (default) to troubleshoot why a value changed, check

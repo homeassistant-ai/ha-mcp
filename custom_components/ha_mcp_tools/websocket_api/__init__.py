@@ -78,6 +78,9 @@ the info handshake carries no capability entry:
   ``area_id`` / label *ids*, not resolved names) without the caller fanning out
   its own area/floor/label registry reads. Registry-only entities (no state) are
   enriched too — the join keys off the registry, not the state machine.
+* ``ha_mcp_tools/entity_aliases`` — Core's own names for a set of entity_ids
+  (``er.async_get_entity_aliases``), which the statistics listing's query
+  matches.
 * ``ha_mcp_tools/exposure`` — voice-assistant exposure with names/areas attached.
   List mode mirrors core's ``ws_list_exposed_entities`` (``{exposed_entities:
   {id: {assistant: True}}}`` — the same entries as ``homeassistant/expose_entity/
@@ -408,6 +411,7 @@ from .lookups import (
     _blueprint_get_prep,
     _do_blueprint_get,
     _do_device_list,
+    _do_entity_aliases,
     _do_entity_enrich,
     _do_entity_lookup,
     _do_exposure,
@@ -427,6 +431,7 @@ from .schemas import (
     _dashboards_schema,
     _device_get_schema,
     _device_list_schema,
+    _entity_aliases_schema,
     _entity_enrich_schema,
     _entity_lookup_schema,
     _exposure_schema,
@@ -528,6 +533,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_device_get_schema(), do_device_get, None),
         (_device_list_schema(), _do_device_list, None),
         (_entity_enrich_schema(), _do_entity_enrich, None),
+        (_entity_aliases_schema(), _do_entity_aliases, None),
         (_exposure_schema(), _do_exposure, None),
         (_config_entries_schema(), _do_config_entries, _config_entries_prep),
         (_registry_lookup_schema(), _do_registry_lookup, None),

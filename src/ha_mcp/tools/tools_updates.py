@@ -293,7 +293,10 @@ class UpdateTools:
         return result
 
     async def _get_update_details(
-        self, entity_id: str, include_release_notes: bool = False
+        self,
+        entity_id: str,
+        include_release_notes: bool = False,
+        language: str | None = None,
     ) -> dict[str, Any]:
         """Internal helper to get details for a specific update entity."""
         if not entity_id.startswith("update."):
@@ -313,9 +316,12 @@ class UpdateTools:
 
         # The row carries every attribute Core wrote, under Core's own keys.
         is_core = row["category"] == "core"
-        result.update(
-            await release_notes_fields(self._client, entity_id, row, is_core=is_core)
+        notes = await release_notes_fields(
+            self._client, entity_id, row, is_core=is_core, language=language
         )
+        if notes_warnings := notes.pop("warnings", None):
+            result["warnings"] = [*result.get("warnings", []), *notes_warnings]
+        result.update(notes)
         installed = row.get("installed_version")
         target = row.get("latest_version")
         if include_release_notes and is_core and installed and target:
@@ -402,6 +408,7 @@ class UpdateTools:
         self,
         entity_ids: list[str] | str | None,
         include_release_notes: bool,
+        language: str | None = None,
     ) -> dict[str, Any]:
         """Validate the 'get' action's single-entity requirement and fetch details."""
         ids = [entity_ids] if isinstance(entity_ids, str) else list(entity_ids or [])
@@ -413,7 +420,9 @@ class UpdateTools:
                     context={"entity_ids": ids},
                 )
             )
-        return await self._get_update_details(ids[0], bool(include_release_notes))
+        return await self._get_update_details(
+            ids[0], bool(include_release_notes), language
+        )
 
     async def _backup_settings(
         self, targets: list[dict[str, Any]]
@@ -782,6 +791,15 @@ class UpdateTools:
                 default=False,
             ),
         ] = False,
+        language: Annotated[
+            str | None,
+            Field(
+                description="For get: the language of the messages Home Assistant "
+                "adds to the release notes, such as 'de' (Home Assistant "
+                "2026.12+; default: its configured language).",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage Home Assistant updates (list, get, refresh, install, skip, clear_skipped, set_channel) and Repairs issues (ignore, unignore, fix).
 
@@ -828,7 +846,7 @@ class UpdateTools:
 
             if action == "get":
                 return await self._handle_get_action(
-                    entity_ids, bool(include_release_notes)
+                    entity_ids, bool(include_release_notes), language
                 )
 
             if action == "refresh":

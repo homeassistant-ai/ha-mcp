@@ -19,8 +19,10 @@ from ._vendor.fastmcp.exceptions import ToolError
 from .backup_entities import current_entity_id
 from .backup_entity_ids import _manager
 from .backup_registry_items import REGISTRY_ITEM_DOMAINS
-from .backup_scenes import current_scene_key
+from .backup_scenes import current_scene_key, scene_key
+from .backup_todo import current_key as todo_current_key
 from .backup_todo import safety_target as todo_safety_target
+from .tools.zone_home import HOME_ZONE
 
 
 async def _stored_items(client: Any, helper_type: str) -> list[Any]:
@@ -106,7 +108,7 @@ async def safety_target(
     platform = domain.removeprefix("helper_")
     stored = config.get("id") if isinstance(config, dict) else None
     if not stored or platform not in bm._HELPER_LIST_TYPES:
-        return entity_id
+        return HOME_ZONE if _holds_home_zone(domain, config) else entity_id
     try:
         rows = await bm._entity_registry_rows(client)
     except bm._CAPTURE_TRANSIENT_ERRORS as err:
@@ -211,3 +213,27 @@ def note_no_safety_backup(
         "was renamed since this backup, the restore overwrites its current state "
         "without one."
     ]
+
+
+def _holds_home_zone(domain: str, config: Any) -> bool:
+    """Whether a snapshot holds the home zone of the general settings. It can
+    be filed under ``home``, an id a stored zone named Home may take later, so
+    its target is always ``zone.home``."""
+    return domain == "zone" and isinstance(config, dict) and "home_zone" in config
+
+
+async def comparison_target(
+    client: Any, domain: str, data: dict[str, Any]
+) -> str | None:
+    """The id the item a snapshot holds has now."""
+    target: str = data["entity_id"]
+    config = data["config"]
+    if domain == "entity":
+        return await current_entity_id(client, target, config)
+    if domain == "todo_item":
+        return todo_current_key(target, config)
+    if domain == "scene":
+        return scene_key(config) or target
+    if _holds_home_zone(domain, config):
+        return HOME_ZONE
+    return target

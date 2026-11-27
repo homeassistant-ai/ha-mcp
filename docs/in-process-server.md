@@ -373,6 +373,25 @@ Exposing it would let a conversation agent or voice satellite turn access on.
 Do not disable the switch entity while access is off: nothing can turn access
 back on until you enable the entity again.
 
+The same device also has a **Read Only Mode** switch, disabled by default. It
+controls the setting of the same name in the HA-MCP settings panel: on blocks
+writes, and off permits them. Enable the entity on the device page to use it in
+scenes and automations. Like the Access switch, Assist does not expose it by
+default; exposing it would let a conversation agent or voice satellite remove
+the write restriction. Its state persists across restarts, and a panel change
+appears on the entity within its 30-second polling interval. Turning it on
+takes effect on the next tool call, without restarting the server. When the
+`READ_ONLY_MODE` environment variable is set, that environment value wins and
+the switch refuses changes until the variable is removed. The `/readonly`
+connection remains read-only even while **Read Only Mode** is off.
+
+Because both controls are disabled by default, an automation that turns all
+enabled switches off changes neither setting on an install that did not opt in.
+After enabling them, an everything-off scene closes access and turns **Read
+Only Mode** off. A lock-down scene should explicitly turn **Read Only Mode** on
+as well as turn **Access** off. The order does not matter: the Read Only Mode
+switch can still persist that safer state while server access is off.
+
 Turning access off does not revoke credentials a client already holds; when
 access is on again, they work as before. With **Authentication mode**
 `ha_auth`, a client holds a Home Assistant token of the administrator who

@@ -27,7 +27,7 @@ Home Assistant language code used across every corresponding file:
 - `homeassistant-addon-dev/translations/<code>.yaml` (generated)
 
 <!-- Keep the following marker line intact; locale parity tests parse it. -->
-The current code set `az`, `cs`, `de`, `eo`, `es`, `fr`, `hu`, `it`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sr`, `sr-Latn`, `sv`, `tlh`, `zh-Hans`, and `zh-Hant` names every file:
+The current code set `az`, `cs`, `de`, `eo`, `es`, `fr`, `hu`, `it`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sr`, `sr-Latn`, `sv`, `tlh`, `tr`, `zh-Hans`, and `zh-Hant` names every file:
 the parity test keeps this documentation aligned with the shipped catalogs.
 
 Klingon (`tlh`) is the one best-effort exception. Its catalogs may be edited
@@ -44,24 +44,18 @@ and merge: the post-merge `locale-sync.yml` workflow machine-fills every string
 over its next daily runs. The component catalog may start as an empty object;
 this one needs `meta` (`native_name`, `dir`) plus the handful of `messages`
 keys the ungated checks below demand — a `meta`-only catalog is red in PR CI.
-Two things that list will not lead you to: `policies.operators.exists_long` is
-the condition editor's own dropdown label rather than a `PredicateOp` member,
-so no check asks for it and a catalog without it reads English there until the
-sync fills it; and because each surface samples its own catalog for the address
-register the engine imitates, a component catalog left at a key or two rests
-entirely on whichever of them addresses the reader —
-`test_every_shipped_component_catalog_gets_reader_addressing_samples` pins that
-one. Leaving that catalog empty is fine, but the moment you author anything in
-it, at least two keys must be ones whose English addresses the reader in the
-second person, and each must carry a non-empty translation — a key left blank is
-skipped like a missing one rather than sampled empty. Most component strings do
-not address the reader, so starting at the top of the file leaves the catalog
-anchorless and that check red until you add ones that do. Two rather than one
-because the run likeliest to need the register is the one that rewords such a
-key: that queues it, and a queued key is dropped from the candidates, so a
-surface resting on a single anchor loses its register in exactly that run —
-`test_component_samples_survive_their_own_anchor_being_queued` pins the
-survival. To fill them in your own PR instead, run
+`policies.operators.exists_long` is the condition editor's own dropdown label.
+CI checks the `PredicateOp` members, so this label can fall back to English
+until the sync fills it.
+
+In Settings UI `messages`, translate at least two distinct keys whose English
+addresses the reader with “you”, “your”, “yours”, “yourself”, or “yourselves”.
+If you add any text to the component catalog, translate at least two such keys
+in that catalog too. The sync takes examples from the catalog it is translating
+and skips blank translations and keys queued for retranslation. With two
+examples, it can still see how to address the reader when either one is queued.
+
+To fill the remaining strings in your own PR instead, run
 `scripts/translate_locales.py` yourself and review its output like any
 other diff. Also add the new code to the current code set near the top of this
 guide; `test_locale_readme_lists_every_shipped_locale` pins that list to the
@@ -134,12 +128,11 @@ is named):
   **These JS behaviour tests skip unless `tests/js/` has its npm dependencies
   installed** (`npm install` there) — locally they are silent, in CI they are
   not.
-- At least one translated key whose English addresses the reader in the
-  second person, so `scripts/translate_locales.py` can show the engine
-  how this catalog addresses its reader
-  (`test_every_shipped_catalog_gets_reader_addressing_samples` in
-  `tests/src/unit/test_translate_locales.py`). Without one the pipeline
-  translates the rest of the catalog with no register to imitate.
+- Each authored catalog with translated text must supply at least two
+  examples whose English addresses the reader. The
+  [shipped-catalog tests](../../../../tests/src/unit/test_translate_locales_shipped_samples.py)
+  check that the sync finds examples and still has one when it queues any
+  single example for retranslation.
 - The generated files (both add-on YAMLs, `FEATURE_META`) are byte-exact
   generator output (`test_derived_catalogs_match_the_canonical_store`); run
   `python scripts/generate_locales.py` after touching any `addon.*`,

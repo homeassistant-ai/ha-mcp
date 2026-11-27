@@ -63,6 +63,7 @@ __all__ = [
     "WS_DASHBOARD_EDIT",
     "WS_DEVICE_GET",
     "WS_DEVICE_LIST",
+    "WS_ENTITY_ALIASES",
     "WS_ENTITY_ENRICH",
     "WS_ENTITY_LOOKUP",
     "WS_EXPOSURE",
@@ -98,6 +99,7 @@ WS_BLUEPRINT_GET = f"{WS_API_PREFIX}/blueprint_get"
 WS_DEVICE_GET = f"{WS_API_PREFIX}/device_get"
 WS_DEVICE_LIST = f"{WS_API_PREFIX}/device_list"
 WS_ENTITY_ENRICH = f"{WS_API_PREFIX}/entity_enrich"
+WS_ENTITY_ALIASES = f"{WS_API_PREFIX}/entity_aliases"
 WS_EXPOSURE = f"{WS_API_PREFIX}/exposure"
 WS_CONFIG_ENTRIES = f"{WS_API_PREFIX}/config_entries"
 WS_REGISTRY_LOOKUP = f"{WS_API_PREFIX}/registry_lookup"
@@ -163,6 +165,7 @@ CAPABILITIES: list[str] = [
     # unless this flag accompanies the individual command capability.
     "device_registry_child_semantics",
     "entity_enrich",
+    "entity_aliases",
     # A flag on entity_enrich: each entity carries ``full_name``, the name Core
     # composes, as the overview's ``full_name``.
     "entity_enrich_full_name",

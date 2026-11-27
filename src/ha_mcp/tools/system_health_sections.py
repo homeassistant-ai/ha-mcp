@@ -20,6 +20,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
+from .component_api import is_unknown_command
 from .flow_translations import configured_language, fetch_flow_strings, flow_text
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,9 @@ logger = logging.getLogger(__name__)
 # checks give up after 5 seconds.
 HEALTH_DEADLINE_SECONDS = 15.0
 MATTER_TOPOLOGY_LIMIT = 50
+DATABASE_USAGE_LIMIT = 50
+# Past the default 30 s for a large database, under a client's own tool timeout.
+DATABASE_REFRESH_TIMEOUT_SECONDS = 180.0
 SUPERVISOR_ENDPOINTS = {
     "resolution": "/resolution/info",
     "core_stats": "/core/stats",
@@ -263,6 +267,71 @@ async def read_integration_startup(ws_client: Any, client: Any) -> dict[str, Any
     return section
 
 
+async def add_database_usage(
+    ws_client: Any, result: dict[str, Any], includes: set[str], *, refresh: bool
+) -> None:
+    """Core's ``recorder/database_usage`` report, which the Storage card reads,
+    as ``result["database_usage"]``.
+
+    Without ``refresh`` Core answers the report it cached, ``null`` until it
+    has analyzed the database. The entity and statistic rows are capped at
+    ``DATABASE_USAGE_LIMIT`` each, largest first, with ``entity_count`` and
+    ``statistic_count`` giving the full sizes. A Core without the command
+    (before 2026.12) gets no section, and neither does a call without the
+    health WebSocket, whose sections are already stubbed.
+    """
+    if "database_usage" not in includes or ws_client is None:
+        return
+    try:
+        reply = await ws_client.send_command(
+            "recorder/database_usage",
+            refresh=refresh,
+            # Core answers a refresh only once it has analyzed the database.
+            **({"_wait_timeout": DATABASE_REFRESH_TIMEOUT_SECONDS} if refresh else {}),
+        )
+    except HomeAssistantCommandError as exc:
+        # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
+        if is_unknown_command(exc):
+            result.setdefault("warnings", []).append(
+                "This Home Assistant has no database usage report (added in 2026.12)"
+            )
+            return
+        result["database_usage"] = {"error": str(exc), "error_code": exc.code}
+        return
+    except HomeAssistantCommandTimeout as exc:
+        result["database_usage"] = {"error": f"No database usage report: {exc}"}
+        if refresh:
+            # This side stopped waiting; Core's analysis goes on and is cached.
+            result.setdefault("warnings", []).append(
+                "Home Assistant is still analyzing the database; read "
+                "database_usage again without refresh_database_usage for its report"
+            )
+        return
+    usage = reply.get("result")
+    if usage is None:
+        result["database_usage"] = None
+        result.setdefault("warnings", []).append(
+            "Home Assistant has no database usage report yet: it keeps one for an "
+            "hour after analyzing the database. Pass refresh_database_usage=True "
+            "to analyze it now"
+        )
+        return
+    entities = sorted(usage.get("entities") or [], key=lambda row: -row["states"])
+    statistics = sorted(
+        usage.get("statistics") or [],
+        key=lambda row: -(row["statistics"] + row["statistics_short_term"]),
+    )
+    result["database_usage"] = {
+        **usage,
+        "entities": entities[:DATABASE_USAGE_LIMIT],
+        "statistics": statistics[:DATABASE_USAGE_LIMIT],
+        "entity_count": len(entities),
+        "statistic_count": len(statistics),
+    }
+    if max(len(entities), len(statistics)) > DATABASE_USAGE_LIMIT:
+        result["database_usage"]["truncated"] = True
+
+
 async def read_supervisor(client: Any) -> dict[str, Any]:
     """Supervisor's resolution info and the Core and Supervisor container
     stats, which the System information dialog reads on a Supervisor install."""
@@ -340,3 +409,94 @@ async def read_matter_network(ws_client: Any) -> dict[str, Any]:
     if max(len(nodes), len(connections)) > MATTER_TOPOLOGY_LIMIT:
         section["topology"]["truncated"] = True
     return section
+
+
+def parse_includes(include: str | None) -> set[str]:
+    """Parse the comma-separated include parameter into a set of section names."""
+    if not include:
+        return set()
+    return {s.strip().lower() for s in include.split(",") if s.strip()}
+
+
+def warn_unknown_includes(result: dict[str, Any], includes: set[str]) -> None:
+    """Append a warning to ``result`` for any unrecognized include sections.
+
+    Extracted verbatim from ``ha_get_system_health``.
+    """
+    VALID_INCLUDES = {
+        "repairs",
+        "zha_network",
+        "zha_network_full",
+        "zwave_network",
+        "thread_network",
+        "matter_network",
+        "integration_startup",
+        "database_usage",
+        "supervisor",
+        "config_check",
+        "dead_entities",
+    }
+    unknown = includes - VALID_INCLUDES
+    if unknown:
+        result.setdefault("warnings", []).append(
+            f"Unknown include sections ignored: {', '.join(sorted(unknown))}"
+        )
+    for section, replacement in (
+        ("diagnostics", "ha_get_integration(include_diagnostics=True)"),
+        ("themes", "ha_manage_theme(action='list')"),
+    ):
+        if section in unknown:
+            result["warnings"].append(f"'{section}' moved to {replacement}")
+
+
+def stub_ws_unavailable(
+    result: dict[str, Any],
+    includes: set[str],
+    ws_backed: set[str],
+    *,
+    want_repairs: bool,
+    want_zha: bool,
+    want_zwave: bool,
+    want_thread: bool,
+    want_matter: bool,
+    want_startup: bool,
+    want_database_usage: bool,
+) -> None:
+    """Stub each requested WS-backed section as an error and add a summary
+    warning when the health WebSocket is unavailable.
+
+    Extracted verbatim from ``ha_get_system_health``.
+    """
+    ws_error = "requires the system_health WebSocket, which is unavailable"
+    if want_repairs:
+        result["repairs"] = {"error": ws_error}
+    if want_zha:
+        result["zha_network"] = {"error": ws_error}
+    if want_zwave:
+        result["zwave_network"] = {"error": ws_error}
+    if want_thread:
+        result["thread_network"] = {"error": ws_error}
+    if want_matter:
+        result["matter_network"] = {"error": ws_error}
+    if want_startup:
+        result["integration_startup"] = {"error": ws_error}
+    if want_database_usage:
+        result["database_usage"] = {"error": ws_error}
+    unavailable = sorted(includes & ws_backed)
+    if unavailable:
+        result.setdefault("warnings", []).append(
+            "These sections require the system_health WebSocket, "
+            f"which is unavailable: {', '.join(unavailable)}"
+        )
+
+
+async def add_ha_mcp_update(result: dict[str, Any]) -> None:
+    """Surface the MCP server's own update status so the model can relay it in
+    chat. ``get_update_field`` is best-effort, thread-offloaded, and never
+    raises (omits the field on any hiccup); see ha_mcp.update_check for
+    gating/throttle details."""
+    from ..update_check import get_update_field
+
+    mcp_update = await get_update_field()
+    if mcp_update is not None:
+        result["ha_mcp_update"] = mcp_update

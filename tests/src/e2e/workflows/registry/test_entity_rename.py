@@ -15,10 +15,12 @@ Key test scenarios:
 """
 
 import logging
+import uuid
 
 import pytest
 
-from ...utilities.assertions import safe_call_tool
+from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.core_version import core_at_least
 from ...utilities.wait_helpers import wait_for_entity_registration
 
 logger = logging.getLogger(__name__)
@@ -181,6 +183,47 @@ class TestEntityRename:
         )
         assert delete_data.get("success"), f"Failed to delete helper: {delete_data}"
         logger.info("Cleanup completed")
+
+    async def test_auto_id_follows_the_name_the_call_sets(
+        self, mcp_client, ha_client, cleanup_tracker
+    ):
+        """new_entity_id='auto' with a new name: Core 2026.12 generates the id
+        from that name; an older Core from the stored one, as before."""
+        suffix = uuid.uuid4().hex[:8]
+        original_entity_id = final_entity_id = f"input_boolean.auto_rename_{suffix}"
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {"helper_type": "input_boolean", "name": f"auto rename {suffix}"},
+            )
+        cleanup_tracker.track("input_boolean", original_entity_id)
+        try:
+            assert await wait_for_entity_registration(mcp_client, original_entity_id)
+            async with MCPAssertions(mcp_client) as mcp:
+                result = await mcp.call_tool_success(
+                    "ha_set_entity",
+                    {
+                        "entity_id": original_entity_id,
+                        "name": f"Reading Lamp {suffix}",
+                        "new_entity_id": "auto",
+                    },
+                )
+            final_entity_id = result["entity_id"]
+            cleanup_tracker.track("input_boolean", final_entity_id)
+            if await core_at_least(ha_client, (2026, 12)):
+                assert final_entity_id == f"input_boolean.reading_lamp_{suffix}"
+            else:
+                assert final_entity_id == original_entity_id
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {
+                    "helper_type": "input_boolean",
+                    "target": final_entity_id,
+                    "confirm": True,
+                },
+            )
 
     async def test_rename_domain_mismatch_rejected(self, mcp_client):
         """

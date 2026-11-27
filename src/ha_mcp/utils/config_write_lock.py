@@ -11,32 +11,22 @@ An embedded server reload can start a new worker loop in the same process,
 so each running loop has its own asyncio lock. The file lock serializes
 writers across loops, threads and processes.
 
-Leaf at import time (stdlib-only at module scope; ``data_paths`` is imported
-lazily inside ``config_file_lock`` — keep it that way) so settings_ui, policy,
-and tools can all depend on it without an import cycle.
+Leaf at import time apart from the dependency-light ``runtime_config`` module;
+``data_paths`` is imported lazily inside ``config_file_lock``. Keep those
+dependencies free of settings and tool modules so their callers do not form an
+import cycle.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
-import os
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from typing import Any
 from weakref import WeakValueDictionary
 
-try:  # POSIX
-    import fcntl
-except ImportError:  # pragma: no cover - Windows
-    fcntl = None  # type: ignore[assignment]
-try:  # Windows
-    import msvcrt
-except ImportError:  # pragma: no cover - POSIX
-    msvcrt = None  # type: ignore[assignment]
-
-logger = logging.getLogger(__name__)
+from ..runtime_config import file_write_lock
 
 _CONFIG_WRITE_LOCKS: WeakValueDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
     WeakValueDictionary()
@@ -110,44 +100,6 @@ def config_file_lock(data_dir: Path | None = None) -> Iterator[None]:
     lock_dir = data_dir if data_dir is not None else get_data_dir()
     with file_write_lock(lock_dir / ".config_write.lock"):
         yield
-
-
-@contextlib.contextmanager
-def file_write_lock(lock_path: Path, *, required: bool = False) -> Iterator[None]:
-    fd: int | None = None
-    locked = False
-    try:
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-                locked = True
-            elif msvcrt is not None:  # pragma: no cover - Windows
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-                locked = True
-            elif required:
-                raise OSError("Cross-process file locking is unavailable")
-        except OSError:
-            if required:
-                raise
-            logger.warning(
-                "config write lockfile unavailable; proceeding without "
-                "cross-process lock",
-                exc_info=True,
-            )
-        yield
-    finally:
-        if fd is not None:
-            with contextlib.suppress(OSError):
-                if locked:
-                    if fcntl is not None:
-                        fcntl.flock(fd, fcntl.LOCK_UN)
-                    elif msvcrt is not None:  # pragma: no cover - Windows
-                        os.lseek(fd, 0, os.SEEK_SET)
-                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            with contextlib.suppress(OSError):
-                os.close(fd)
 
 
 def run_with_file_lock(fn: Callable[..., Any], /, *args: Any) -> Any:

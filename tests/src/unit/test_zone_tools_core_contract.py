@@ -129,17 +129,16 @@ class TestZoneLookup:
         assert "ha_get_zone" in json.dumps(error)
         assert _writes(spy) == []
 
-    @CALLS
     @pytest.mark.parametrize("zone_id", ["home", "zone.home"])
-    async def test_home_zone_is_refused_as_not_stored(
-        self, office_client: HomeAssistantClient, call: str, zone_id: str
+    async def test_home_zone_removal_is_refused_as_not_stored(
+        self, office_client: HomeAssistantClient, zone_id: str
     ) -> None:
         """Core's home zone has a state but no registry entry: nothing is sent."""
         with (
             sent_messages(office_client) as spy,
             pytest.raises(ToolError) as exc_info,
         ):
-            await _change(ZoneTools(office_client), call, zone_id)
+            await _change(ZoneTools(office_client), "remove", zone_id)
 
         assert "not a stored zone" in error_of(exc_info)["message"]
         assert _writes(spy) == []
@@ -392,6 +391,127 @@ class TestZoneWrites:
         assert _sent(spy, "zone/create") == [] and _sent(spy, "zone/update") == []
 
 
+class TestHomeZone:
+    """The home zone's location and radius are Core's general settings,
+    written with ``config/core/update`` as the Zones panel writes them."""
+
+    @pytest.mark.parametrize("zone_id", ["home", "zone.home"])
+    async def test_the_home_zone_moves_with_the_general_settings(
+        self, hass: HomeAssistant, office_client: HomeAssistantClient, zone_id: str
+    ) -> None:
+        with sent_messages(office_client) as spy:
+            result = await ZoneTools(office_client).ha_set_zone(
+                zone_id=zone_id, latitude=48.1, longitude=11.6, radius=250
+            )
+
+        assert (hass.config.latitude, hass.config.longitude, hass.config.radius) == (
+            48.1,
+            11.6,
+            250,
+        )
+        (update,) = _sent(spy, "config/core/update")
+        assert set(update) == {"type", "latitude", "longitude", "radius"}
+        assert _writes(spy) == []
+        assert result["entity_id"] == "zone.home"
+        assert result["zone_data"]["radius"] == 250
+        assert "warnings" not in result
+
+    async def test_only_the_given_fields_are_sent(
+        self, hass: HomeAssistant, office_client: HomeAssistantClient
+    ) -> None:
+        latitude = hass.config.latitude
+        with sent_messages(office_client) as spy:
+            await ZoneTools(office_client).ha_set_zone(zone_id="zone.home", radius=80)
+
+        (update,) = _sent(spy, "config/core/update")
+        assert set(update) == {"type", "radius"}
+        assert (hass.config.radius, hass.config.latitude) == (80, latitude)
+
+    @pytest.mark.parametrize(
+        "other", [{"name": "Castle"}, {"icon": "mdi:castle"}, {"passive": True}]
+    )
+    async def test_another_home_zone_field_is_refused_before_the_write(
+        self,
+        hass: HomeAssistant,
+        office_client: HomeAssistantClient,
+        other: dict[str, Any],
+    ) -> None:
+        radius = hass.config.radius
+        with (
+            sent_messages(office_client) as spy,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await ZoneTools(office_client).ha_set_zone(
+                zone_id="zone.home", radius=250, **other
+            )
+
+        assert error_of(exc_info)["code"] == "VALIDATION_FAILED"
+        assert _sent(spy, "config/core/update") == []
+        assert hass.config.radius == radius
+
+    async def test_core_refuses_a_home_zone_value_it_does_not_take(
+        self, office_client: HomeAssistantClient
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await ZoneTools(office_client).ha_set_zone(
+                zone_id="zone.home", latitude=123.0
+            )
+
+        assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    async def test_a_radius_core_rounds_is_read_back_as_core_stored_it(
+        self, hass: HomeAssistant, office_client: HomeAssistantClient
+    ) -> None:
+        """Core stores a whole radius; the readback must not wait for 80.5."""
+        result = await ZoneTools(office_client).ha_set_zone(
+            zone_id="zone.home", radius=80.5
+        )
+
+        assert hass.config.radius == 80
+        assert result["zone_data"]["radius"] == 80
+        assert "warnings" not in result
+
+    async def test_a_lost_readback_does_not_report_the_write_as_failed(
+        self,
+        hass: HomeAssistant,
+        office_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An error after Core took the write would invite the same write again."""
+        with on_receipt(
+            hass,
+            "config/core/update",
+            lambda msg: lose_state_reads(office_client, monkeypatch),
+        ):
+            result = await ZoneTools(office_client).ha_set_zone(
+                zone_id="zone.home", radius=90, wait=False
+            )
+
+        assert hass.config.radius == 90
+        assert result["success"] is True
+        assert any("not read back" in warning for warning in result["warnings"])
+
+    async def test_a_yaml_zone_named_home_is_not_the_settings_home_zone(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """A YAML zone called Home takes zone.home in the home zone's place:
+        moving it must not move the home of the general settings."""
+        yaml_home = {"name": "Home", "latitude": 1.0, "longitude": 2.0}
+        assert await async_setup_component(hass, "zone", {"zone": [yaml_home]})
+        client = await with_config_component(hass, core_client)
+        latitude = hass.config.latitude
+
+        with sent_messages(client) as spy, pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_set_zone(zone_id="zone.home", latitude=48.1)
+
+        assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
+        assert _sent(spy, "config/core/update") == []
+        assert hass.config.latitude == latitude
+        listed = await ZoneTools(client).ha_get_zone()
+        (home,) = [z for z in listed["zones"] if z["entity_id"] == "zone.home"]
+        assert home["source"] == "yaml"
+
+
 class TestListing:
     async def test_without_component_lists_the_home_zone_and_entity_ids(
         self, hass: HomeAssistant, office_client: HomeAssistantClient
@@ -406,7 +526,7 @@ class TestListing:
         home = by_id["home"]
         assert (home["entity_id"], home["source"], home["editable"]) == (
             "zone.home",
-            "yaml",
+            "home",
             False,
         )
         assert home["name"] == hass.config.location_name

@@ -24,6 +24,7 @@ from .constants import (
     WS_DASHBOARDS,
     WS_DEVICE_GET,
     WS_DEVICE_LIST,
+    WS_ENTITY_ALIASES,
     WS_ENTITY_ENRICH,
     WS_ENTITY_LOOKUP,
     WS_EXPOSURE,
@@ -195,6 +196,13 @@ def _device_list_schema() -> dict[Any, Any]:
 def _entity_enrich_schema() -> dict[Any, Any]:
     return {
         vol.Required("type"): WS_ENTITY_ENRICH,
+        vol.Required("entity_ids"): [str],
+    }
+
+
+def _entity_aliases_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_ENTITY_ALIASES,
         vol.Required("entity_ids"): [str],
     }
 

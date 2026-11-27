@@ -331,6 +331,25 @@ def _do_entity_enrich(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, 
 
 
 # =============================================================================
+# ha_mcp_tools/entity_aliases
+# =============================================================================
+def _do_entity_aliases(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
+    """Core's names for each registered id, ``er.async_get_entity_aliases``: the
+    entity's aliases, an alias that stands for its name given as that name.
+
+    ``{aliases: {id: [...]}}``; an id with no registry entry is left out.
+    """
+    registry = er.async_get(hass)
+    return {
+        "aliases": {
+            entity_id: er.async_get_entity_aliases(hass, entry)
+            for entity_id in params.get("entity_ids") or []
+            if (entry := registry.async_get(entity_id)) is not None
+        }
+    }
+
+
+# =============================================================================
 # ha_mcp_tools/exposure
 # =============================================================================
 def _do_exposure(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:

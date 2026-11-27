@@ -11,6 +11,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
@@ -41,6 +42,13 @@ _UPDATE = "config/entity_registry/update"
 _GET = "config/entity_registry/get"
 _LABELS = "config/label_registry/list"
 _AREAS = "config/area_registry/list"
+
+# Core refuses an unknown area itself from 2026.12, and the tool then leaves
+# the area check to it (test_tools_entities_core_checks.py).
+CORE_CHECKS_AREA = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12)
+precheck_only = pytest.mark.skipif(
+    CORE_CHECKS_AREA, reason="Core checks the area itself since 2026.12"
+)
 
 
 def _aliases(registry: er.EntityRegistry, entity_id: str) -> list[str | None]:
@@ -257,6 +265,7 @@ class TestStoredLabels:
 
 
 class TestRegistryReferences:
+    @precheck_only
     async def test_an_unknown_area_is_refused_before_the_write(
         self,
         tools: EntityTools,
@@ -289,7 +298,7 @@ class TestRegistryReferences:
 
         await tools.ha_set_entity(entity_id="light.test", area_id=area.id)
 
-        assert sent_types(sent) == [_AREAS, _UPDATE]
+        assert sent_types(sent) == ([] if CORE_CHECKS_AREA else [_AREAS]) + [_UPDATE]
         assert stored_entry(entity_registry, "light.test").area_id == area.id
 
     async def test_an_unknown_category_is_refused_in_its_own_scope(
@@ -318,7 +327,13 @@ class TestRegistryReferences:
     @pytest.mark.parametrize(
         ("registry", "method", "kwargs", "lookup"),
         [
-            (ar.AreaRegistry, "async_list_areas", {"area_id": "living_room"}, _AREAS),
+            pytest.param(
+                ar.AreaRegistry,
+                "async_list_areas",
+                {"area_id": "living_room"},
+                _AREAS,
+                marks=precheck_only,
+            ),
             (lr.LabelRegistry, "async_list_labels", {"labels": ["outdoor"]}, _LABELS),
             (
                 cr.CategoryRegistry,
@@ -355,6 +370,7 @@ class TestRegistryReferences:
         assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
         assert sent_types(sent) == [lookup]
 
+    @precheck_only
     async def test_a_dropped_area_read_refuses_the_write(
         self, tools: EntityTools, dropped: AsyncMock
     ) -> None:
