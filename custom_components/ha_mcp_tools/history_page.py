@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
-from collections.abc import Callable
 from datetime import datetime
-from functools import cache, partial
-from pathlib import Path
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 from .core_contract import validate_request
@@ -19,20 +16,52 @@ if TYPE_CHECKING:
 CAPABILITY = "history_page"
 
 
-@cache
-def _summarize_states() -> Callable[..., dict[str, Any]]:
-    """The server's summary, loaded from its file so its package is not imported."""
-    package = importlib.util.find_spec("ha_mcp")
-    if package is None or not package.submodule_search_locations:
-        raise ImportError("the ha-mcp server package is not installed")
-    path = Path(next(iter(package.submodule_search_locations))) / "history_summary.py"
-    spec = importlib.util.spec_from_file_location("ha_mcp_tools_history_summary", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    summarize: Callable[..., dict[str, Any]] = module.summarize_states
-    return summarize
+def _summarize_states(
+    states: list[dict[str, Any]],
+    window_start_ts: float,
+    window_end_ts: float,
+    limit: int,
+) -> dict[str, Any]:
+    """Reduce Core's oldest-first compressed rows to periods and seconds per state.
+
+    The server's ``history_response.summarize_states`` is the same function,
+    for an install without this component; importing it here would load the
+    whole server package into Home Assistant.
+
+    Each row lasts until the next row's ``lu`` and the last one until the window
+    end; rows after the window end must be dropped first. A row repeating the
+    previous state (an attribute-only update, which Core may return) extends
+    the current period instead of opening one. Core stamps its window-start
+    snapshot with the window start, so the first row counts as a change only
+    when it is later than the window start.
+    """
+    totals: dict[str, dict[str, Any]] = {}
+    change_times: list[float] = []
+    bounds = [row["lu"] for row in states] + [window_end_ts]
+    for index, row in enumerate(states):
+        state = row["s"]
+        entry = totals.setdefault(state, {"periods": 0, "duration_s": 0.0})
+        if index == 0 or state != states[index - 1]["s"]:
+            entry["periods"] += 1
+            if index or row["lu"] > window_start_ts:
+                change_times.append(row["lu"])
+        entry["duration_s"] += bounds[index + 1] - bounds[index]
+    ranked = sorted(
+        totals.items(), key=lambda item: item[1]["duration_s"], reverse=True
+    )
+    return {
+        "changes": len(change_times),
+        "first_change": change_times[0] if change_times else None,
+        "last_change": change_times[-1] if change_times else None,
+        "distinct_states": len(totals),
+        "states": {
+            state: {
+                "periods": entry["periods"],
+                "duration_s": round(entry["duration_s"], 3),
+            }
+            for state, entry in ranked[:limit]
+        },
+    }
 
 
 def _page(
@@ -42,7 +71,7 @@ def _page(
         # Core can answer past the clock reading the summary ends at.
         rows = [row for row in rows if row["lu"] < until]
         data: dict[str, Any] = {
-            "summary": _summarize_states()(rows, start, until, msg["limit"])
+            "summary": _summarize_states(rows, start, until, msg["limit"])
         }
     else:
         offset, limit = msg["offset"], msg["limit"]
