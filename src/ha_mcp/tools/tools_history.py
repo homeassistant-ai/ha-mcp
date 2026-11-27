@@ -434,7 +434,9 @@ class HistoryTools:
                 entity_ids=entity_id_list,
                 start_dt=start_dt,
                 end_dt=end_dt,
-                no_attributes=no_attributes or summary,
+                attributes_on_every_row=not (
+                    minimal_response or no_attributes or summary
+                ),
                 significant_changes_only=significant_changes_only,
                 period=guard_period,
                 enforce_budget=query_settings.enable_history_query_guardrails,
@@ -719,7 +721,7 @@ def _validate_query_workload(
     entity_ids: list[str],
     start_dt: datetime,
     end_dt: datetime,
-    no_attributes: bool,
+    attributes_on_every_row: bool,
     significant_changes_only: bool,
     period: str,
     enforce_budget: bool,
@@ -735,7 +737,7 @@ def _validate_query_workload(
             entity_ids,
             start_dt,
             end_dt,
-            no_attributes,
+            attributes_on_every_row,
             significant_changes_only,
         )
     else:
@@ -764,16 +766,17 @@ def _history_workload_violation(
     entity_ids: list[str],
     start_dt: datetime,
     end_dt: datetime,
-    no_attributes: bool,
+    attributes_on_every_row: bool,
     significant_changes_only: bool,
 ) -> tuple[dict[str, Any], list[str]] | None:
     """Return raw-history violation details, or None when within budget."""
     # Estimated multipliers account for the larger recorder payload when
-    # filtering is off and attributes are read; they are not measured row counts.
+    # filtering is off or every row carries attributes; they are not measured
+    # row counts.
     detail_weight = 1
     if not significant_changes_only:
         detail_weight *= 4
-    if not no_attributes:
+    if attributes_on_every_row:
         detail_weight *= 2
     entity_count = len(entity_ids)
     hours = (end_dt.timestamp() - start_dt.timestamp()) / 3600  # elapsed, DST-safe
@@ -789,14 +792,16 @@ def _history_workload_violation(
         "estimated_entity_hours": round(estimated_entity_hours, 2),
         "max_entity_hours": _MAX_HISTORY_ENTITY_HOURS,
         "detail_weight": detail_weight,
-        "no_attributes": no_attributes,
+        "attributes_on_every_row": attributes_on_every_row,
         "significant_changes_only": significant_changes_only,
     }
     suggestions = ["Query fewer entities or use a shorter time range."]
     if not significant_changes_only:
         suggestions.append("Set significant_changes_only=true to reduce recorder work.")
-    if not no_attributes:
-        suggestions.append("Set no_attributes=true to read no state attributes.")
+    if attributes_on_every_row:
+        suggestions.append(
+            "Set minimal_response=true or no_attributes=true to leave attributes off the rows."
+        )
     suggestions.append(
         "Use source='statistics' for long ranges when the entities support long-term statistics."
     )
