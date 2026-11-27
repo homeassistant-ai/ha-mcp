@@ -656,15 +656,16 @@ async def test_empty_entity_area_does_not_inherit_its_devices_area(
     office: str,
     search: Any,
 ) -> None:
-    """Core stores an entity's area as ``""`` when it is cleared to empty; that
-    entity is not reported in its device's area."""
+    """The area whose id is "" blocks inheritance from the device."""
     entry = add_test_entry(hass)
     device = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={("test", "device")}
     )
     device_registry.async_update_device(device.id, area_id=office)
     _add(hass, entity_registry, "sensor.probe", "1", "Probe", device_id=device.id)
-    entity_registry.async_update_entity("sensor.probe", area_id="")
+    empty_area = ar.async_get(hass).async_create("")
+    assert empty_area.id == ""
+    entity_registry.async_update_entity("sensor.probe", area_id=empty_area.id)
 
     data = await search(query="probe", result_fields=["area", "floor"])
 

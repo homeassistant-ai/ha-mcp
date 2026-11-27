@@ -225,6 +225,54 @@ def _files(tmp_path: Path, files: dict[str, str]) -> Path:
         ),
         pytest.param(
             {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": 'MESSAGE = "probe(%s) skipped"\n',
+            },
+            True,
+            id="mentioned-in-a-sentence",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "lefthook.yml": "# probe runs here\n",
+            },
+            True,
+            id="named-only-in-a-comment-of-a-file-production-reads",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "lefthook.yml": "run: lint  # probe runs here\n",
+            },
+            True,
+            id="named-only-in-a-comment-after-a-value",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "lefthook.yml": "run: lint ha_mcp/a.py#probe\n",
+            },
+            False,
+            id="named-after-a-hash-that-starts-no-comment",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": 'TARGET = "ha_mcp.a.probe"\n',
+            },
+            False,
+            id="named-by-a-dotted-path-in-a-string",
+        ),
+        pytest.param(
+            {
+                "src/ha_mcp/a.py": "def probe():\n    pass\n",
+                "src/ha_mcp/b.py": 'ENTRY = "ha_mcp.a:probe"\n',
+            },
+            False,
+            id="named-by-a-module-and-function-in-a-string",
+        ),
+        pytest.param(
+            {
                 "src/ha_mcp/a.py": "class Tool(Base):\n    def probe(self):\n        pass\n"
             },
             False,
@@ -238,6 +286,18 @@ def test_only_a_use_of_the_definition_itself_counts(
     repo = _files(tmp_path, {**files, "tests/test_a.py": "from x import probe\n"})
 
     assert guard.main(["--repo", str(repo)]) == (1 if refused else 0)
+
+
+def test_an_exempt_entry_that_exempts_nothing_fails(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    idle = "src/ha_mcp/config.py:a_name_that_is_not_there"
+    monkeypatch.setattr(guard, "EXEMPT", guard.EXEMPT | {idle})
+
+    assert guard.main([]) == 1
+    assert f"EXEMPT lists {idle}" in capsys.readouterr().out
 
 
 def test_this_checkout_has_no_public_name_only_the_tests_use(

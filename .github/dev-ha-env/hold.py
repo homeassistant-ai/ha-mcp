@@ -1,4 +1,4 @@
-"""Hold a live HA test instance up for dev-ha-env.yml at the dispatched commit.
+"""Hold a live HA test instance up for dev-ha-env.yml, from track_ref's commit.
 
 The workflow copies this file into the tracked checkout's tests/src/e2e/ and
 runs it with pytest, so the E2E session fixture does the whole bring-up for the
@@ -9,17 +9,22 @@ DEVENV_TARGETS and keeps the instance up. The standalone and embedded servers
 run in developer mode, so a branch is iterated on with the same tools as on any
 live HA: ha_dev_manage_server (update_source) for the embedded server, the
 Marketplace for the component, ha_restart. The app is updated by installing the branch's build
-from an app repository (stage_app_repo.py; docs/dev-ha-env.md, step 5).
+from an app repository (stage_app_repo.py; docs/dev-ha-env.md, step 5). The
+standalone server, which runs here on the runner, follows the run's switch ref
+(SWITCH_REF) in the fork: push a commit there and the holder restarts the
+server on it, or back on the previous commit if it does not come up.
 
 Status lines (STATUS {...}) go to the job log.
 """
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
 import shlex
+import signal
 import subprocess
 import tarfile
 import time
@@ -45,6 +50,11 @@ SRC = Path(__file__).resolve().parents[3]
 COMPONENT = Path("custom_components") / HA_MCP_SERVER_DOMAIN
 # A stale component applied at boot is retried this many times.
 MAX_TRIES = 3
+# The fork ref the standalone server follows. Only those who can push to the
+# fork can set it, as with track_ref; a commit named through HA or a tunnel
+# could be any commit of the fork network, which the fork serves by SHA.
+SWITCH_REF = f"refs/dev-ha-env/{os.environ.get('GITHUB_RUN_ID', 'local')}"
+SWITCH_POLL_SECONDS = 10
 
 # Agents meet strict best-practices mode by default; the E2E suite pins it off.
 STRICT_BPS = os.environ.get("DEVENV_STRICT_BPS", "true") == "true"
@@ -212,11 +222,66 @@ class Instance:
             command = "ha-mcp-oauth"
             env.pop("HOMEASSISTANT_TOKEN")
             env["HA_MCP_DISABLE_SETTINGS_UI"] = "true"
-        # The child keeps its own copy of the log handle.
+        # The child keeps its own copy of the log handle. Its own process
+        # group lets stop_server end uv and the server it starts together.
         with open(SRC.parent / "server.log", "ab") as out:
             self.server = subprocess.Popen(
-                ["uv", "run", command], cwd=SRC, env=env, stdout=out, stderr=out
+                ["uv", "run", command],
+                cwd=SRC,
+                env=env,
+                stdout=out,
+                stderr=out,
+                start_new_session=True,
             )
+
+    def stop_server(self) -> None:
+        if self.server is None:
+            return
+        group = self.server.pid
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(group, sig)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                self.server.poll()  # Reap uv, or the group never empties.
+                try:
+                    os.killpg(group, 0)
+                except ProcessLookupError:
+                    return
+                time.sleep(0.5)
+        raise RuntimeError("the standalone server did not stop")
+
+    def run_commit(self, sha: str) -> None:
+        """Restart the standalone server on ``sha``, prepared as the boot is."""
+        self.stop_server()
+        # Fetch only a commit the checkout lacks, so going back needs no network.
+        try:
+            git("cat-file", "-e", f"{sha}^{{commit}}")
+        except subprocess.CalledProcessError:
+            git("fetch", "--quiet", "origin", sha)
+        # uv can rewrite uv.lock while it syncs; the commit brings its own.
+        git("checkout", "--quiet", "--force", "--detach", sha)
+        git("submodule", "update", "--quiet", "--init", "--recursive")
+        subprocess.run(["uv", "sync", "--all-extras", "--dev"], cwd=SRC, check=True)
+        self.start_server()
+        self.wait_server()
+
+    def ha_log(self, level: str, message: str) -> None:
+        """Write ``message`` to Home Assistant's log, where the agent reads it."""
+        try:
+            requests.post(
+                f"{self.base_url}/api/services/system_log/write",
+                headers=self.headers,
+                json={
+                    "message": f"dev-ha-env: {message}",
+                    "level": level,
+                    "logger": "dev_ha_env",
+                },
+                timeout=30,
+            ).raise_for_status()
+        except requests.RequestException as err:
+            # Core may be restarting; the STATUS line still records it.
+            log(ha_log_failed=f"{type(err).__name__}: {err}")
 
     def update_component(self) -> None:
         """Replace the HAOS component with the branch's, as the Marketplace
@@ -296,6 +361,65 @@ def apply_stale_component(inst: Instance, sha: str) -> None:
     raise RuntimeError("the branch's component could not be applied") from last_err
 
 
+def switch_server(inst: Instance, current: str, wanted: str) -> str:
+    """Run the standalone server on ``wanted``, or on ``current`` again if that
+    fails; return that commit and report the outcome in HA's log."""
+    log(sha=current, backend=inst.backend, switching_to=wanted)
+    failures: list[str] = []
+    for sha in (wanted, current):
+        try:
+            inst.run_commit(sha)
+        except (subprocess.SubprocessError, RuntimeError, OSError) as err:
+            failures.append(f"{type(err).__name__}: {err}")
+            log(sha=sha, backend=inst.backend, ready=False, error=failures[-1])
+            if len(failures) == 1 and isinstance(err, RuntimeError):
+                # The agent cannot read server.log while the run lasts.
+                failures[0] += f"; server.log ends with:\n{server_log_tail()}"
+            continue
+        log(sha=sha, backend=inst.backend, ready=True)
+        if sha == wanted:
+            inst.ha_log("warning", f"the standalone server now runs {wanted}")
+        else:
+            inst.ha_log(
+                "error",
+                f"could not switch the standalone server to {wanted} "
+                f"({failures[0]}); it runs {current} again",
+            )
+        return sha
+    inst.ha_log(
+        "error",
+        f"could not switch the standalone server to {wanted} ({failures[0]}) "
+        f"nor go back to {current} ({failures[1]}); the server may not answer "
+        "until the switch ref names a commit that starts",
+    )
+    return current
+
+
+def server_log_tail(lines: int = 20) -> str:
+    try:
+        text = (SRC.parent / "server.log").read_text(errors="replace")
+    except OSError as err:
+        return f"(unreadable: {err})"
+    return "\n".join(text.splitlines()[-lines:])
+
+
+def follow_switch_ref(inst: Instance, sha: str, deadline: float) -> None:
+    """Poll SWITCH_REF until ``deadline`` and switch to each new commit it names.
+
+    A commit is tried once, even when it fails: the ref has to move again.
+    """
+    handled = sha
+    while time.monotonic() < deadline:
+        time.sleep(SWITCH_POLL_SECONDS)
+        try:
+            wanted = git("ls-remote", "origin", SWITCH_REF).split("\t")[0]
+        except subprocess.CalledProcessError:
+            continue  # GitHub unreachable for a moment; ask again.
+        if wanted and wanted != handled:  # A missing ref lists nothing.
+            handled = wanted
+            sha = switch_server(inst, sha, wanted)
+
+
 def test_hold_dev_ha_env(ha_container_with_fresh_config: dict[str, Any]) -> None:
     inst = Instance(dict(ha_container_with_fresh_config))
     inst.start_server()
@@ -309,4 +433,8 @@ def test_hold_dev_ha_env(ha_container_with_fresh_config: dict[str, Any]) -> None
     except Exception as err:  # noqa: BLE001
         # HA is up; fix the server through the tools, as on any instance.
         log(sha=sha, backend=inst.backend, ready=False, error=str(err))
-    time.sleep(60 * int(os.environ.get("DEVENV_MINUTES", "340")))
+    minutes = int(os.environ.get("DEVENV_MINUTES", "340"))
+    if inst.standalone:
+        follow_switch_ref(inst, sha, time.monotonic() + 60 * minutes)
+    else:
+        time.sleep(60 * minutes)

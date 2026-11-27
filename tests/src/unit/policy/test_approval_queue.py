@@ -63,7 +63,7 @@ def test_find_returns_none_for_unknown():
     assert q.find("ha_x", "abc") is None
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_approve_sets_decision_and_fires_event():
     q = ApprovalQueue()
     p = q.create("ha_x", "abc", {}, ttl_minutes=5)
@@ -73,7 +73,7 @@ async def test_approve_sets_decision_and_fires_event():
         assert await p.wait() == p.decision
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_deny_sets_decision_and_fires_event():
     q = ApprovalQueue()
     p = q.create("ha_x", "abc", {}, ttl_minutes=5)
@@ -164,7 +164,7 @@ def test_consume_and_maybe_remember_with_remember():
     assert q.is_remembered("ha_x", "abc") is True
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_event_wakes_waiter():
     q = ApprovalQueue()
     p = q.create("ha_x", "abc", {}, ttl_minutes=5)
@@ -191,7 +191,7 @@ async def test_event_wakes_waiter():
 # --- find_or_create + concurrency ---
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_find_or_create_returns_existing_when_args_hash_matches():
     q = ApprovalQueue()
     first = q.create("ha_x", "abc", {"a": 1}, ttl_minutes=5)
@@ -199,7 +199,7 @@ async def test_find_or_create_returns_existing_when_args_hash_matches():
     assert second.token == first.token, "should reuse existing pending entry"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_find_or_create_concurrent_callers_share_entry():
     """Two coroutines hitting find_or_create with identical
     (tool_name, args_hash) must end up with the SAME token. The lock
@@ -256,7 +256,7 @@ def test_create_evicts_resolved_entries_before_pending():
         assert q.get(entry.token) is not None
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_evicting_pending_wakes_its_waiter():
     """If the cap forces eviction of an in-flight pending entry, the
     waiter must wake immediately — without setting the entry's event,

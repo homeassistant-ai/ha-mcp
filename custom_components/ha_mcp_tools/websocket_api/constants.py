@@ -133,6 +133,7 @@ CAPABILITIES: list[str] = [
     "search",
     # Location/state filters precede pagination; search accepts any result window.
     "search_unified",
+    "search_editor_bodies",
     # A flag on search: gates its additive result_fields request and generic
     # is_group/member_entity_ids response fields.
     "search_entity_membership",
@@ -219,6 +220,9 @@ CAPABILITIES: list[str] = [
     # hidden entity. The server sends an enforcing search here only with it.
     "search_visibility_enforce",
     "server_entry",
+    # A flag on server_entry: gates its ``install_pending`` field, whether the
+    # configured spec still waits for its install.
+    "server_entry_install_pending",
     # The WRITE counterpart of ``server_entry`` (Phase 3). The server gates its
     # ``ha_dev_manage_server(update_source)`` embedded-mode direct-write on this; an
     # old component that lacks it is never sent the frame and the server stays on its

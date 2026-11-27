@@ -207,9 +207,10 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   `component_core_client` also registers the `ha_mcp_tools/*` commands. Data
   handed straight to a pure helper follows the same rule: get it from Core.
 - What may be replaced: this repository's own collaborators that do not speak
-  for Home Assistant (the in-process server, an upstream), another integration
-  through Core's `mock_integration`, and one function or constant on a real
-  Core module when the test needs an answer Core cannot be made to give in a
+  for Home Assistant (the in-process server, an upstream), an integration of a
+  made-up domain through Core's `mock_integration` (see
+  `scripts/integration_stand_ins.py` below), and one function or constant on a
+  real Core module when the test needs an answer Core cannot be made to give in a
   unit test (a failure, a URL, another Core version's shape). Another Core
   version's shape is for the occasional case that needs it, such as a beta
   change with a fallback to current stable or an update path; it is not a
@@ -231,7 +232,8 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   `INTEGRATIONS` like any requirement): a test reads what `hass_frontend.where()`
   names and never writes a frontend build of its own.
 - A unit test has no Supervisor: `src/unit/_tools_addons_core.py` serves its
-  REST API over real HTTP behind Core's `hassio` integration. What it answers
+  REST API over real HTTP behind Core's `hassio` integration, which
+  `src/unit/_hassio_core.py`'s `set_up_hassio` sets up. What it answers
   is built from Supervisor's own client models (`aiohasupervisor.models`, as
   `app_info()` does) with only the fields the test is about changed, never a
   dict typed into the test. A body the models cannot express is one Supervisor
@@ -307,6 +309,24 @@ files.
 A file on a list would be exempt for what it already holds, and an edit to it
 could add a faked test, so a listed file a pull request changes is converted:
 the same script fails when it is still on any list.
+
+`scripts/integration_stand_ins.py` (in Fast Checks) refuses `mock_component`,
+`MockModule` (what `mock_integration` registers), `mock_platform`,
+`mock_config_flow` and `hass.config.components.add` under the name of an
+integration of the installed Core, also when the name reaches them through
+helpers' parameters: the test would run against a stand-in while the
+integration's own code never runs (#3178). Set the real integration
+up, or register the stand-in under a made-up domain, as Core's own tests do.
+A name the check cannot read fails too (one only known at runtime, or given
+to a helper handed on instead of called): write it in the call or a constant.
+A case is fixed, not listed: only one the real integration was tried for and
+cannot serve is recorded, with its reason, in
+`src/unit/integration_stand_in_allowlist.yml`, and an entry that matches
+nothing fails. The list ratchet treats that file like the lists above, except
+that editing a listed file does not take it off, and a file converted off the
+other lists may stay on it: it never lists a new file, adds an older file or
+integration only when the check's code changed, and takes a file it drops off
+every list.
 
 Production code has no public name that only the tests use
 (`scripts/test_only_public_names.py`, in Fast Checks): a helper made public for

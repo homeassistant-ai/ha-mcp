@@ -188,10 +188,15 @@ the info handshake carries no capability entry:
   ``visibility_warnings`` carried by the response so filtering is not silently
   incomplete.
 * ``ha_mcp_tools/server_entry`` — the component locates its OWN server config
-  entry (``entry.data[CONF_ENTRY_TYPE] == server``, the one marker key it reads
-  from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
-  pip_spec from ``entry.options``), so ``ha_dev_manage_server`` need not probe
-  every ``ha_mcp_tools``-domain entry's options-flow schema from the outside.
+  entry (``entry.data[CONF_ENTRY_TYPE] == server``) and returns
+  ``{entry_id, pip_spec, install_pending}`` (pip_spec from ``entry.options``;
+  install_pending, gated by ``server_entry_install_pending``, compares the spec
+  bring-up resolves with the one the component recorded after its last
+  completed, non-deferred package step, ``_server_entry_prep``), so
+  ``ha_dev_manage_server`` need not probe every ``ha_mcp_tools``-domain entry's
+  options-flow schema from the outside. The type marker and that record are
+  the two ``entry.data`` keys this package reads, the data-minimization
+  exception: neither is returned, install_pending is only a boolean or null.
 * ``ha_mcp_tools/server_entry_update`` — the WRITE counterpart of ``server_entry``:
   applies a ``channel`` / ``pip_spec`` delta to the server entry via
   ``hass.config_entries.async_update_entry`` DIRECTLY (what core's finish-flow
@@ -309,7 +314,8 @@ the info handshake carries no capability entry:
 completed reload (no version marker distinguishes a fresh body from a stale one),
 so a get racing a reload returned a pre-edit body. ``ha_config_get_{automation,
 script}`` stay on the legacy REST path (which reads the fresh config file);
-scenes were already legacy-only. A file-reading redesign may return (issue #1813).
+scenes were already legacy-only. YAML source support is planned for the dedicated
+get tools (issue #2632).
 
 Design notes that are load-bearing:
 
@@ -319,12 +325,11 @@ Design notes that are load-bearing:
   manifest version is reported for display only.
 * **Data minimization.** Flow-helper indexing reads ``ConfigEntry.options`` /
   ``title`` only — **never** ``ConfigEntry.data`` (integration credentials).
-* **YAML config bodies are never emitted.** automation/script/scene bodies are
-  indexed for *matching*, but a matched item's ``config`` body is returned only
-  when it is storage/editor-backed AND ``include_config`` is set. YAML-loaded
-  items return identity/metadata only (their ``raw_config`` may carry resolved
-  ``!secret`` plaintext). Body emission for YAML belongs to a future file-based
-  tool.
+* **Search result bodies come from saved editor definitions.** Search matches
+  automations, scripts and scenes against their loaded configuration. When
+  requested, automation and script bodies come from the editor file with YAML
+  tags preserved. A package match directs callers to ``ha_config_get_yaml``
+  for the source. Scenes return metadata only.
 * **Resolved secrets are scrubbed from the match corpus.** Because YAML bodies
   (and flow-helper options) can hold ``!secret`` values resolved to plaintext,
   a body leaf that exactly equals a ``secrets.yaml`` value is dropped before
@@ -450,6 +455,7 @@ from .system import (
     _do_server_entry_update,
     _do_system_snapshot,
     _do_template_diagnose,
+    _server_entry_prep,
     _server_entry_update_prep,
     _template_diagnose_prep,
     do_info,
@@ -540,7 +546,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         # Core's live trace store: one in-process pass matches a run's own
         # context or a triggering parent context across every stored item.
         (_trace_context_schema(), _do_trace_context, _trace_context_prep),
-        (_server_entry_schema(), _do_server_entry, None),
+        (_server_entry_schema(), _do_server_entry, _server_entry_prep),
         # The WRITE counterpart of server_entry: the deferred ``async_update_entry``
         # scheduling is inherently async, so it lives in ``_server_entry_update_prep``
         # and ``_do_server_entry_update`` is a pure formatter (same seam as the

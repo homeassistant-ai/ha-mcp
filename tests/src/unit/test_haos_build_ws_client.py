@@ -156,6 +156,7 @@ async def test_a_send_that_ends_after_its_deadline_has_an_unknown_outcome(
     haos: Haos, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The command was written, but too late to wait for its answer."""
+    haos.supervisor.answer("POST", "/core/update")
     ws = await haos.connected()
     real_send = ClientConnection.send
 

@@ -81,7 +81,18 @@ label; the report or a reason does, and then the gate removes the label and
 rewrites its comment. A maintainer removing the label waives the requirement:
 the gate never adds it back to that issue.
 
-`report-gate.yml` runs hourly. It closes, as not planned and with a new comment
+A repository maintainer or admin can apply `missing bug report output (Override)` to
+request the generated output after reviewing an explanation. The gate checks
+the role of the human who applied the label, mentions the reporter, and gives
+them 24 hours from the request notice. If the label event was missed, the
+hourly sweep posts the notice and gives the reporter the same response period. The label supersedes the ordinary missing
+report label. Edits, reclassification and additional explanations leave the
+deadline in place. A visible report heading and version line in the issue body
+or a reporter comment clear the request. Removing the override withdraws it.
+Reapplying it starts a fresh 24 hours. If the hourly sweep closes the issue for
+this request, adding the report later reopens it.
+
+For the ordinary missing-report label, `report-gate.yml` runs hourly. It closes, as not planned and with a new comment
 mentioning the reporter, an open issue that is still unanswered 24 or more
 hours after the label was last applied, whether by the gate or by a maintainer
 by hand. An issue that becomes a feature request or documentation issue while

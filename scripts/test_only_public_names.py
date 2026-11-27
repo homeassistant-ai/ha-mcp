@@ -12,10 +12,11 @@ Python (``homeassistant-addon*``), uses it when:
 - production Python names it (a name, an attribute, an import), its own
   definition aside, or reads it as an attribute of a receiver no import names
   in a module that hands its module on as a value;
-- production Python holds it in a string (``getattr``, a registry), an
-  ``__all__`` entry or a docstring aside;
+- a string in production Python is the name or a path to it (``getattr``, a
+  registry, a patch target); a sentence that mentions it, an ``__all__``
+  entry and a docstring are not uses;
 - a file production reads names it (pyproject, workflows, manifests, YAML,
-  shell);
+  shell), its comment lines aside;
 - the framework calls it by convention: a decorated function or method, a Home
   Assistant hook (``async_setup*``, ``async_step_*``, ...), a config flow class,
   a method of a class with a base (it may override one), a tool module's
@@ -23,7 +24,8 @@ Python (``homeassistant-addon*``), uses it when:
 
 A name production does not use and a test names is refused, unless it is one
 of ``EXEMPT``: the module state the tests reset between tests, and the
-cleanup of a server process a test started.
+cleanup of a server process a test started. An entry of ``EXEMPT`` naming
+nothing the check would refuse fails too.
 """
 
 from __future__ import annotations
@@ -56,6 +58,13 @@ HA_HOOK = re.compile(
     r"async_get_.*_flow|async_create_fix_flow|register_.*_tools|main|setup|run)$"
 )
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# A string that is a name or a path to one (``getattr``, a registry key, a patch
+# target, ``module:function``); a sentence that mentions a name is not a use.
+NAMING = re.compile(r"[A-Za-z_][\w.:]*")
+# A ``#`` comment in YAML or TOML: at the line's start or after white space
+# (also inside a quoted value, which then names nothing: the check errs on the
+# side of refusing).
+COMMENT = re.compile(r"(^|\s)#.*")
 # Module state the tests reset between tests, and the cleanup of a server
 # process a test started; production needs neither.
 EXEMPT = frozenset(
@@ -125,7 +134,9 @@ class _Uses(NamedTuple):
     qualified: set[tuple[str, str]]
     # Every attribute read: a method's receiver cannot be resolved statically.
     attributes: set[str]
-    # Words in strings (``getattr``, registries), ``__all__`` entries aside.
+    # Words of the strings that are a name or a path to one (``NAMING``),
+    # ``__all__`` entries aside; ``test_only_names`` adds the words of the
+    # non-Python files' lines.
     strings: set[str]
 
 
@@ -188,6 +199,7 @@ def _uses(tree: ast.Module, module: str, is_package: bool) -> _Uses:
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
                 and id(node) not in exported
+                and NAMING.fullmatch(node.value)
             ):
                 uses.strings.update(WORD.findall(node.value))
 
@@ -275,18 +287,23 @@ def _bindings(nodes: list[ast.AST], package: str) -> dict[str, str]:
     return bound
 
 
-def _words(paths: list[Path]) -> set[str]:
+def _words(paths: list[Path], *, comments: bool = True) -> set[str]:
+    """The words in ``paths``; without ``comments``, a ``#`` comment is left
+    out, whether it is the whole line or follows a value."""
     words: set[str] = set()
     for path in paths:
         try:
-            words |= set(WORD.findall(path.read_text(encoding="utf-8")))
+            text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError, IsADirectoryError:
             continue
+        if not comments:
+            text = "\n".join(COMMENT.sub("", line) for line in text.splitlines())
+        words |= set(WORD.findall(text))
     return words
 
 
 def test_only_names(repo: Path) -> list[str]:
-    """``path:name`` of every public name only the tests use, EXEMPT aside."""
+    """``path:name`` of every public name only the tests use, EXEMPT included."""
     trees = {
         path.relative_to(repo).as_posix(): ast.parse(path.read_text(encoding="utf-8"))
         for path in _python(repo, CALLERS)
@@ -297,7 +314,9 @@ def test_only_names(repo: Path) -> list[str]:
         mod = _uses(tree, _module_name(relative), relative.endswith("/__init__.py"))
         uses.qualified.update(mod.qualified)
         uses.attributes.update(mod.attributes)
-        uses.strings.update(mod.strings)
+        # This script's own strings are EXEMPT's entries, not uses of the names.
+        if repo / relative != Path(__file__).resolve():
+            uses.strings.update(mod.strings)
     uses.strings.update(
         _words(
             [
@@ -305,7 +324,8 @@ def test_only_names(repo: Path) -> list[str]:
                 for pattern in NON_PYTHON
                 for path in repo.glob(pattern)
                 if ".venv" not in path.parts and "node_modules" not in path.parts
-            ]
+            ],
+            comments=False,
         )
     )
     tested = _words(sorted((repo / "tests").rglob("*.py")))
@@ -319,7 +339,7 @@ def test_only_names(repo: Path) -> list[str]:
             reached = {(module, name), (loaded, name)}
             if reached & uses.qualified or (is_method and name in uses.attributes):
                 continue
-            if name in tested and f"{relative}:{name}" not in EXEMPT:
+            if name in tested:
                 found.append(f"{relative}:{name}")
     return sorted(found)
 
@@ -328,10 +348,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--repo", type=Path, default=REPO, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    found = test_only_names(args.repo)
+    names = test_only_names(args.repo)
+    found = [name for name in names if name not in EXEMPT]
+    # EXEMPT names this repository's files, so only here can an entry be idle.
+    idle = sorted(EXEMPT - set(names)) if args.repo.resolve() == REPO else []
+    for name in idle:
+        print(f"EXEMPT lists {name}, which the check would not refuse; remove it.")
     if not found:
-        print("No public name is used only by the tests.")
-        return 0
+        if not idle:
+            print("No public name is used only by the tests.")
+        return 1 if idle else 0
     print("\n".join(found))
     print(
         "\nOnly the tests use these public names. A test reaches the code through "

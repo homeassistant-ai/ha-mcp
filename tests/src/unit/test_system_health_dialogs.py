@@ -3,24 +3,24 @@ Integration startup dialog read.
 
 The labels, names and setup times are Core's own: a real ``hass`` with
 Core's frontend serves them. Core records setup times only while it starts.
-Core's own ``supervisor/api`` answers the Supervisor reads, in front of a
-Supervisor that ``aioclient_mock`` answers (``_supervisor_core``).
+Core's own ``hassio`` integration answers the Supervisor reads, in front of the
+stand-in Supervisor of ``_tools_addons_core``.
 """
 
 from pathlib import Path
 
-import pytest
 from aiohasupervisor.models.homeassistant import HomeAssistantStats
 from aiohasupervisor.models.resolution import ResolutionInfo, UnhealthyReason
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import mock_component
-from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_system import SystemTools
 
-from ._supervisor_core import SUPERVISOR, load_supervisor_api
+from ._tools_addons_core import Supervisor
+from ._tools_addons_core import core_supervisor as core_supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
 
 
 async def _set_up_frontend(hass: HomeAssistant, tmp_path: Path) -> None:
@@ -91,41 +91,31 @@ async def test_supervisor_is_reported_absent_without_hassio(
 
 async def test_supervisor_reads_resolution_and_both_container_stats(
     hass: HomeAssistant,
+    core_supervisor: Supervisor,
     core_client: HomeAssistantClient,
     tmp_path: Path,
-    aioclient_mock: AiohttpClientMocker,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await _set_up_frontend(hass, tmp_path)
-    mock_component(hass, "hassio")
-    # ``load_supervisor_api`` sets ``SUPERVISOR_TOKEN``, which alone makes the
-    # server call the Supervisor directly; embedded mode keeps it on Core.
-    monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    load_supervisor_api(
-        hass,
-        aioclient_mock,
-        monkeypatch,
-        {
-            ("get", "/resolution/info"): ResolutionInfo(
-                unsupported=[],
-                unhealthy=[UnhealthyReason.DOCKER],
-                issues=[],
-                checks=[],
-                suggestions=[],
-            ).to_dict(),
-            ("get", "/core/stats"): HomeAssistantStats(
-                cpu_percent=3.5,
-                memory_usage=0,
-                memory_limit=1024,
-                memory_percent=0,
-                network_rx=0,
-                network_tx=0,
-                blk_read=0,
-                blk_write=0,
-            ).to_dict(),
-        },
+    resolution = ResolutionInfo(
+        unsupported=[],
+        unhealthy=[UnhealthyReason.DOCKER],
+        issues=[],
+        checks=[],
+        suggestions=[],
     )
-    aioclient_mock.get(f"http://{SUPERVISOR}/supervisor/stats", status=500)
+    core_supervisor.answer("GET", "/resolution/info", resolution.to_dict())
+    core_stats = HomeAssistantStats(
+        cpu_percent=3.5,
+        memory_usage=0,
+        memory_limit=1024,
+        memory_percent=0,
+        network_rx=0,
+        network_tx=0,
+        blk_read=0,
+        blk_write=0,
+    )
+    core_supervisor.answer("GET", "/core/stats", core_stats.to_dict())
+    core_supervisor.refuse("GET", "/supervisor/stats", "Unknown error", status=500)
 
     result = await SystemTools(core_client).ha_get_system_health(include="supervisor")
 

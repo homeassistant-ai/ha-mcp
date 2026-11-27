@@ -43,7 +43,6 @@ from urllib.parse import urlparse
 
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
-from homeassistant.loader import async_get_integration
 from homeassistant.requirements import (
     RequirementsNotFound,
     async_process_requirements,
@@ -69,7 +68,6 @@ from .const import (
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
-    OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
     SERVER_CONFIG_SUBDIR,
@@ -100,8 +98,14 @@ from .server_credentials import (
     async_release_credentials,
     async_server_access_token,
 )
-from .server_pin import server_dist, server_pins
-from .spec_dist import provides_server, spec_dist_name, version_dist
+from .server_pin import server_dist
+from .spec_dist import (
+    async_paired_server_requirement,
+    pip_spec_override,
+    provides_server,
+    spec_dist_name,
+    version_dist,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -262,13 +266,7 @@ class EmbeddedServerManager:
             self._server_url, self._loopback_verify_ssl = derive_loopback_url(hass)
         # An explicit pip-spec override (PR / pre-release testing) wins over the
         # server requirement this component release pins in its manifest.
-        # DEFAULT_PIP_SPEC in the field means "no override" (the options flow
-        # also normalizes it away on save; this guard keeps legacy/direct
-        # entries correct too).
-        raw_pip_spec = str(options.get(OPT_PIP_SPEC) or "").strip()
-        self._pip_spec_override: str = (
-            raw_pip_spec if raw_pip_spec and raw_pip_spec != DEFAULT_PIP_SPEC else ""
-        )
+        self._pip_spec_override: str = pip_spec_override(options)
         # The ha-mcp requirement in this component release's manifest. Home
         # Assistant installs it before setup, like any integration requirement;
         # read in async_start (the loader lookup is async).
@@ -2316,18 +2314,6 @@ def _spec_satisfied_by(spec: str, installed_version: str) -> bool:
     if requirement.url:
         return False
     return requirement.specifier.contains(installed_version, prereleases=True)
-
-
-async def async_paired_server_requirement(hass: HomeAssistant) -> str | None:
-    """Return the server requirement this component release pins, or None.
-
-    Every component release the Marketplace delivers pins the ``ha-mcp`` (pre-release:
-    ``ha-mcp-dev``) build it was released with in ``manifest.json``'s ``requirements``, which Home
-    Assistant installs before setting the integration up. A copy taken from
-    master pins the last release; only a hand-edited manifest carries none.
-    """
-    integration = await async_get_integration(hass, DOMAIN)
-    return next(iter(server_pins(integration.requirements)), None)
 
 
 def _exact_pinned_version(spec: str) -> str | None:

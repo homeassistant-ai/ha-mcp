@@ -115,7 +115,12 @@ class WebSocketConnectionState:
         """Retrieve and remove an authentication message if present."""
         return self._auth_messages.pop(message_type, None)
 
-    def reset_connection(self, close_reason: str | None = None) -> None:
+    def reset_connection(
+        self,
+        close_reason: str | None = None,
+        *,
+        error_type: type[HomeAssistantConnectionError] = HomeAssistantConnectionError,
+    ) -> None:
         """Reset connection-specific state while preserving handlers.
 
         Args:
@@ -146,12 +151,12 @@ class WebSocketConnectionState:
                 # across multiple ``set_exception`` calls means the second
                 # raise attaches a traceback to an exception already
                 # associated with another future's stack.
-                future.set_exception(HomeAssistantConnectionError(message))
+                future.set_exception(error_type(message))
         self._pending_requests.clear()
 
         for future in self._event_responses.values():
             if not future.done():
-                future.set_exception(HomeAssistantConnectionError(message))
+                future.set_exception(error_type(message))
         self._event_responses.clear()
 
         # Drop any subscription queues. ``shutdown`` rather than just clearing
@@ -175,9 +180,14 @@ class WebSocketConnectionState:
         """Mark the socket as authenticated and ready for commands."""
         self.authenticated = True
 
-    def mark_disconnected(self, close_reason: str | None = None) -> None:
+    def mark_disconnected(
+        self,
+        close_reason: str | None = None,
+        *,
+        error_type: type[HomeAssistantConnectionError] = HomeAssistantConnectionError,
+    ) -> None:
         """Reset connection state when the socket is closed."""
-        self.reset_connection(close_reason)
+        self.reset_connection(close_reason, error_type=error_type)
 
     @property
     def is_ready(self) -> bool:

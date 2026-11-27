@@ -32,6 +32,8 @@ def _manager(hass: HomeAssistant, name: str) -> FlowManager[Any, Any, Any] | Non
     if name == _REPAIRS:
         from homeassistant.components.repairs import repairs_flow_manager
 
+        if _REPAIRS not in hass.config.components:
+            return None
         return repairs_flow_manager(hass)
     manager: FlowManager[Any, Any, Any] = getattr(hass.config_entries, _MANAGERS[name])
     return manager

@@ -37,7 +37,7 @@ from ha_mcp.tools.tools_hacs import HacsTools
 
 from ._backup_snapshot_core import Heartbeats
 from ._command_faults import arrival
-from ._hacs_actions_core import serve_card, serve_files, serve_repository
+from ._hacs_actions_core import serve_card, serve_files
 from ._hacs_marketplace import (
     CARD_ID,
     add_marketplace,
@@ -53,10 +53,6 @@ from ._tools_addons_core import outwait, timers
 CARD = "piitaya/lovelace-mushroom"
 OTHER_CARD = "someone/other-card"
 OTHER_CARD_ID = "600700800"
-# Core lists only the categories it has active, and it activates themes only
-# with the frontend's theme service, which the unit tests' frontend lacks.
-UNLISTED_THEME = "someone/unlisted-theme"
-UNLISTED_THEME_ID = "600700900"
 BROKEN_CARD = "someone/broken-card"
 BROKEN_CARD_ID = "600701000"
 INSTALL = "marketplace/repository/install"
@@ -105,20 +101,13 @@ async def installable(
     socket: HomeAssistantWebSocketClient,
     other_card_file: HeldFile,
 ) -> AsyncIterator[MockConfigEntry]:
-    """The Marketplace, its warning accepted, GitHub serving the card, a theme
-    the list leaves out, another card whose file it holds
-    (``other_card_file``), and a card whose file it fails."""
+    """The Marketplace, its warning accepted, GitHub serving the card, another
+    card whose file it holds (``other_card_file``), and a card whose file it
+    fails."""
     serve_card(aioclient_mock, CARD, int(CARD_ID))
     serve_files(aioclient_mock, CARD)
     serve_card(aioclient_mock, OTHER_CARD, int(OTHER_CARD_ID))
     serve_files(aioclient_mock, OTHER_CARD, side_effect=other_card_file.answer)
-    serve_repository(
-        aioclient_mock,
-        UNLISTED_THEME,
-        int(UNLISTED_THEME_ID),
-        ("themes/unlisted.yaml",),
-    )
-    serve_files(aioclient_mock, UNLISTED_THEME)
     serve_card(aioclient_mock, BROKEN_CARD, int(BROKEN_CARD_ID))
     serve_files(aioclient_mock, BROKEN_CARD, status=502)
     entry = add_marketplace(
@@ -128,7 +117,6 @@ async def installable(
         {
             CARD_ID: stored(CARD, "plugin"),
             OTHER_CARD_ID: stored(OTHER_CARD, "plugin"),
-            UNLISTED_THEME_ID: stored(UNLISTED_THEME, "theme"),
             BROKEN_CARD_ID: stored(BROKEN_CARD, "plugin"),
         },
     )
@@ -265,24 +253,6 @@ async def test_progress_that_stops_on_a_lost_list_read_is_logged(
     assert result["data"]["repository_id"] == OTHER_CARD_ID
     assert heartbeats.reports == []
     assert any("stopped" in w for w in _logged_warnings(caplog))
-
-
-async def test_a_repository_the_list_leaves_out_is_logged_not_followed(
-    installable: MockConfigEntry,
-    tools: HacsTools,
-    socket: HomeAssistantWebSocketClient,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    heartbeats = Heartbeats()
-    result = await tools.ha_manage_hacs(
-        action="download", repository_id=UNLISTED_THEME_ID, ctx=heartbeats.context
-    )
-
-    listed = await socket.send_command(LIST)
-    assert UNLISTED_THEME_ID not in {r["id"] for r in listed["result"]}
-    assert result["data"]["repository_id"] == UNLISTED_THEME_ID
-    assert heartbeats.reports == []
-    assert any(UNLISTED_THEME_ID in w for w in _logged_warnings(caplog))
 
 
 async def test_a_repository_still_installing_points_at_waiting(

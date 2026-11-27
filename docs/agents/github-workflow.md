@@ -119,6 +119,7 @@ Triage-state labels:
 | `ready-to-implement` | Clear path with no unresolved decisions. |
 | `needs-choices` | Multiple approaches need stakeholder input. |
 | `needs-info` | Awaiting the reporter. Any label application starts reminders on days 3/5/6 and closure on day 7; a reporter reply after labeling removes it. See [issue intake](issue-intake.md). |
+| `missing bug report output (Override)` | A maintainer or admin requires generated output. The reporter has 24 hours from the request notice to supply it. See [issue intake](issue-intake.md#report-gate). |
 | `missing bug report output` | A bug report with neither an `ha_report_issue` report nor a reason. The report gate applies it and closes the issue after 24 hours; adding either clears it, and a maintainer removing it waives the requirement. See [issue intake](issue-intake.md#report-gate). |
 | `priority: high/medium/low` | Relative priority. |
 | `triaged` | Historical marker from the retired triage bot. |
@@ -240,7 +241,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `pr.yml` | Pull request or manual | Fast checks and validation orchestration, plus the non-required beta Core unit lane. |
+| `pr.yml` | Pull request or manual | Fast checks and validation orchestration, including the beta Core unit lanes and the external Docker E2E lane during an active beta. |
 | `renovate.yml` | Hourly, human dashboard/PR checkbox edit, or manual | Refresh dependency discovery and process eligible updates. |
 | `renovate-validation.yml` | Relevant pull request or manual | Validate configuration with the scanner’s pinned Renovate engine, without credentials. |
 | `renovate-auto-merge.yml` | Renovate enables auto-merge or updates its PR | Approve the verified current head with the separate maintainer account; GitHub enforces merge requirements. |
@@ -249,7 +250,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `haos-e2e-tests.yml` | Pull request or manual | External, embedded and app HAOS lanes against a baked qcow2; embedded and app cover both tool-entry states. A dispatch picks one `lane` and can keep the tools entry absent (`topology: without-tools`). |
 | `haos-e2e-stdio.yml` | Manual | The HAOS lane over the installed `ha-mcp` command's stdio transport. |
 | `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
-| `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
+| `e2e-beta-tests.yml` | PR validation (external Docker lane), push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
 | `publish-dev.yml` | Push to `master`, or manual; this repository only | Development `<next>.devN` release, published as `ha-mcp-dev`; its GitHub pre-release tags a commit with the component stamped to pin that build, for the Marketplace, and the mirror sync pins the same build via its `dev-version` artifact. |
 | `sync-integration-mirror.yml` | `workflow_run` after SemVer Release or Publish Dev Channel; docs pushes; manual | Distribution mirror releases: the component with its version and server pin (`ha-mcp` stable, `ha-mcp-dev` pre-release), tagged once PyPI serves the pinned build. |
 | `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
@@ -263,7 +264,7 @@ missing required live-testing evidence blocks merging, not requesting review.
 | `dev-ha-env.yml` | Manual, forks only | Live throwaway HA (Docker or HAOS) running a branch's server standalone, embedded or as the app, behind encrypted-URL tunnels; see [`docs/dev-ha-env.md`](../dev-ha-env.md). |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
 | `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides, after the report gate. |
-| `report-gate.yml` | Hourly or manual | Close bug reports whose `missing bug report output` label is 24 hours old. |
+| `report-gate.yml` | Hourly or manual | Close bug reports still missing the answer required by their report label after 24 hours. |
 | `slash-agent.yml` | Maintainer slash command, trusted continuation event, or manual | Issue response and issue-to-PR implementation through readiness. |
 | `slash-agent-review-event.yml` | PR review or inline comment | Secretless wakeup for the slash controller; it reads no PR code. |
 | `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |
@@ -357,11 +358,18 @@ of one would only fail that check or the unit tests.
 Renovate moves those pins only to stable releases. `pr.yml`'s
 `Unit Tests (beta Core, ...)` job covers the beta: it reads the current beta
 Core from `beta.json`, installs that `homeassistant` and `pytest-homeassistant`
-over the locked environment, and runs the unit suite on two runners, split
-the way the stable unit job is, and the app suite on the first. Unlike the E2E
-beta lanes it runs on every pull request, because these suites take minutes.
-It is not a required check, so a beta Core change reports without blocking
-a merge, and it skips while beta equals the dev group's pin.
+with the integration requirements of its manifests over the locked
+environment, and runs the unit suite on two runners, split the way the stable
+unit job is, and the app suite on the first. It is not a required check, so a
+beta Core change reports without blocking a merge, and it skips while beta
+equals the dev group's pin.
+
+For code changes, `pr.yml`'s `Beta Docker` job also calls
+`e2e-beta-tests.yml` with `pr_lane: true`, which runs only its external Docker
+`E2E Tests` job, and only while `beta.json` names a beta (`b` or `.dev`) that
+differs from the E2E image pin. It is not required either and is not part of
+the `E2E Validation Gate`. The other beta E2E lanes run after merge, nightly,
+or on manual dispatch.
 
 Renovate enables GitHub-native squash auto-merge for minor, patch, and digest
 updates, and for its ungrouped vulnerability-alert fixes. Ordinary major

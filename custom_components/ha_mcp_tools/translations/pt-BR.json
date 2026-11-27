@@ -1,0 +1,250 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-MCP — Gerencie o Home Assistant com IA",
+        "description": "Escolha o que adicionar. O **Servidor HA-MCP** executa o servidor ha-mcp completo dentro do Home Assistant e o expõe através de um webhook do Home Assistant — esta é a instalação que a maioria das pessoas deseja. É um servidor autônomo e um substituto completo para todos os outros métodos de instalação: App (add-on), Docker, uvx/PyPI, stdio; se você o executar, não execute também um desses. As **Ferramentas de Arquivo e YAML do HA-MCP** têm duas funções. Se o seu servidor ha-mcp for executado fora do Home Assistant — app, Docker, uvx/PyPI, stdio — esta entrada também concede a esse servidor as capacidades de componente em processo que ele não consegue alcançar de fora (pesquisa rápida em processo, metadados de entrada de configuração, leituras baseadas em registro), então vale a pena adicioná-la a toda instalação externa, e ela controla os serviços privilegiados de edição de arquivo e YAML usados pelas ferramentas de arquivo/YAML opcionais do ha-mcp. Se você adicionar a entrada do Servidor HA-MCP, essa entrada já fornece essas capacidades compartilhadas, então esta segunda entrada é necessária apenas como o controle para as ferramentas de arquivo/YAML opcionais. Funciona com todos os tipos de servidor e pode ser adicionado a qualquer momento.",
+        "menu_options": {
+          "server": "Servidor HA-MCP (recomendado)",
+          "tools": "Ferramentas de Arquivo e YAML do HA-MCP (opcional)"
+        }
+      },
+      "tools": {
+        "title": "Ferramentas de Arquivo e YAML do HA-MCP",
+        "description": "Configura os serviços privilegiados de arquivo e configuração YAML, que permanecem controlados pelas ferramentas de edição de arquivo/YAML opcionais do ha-mcp (flags de recurso, desativadas por padrão) — isso se aplica a todos os tipos de servidor, incluindo o Servidor HA-MCP em processo. Se o seu servidor ha-mcp for executado fora do Home Assistant, esta entrada também concede a ele as capacidades de componente em processo que ele não consegue alcançar de fora (pesquisa rápida em processo, metadados de entrada de configuração, leituras baseadas em registro), que valem a pena ter mesmo com as ferramentas de arquivo/YAML desativadas. Você pode adicionar ou remover esta entrada a qualquer momento."
+      },
+      "server": {
+        "title": "Servidor HA-MCP",
+        "description": "Isso executa o servidor ha-mcp completo dentro do Home Assistant. É um servidor autônomo e um substituto completo para os métodos de instalação app (add-on), Docker, uvx/PyPI e stdio — não o execute junto com outro servidor ha-mcp.\n\nPor padrão, nada fora desta máquina Home Assistant pode alcançá-lo: o painel da barra lateral e os próprios agentes de conversação do Home Assistant funcionam, mas clientes MCP em outros dispositivos não podem se conectar até que você escolha um modo de acesso remoto ou acesso à rede local abaixo. Você pode alterar ambos mais tarde nas opções da integração.",
+        "data": {
+          "remote_access": "Acesso remoto através do Home Assistant",
+          "bind_host": "Acesso à rede",
+          "admin_token": "Token de acesso de administrador",
+          "admin_username": "Ou: nome de usuário de uma conta somente local criada para o HA-MCP",
+          "admin_password": "Senha dessa conta"
+        },
+        "data_description": {
+          "remote_access": "Permite que clientes MCP se conectem através de um webhook do Home Assistant, que funciona onde quer que o Home Assistant seja acessível (incluindo Nabu Casa). Login do Home Assistant: clientes como claude.ai fazem login com uma conta de administrador do Home Assistant. OAuth Legado: um ID de Cliente e Segredo para colar em clientes que precisam de um. URL Secreta: o próprio link do webhook é a única credencial — qualquer um que o tenha pode usar todas as ferramentas.",
+          "bind_host": "Quem pode se conectar diretamente à própria porta do servidor. Somente esta máquina é o padrão seguro. A rede local permite que outros dispositivos em sua rede se conectem com a URL de acesso direto secreta mostrada na tela de Configuração.",
+          "admin_token": "Um token de acesso de longa duração de uma conta de administrador. O seu próprio funciona: abra seu perfil (seu nome na parte inferior da barra lateral), selecione a aba Segurança e, em Tokens de acesso de longa duração, selecione Criar token. Seu próprio token também funciona de fora da sua rede doméstica se vazar, e o Home Assistant registra as alterações do servidor sob seu nome. Mais seguro: uma conta criada apenas para o HA-MCP, com Acesso local apenas ativado (veja os campos abaixo).",
+          "admin_password": "Usada uma vez, para criar o token. Nunca sua própria senha."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Esta entrada já está configurada.",
+      "unsupported_home_assistant": "O servidor HA-MCP em processo requer Home Assistant {required} ou mais recente, mas esta instância está executando {installed}. Você ainda pode usar a entrada Ferramentas de Arquivo e YAML do HA-MCP deste componente com um servidor ha-mcp externo executando como um aplicativo (add-on) ou contêiner Docker."
+    },
+    "error": {
+      "invalid_token": "Home Assistant não reconhece este token. Copie o token inteiro ou crie um novo.",
+      "token_not_long_lived": "Este é um token de login temporário, que expira. Crie um token de acesso de longa duração em vez disso.",
+      "token_not_admin": "Este token pertence a uma conta que não é um administrador ativo.",
+      "invalid_login": "Insira o nome de usuário e a senha de uma conta de administrador somente local criada para o HA-MCP.",
+      "credentials_needed": "Insira o nome de usuário e a senha de uma conta de administrador, ou cole um token de acesso."
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_connect_path": "Não deve conter #, ?, %, ou espaços em branco.",
+      "invalid_webhook_id": "IDs de webhook não devem conter uma barra (/).",
+      "invalid_oauth_callback": "Cada callback deve ser uma URL https://, ou uma URL http:// em 127.0.0.1, [::1] ou localhost, sem nome de usuário, senha ou #fragment, e com no máximo 2048 caracteres. Correção: {invalid_callbacks}",
+      "too_many_oauth_callbacks": "Liste no máximo {max_callbacks} callbacks.",
+      "invalid_token": "Home Assistant não reconhece este token. Copie o token inteiro ou crie um novo.",
+      "token_not_long_lived": "Este é um token de login temporário, que expira. Crie um token de acesso de longa duração em vez disso.",
+      "token_not_admin": "Este token pertence a uma conta que não é um administrador ativo.",
+      "invalid_login": "Insira o nome de usuário e a senha de uma conta de administrador somente local criada para o HA-MCP.",
+      "credentials_needed": "Insira o nome de usuário e a senha de uma conta de administrador, ou cole um token de acesso."
+    },
+    "step": {
+      "tools_info": {
+        "title": "Ferramentas de Arquivo e YAML do HA-MCP",
+        "description": "Configure os serviços privilegiados de edição de arquivo e YAML usados pelas ferramentas de arquivo/YAML opcionais do ha-mcp. Estas configurações também aparecem na interface de configurações do próprio servidor ha-mcp e são aplicadas ao vivo, sem reiniciar. Um limite de negação não substituível ainda bloqueia caminhos sensíveis (por exemplo, .storage) e chaves de limite de confiança (homeassistant, http, frontend, lovelace).",
+        "data": {
+          "allowed_dirs": "Caminhos de arquivo extras",
+          "extra_yaml_keys": "Chaves extras de escrita YAML"
+        },
+        "data_description": {
+          "allowed_dirs": "Caminhos relativos ao diretório de configuração, incluindo nomes de arquivo exatos como sensor.yaml, ou caminhos sob /share, /media e /ssl (somente leitura em HAOS e Supervised). Cada entrada concede leitura e escrita para aquele caminho e tudo abaixo dele; insira cada caminho como um item de lista separado. As entradas são correspondidas literalmente; curingas como * não são suportados. Caminhos de travessia e outros caminhos não permitidos são descartados.",
+          "extra_yaml_keys": "Chaves de nível superior que ha_config_set_yaml pode escrever além das integradas, para integrações YAML-first nesta instalação (por exemplo, alert2). Chaves de limite de confiança são descartadas."
+        }
+      },
+      "init": {
+        "title": "Servidor HA-MCP",
+        "description": "Configure o servidor HA-MCP. {panel_hint}As alterações aqui são aplicadas ao salvar.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+        "data": {
+          "server_port": "Porta de escuta do servidor MCP",
+          "bind_host": "Acesso à rede",
+          "webhook_auth": "Modo de autenticação",
+          "oauth_client_id_override": "OAuth Legado: Client ID personalizado (opcional)",
+          "oauth_client_secret_override": "OAuth Legado: Client Secret personalizado (opcional)",
+          "oauth_regenerate": "OAuth Legado: regenerar Client ID/Secret agora",
+          "pip_spec": "Desenvolvedor: substituição do pacote ha-mcp",
+          "server_url": "URL do Home Assistant (avançado)",
+          "external_url": "URL externa (opcional)",
+          "webhook_id_override": "Segredo de webhook personalizado (opcional)",
+          "secret_path_override": "Caminho de acesso direto personalizado (opcional)",
+          "regenerate_secrets": "Regenerar segredos de conexão agora",
+          "enable_webhook": "Ativar acesso remoto via webhook",
+          "enable_llm_api": "Ativar API LLM do agente de conversação",
+          "llm_api_exposure": "Exposição de ferramentas do agente de conversação",
+          "enable_startup_notification": "Ativar notificação de inicialização",
+          "enable_sidebar_panel": "Ativar painel de configurações da barra lateral",
+          "access_off_after_restart": "Desativar acesso após uma reinicialização",
+          "oauth_redirect_allowlist": "URLs de callback OAuth permitidas",
+          "admin_token_replacement": "Substituir o token de acesso do administrador (opcional)",
+          "admin_username": "Ou mudar para uma conta somente local criada para o HA-MCP: nome de usuário (opcional)",
+          "admin_password": "Senha dessa conta",
+          "oauth_allow_any_callback": "Permitir qualquer URL de callback OAuth (desativa a lista acima)"
+        },
+        "data_description": {
+          "server_port": "A porta em que este servidor escuta. O aplicativo ha-mcp (add-on) usa 9583, então o padrão é 9584 para permitir que ambos funcionem lado a lado - se você não executa o aplicativo (add-on), qualquer porta livre funciona.",
+          "bind_host": "Quem pode se conectar diretamente à porta do servidor MCP. Rede local o torna acessível a partir da sua rede local, com o caminho secreto como credencial, como o aplicativo (add-on). Esta máquina permite apenas conexões da própria máquina do Home Assistant - a URL do webhook e o painel lateral funcionam de qualquer forma.",
+          "webhook_auth": "Como os clientes MCP se autenticam na URL do webhook. Com a URL secreta, o próprio link é a única credencial - o OAuth ainda funciona para clientes que o utilizam, e um login que retorna a uma URL de callback permitida (veja abaixo) é aprovado automaticamente: sem login e sem Client ID ou Secret necessários. Com o login do Home Assistant, clientes como claude.ai fazem login com uma conta de administrador do Home Assistant (OAuth). Com o OAuth legado, esta integração executa seu próprio serviço de login e emite um Client ID e Secret para colar em clientes que exigem um - uma reinicialização do Home Assistant pode ser necessária para ativá-lo ou desativá-lo completamente.",
+          "oauth_client_id_override": "Substitui o Client ID OAuth legado gerado automaticamente. Deixe vazio para manter o atual. Usado apenas quando o modo de autenticação está definido como OAuth legado.",
+          "oauth_client_secret_override": "Substitui o Client Secret OAuth legado gerado automaticamente. Deixe vazio para manter o atual. Usado apenas quando o modo de autenticação está definido como OAuth legado.",
+          "oauth_regenerate": "Ação única: gera um novo Client ID e Secret para o modo OAuth legado. Ele só entra em vigor após a reinicialização do Home Assistant que o prompt de reparo solicita - até você reiniciar, o Client ID e Secret anteriores continuam funcionando e os novos não. Também limpa os dois campos de substituição acima.",
+          "pip_spec": "Deixe vazio para executar o servidor ha-mcp que esta versão do componente instalou. Apenas para testar uma compilação específica do ha-mcp (uma versão fixada, um tarball de pull-request ou uma URL de wheel); aplicado recarregando o servidor, sem reiniciar o Home Assistant. Limpe-o para retornar ao servidor emparelhado.",
+          "server_url": "A URL que o servidor em processo usa para alcançar seu Home Assistant (geralmente esta própria instância). Deixe vazio para derivá-la das configurações de porta e SSL desta instância; defina um valor apenas quando o servidor precisar de uma rota diferente.",
+          "external_url": "Mostrada como a URL de conexão principal - use-a quando o Home Assistant estiver atrás do seu próprio domínio ou proxy reverso. Insira o endereço base completo, incluindo o esquema. Deve apontar diretamente para o Home Assistant - abri-lo em um navegador deve levar à sua página de login do HA - e não deve conter uma porta como :8123 (ou qualquer outra porta), ou clientes MCP remotos não conseguirão alcançá-lo. Deixe vazio para usar Nabu Casa / o endereço local automaticamente.",
+          "webhook_id_override": "Substitui o segredo aleatório do webhook na URL de conexão (/api/webhook/...). A URL é a credencial - use um valor longo e difícil de adivinhar. Deixe vazio para manter o atual.",
+          "secret_path_override": "Substitui o caminho aleatório usado para acesso direto na porta do servidor. Mesma regra: o caminho é a credencial. Deixe vazio para manter o atual.",
+          "regenerate_secrets": "Ação única: gera um novo segredo aleatório de webhook e caminho de acesso direto, invalidando as URLs de conexão antigas imediatamente. Também limpa os dois campos de substituição acima.",
+          "enable_webhook": "Desative para o modo somente local: o webhook do Home Assistant não é registrado, então nada - incluindo Nabu Casa - pode alcançar o servidor através do Home Assistant. A porta direta do servidor e o painel lateral continuam funcionando.",
+          "enable_llm_api": "Ofereça o conjunto completo de ferramentas para agentes de conversação do Home Assistant (OpenAI, Google, Ollama, ...): enquanto ativado, os agentes podem selecionar 'HA-MCP Server' em Controlar Home Assistant e usar as ferramentas do chat e voz do Assist. Ativar apenas o torna selecionável - nada é exposto até você escolhê-lo em um agente. Guia de uso: {llm_api_docs_url}",
+          "llm_api_exposure": "Formato do conjunto de ferramentas oferecido aos agentes de conversação. A busca de ferramentas (padrão) mantém o contexto do agente pequeno: uma API compacta com ferramentas fixadas mais meta-ferramentas de busca/execução. O catálogo completo lista cada ferramenta exposta diretamente - melhor para modelos de contexto grande. Ambos registram os dois lado a lado para que cada agente escolha o seu em Controlar Home Assistant. A exposição por ferramenta é gerenciada no painel de configurações do HA-MCP; detalhes: {llm_api_docs_url}",
+          "enable_startup_notification": "Mostra uma notificação cada vez que o Home Assistant inicia o servidor (não quando o interruptor de Acesso o liga), apontando para as superfícies de configurações somente para administradores. Desative para iniciar silenciosamente - as URLs de conexão permanecem nesta tela.",
+          "enable_sidebar_panel": "Mostra o painel de configurações do HA-MCP na barra lateral (somente administradores). Desative para remover a entrada da barra lateral - as opções do servidor permanecem disponíveis nesta tela.",
+          "access_off_after_restart": "O interruptor de Acesso do servidor normalmente mantém seu último estado após uma reinicialização do Home Assistant. Ative esta opção para que o acesso comece desativado após cada reinicialização; ele permanece desativado até ser ligado. Ative o interruptor primeiro (ele está desativado por padrão): enquanto estiver desativado, nada pode reativar o acesso.",
+          "oauth_redirect_allowlist": "Usado apenas enquanto o modo de Autenticação for a URL secreta do webhook. Quando um cliente faz login com OAuth, o HA-MCP retorna o login apenas para uma URL de callback nesta lista; qualquer outra é recusada com uma página explicando como adicioná-la. Insira cada callback exatamente como o cliente o envia. Um callback de loopback http:// (127.0.0.1, [::1] ou localhost) também corresponde em qualquer porta. Clientes que se conectam sem um login OAuth não precisam de entrada. Entra em vigor sem uma reinicialização.",
+          "admin_token_replacement": "Deixe vazio para manter o acesso atual; o servidor reinicia quando você muda. Um token de acesso de longa duração de uma conta de administrador. O seu próprio funciona: abra seu perfil (seu nome na parte inferior da barra lateral), selecione a aba Segurança e, em Tokens de acesso de longa duração, selecione Criar token. Seu próprio token também funciona de fora da sua rede doméstica se vazar, e o Home Assistant registra as mudanças do servidor sob seu nome. Mais seguro: uma conta criada apenas para o HA-MCP, com Acesso local apenas ativado (veja os campos abaixo).",
+          "admin_username": "Apenas para uma conta que você criou apenas para o HA-MCP, em Configurações → Pessoas → Adicionar pessoa com Permitir login, Acesso local apenas e Administrador ativado. Nunca insira seu próprio login aqui: para usar sua própria conta, cole seu token acima. O HA-MCP cria o token desta conta (nomeado HA-MCP Server), para que ninguém precise fazer login como ela, e a senha não é mantida. Seu token funciona apenas da sua rede local, onde o servidor é executado, e o Home Assistant registra as mudanças do servidor sob esta conta.",
+          "admin_password": "Usada uma vez, para criar o token. Nunca sua própria senha.",
+          "oauth_allow_any_callback": "Usado apenas enquanto o modo de Autenticação for a URL secreta do webhook. Aceita um login OAuth para qualquer callback https://, ou http:// em 127.0.0.1, [::1] ou localhost, em vez de apenas a lista acima, para que você nunca precise adicionar um cliente. O custo: seu endereço do Home Assistant então encaminha um link de login manipulado para qualquer site que ele nomeie, o que um link de phishing pode usar para parecer que vem do seu Home Assistant. Entra em vigor sem uma reinicialização."
+        }
+      }
+    }
+  },
+  "issues": {
+    "server_start_failed": {
+      "title": "O servidor em processo do HA-MCP falhou ao iniciar",
+      "description": "O servidor em processo do HA-MCP não pôde ser iniciado dentro do Home Assistant:\n\n{detail}\n\nVerifique os logs do Home Assistant, então recarregue a integração (ou corrija o problema subjacente e recarregue) para tentar novamente."
+    },
+    "server_package_install_failed": {
+      "title": "O pacote do servidor em processo do HA-MCP não pôde ser instalado",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Reinstalar o servidor HA-MCP",
+            "description": "O servidor em processo do HA-MCP não pôde ser instalado ou iniciado:\n\n{detail}\n\nEnvie para reiniciar o Home Assistant; o pacote do servidor é reinstalado antes do servidor iniciar, juntamente com qualquer dependência cuja versão não o satisfaça mais. Se a mensagem acima nomear outra integração que alterou um desses pacotes, atualize ou remova essa integração primeiro: caso contrário, o Home Assistant restaurará sua versão na próxima vez que iniciar. Se você definiu **pacote ha-mcp (avançado)** nas opções do Servidor HA-MCP, verifique esse valor primeiro: reinstalar um pacote que não pode ser instalado falha da mesma forma."
+          }
+        },
+        "abort": {
+          "entry_removed": "A entrada do Servidor HA-MCP não existe mais.",
+          "externally_managed": "O Home Assistant foi iniciado com skip_pip, então ele não instala pacotes Python. Reinstale o pacote ha-mcp com o gerenciador de pacotes do seu sistema e, em seguida, recarregue a integração."
+        }
+      }
+    },
+    "component_outdated": {
+      "title": "Atualize a integração HA-MCP"
+    },
+    "legacy_oauth_restart": {
+      "title": "Reinicie o Home Assistant para aplicar as configurações OAuth legadas",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Reiniciar o Home Assistant?",
+            "description": "O envio deste formulário reiniciará o Home Assistant e aplicará as configurações OAuth legadas.\n\nClique em **Enviar** para reiniciar agora."
+          }
+        }
+      }
+    },
+    "server_token_needed": {
+      "title": "HA-MCP precisa de um token de acesso de administrador",
+      "fix_flow": {
+        "step": {
+          "token": {
+            "title": "Insira um token de acesso de administrador",
+            "description": "O servidor em processo do HA-MCP não possui um token do Home Assistant que possa usar, portanto não está em execução. O token pode estar faltando, revogado ou expirado, ou sua conta pode não ser mais um administrador ativo. Cole um novo token de acesso de longa duração, ou insira o login de uma conta somente local que você criou apenas para o HA-MCP (nunca seu próprio login) e o HA-MCP criará seu token.",
+            "data": {
+              "admin_token": "Token de acesso de administrador",
+              "admin_username": "Ou: nome de usuário de uma conta somente local criada para o HA-MCP",
+              "admin_password": "Senha dessa conta"
+            }
+          }
+        },
+        "error": {
+          "invalid_token": "O Home Assistant não reconhece este token. Copie o token completo ou crie um novo.",
+          "token_not_long_lived": "Este é um token de login temporário, que expira. Crie um token de acesso de longa duração em vez disso.",
+          "token_not_admin": "Este token pertence a uma conta que não é um administrador ativo.",
+          "invalid_login": "Insira o nome de usuário e a senha de uma conta de administrador somente local criada para o HA-MCP.",
+          "credentials_needed": "Insira o nome de usuário e a senha de uma conta de administrador, ou cole um token de acesso."
+        },
+        "abort": {
+          "entry_removed": "A entrada do Servidor HA-MCP não existe mais."
+        }
+      }
+    },
+    "store_records_conflict": {
+      "title": "HA-MCP está instalado a partir de duas listagens da loja",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Manter o HA-MCP em uma única listagem da loja?"
+          }
+        },
+        "abort": {
+          "already_resolved": "O HA-MCP está instalado a partir de uma única listagem da loja agora; nada a corrigir."
+        }
+      }
+    }
+  },
+  "selector": {
+    "server_remote_access": {
+      "options": {
+        "disabled": "Desativado (padrão)",
+        "ha_auth": "Login do Home Assistant",
+        "legacy": "OAuth legado (ID do Cliente e Segredo)",
+        "none": "URL secreta (sem login)"
+      }
+    },
+    "server_webhook_auth": {
+      "options": {
+        "none": "URL secreta do webhook",
+        "ha_auth": "Fazer login com Home Assistant (OAuth)",
+        "legacy": "OAuth legado (esta integração emite um ID/Segredo do Cliente para colar)"
+      }
+    },
+    "llm_api_exposure": {
+      "options": {
+        "tool_search": "Busca de ferramentas (compacta, padrão)",
+        "full": "Catálogo completo",
+        "both": "Ambos (escolha por agente)"
+      }
+    }
+  },
+  "common": {
+    "connect_direct_access": "Acesso direto da máquina do Home Assistant: {url}",
+    "connect_local_lan": "Local/LAN (quando o acesso à rede é \"Local network\"): {url}",
+    "connect_remote_url": "URL de conexão remota: {url}",
+    "connect_urls_label": "URL(s) de conexão:",
+    "connect_urls_pending": "As URLs de conexão aparecerão aqui assim que o servidor for iniciado.",
+    "connect_webhook_disabled": "O acesso remoto via webhook está desativado (modo somente local).",
+    "oauth_creds_pending": "O ID do Cliente e o Segredo do Cliente aparecerão aqui assim que o servidor for iniciado.",
+    "oauth_not_serving": "O OAuth legado ainda não está servindo estes — reinicie o Home Assistant quando solicitado, para ativá-los.",
+    "panel_hint": "Abra o [painel de configurações do HA-MCP](/ha-mcp) para gerenciamento de ferramentas e configurações do servidor.",
+    "tools_module_installed": "Módulo de ferramentas de arquivo e YAML beta/avançado (opcional): Instalado",
+    "tools_module_not_loaded": "Módulo de ferramentas de arquivo e YAML beta/avançado (opcional): Instalado mas não carregado — ative ou recarregue a entrada \"HA-MCP File & YAML Tools\" na página desta integração",
+    "version_line": "Componente {component_version} - Servidor ha-mcp {server_version} ({source})",
+    "server_source_paired": "instalado com esta versão do componente",
+    "server_source_override": "substituição de requisito pip",
+    "version_not_installed": "ainda não instalado",
+    "version_unknown": "desconhecido"
+  },
+  "entity": {
+    "switch": {
+      "server_access": {
+        "name": "Acesso"
+      }
+    }
+  }
+}

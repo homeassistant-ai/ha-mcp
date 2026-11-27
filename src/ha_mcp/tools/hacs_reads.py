@@ -23,6 +23,7 @@ from .hacs_backend import (
     store_state_warning,
 )
 from .helpers import safe_progress
+from .update_release_notes import entity_release_notes
 
 # The row values a query word is looked for in.
 _SEARCHED = (
@@ -160,7 +161,8 @@ async def _releases(
     ws_client: Any, repository_id: str, info: dict[str, Any]
 ) -> tuple[dict[str, Any], list[str]]:
     """The repository's GitHub releases and, with an upgrade pending, the
-    release notes its update entity shows. A failure of either is a warning:
+    release notes its update entity shows (with the other fields of Core's
+    answer, see ``entity_release_notes``). A failure of either is a warning:
     the repository info already arrived."""
     out: dict[str, Any] = {}
     warnings: list[str] = []
@@ -180,7 +182,7 @@ async def _releases(
                 _wait_timeout=GITHUB_COMMAND_TIMEOUT,
                 entity_id=info["update_entity_id"],
             )
-            out["release_notes"] = reply.get("result")
+            out.update(entity_release_notes(reply.get("result")))
         except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as err:
             warnings.append(f"Release notes unavailable: {err}")
     return out, warnings

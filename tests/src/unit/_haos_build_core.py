@@ -3,9 +3,8 @@
 ``tests/haos_image_build/build_image.py`` talks to a booted HAOS: Core's REST
 onboarding and auth, Core's WebSocket, and the Supervisor behind Core's
 ``hassio`` ``supervisor/api`` command. Here all of that is real Core, with
-``hassio``'s WebSocket API set up the way ``hassio`` sets it up, in front of
-the Supervisor stand-in of ``_tools_addons_core`` (a unit test has no
-Supervisor).
+Core's own ``hassio`` integration (``_hassio_core``) in front of the Supervisor
+stand-in of ``_tools_addons_core`` (a unit test has no Supervisor).
 
 The builder is synchronous, so a test runs it in an executor thread while
 Core's loop serves it. Between the builder and Core sits a TCP relay the test
@@ -37,17 +36,14 @@ from aiohasupervisor.models import (
 )
 from aiohttp import web
 from homeassistant.auth.providers.homeassistant import HassAuthProvider
-from homeassistant.components.hassio import const as hassio_const
-from homeassistant.components.hassio import websocket_api as hassio_websocket_api
-from homeassistant.components.hassio.handler import HassIO
 from homeassistant.components.websocket_api.const import DATA_CONNECTIONS
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.setup import async_setup_component
 
 from tests.haos_image_build import build_image
 from tests.haos_image_build.build_image import HAWebSocket, OAuthCredentials, onboard
 
+from ._hassio_core import set_up_hassio
 from ._tools_addons_core import Supervisor, TargetApp
 from ._tools_addons_core import target_app as target_app
 from ._ws_transport import until
@@ -186,6 +182,7 @@ class Haos:
     clock: BuildClock
     base_url: str
     credentials: OAuthCredentials
+    monkeypatch: pytest.MonkeyPatch
     # Every client the test logged in, closed when the test ends.
     clients: list[HAWebSocket] = field(default_factory=list)
 
@@ -226,17 +223,21 @@ class Haos:
         assert refresh is not None
         self.hass.auth.async_remove_refresh_token(refresh)
 
-    def load_supervisor_api(self) -> None:
-        """Register ``supervisor/api``, as ``hassio`` does once it has loaded."""
-        hassio_websocket_api.async_load_websocket_api(self.hass)
+    async def load_supervisor_api(self) -> None:
+        """Load Core's ``hassio``, which registers ``supervisor/api``. From
+        then on Supervisor answers only what the test queues."""
+        await set_up_hassio(self.hass, self.supervisor, self.monkeypatch)
+        self.supervisor.forget_defaults()
 
     def in_core(self, func: Callable[[], Any]) -> None:
-        """Run ``func`` on Core's loop from a builder thread, and wait for it."""
+        """Run ``func`` on Core's loop from a builder thread, and wait for it
+        (and for a coroutine it returns)."""
         asyncio.run_coroutine_threadsafe(_call(func), self.hass.loop).result(5)
 
 
 async def _call(func: Callable[[], Any]) -> None:
-    func()
+    if inspect.isawaitable(result := func()):
+        await result
 
 
 def _on_loop(loop: asyncio.AbstractEventLoop) -> bool:
@@ -274,18 +275,14 @@ async def _haos(
     # Core's frontend serves the /manifest.json the builder waits on after a
     # Core update.
     assert await async_setup_component(hass, "frontend", {})
-    hass.data[hassio_const.DATA_COMPONENT] = HassIO(
-        hass.loop, async_get_clientsession(hass), supervisor.url
-    )
-    hass.data[hassio_const.DATA_HASSIO_HOST] = supervisor.url
     server = await aiohttp_client(hass.http.app)
     relay = Relay(server.port)
     await relay.start()
     base_url = f"http://127.0.0.1:{relay.port}"
     credentials = await hass.async_add_executor_job(onboard, base_url)
-    haos = Haos(hass, supervisor, relay, clock, base_url, credentials)
+    haos = Haos(hass, supervisor, relay, clock, base_url, credentials, monkeypatch)
     if supervisor_api:
-        haos.load_supervisor_api()
+        await haos.load_supervisor_api()
     try:
         yield haos
     finally:

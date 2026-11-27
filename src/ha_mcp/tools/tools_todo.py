@@ -18,7 +18,6 @@ reaches the caller.
 """
 
 import json
-import logging
 from typing import Annotated, Any, NoReturn
 
 from pydantic import Field
@@ -50,8 +49,6 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .tool_hints import read_only_hints, write_hints
-
-logger = logging.getLogger(__name__)
 
 
 def _not_read_back(item: str) -> str:

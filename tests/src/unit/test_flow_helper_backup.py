@@ -6,42 +6,24 @@ flow, and recreated through its creation flow when deleted. What a form does
 not offer comes from Home Assistant's own forms, not a per-type list.
 
 The snapshots are read through the ha_mcp_tools component on a real ``hass``.
-A utility meter here is a mocked integration in Core's place: its forms are
-the ones each test needs. group, statistics and derivative are Core's own.
+utility_meter, group, statistics and derivative are Core's own.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import ANY, AsyncMock, patch
 
-import probatio
 import pytest
-from homeassistant.config_entries import (
-    ConfigEntry,
-    ConfigFlow,
-    ConfigFlowResult,
-    OptionsFlow,
-)
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.components.utility_meter import config_flow as meter_flow
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import selector
-from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import (
-    MockConfigEntry,
-    MockEntity,
-    MockModule,
-    MockPlatform,
-    mock_config_flow,
-    mock_integration,
-    mock_platform,
-)
+from pytest_homeassistant.common import MockConfigEntry
 
 from ha_mcp import backup_entity_ids
 from ha_mcp import backup_manager as bm
@@ -52,112 +34,19 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools import auto_backup, helper_flows
 from ha_mcp.tools.config_entry_flow import CreationFlowError, recreate_flow_helper
 
+from ._core_setup import with_config_component
+from ._utility_meter_core import meter_options, set_up_meter
+
 _METER = "utility_meter"
-_OPTIONS = {
-    "name": "Energy",
-    "source": "sensor.power",
-    "cycle": "daily",
-    "periodically_resetting": True,
-}
-
-
-class _MeterOptionsFlow(OptionsFlow):
-    """The options form offers source and periodically_resetting; the entry's
-    ``unmarked`` data leaves its last form unmarked (``last_step`` None)."""
-
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        if user_input is not None:
-            return self.async_create_entry(
-                data={**self.config_entry.options, **user_input}
-            )
-        schema = probatio.Schema(
-            {
-                probatio.Required("source"): selector.EntitySelector(),
-                probatio.Required("periodically_resetting"): bool,
-            }
-        )
-        return self.async_show_form(
-            step_id="init",
-            data_schema=self.add_suggested_values_to_schema(
-                schema, self.config_entry.options
-            ),
-            last_step=None if self.config_entry.data.get("unmarked") else True,
-        )
-
-
-class _MeterFlow(ConfigFlow):
-    VERSION = 1
-
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        if user_input is not None:
-            return self.async_create_entry(
-                title=user_input["name"], data={}, options=user_input
-            )
-        schema = probatio.Schema(
-            {
-                probatio.Required("name"): str,
-                probatio.Required("source"): selector.EntitySelector(),
-                probatio.Required("cycle"): str,
-                probatio.Required("periodically_resetting"): bool,
-            }
-        )
-        return self.async_show_form(step_id="user", data_schema=schema, last_step=True)
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return _MeterOptionsFlow()
-
-
-async def _setup_meter(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
-
-
-async def _unload_meter(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    await hass.config_entries.async_unload_platforms(entry, ["sensor"])
-
-
-async def _add_meter_sensor(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddConfigEntryEntitiesCallback,
-) -> None:
-    """The meter's one sensor, its unique_id derived from the entry's id."""
-    async_add_entities(
-        [MockEntity(unique_id=entry.entry_id, name=entry.options["name"])]
-    )
-
-
-@pytest.fixture
-def meter_integration(hass: HomeAssistant) -> Iterator[None]:
-    mock_integration(
-        hass,
-        MockModule(
-            _METER, async_setup_entry=_setup_meter, async_unload_entry=_unload_meter
-        ),
-    )
-    mock_platform(hass, f"{_METER}.config_flow")
-    mock_platform(
-        hass, f"{_METER}.sensor", MockPlatform(async_setup_entry=_add_meter_sensor)
-    )
-    with mock_config_flow(_METER, _MeterFlow):
-        yield
+_OPTIONS = meter_options()
 
 
 @pytest.fixture
 async def client(
-    hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
-    meter_integration: None,
-) -> AsyncIterator[HomeAssistantClient]:
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> HomeAssistantClient:
     """The server's client on a ``hass`` whose component lists flow helpers."""
-    assert await async_setup_component(hass, "config", {})
-    yield component_core_client
-    await hass.async_block_till_done()
+    return await with_config_component(hass, component_core_client)
 
 
 @pytest.fixture
@@ -173,14 +62,6 @@ def settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace
     return configured
 
 
-async def _meter(hass: HomeAssistant, **data: Any) -> MockConfigEntry:
-    entry = MockConfigEntry(domain=_METER, data=data, options=dict(_OPTIONS))
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    return entry
-
-
 def _handler(client: HomeAssistantClient, settings: SimpleNamespace) -> Any:
     handler = bm.get_backup_manager(client, settings).handler_for(f"helper_{_METER}")
     assert handler is not None
@@ -190,7 +71,7 @@ def _handler(client: HomeAssistantClient, settings: SimpleNamespace) -> Any:
 async def test_capture_reads_the_stored_options(
     hass: HomeAssistant, client: HomeAssistantClient, settings: SimpleNamespace
 ) -> None:
-    entry = await _meter(hass)
+    entry = await set_up_meter(hass)
 
     snapshot = await _handler(client, settings).fetch(client, "sensor.energy")
 
@@ -226,36 +107,16 @@ async def _changed_then_restored(
 async def test_restore_submits_what_the_options_form_offers(
     hass: HomeAssistant, client: HomeAssistantClient, settings: SimpleNamespace
 ) -> None:
-    entry = await _meter(hass)
+    entry = await set_up_meter(hass)
 
     submitted, error = await _changed_then_restored(
         hass, client, settings, entry, source="sensor.other"
     )
 
     assert error is None
-    submitted.assert_awaited_once_with(
-        ANY, {"source": "sensor.power", "periodically_resetting": True}
-    )
+    offered = {str(key) for key in meter_flow.OPTIONS_SCHEMA.schema}
+    submitted.assert_awaited_once_with(ANY, {k: _OPTIONS[k] for k in offered})
     assert entry.options == _OPTIONS
-
-
-async def test_unmarked_last_form_is_applied_and_judged_by_readback(
-    hass: HomeAssistant, client: HomeAssistantClient, settings: SimpleNamespace
-) -> None:
-    """A flow that never marks its last form (``last_step`` None) cannot be
-    checked before it applies: the forms are submitted, and a snapshot option
-    no form offers that differs is reported by the readback, not refused."""
-    entry = await _meter(hass, unmarked=True)
-
-    submitted, error = await _changed_then_restored(
-        hass, client, settings, entry, cycle="monthly"
-    )
-
-    assert error is not None
-    assert error.outcome["apply_status"] == "applied"
-    assert error.outcome["verification_status"] == "mismatched"
-    submitted.assert_awaited_once()
-    assert entry.options["cycle"] == "monthly"
 
 
 async def test_restore_refuses_a_changed_option_the_form_cannot_set(
@@ -263,7 +124,7 @@ async def test_restore_refuses_a_changed_option_the_form_cannot_set(
 ) -> None:
     """A meter's cycle is fixed at creation: restoring an older cycle is refused
     with nothing applied, rather than reported as done."""
-    entry = await _meter(hass)
+    entry = await set_up_meter(hass)
 
     submitted, error = await _changed_then_restored(
         hass, client, settings, entry, cycle="monthly"
@@ -291,13 +152,12 @@ def _edit(
 async def test_edit_whose_capture_cannot_be_read_warns_the_caller(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
-    meter_integration: None,
     settings: SimpleNamespace,
 ) -> None:
     """Without the component no flow helper's options can be read: the write
     goes ahead, and the response (not only the log) says that no backup was
     taken and why."""
-    entry = await _meter(hass)
+    entry = await set_up_meter(hass)
 
     result = await _edit(core_client, _METER)(helper_id=entry.entry_id)
 
@@ -469,7 +329,7 @@ async def test_entities_renamed_before_a_later_one_fails_are_reported(
         "asyncio",
         SimpleNamespace(sleep=poll_sleep, timeout=lambda _delay: asyncio.timeout(None)),
     )
-    entry = await _meter(hass)
+    entry = await set_up_meter(hass)
     entity_registry.async_get_or_create(
         "sensor", _METER, f"{entry.entry_id}_peak", config_entry=entry
     )

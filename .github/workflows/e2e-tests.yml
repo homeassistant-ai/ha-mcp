@@ -21,7 +21,7 @@ env:
   PYTHON_VERSION: "3.14"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.11.2"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.11.3"
   # Disable Testcontainers' Ryuk reaper: it has been reported to leave
   # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
   # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
@@ -52,7 +52,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.7"
+        version: "0.13.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -136,7 +136,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.7"
+        version: "0.13.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -178,15 +178,12 @@ jobs:
     - name: Run full E2E test suite (no component)
       run: |
         echo "🚀 Running full E2E test suite without the ha_mcp_tools component with 3 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
         cd tests
         uv run pytest src/e2e/ \
           -n3 \
           --dist loadscope \
           --tb=short \
-          -v \
-          --maxfail=0
+          -v
         echo "✅ Full E2E test suite (no component) passed"
       env:
         E2E_NO_TOOLS_ENTRY: "1"
@@ -234,7 +231,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.7"
+        version: "0.13.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -319,7 +316,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.7"
+        version: "0.13.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -361,15 +358,12 @@ jobs:
     - name: Run full E2E test suite (embedded backend, server entry only)
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server with only the server entry (no tools entry) with 2 workers..."
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3: this topology
-        # audit is only useful if it reports every failure, not the first three.
         cd tests
         uv run pytest src/e2e/ \
           -n2 \
           --dist loadscope \
           --tb=short \
-          -v \
-          --maxfail=0
+          -v
         echo "✅ Full E2E test suite (embedded backend, server entry only) passed"
       env:
         E2E_BACKEND: "embedded"
@@ -423,7 +417,7 @@ jobs:
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.13.7"
+        version: "0.13.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}

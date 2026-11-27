@@ -18,7 +18,9 @@ from .coercion import JSON_STRING_COERCION, parse_string_list_param
 from .component_api import (
     DEVICE_REGISTRY_CHILD_SEMANTICS,
     ENTITY_COMPOSED_NAME,
+    ComponentCaps,
     component_supports,
+    component_unusable_warning,
     get_component_caps,
 )
 from .helpers import (
@@ -27,7 +29,11 @@ from .helpers import (
     register_tool_methods,
 )
 from .response_helpers import project_fields
-from .search.component import ComponentSearchMixin, _component_serves_search_types
+from .search.component import (
+    ComponentSearchMixin,
+    _component_body_search_types,
+    _component_serves_search_types,
+)
 from .search.entities import (
     _COMPOSED_NAME_FIELD,
     ComponentNaming,
@@ -50,6 +56,36 @@ from .search.response import (
 )
 from .search.state import StateMixin
 from .tool_hints import read_only_hints
+
+
+def _check_editor_body_support(
+    req: _ResolvedSearch, caps: ComponentCaps | None
+) -> list[str]:
+    """Require an update before a body search can downgrade other requested surfaces."""
+    if (
+        not req.include_config
+        or not req.body_eligible
+        or component_supports(caps, "search_editor_bodies")
+        or not {"automation", "script"}.intersection(_component_body_search_types(req))
+    ):
+        return []
+    if caps is not None:
+        raise_tool_error(
+            create_validation_error(
+                component_unusable_warning(
+                    caps, "it cannot safely return automation or script definitions"
+                ),
+                parameter="include_config",
+                suggestions=[
+                    "Retry after updating, or omit include_config for metadata."
+                ],
+            )
+        )
+    return [
+        component_unusable_warning(
+            None, "automation and script definition searches may be incomplete"
+        )
+    ]
 
 
 class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
@@ -402,10 +438,6 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             body_skipped_by_intent_gate=body_skipped_by_intent_gate,
         )
 
-        # Capability-gated semantics keep old components compatible while newer
-        # components serve queryless listings, locations, and complete windows.
-        # Visibility and membership gates still apply before any entity data is
-        # returned; schema hiding never changes old-client invocation support.
         if not _component_serves_search_types(req):
             return _omit_empty_warnings(await self._legacy_ha_search(req, ctx))
 
@@ -422,6 +454,7 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
         mode_supported = component_supports(caps, "search_unified") or (
             bool(req.query_text) and not (req.area_filter or "").strip()
         )
+        editor_body_notes = _check_editor_body_support(req, caps)
         if (
             mode_supported
             and component_supports(caps, "search")
@@ -457,8 +490,7 @@ class SearchTools(ComponentSearchMixin, OverviewMixin, StateMixin):
             and not response.get("entity_total_matches")
             and not response.get("config_total_matches"),
         )
-        if notes:
-            response.setdefault("warnings", []).extend(notes)
+        response.setdefault("warnings", []).extend(editor_body_notes + notes)
         return _omit_empty_warnings(response)
 
     @tool(

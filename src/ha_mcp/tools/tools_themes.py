@@ -7,7 +7,6 @@ the installed themes and selecting the backend default themes through Core's
 installed through the Marketplace.
 """
 
-import logging
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -32,8 +31,6 @@ from .helpers import (
 )
 from .tool_hints import write_hints
 from .util_helpers import summarize_theme_listing, websocket_error_message
-
-logger = logging.getLogger(__name__)
 
 ThemeAction = Literal["list", "set", "get_engine_theme", "set_engine_theme"]
 

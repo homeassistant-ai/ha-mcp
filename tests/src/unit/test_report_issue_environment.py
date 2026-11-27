@@ -7,23 +7,16 @@ must come from the install itself and a failed probe must stay visible.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockConfigEntry, mock_component
-from pytest_homeassistant.test_util.aiohttp import (
-    AiohttpClientMocker,
-    AiohttpClientMockResponse,
-)
-from yarl import URL
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.ha_mcp_tools.const import COMPONENT_VERSION, DOMAIN
 from ha_mcp import __version__
@@ -43,7 +36,10 @@ from ._haos_build_core import root_info
 from ._report_issue import report_issue, report_line
 from ._server_entry import add_server_entry, replace_server
 from ._server_entry import set_up as set_up_entry
-from ._supervisor_core import load_supervisor_api, supervisor_requests
+from ._tools_addons_core import Supervisor
+from ._tools_addons_core import core_supervisor as core_supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
 
 
 async def test_a_healthy_install_is_described_from_core_and_the_process(
@@ -300,35 +296,26 @@ async def test_component_version_and_entry_line_share_one_info_read(
 
 @pytest.fixture
 def supervised(
-    hass: HomeAssistant,
-    aioclient_mock: AiohttpClientMocker,
-    monkeypatch: pytest.MonkeyPatch,
-) -> AiohttpClientMocker:
+    core_supervisor: Supervisor, monkeypatch: pytest.MonkeyPatch
+) -> Supervisor:
     """An embedded server on HAOS: Core loaded ``hassio``, and the Core
     container carries ``SUPERVISOR_TOKEN``."""
     monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
-    load_supervisor_api(hass, aioclient_mock, monkeypatch, {})
-    mock_component(hass, "hassio")
-    return aioclient_mock
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "core-supervisor-token")
+    return core_supervisor
 
 
 async def test_supervised_install_reports_the_supervisor_release(
-    core_client: HomeAssistantClient, supervised: AiohttpClientMocker
+    supervised: Supervisor, core_client: HomeAssistantClient
 ) -> None:
     """App tool failures depend on the Supervisor release (#2270, #2278).
     The embedded server must not read as the add-on or as plain Docker: the
     Core container carries both ``SUPERVISOR_TOKEN`` and ``/.dockerenv``."""
-    supervised.get(
-        "http://127.0.0.1/info",
-        json={
-            "result": "ok",
-            "data": root_info("running"),
-        },
-    )
+    supervised.answer("GET", "/info", root_info("running"))
 
     report = await report_issue(core_client)
 
-    assert ("get", "/info") in supervisor_requests(supervised)
+    assert ("GET", "/info") in supervised.requests
     assert (
         "- **Supervisor:** 2026.06.1 (host OS: Home Assistant OS 17.0)\n"
         in (report["issue_body"])
@@ -337,26 +324,16 @@ async def test_supervised_install_reports_the_supervisor_release(
 
 
 async def test_slow_supervisor_does_not_hold_up_the_report(
+    supervised: Supervisor,
     core_client: HomeAssistantClient,
-    supervised: AiohttpClientMocker,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#2279 was a report that hung for 15 minutes; a probe that gets no
     answer says why instead."""
-    answer = asyncio.Event()
-
-    async def answers_late(method: str, url: URL, data: Any) -> Any:
-        await answer.wait()
-        return AiohttpClientMockResponse(
-            method, url, json={"result": "ok", "data": root_info("running")}
-        )
-
-    supervised.get("http://127.0.0.1/info", side_effect=answers_late)
+    supervised.hang("GET", "/info")
     monkeypatch.setattr(tools_bug_report, "SUPERVISOR_PROBE_TIMEOUT", 0.05)
-    try:
-        report = await report_issue(core_client)
-    finally:
-        answer.set()
+
+    report = await report_issue(core_client)
 
     assert report_line(report, "Supervisor") == "probe failed (TimeoutError)"
 

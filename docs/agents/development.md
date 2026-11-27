@@ -76,9 +76,10 @@ CI runs them on two runners: each
 takes its share by test id from `UNIT_TEST_SHARD` (`1/2`, `2/2`;
 `tests/src/unit/_shards.py`), and the required `Unit Tests` check passes when
 both did. The beta Core unit job is split the same way.
-The root `pyproject.toml` sets `--maxfail=3`, so
-a report with three failures may be an early stop; use `--maxfail=0` only when
-the complete failure set is actually needed.
+Pytest reports the full failure set by default, collection errors included:
+`pyproject.toml` sets `--continue-on-collection-errors`, so a module that
+fails to import does not end the run. Pass `-x` to stop a focused run at its
+first failure.
 
 Both testcontainer lanes preinstall pip packages before Home Assistant's
 `/init` — the component's manifest requirements, and on the embedded lane the

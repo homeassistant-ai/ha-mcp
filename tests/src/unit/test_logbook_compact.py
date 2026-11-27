@@ -12,7 +12,6 @@ from typing import Any
 from homeassistant.components.recorder import Recorder
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp._vendor.fastmcp import Client, FastMCP
@@ -36,9 +35,6 @@ async def _logbook(client: HomeAssistantClient, *, compact: bool) -> dict[str, A
 async def test_compact_logbook_rows_keep_only_the_essential_fields_unchanged(
     recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    # The logbook registers a sidebar panel; the real frontend needs the
-    # frontend build, which is not installed with Core.
-    mock_integration(hass, MockModule("frontend"))
     assert await async_setup_component(hass, "logbook", {})
     attributes = {"friendly_name": "Living Room Light", "icon": "mdi:lightbulb"}
     hass.states.async_set("light.living_room", "off", attributes)
@@ -66,7 +62,6 @@ async def test_compact_logbook_rows_keep_only_the_essential_fields_unchanged(
 async def test_an_empty_logbook_compacts_to_no_entries(
     recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
-    mock_integration(hass, MockModule("frontend"))
     assert await async_setup_component(hass, "logbook", {})
     await async_wait_recording_done(hass)
 
