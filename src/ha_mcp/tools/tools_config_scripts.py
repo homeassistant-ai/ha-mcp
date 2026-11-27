@@ -712,11 +712,13 @@ class ConfigScriptTools:
                 _, resolved_key = await self._fetch_and_verify_hash(
                     script_id, config_hash, "set"
                 )
+                stored = True
             else:
                 resolved_key = await self._client._resolve_script_id(script_id)
                 refuse_write_by_bare_id_of_another_key(
                     "script", script_id, resolved_key
                 )
+                stored = await self._client._config_exists("script", resolved_key)
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(config_dict)
@@ -741,6 +743,7 @@ class ConfigScriptTools:
                 bp_warnings,
                 MandatoryBPS,
                 detached_blueprint,
+                operation="updated" if stored else "created",
             )
 
         except ToolError as te:
@@ -917,7 +920,17 @@ class ConfigScriptTools:
         wait: bool,
         category: str | None,
     ) -> None:
-        """Resolve, wait, and apply a category for either script write mode."""
+        """Hash the config Core stored (read by key: no registry read), then
+        resolve, wait, and apply a category; a failed read leaves the write saved."""
+        try:
+            readback = await self._client.get_script_config(
+                script_id, result["script_id"]
+            )
+            result["config_hash"] = compute_config_hash(readback["config"])
+        except (HomeAssistantAPIError, HomeAssistantConnectionError) as e:
+            result.setdefault("warnings", []).append(
+                f"Saved; reading it back failed ({e}), re-read it for a config_hash"
+            )
         if not wait and not category:
             return
         storage_key = result.get("script_id") or resolved_key or script_id
@@ -930,6 +943,8 @@ class ConfigScriptTools:
             category=category,
             caller_id=script_id,
         )
+        if entity_id:
+            result["entity_id"] = entity_id
         if wait and entity_id:
             try:
                 registered = await wait_for_entity_registered(self._client, entity_id)
@@ -969,11 +984,6 @@ class ConfigScriptTools:
         result = await self._upsert_script(
             transformed_config, script_id, resolved_id, bp_warnings
         )
-
-        # Re-read the written key for the hash (HA may normalize): no registry read
-        readback = await self._client.get_script_config(script_id, result["script_id"])
-        new_config_hash = compute_config_hash(readback["config"])
-
         await self._finalize_script_write(
             result, script_id, resolved_id, wait, effective_category
         )
@@ -982,7 +992,7 @@ class ConfigScriptTools:
             "success": True,
             "action": "python_transform",
             "script_id": script_id,
-            "config_hash": new_config_hash,
+            "operation": "updated",
             "python_expression": python_transform,
             "message": f"Script {script_id} updated via Python transform",
             # Merge upsert result, excluding "success" (we set it ourselves)
@@ -1026,6 +1036,8 @@ class ConfigScriptTools:
         bp_warnings: BestPracticeCheckResult,
         MandatoryBPS: bool,
         detached_blueprint: str | None = None,
+        *,
+        operation: str,
     ) -> dict[str, Any]:
         """Validate references, upsert, finalize wait/category, and build the response."""
         references = await ref_check(self._client, config_dict, "script")
@@ -1042,10 +1054,7 @@ class ConfigScriptTools:
 
         merge_validation_meta(result, references)
 
-        response = {
-            "success": True,
-            **result,
-        }
+        response = {"success": True, "operation": operation, **result}
         if detached_blueprint:
             response["took_control_of_blueprint"] = detached_blueprint
         # attach AFTER the outer dict is built so hint lands at

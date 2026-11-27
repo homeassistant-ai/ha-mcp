@@ -19,8 +19,7 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.setup import async_setup_component
-from homeassistant.util.yaml import dump, load_yaml_dict
+from homeassistant.util.yaml import dump
 
 from ha_mcp.backup_manager import BackupManager
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
@@ -32,34 +31,18 @@ from ha_mcp.tools.ws_waiters import wait_for_entity_registered
 
 from ._blueprint_actions_core import BEDTIME, SCRIPT_PATH
 from ._command_faults import before_handling, registry_lookup_failing, unanswered
-from ._config_dir_yaml import setup_from_configuration, write_config_files
+from ._config_dir_yaml import write_config_files
+from ._scripts_core import (
+    BODY,
+    KEY,
+    NEW_SEQUENCE,
+    TRANSFORM,
+    WRITE_MODES,
+    _stored,
+    _write_arguments,
+)
+from ._scripts_core import tools as tools
 from ._tool_errors import rejected_call_body
-
-KEY = "storage_key"
-BODY = {"alias": "Morning", "sequence": [{"delay": {"seconds": 1}}]}
-NEW_SEQUENCE = [{"delay": {"seconds": 5}}]
-TRANSFORM = "config['mode'] = 'single'"
-WRITE_MODES = ["full_config", "transform"]
-
-
-@pytest.fixture
-async def tools(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> ConfigScriptTools:
-    """The script tools on a ``hass`` whose scripts.yaml holds ``storage_key``."""
-    # The script is registered before each write; one registry read finds it.
-    monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
-    await write_config_files(
-        hass,
-        {
-            "configuration.yaml": "script: !include scripts.yaml\n",
-            "scripts.yaml": dump({KEY: BODY}),
-        },
-    )
-    await setup_from_configuration(hass, "script")
-    return ConfigScriptTools(core_client)
 
 
 async def _rename(
@@ -71,23 +54,6 @@ async def _rename(
     )
     await hass.async_block_till_done()
     return entry.entity_id
-
-
-async def _stored(hass: HomeAssistant) -> dict[str, Any]:
-    """The scripts Core's config view keeps in scripts.yaml."""
-    return await hass.async_add_executor_job(
-        load_yaml_dict, hass.config.path("scripts.yaml")
-    )
-
-
-async def _write_arguments(
-    tools: ConfigScriptTools, mode: str, script_id: str
-) -> dict[str, Any]:
-    """A full config, or a transform with the hash of a fresh read."""
-    if mode == "transform":
-        current = await tools.ha_config_get_script(script_id=script_id)
-        return {"python_transform": TRANSFORM, "config_hash": current["config_hash"]}
-    return {"config": {"alias": "Morning", "sequence": NEW_SEQUENCE}}
 
 
 def _waits() -> Any:
@@ -216,84 +182,6 @@ async def test_connection_lost_during_wait_keeps_the_write_successful(
     assert result["success"] is True
     assert any("verification failed" in w for w in result["warnings"])
     assert (await _stored(hass))[KEY]["sequence"] == NEW_SEQUENCE
-
-
-async def test_config_without_sequence_or_blueprint_gets_cores_refusal(
-    hass: HomeAssistant, tools: ConfigScriptTools
-) -> None:
-    """Core's config API judges the script; the tool passes its reason on."""
-    body = await rejected_call_body(
-        tools.ha_config_set_script(script_id=KEY, config={"alias": "Test Script"})
-    )
-
-    assert body["error"]["code"] == "VALIDATION_FAILED"
-    assert "required key not provided" in body["error"]["message"]
-    assert body["failed_section"] == "schema"
-    assert not any("blueprint" in s.lower() for s in body["error"]["suggestions"])
-    assert await _stored(hass) == {KEY: BODY}
-
-
-@pytest.mark.parametrize("mode", WRITE_MODES)
-async def test_a_refused_action_names_the_sequence_as_what_failed(
-    hass: HomeAssistant, tools: ConfigScriptTools, mode: str
-) -> None:
-    """Core's 400 names no section; Core's ``validate_config`` on the sequence
-    does, in both write modes."""
-    arguments = (
-        {"config": {"alias": "Morning", "sequence": [{"foo": 1}]}}
-        if mode == "full_config"
-        else {
-            "python_transform": "config['sequence'] = [{'foo': 1}]",
-            "config_hash": (await tools.ha_config_get_script(script_id=KEY))[
-                "config_hash"
-            ],
-        }
-    )
-
-    body = await rejected_call_body(
-        tools.ha_config_set_script(script_id=KEY, **arguments)
-    )
-
-    assert body["error"]["code"] == "VALIDATION_FAILED"
-    assert body["failed_section"] == "sequence"
-    assert await _stored(hass) == {KEY: BODY}
-
-
-async def test_an_unknown_trigger_in_a_script_names_the_closest_registered_ones(
-    hass: HomeAssistant, tools: ConfigScriptTools
-) -> None:
-    """Core's text alone names only the key it refused; the registered keys
-    nearest to it come from the platforms Core describes, as for automations."""
-    assert await async_setup_component(hass, "homeassistant", {})
-    assert await async_setup_component(hass, "schedule", {})
-    await hass.async_block_till_done()
-    config = {
-        "alias": "Wait",
-        "sequence": [{"wait_for_trigger": [{"trigger": "schedule.turned_on"}]}],
-    }
-
-    body = await rejected_call_body(
-        tools.ha_config_set_script(script_id="waiter", config=config)
-    )
-
-    assert "schedule.block_started" in body["closest_matches"]
-    assert await _stored(hass) == {KEY: BODY}
-
-
-async def test_a_missing_blueprint_points_to_the_blueprint_list(
-    hass: HomeAssistant, tools: ConfigScriptTools
-) -> None:
-    config = {"alias": "B", "use_blueprint": {"path": "nope.yaml", "input": {}}}
-
-    body = await rejected_call_body(
-        tools.ha_config_set_script(script_id="from_bp", config=config)
-    )
-
-    assert body["failed_section"] == "blueprint"
-    assert any(
-        "ha_manage_blueprints(action='list', domain='script')" in s
-        for s in body["error"]["suggestions"]
-    )
 
 
 async def test_new_script_with_a_sequence_is_saved(
