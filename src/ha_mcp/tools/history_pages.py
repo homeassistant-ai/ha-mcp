@@ -4,10 +4,10 @@ from typing import Any
 
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from ..history_summary import summarize_states
 from .coercion import parse_string_list_param
 from .component_api import ask_component, component_unusable_warning, get_component_caps
 from .helpers import raise_core_refusal, raise_tool_error
-from .history_response import summarize_states
 from .recorder_errors import raise_recorder_refusal
 
 
@@ -24,28 +24,38 @@ def history_fields(fields: str | list[str] | None) -> list[str] | None:
 
 async def resolve_entities(
     client: Any, ids: str | list[str] | None, target: dict[str, Any] | None
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
+    """The entities to read, and a warning for each target ID Core did not find."""
     if target is None:
-        # An empty string goes to Core, which refuses it with its own code.
-        return _parse_entity_ids([] if ids is None else ids)
-    selected = _parse_entity_ids(ids) if ids is not None else []
+        # An empty string is sent to Core as given.
+        return _parse_entity_ids([] if ids is None else ids), []
+    selected = _parse_entity_ids(ids) if ids else []
     resolved = await _resolve_target(client, target)
     entities = list(
         dict.fromkeys([*selected, *sorted(resolved["referenced_entities"])])
     )
+    missing = {
+        key: sorted(value)
+        for key, value in resolved.items()
+        if key.startswith("missing_") and value
+    }
     if not entities:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "The target matches no entities",
-                context={
-                    key: sorted(value)
-                    for key, value in resolved.items()
-                    if key.startswith("missing_") and value
-                },
+                context=missing,
+                suggestions=[
+                    "Core resolves a target to its primary entities only; name a "
+                    "diagnostic or configuration entity in entity_ids"
+                ],
             )
         )
-    return entities
+    return entities, [
+        f"Home Assistant found no {key.removeprefix('missing_')[:-1]} "
+        f"{', '.join(value)}; the target's other matches were read."
+        for key, value in missing.items()
+    ]
 
 
 def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
@@ -134,6 +144,7 @@ async def history_pages(
     for entity_id, all_rows in reply["result"].items():
         rows = all_rows
         if until is not None:
+            # Core can answer past the clock reading the summary ends at.
             rows = [row for row in all_rows if row["lu"] < until]
             page: dict[str, Any] = {
                 "summary": summarize_states(rows, start, until, limit)

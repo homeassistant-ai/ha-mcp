@@ -23,6 +23,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from ..history_summary import summarize_states
 from .coercion import JSON_STRING_COERCION
 from .core_contract import include_core_contract, merge_core_options
 from .helpers import (
@@ -36,7 +37,6 @@ from .history_coverage import history_coverage_warnings
 from .history_pages import history_fields, history_pages, resolve_entities
 from .history_response import (
     format_history_response,
-    summarize_states,
     summary_warnings,
 )
 from .response_helpers import (
@@ -174,7 +174,7 @@ class HistoryTools:
             str | list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Entity ID(s) to query. Can be a single ID, comma-separated string, or JSON array."
+                description="Entity ID(s) to query: a single ID, comma-separated string, or JSON array. Required unless target is given."
             ),
         ] = None,
         source: Annotated[
@@ -207,15 +207,16 @@ class HistoryTools:
         minimal_response: Annotated[
             bool,
             Field(
-                description="Compact repeated history rows where Core permits it. Ignored when "
-                'source="statistics"',
+                description="Core's compact rows: after an entity's first row, rows carry only the state and its time, "
+                "and attribute-only updates are dropped (climate, humidifier and water heater rows keep attributes). "
+                'Ignored when source="statistics"',
                 default=True,
             ),
         ] = True,
         no_attributes: Annotated[
             bool,
             Field(
-                description="Omit state attributes from history, including climate and water heater attributes."
+                description="Read no state attributes at all, the first row and climate or water heater rows included. Less recorder work."
             ),
         ] = False,
         significant_changes_only: Annotated[
@@ -319,14 +320,14 @@ class HistoryTools:
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Additional native Core request fields, e.g. {'units': {'energy': 'MWh'}} for statistics. Core validates them. Cannot override fields controlled by the tool's parameters or query limits."
+                description="Additional native Core request fields, e.g. {'units': {'energy': 'MWh'}} for statistics; a statistics summary also takes Core's {'calendar': {'period': 'month'}} or 'rolling_window' in place of the window. Core validates them. Cannot override fields controlled by the tool's parameters or query limits."
             ),
         ] = None,
         target: Annotated[
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Home Assistant target (area, device, floor, label or entity), combined with entity_ids."
+                description="Home Assistant target, combined with entity_ids: any of area_id, device_id, floor_id, label_id, entity_id, each an ID or a list. Core resolves it; IDs it cannot find come back in warnings."
             ),
         ] = None,
         ctx: Context | None = None,
@@ -365,7 +366,8 @@ class HistoryTools:
         Core recorder metadata and reflect its display-unit conversion; unresolved
         units include a reason. statistics_metadata preserves Core's native fields.
 
-        The component pages and summarizes history inside the recorder executor.
+        The component pages and summarizes history inside the recorder executor; without it
+        the whole window is downloaded and a warning says so.
         With multiple entity_ids, offset must be 0 — use a single entity_id for
         offset > 0. Use has_more and next_offset from the response to paginate.
         summary=True does not combine with offset > 0.
@@ -384,7 +386,9 @@ class HistoryTools:
         """
         parsed_fields = history_fields(fields)
         try:
-            entity_id_list = await resolve_entities(self._client, entity_ids, target)
+            entity_id_list, target_warnings = await resolve_entities(
+                self._client, entity_ids, target
+            )
             _validate_offset(
                 offset,
                 entity_count=len(entity_id_list),
@@ -413,7 +417,7 @@ class HistoryTools:
                         parameter="core_options",
                     )
                 )
-            # A statistics summary sends one fixed window and no period;
+            # A guarded statistics summary sends one fixed window and no period;
             # it is budgeted as an hourly scan of that window.
             guard_period = "hour" if source == "statistics" and summary else period
             statistics_timezone = await _prepare_guardrail_query(
@@ -430,7 +434,7 @@ class HistoryTools:
                 entity_ids=entity_id_list,
                 start_dt=start_dt,
                 end_dt=end_dt,
-                minimal_response=minimal_response,
+                no_attributes=no_attributes or summary,
                 significant_changes_only=significant_changes_only,
                 period=guard_period,
                 enforce_budget=query_settings.enable_history_query_guardrails,
@@ -493,10 +497,13 @@ class HistoryTools:
                     _DEFAULT_HISTORY_LIMIT,
                     _MAX_HISTORY_LIMIT,
                     order=order,
-                    no_attributes=no_attributes,
+                    # A summary counts states and times only.
+                    no_attributes=no_attributes or summary,
                     core_options=core_options,
                     summary_until=min(end_dt, now) if summary else None,
                 )
+            if target_warnings:
+                inner["warnings"] = target_warnings + inner.get("warnings", [])
             if include_schema:
                 command = "history/history_during_period"
                 if source == "statistics":
@@ -712,7 +719,7 @@ def _validate_query_workload(
     entity_ids: list[str],
     start_dt: datetime,
     end_dt: datetime,
-    minimal_response: bool,
+    no_attributes: bool,
     significant_changes_only: bool,
     period: str,
     enforce_budget: bool,
@@ -728,7 +735,7 @@ def _validate_query_workload(
             entity_ids,
             start_dt,
             end_dt,
-            minimal_response,
+            no_attributes,
             significant_changes_only,
         )
     else:
@@ -757,17 +764,16 @@ def _history_workload_violation(
     entity_ids: list[str],
     start_dt: datetime,
     end_dt: datetime,
-    minimal_response: bool,
+    no_attributes: bool,
     significant_changes_only: bool,
 ) -> tuple[dict[str, Any], list[str]] | None:
     """Return raw-history violation details, or None when within budget."""
     # Estimated multipliers account for the larger recorder payload when
-    # filtering and attribute minimization are disabled; they are not measured
-    # row counts.
+    # filtering is off and attributes are read; they are not measured row counts.
     detail_weight = 1
     if not significant_changes_only:
         detail_weight *= 4
-    if not minimal_response:
+    if not no_attributes:
         detail_weight *= 2
     entity_count = len(entity_ids)
     hours = (end_dt.timestamp() - start_dt.timestamp()) / 3600  # elapsed, DST-safe
@@ -783,14 +789,14 @@ def _history_workload_violation(
         "estimated_entity_hours": round(estimated_entity_hours, 2),
         "max_entity_hours": _MAX_HISTORY_ENTITY_HOURS,
         "detail_weight": detail_weight,
-        "minimal_response": minimal_response,
+        "no_attributes": no_attributes,
         "significant_changes_only": significant_changes_only,
     }
     suggestions = ["Query fewer entities or use a shorter time range."]
     if not significant_changes_only:
         suggestions.append("Set significant_changes_only=true to reduce recorder work.")
-    if not minimal_response:
-        suggestions.append("Set minimal_response=true to omit full state attributes.")
+    if not no_attributes:
+        suggestions.append("Set no_attributes=true to read no state attributes.")
     suggestions.append(
         "Use source='statistics' for long ranges when the entities support long-term statistics."
     )
@@ -867,7 +873,7 @@ async def _fetch_history(
     summary_until: datetime | None = None,
     no_attributes: bool = False,
 ) -> dict[str, Any]:
-    """Execute the history/history_during_period WebSocket call.
+    """Read one page or summary per entity through ``history_pages``.
 
     *order* controls state-list ordering: ``"desc"`` (default) returns the
     newest states first; ``"asc"`` returns the oldest first. With

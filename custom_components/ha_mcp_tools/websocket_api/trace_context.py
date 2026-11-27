@@ -46,6 +46,7 @@ async def _trace_context_prep(
             _encode_result, msg["id"], _empty_result(scanned=0, available=False)
         )
         return {"payload": payload}
+    # One restore at a time from this command; Core's own commands restore outside it.
     lock = hass.data.setdefault(_TRACE_RESTORE_LOCK, asyncio.Lock())
     async with lock:
         await async_restore_traces(hass)

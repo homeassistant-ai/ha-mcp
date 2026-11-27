@@ -280,6 +280,6 @@ async def statistics_coverage_warnings(
                 for i, first in status["first_short_term_statistics"].items()
             )
             warnings.append(
-                f"auto_purge: {status['auto_purge']}, purge_keep_days: {status['purge_keep_days']}."
+                f"The recorder's auto_purge: {status['auto_purge']}, purge_keep_days: {status['purge_keep_days']}."
             )
     return warnings

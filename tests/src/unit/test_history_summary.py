@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.recorder import Recorder
-from homeassistant.components.recorder import history as core_history
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
@@ -36,6 +35,20 @@ async def recorder(recorder_mock: Recorder, hass: HomeAssistant) -> None:
     """Core's recorder and history, in UTC unless a test sets another zone."""
     assert await async_setup_component(hass, "history", {})
     await hass.config.async_set_time_zone("UTC")
+
+
+@pytest.fixture(params=["component", "core"])
+async def client(
+    request: pytest.FixtureRequest,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+) -> HomeAssistantClient:
+    """``core_client``, with and without the component's commands."""
+    if request.param == "component":
+        from custom_components.ha_mcp_tools import websocket_api
+
+        websocket_api.async_register_commands(hass)
+    return core_client
 
 
 async def _record(
@@ -92,7 +105,7 @@ def _summary(result: dict[str, Any], entity_id: str) -> dict[str, Any]:
         (True, True, False, False),
     ],
 )
-async def test_history_page_matches_core(
+async def test_a_page_holds_the_rows_cores_own_read_returns(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
     minimal: bool,
@@ -109,8 +122,9 @@ async def test_history_page_matches_core(
         ("off", 20),
         temperature={_BEFORE: 19, 5: 20, 20: 20},
     )
+    await _record(hass, "switch.pump", ("off", _BEFORE), ("on", 5), ("off", 9))
     query = {
-        "entity_ids": ["climate.hall"],
+        "entity_ids": ["climate.hall", "switch.pump", "switch.never_recorded"],
         "start_time": _iso(0),
         "end_time": _iso(30),
         "minimal_response": minimal,
@@ -118,11 +132,12 @@ async def test_history_page_matches_core(
         "significant_changes_only": significant,
         "include_start_time_state": include_start,
     }
-    expected = (
+    native = (
         await client.send_websocket_message(
             {"type": "history/history_during_period", **query}
         )
-    )["result"]["climate.hall"]
+    )["result"]
+    assert set(native) == {"climate.hall", "switch.pump"}
     for order in ("asc", "desc"):
         reply = await client.send_websocket_message(
             {
@@ -133,11 +148,13 @@ async def test_history_page_matches_core(
                 "order": order,
             }
         )
-        page = reply["result"]["entities"]["climate.hall"]
-        assert page == {
-            "states": (expected if order == "asc" else expected[::-1])[1:2],
-            "total_count": len(expected),
-            "first": expected[0]["lu"],
+        assert reply["result"]["entities"] == {
+            entity_id: {
+                "states": (rows if order == "asc" else rows[::-1])[1:2],
+                "total_count": len(rows),
+                "first": rows[0]["lu"],
+            }
+            for entity_id, rows in native.items()
         }
     with patch.object(
         client,
@@ -153,28 +170,9 @@ async def test_history_page_matches_core(
     )
 
 
-@pytest.mark.skipif(
-    not hasattr(core_history, "get_significant_states_serialized"),
-    reason="Core 2026.12 per-entity serialization",
-)
-@pytest.mark.usefixtures("recorder")
-async def test_history_summary_uses_cores_per_entity_serializer(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
-) -> None:
-    await _record(hass, "switch.pump", ("off", _BEFORE), ("on", 5))
-    with patch.object(
-        core_history,
-        "get_significant_states_serialized",
-        wraps=getattr(core_history, "get_significant_states_serialized", None),
-    ) as read:
-        result = await _query(component_core_client, "switch.pump", 10, summary=True)
-    read.assert_called_once()
-    assert _summary(result, "switch.pump")["states"]["on"]["duration_s"] == 5
-
-
 @pytest.mark.usefixtures("recorder")
 async def test_totals_count_each_change_and_the_time_in_each_state(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     await _record(
         hass,
@@ -185,7 +183,7 @@ async def test_totals_count_each_change_and_the_time_in_each_state(
         ("unavailable", 45),
     )
 
-    result = await _query(core_client, "switch.pump", 100, summary=True)
+    result = await _query(client, "switch.pump", 100, summary=True)
 
     assert _summary(result, "switch.pump") == {
         "changes": 3,
@@ -202,13 +200,13 @@ async def test_totals_count_each_change_and_the_time_in_each_state(
 
 @pytest.mark.usefixtures("recorder")
 async def test_first_state_after_the_window_start_is_a_change(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     # No window-start state: the entity appeared later, older history was
     # purged, or include_start_time_state=false.
     await _record(hass, "switch.pump", ("off", 10), ("on", 30))
 
-    result = await _query(core_client, "switch.pump", 100, summary=True)
+    result = await _query(client, "switch.pump", 100, summary=True)
 
     totals = _summary(result, "switch.pump")
     assert totals["changes"] == 2
@@ -248,11 +246,11 @@ async def test_attribute_update_is_not_counted_as_a_state_change(
 
 @pytest.mark.usefixtures("recorder")
 async def test_limit_keeps_the_longest_states_and_reports_how_many_exist(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     await _record(hass, "sensor.mode", ("1", _BEFORE), ("2", 1), ("3", 4), ("4", 10))
 
-    result = await _query(core_client, "sensor.mode", 20, summary=True, limit=2)
+    result = await _query(client, "sensor.mode", 20, summary=True, limit=2)
 
     totals = _summary(result, "sensor.mode")
     assert list(totals["states"]) == ["4", "3"]
@@ -296,24 +294,24 @@ async def test_summary_replaces_rows_with_totals_in_ha_time(
 
 @pytest.mark.usefixtures("recorder")
 async def test_future_end_time_does_not_count_time_that_has_not_passed(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     await _record(hass, "switch.pump", ("on", _BEFORE))
 
-    result = await _query(core_client, "switch.pump", 86400, now=600, summary=True)
+    result = await _query(client, "switch.pump", 86400, now=600, summary=True)
 
     assert _summary(result, "switch.pump")["states"]["on"]["duration_s"] == 600.0
 
 
 @pytest.mark.usefixtures("recorder")
 async def test_states_from_after_now_are_not_counted_as_changes(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     # Core answers a future end_time up to its own clock, which can run past
     # the `now` the summary stops at, by a fraction of a second or more.
     await _record(hass, "switch.pump", ("on", _BEFORE), ("off", 600.001), ("on", 800))
 
-    result = await _query(core_client, "switch.pump", 86400, now=600, summary=True)
+    result = await _query(client, "switch.pump", 86400, now=600, summary=True)
 
     totals = _summary(result, "switch.pump")
     assert totals["changes"] == 0

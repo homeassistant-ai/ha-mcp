@@ -57,7 +57,7 @@ LogsAction = Literal[
     "logger/log_level",
 ]
 
-# How long a recorder write waits for the recorder to finish it.
+# How long a write waits for the recorder to finish it, and for recorder/info.
 RECORDER_DRAIN_SECONDS = 30.0
 _PAGED_ACTION = "recorder/list_statistic_ids"
 _SETTLED_FIELDS = {"settled", "purge_keep_days", "auto_purge", "oldest_state"}
@@ -66,6 +66,13 @@ _REPLY_MARGIN_SECONDS = 10.0
 # The recorder actions that change nothing, so nothing is waited for; Read
 # Only Mode allows exactly these (read_only._logs_write).
 RECORDER_READS = (_PAGED_ACTION, "recorder/validate_statistics")
+
+
+def _stores_through_recorder(action: str) -> bool:
+    """A service fires an event the recorder stores; of Core's commands only the recorder's write."""
+    return action not in RECORDER_READS and (
+        "/" not in action or action.startswith("recorder/")
+    )
 
 
 def _still_working() -> str:
@@ -173,6 +180,8 @@ class LogsManageTools:
                         "Do not repeat it automatically: a repeat can apply the "
                         "change twice. Read its effect first with ha_get_history, "
                         "ha_get_logs or action='recorder/list_statistic_ids'."
+                        if _stores_through_recorder(action)
+                        else "Repeating it sets the same value again."
                     ],
                 )
             )
@@ -252,12 +261,11 @@ class LogsManageTools:
             settled: bool = status["settled"]
             if not settled:
                 warnings.append(_still_working())
-            # A component released before the field came answers without it.
+            # A component released before these two fields came answers without them.
             if status.get("migration_in_progress"):
                 warnings.append(MIGRATING)
             oldest = status["oldest_state"]
             return {
-                # A component released before the field came answers without it.
                 **({"enabled": status["enabled"]} if "enabled" in status else {}),
                 "purge_keep_days": status["purge_keep_days"],
                 "auto_purge": status["auto_purge"],
@@ -294,8 +302,8 @@ class LogsManageTools:
         """Wait for the recorder and read back what the operation left."""
         settled = False
         # Services outside the recorder write through it too (a logbook entry
-        # is an event it stores), so every write waits, with no list of them.
-        if action not in RECORDER_READS:
+        # is an event it stores), so every service waits, with no list of them.
+        if _stores_through_recorder(action):
             status, settled = await self._recorder_settled(warnings)
             if action.startswith("recorder"):
                 info = await self._recorder_info(warnings)
@@ -379,7 +387,7 @@ class LogsManageTools:
             Field(
                 description=(
                     "Core's recorder and log write operations, plus statistic listings "
-                    "and validation. Use ha_get_history for recorded states and statistics. "
+                    "and validation. "
                     "A dot names a service and a slash names a WebSocket command."
                 )
             ),

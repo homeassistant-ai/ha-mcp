@@ -27,6 +27,7 @@ from pytest_homeassistant.components.recorder.common import (
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_history
+from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
 from ha_mcp.tools.tools_history import HistoryTools
 
 from ._client_spies import sent_messages
@@ -58,23 +59,14 @@ def _warnings(result: dict[str, Any]) -> str:
     return " ".join(result.get("warnings", []))
 
 
-@pytest.mark.parametrize(
-    "bridge", ["history_page", "statistics_units", "recorder_status"]
-)
-async def test_an_advertised_recorder_bridge_that_fails_is_disclosed(
-    recorded: Recorder,
-    hass: HomeAssistant,
-    component_core_client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-    bridge: str,
+@pytest.mark.parametrize("read", ["history", "statistics summary"])
+async def test_without_the_component_a_read_names_the_component_it_lacks(
+    recorded: Recorder, core_client: HomeAssistantClient, read: str
 ) -> None:
-    from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
-
-    monkeypatch.delitem(hass.data["websocket_api"], "ha_mcp_tools/" + bridge)
-    if bridge == "statistics_units":
-        result = await _summary(component_core_client, entity_ids=ENTITY)
+    if read == "history":
+        result = await _history(core_client, START, START + HOUR)
     else:
-        result = await _history(component_core_client, START, START + HOUR)
+        result = await _summary(core_client, entity_ids=ENTITY)
     assert COMPONENT_VIA_MARKETPLACE in _warnings(result)
 
 
@@ -525,20 +517,102 @@ async def _summary(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]
     return result
 
 
+# Noon on the recorded day; ticking, since the client waits on the clock.
+@pytest.mark.freeze_time(START + 12 * HOUR, tick=True)
 @pytest.mark.parametrize(
-    "native_period",
-    [{"calendar": {"period": "day"}}, {"rolling_window": {"duration": {"hours": 4}}}],
+    ("native_period", "hours"),
+    [
+        ({"calendar": {"period": "day"}}, (0, 24)),
+        ({"rolling_window": {"duration": {"hours": 4}}}, (8, 12)),
+    ],
 )
-async def test_summary_accepts_cores_period(
-    recorded: Recorder, core_client: HomeAssistantClient, native_period: dict[str, Any]
+async def test_a_summary_over_cores_own_period_totals_that_period(
+    recorded: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    native_period: dict[str, Any],
+    hours: tuple[int, int],
 ) -> None:
-    result = await _summary(
-        core_client,
-        entity_ids="sensor.energy",
-        core_options=native_period,
+    """The tool's own window, the first four hours, gives another total."""
+    await import_statistic(
+        hass,
+        "sensor.energy",
+        "kWh",
+        "energy",
+        [{"start": START + hour * HOUR, "sum": hour * hour} for hour in range(10)],
     )
-    assert result["data"]["success"]
-    assert result["data"]["time_range"] == native_period
+
+    async def change(**kwargs: Any) -> Any:
+        result = await HistoryTools(core_client).ha_get_history(
+            entity_ids="sensor.energy",
+            source="statistics",
+            summary=True,
+            statistic_types="change",
+            **kwargs,
+        )
+        return result["data"]["entities"][0]["summary"]["change"]
+
+    first_four_hours = {
+        "start_time": START.isoformat(),
+        "end_time": (START + 4 * HOUR).isoformat(),
+    }
+    native = await change(**first_four_hours, core_options=native_period)
+
+    assert native == await change(
+        start_time=(START + hours[0] * HOUR).isoformat(),
+        end_time=(START + hours[1] * HOUR).isoformat(),
+    )
+    assert native != await change(**first_four_hours)
+
+
+async def test_with_guardrails_a_summary_over_cores_own_period_is_refused_unsent(
+    recorded: Recorder, core_client: HomeAssistantClient
+) -> None:
+    """Its window is Core's to work out, so its cost cannot be estimated."""
+    with (
+        patch.object(
+            tools_history,
+            "get_global_settings",
+            return_value=MagicMock(enable_history_query_guardrails=True),
+        ),
+        sent_messages(core_client) as sent,
+        pytest.raises(ToolError) as refused,
+    ):
+        await _summary(
+            core_client,
+            entity_ids="sensor.energy",
+            core_options={"calendar": {"period": "day"}},
+        )
+
+    assert json.loads(str(refused.value))["error"]["code"] == (
+        "VALIDATION_INVALID_PARAMETER"
+    )
+    assert all(
+        call.args[0]["type"] != "recorder/statistic_during_period"
+        for call in sent.call_args_list
+    )
+
+
+async def test_a_statistic_whose_state_has_a_unit_of_another_class_keeps_its_own_unit(
+    recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """Core converts to the state's unit only when it is one of the statistic's class."""
+    hass.states.async_set("sensor.energy", "1", {"unit_of_measurement": "W"})
+    await import_statistic(
+        hass,
+        "sensor.energy",
+        "kWh",
+        "energy",
+        [{"start": START + hour * HOUR, "sum": hour} for hour in range(4)],
+    )
+
+    result = await _summary(
+        component_core_client, entity_ids="sensor.energy", statistic_types="change"
+    )
+
+    entity = result["data"]["entities"][0]
+    assert entity["unit_of_measurement"] == "kWh"
+    assert entity["summary"]["change"] == 3.0
 
 
 async def test_a_summary_without_types_takes_cores_defaults_for_each_statistic(

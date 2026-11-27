@@ -19,8 +19,7 @@ if TYPE_CHECKING:
 
 WS_RECORDER_STATUS = "ha_mcp_tools/recorder_status"
 # Advertised by websocket_api's info; without it a short or empty history read
-# says only what Core's own commands tell, and a recorder write is waited for
-# by its queue length alone.
+# says only what Core's own commands tell, and a recorder write is not waited for.
 CAPABILITY = "recorder_status"
 # The longest a caller may ask the bridge to wait for the recorder.
 _MAX_WAIT_SECONDS = 120
@@ -33,8 +32,9 @@ def recorder_status(
     settled: bool | None = None,
     first_statistics: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """The recorder's purge settings and oldest state, and per entity whether
-    it is recorded and has a state now."""
+    """Whether the recorder is enabled, its purge settings and oldest state, per
+    entity whether it is recorded and has a state now, and what the caller's
+    wait and first-statistic lookup found."""
     from homeassistant.components.recorder.entity_options import is_entity_recorded
     from homeassistant.helpers.recorder import get_instance
 

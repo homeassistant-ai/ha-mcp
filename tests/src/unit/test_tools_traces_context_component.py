@@ -124,3 +124,20 @@ class TestComponentContextLookup:
         assert "Install the ha_mcp_tools component" not in hints
         assert "Pass the trace's own `context.id`" not in hints
         assert "component checked" in hints
+
+
+async def test_without_the_component_a_context_lookup_names_the_component(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
+
+    await store_runs(
+        hass, automation_run("auto-run", context_id="own-auto", parent_id="parent-1")
+    )
+
+    result = await TraceTools(core_client).ha_get_automation_traces(
+        context_id="own-auto"
+    )
+
+    assert result["success"] is True
+    assert any(COMPONENT_VIA_MARKETPLACE in w for w in result["warnings"])

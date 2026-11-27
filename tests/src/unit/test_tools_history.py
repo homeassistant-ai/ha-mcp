@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock
 import pytest
 from homeassistant.components.recorder import Recorder
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -100,6 +102,83 @@ async def test_history_resolves_a_target_with_core(
     assert any(
         call.args[0]["type"] == "extract_from_target" for call in sent.call_args_list
     )
+
+
+async def test_a_target_area_is_read_beside_the_named_entities(
+    recorded: None,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    area_registry: ar.AreaRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    kitchen = area_registry.async_create("Kitchen")
+    entry = entity_registry.async_get_or_create("sensor", "test", "kitchen")
+    entity_registry.async_update_entity(entry.entity_id, area_id=kitchen.id)
+    hass.states.async_set(entry.entity_id, "5")
+    hass.states.async_set("sensor.outside", "8")
+
+    result = await _history(
+        component_core_client,
+        entity_ids="sensor.outside",
+        target={"area_id": [kitchen.id, "no_such_area"]},
+    )
+
+    assert [e["entity_id"] for e in result["data"]["entities"]] == [
+        "sensor.outside",
+        entry.entity_id,
+    ]
+    assert any("no area no_such_area" in warning for warning in result["warnings"])
+
+
+async def test_an_empty_entity_list_beside_a_target_reads_the_target(
+    recorded: None, hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    hass.states.async_set("sensor.outside", "8")
+
+    result = await _history(
+        component_core_client, entity_ids=[], target={"entity_id": "sensor.outside"}
+    )
+
+    assert [e["entity_id"] for e in result["data"]["entities"]] == ["sensor.outside"]
+
+
+async def test_no_attributes_leaves_the_attributes_out_of_every_row(
+    recorded: None, hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    await record_states(
+        hass,
+        "climate.hall",
+        ("heat", {"temperature": 20}, START.timestamp()),
+        ("heat", {"temperature": 21}, START.timestamp() + 60),
+    )
+
+    async def attributes(**kwargs: Any) -> list[Any]:
+        result = await _history(
+            component_core_client, entity_ids="climate.hall", **_window(1), **kwargs
+        )
+        return [
+            row.get("attributes") for row in result["data"]["entities"][0]["states"]
+        ]
+
+    assert [row["temperature"] for row in await attributes(order="asc")] == [20, 21]
+    assert not any(await attributes(no_attributes=True))
+
+
+@pytest.mark.usefixtures("guardrails")
+async def test_the_workload_budget_counts_attributes_by_no_attributes(
+    recorded: None, core_client: HomeAssistantClient
+) -> None:
+    """Seven entity-days fit the budget once and not doubled."""
+    query = {"entity_ids": "sensor.temp", **_window(7)}
+
+    refusal = await _refusal(core_client, **query)
+    result = await _history(core_client, **query, no_attributes=True)
+
+    assert (
+        "Set no_attributes=true to read no state attributes."
+        in (refusal["error"]["suggestions"])
+    )
+    assert result["data"]["success"] is True
 
 
 async def test_an_empty_entity_id_gets_cores_own_refusal(

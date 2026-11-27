@@ -363,7 +363,8 @@ time or response-size inputs that the wrapper has already bounded.
 
 HA-MCP estimates recorder scans as a safety policy. Core aligns calendar
 periods inside its query and, since 2026.12, exposes per-entity and
-per-statistic row counts through `recorder/database_usage`.
+per-statistic row counts through `recorder/database_usage`: whole-table
+counts, not counts for a time window, so they do not replace the estimate.
 Keep this conservative model explicit, fail closed for periods it cannot
 estimate, and compare it against live Core queries. Do not disguise it as a
 complete list of valid Core periods. Disabling this operator-controlled guard
