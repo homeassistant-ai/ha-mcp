@@ -697,8 +697,7 @@ async def _supervisor_api_call(
 ) -> dict[str, Any]:
     """Make a Supervisor API call through the supported install-mode transport.
 
-    App (add-on) installs call Supervisor REST with their manager role, over the
-    app's socket when Supervisor mounts one and with the app's token otherwise.
+    App (add-on) installs call Supervisor REST directly, over their socket if mounted.
     Other installs retain Home Assistant Core's ``supervisor/api`` WebSocket proxy.
 
     Args:
