@@ -1269,13 +1269,13 @@ def _list_files_sync(
         # coming back from it, so a name it protects would otherwise be
         # enumerable inside an allowed directory -- reporting its size and
         # mtime for a file no handler will open. Matched on the entry's own
-        # name, which is what the floor denies; nothing here resolves a
+        # name, which is what the floor denies; the match does not resolve a
         # symlink, because a link's own name is not the protected one and
         # reading through it is refused anyway.
         lowered = item.name.lower()
         if lowered in DENY_READ_BASENAMES or lowered in DENY_PATH_SEGMENTS:
             continue
-        stat = item.stat()
+        stat = item.stat() if item.exists() else item.lstat()  # broken or looping link
         # Config-relative paths report relative to the config dir; absolute
         # HAOS sibling-volume paths (issue #1586) are not under it, so report
         # them absolute (the caller passes absolute paths for volumes too).
@@ -1289,7 +1289,7 @@ def _list_files_sync(
                 "path": reported_path,
                 "is_dir": item.is_dir(),
                 "size": stat.st_size if item.is_file() else 0,
-                "modified": stat.st_mtime,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
             }
         )
     files.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
