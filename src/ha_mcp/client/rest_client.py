@@ -1079,12 +1079,12 @@ class HomeAssistantClient:
 
         Bypasses ``HomeAssistantClient.httpx_client`` because that client targets
         Home Assistant Core through ``http://supervisor/core/api``, while logs
-        belong to Supervisor at ``http://supervisor``. Plain HTTP here is the
-        platform contract, not a downgrade: Supervisor serves its API over
-        HTTP only (no TLS endpoint or IPC socket exists), on the internal
-        ``hassio`` docker network whose isolation is the boundary protecting
-        the token — see SECURITY.md § "Local network is the trusted zone". Both clients use the same
-        ``SUPERVISOR_TOKEN``; the Core proxy requires ``homeassistant_api``, while
+        belong to Supervisor at ``http://supervisor``. The request goes over
+        the app's Supervisor socket when Supervisor gave it one, otherwise over
+        plain HTTP on the internal ``hassio`` docker network — see
+        SECURITY.md § "Local network is the trusted zone". Over TCP both
+        clients use the same ``SUPERVISOR_TOKEN``; the Core proxy requires
+        ``homeassistant_api``, while
         system-service and arbitrary app-log paths require ``hassio_api`` and
         ``hassio_role: manager``. The recognized-app-token exception is
         ``/addons/self/logs``.

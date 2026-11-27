@@ -1,26 +1,46 @@
-"""Shared factory for direct-Supervisor httpx clients.
+"""Shared transport for the app's (add-on's) calls to Supervisor.
 
 Several code paths call the Home Assistant Supervisor REST API directly with
-a short-lived client configured for the Supervisor base URL and
-``SUPERVISOR_TOKEN``. Callers cover log collection, app (add-on) management
-and restart, backup operations, and screenshot-engine discovery.
+a short-lived client configured for the Supervisor base URL. Callers cover log
+collection, app (add-on) management and restart, backup operations, and
+screenshot-engine discovery.
 
 These calls cannot use ``HomeAssistantClient.httpx_client``, which targets
-Home Assistant Core rather than Supervisor. In app mode it carries the same
-token value, but requests use a different base URL and authorization surface.
-This module centralizes the direct transport setup.
+Home Assistant Core rather than Supervisor. In app mode it reaches Core through
+Supervisor's ``/core`` proxy, so it uses the same transport, but requests use a
+different base URL and authorization surface.
+
+Supervisor 2026.11 gives every app a Unix socket (``SUPERVISOR_SOCKET``) and
+deprecates the app's token over TCP. On the socket Supervisor identifies the
+app by the socket itself and reads no token, so these clients send none there.
 """
 
 from __future__ import annotations
 
 import os
 import ssl
+from urllib.parse import urlsplit
 
 import httpx
 
 from .._version import get_supervisor_base_url
 
-__all__ = ["make_supervisor_httpx_client"]
+__all__ = ["make_supervisor_httpx_client", "supervisor_socket_for"]
+
+
+def supervisor_socket_for(url: str) -> str | None:
+    """Return Supervisor's Unix socket when ``url`` is a Supervisor address.
+
+    ``None`` when Supervisor gave this process no socket (an older Supervisor,
+    or not an app) or ``url`` leads somewhere else, such as the embedded
+    server's loopback URL to Core.
+    """
+    socket_path = os.environ.get("SUPERVISOR_SOCKET")
+    if not socket_path:
+        return None
+    if urlsplit(url).netloc != urlsplit(get_supervisor_base_url()).netloc:
+        return None
+    return socket_path
 
 
 def make_supervisor_httpx_client(
@@ -43,14 +63,15 @@ def make_supervisor_httpx_client(
             accepted and forwarded verbatim.
 
     Returns:
-        A new :class:`httpx.AsyncClient` bound to the Supervisor base URL
-        with ``Authorization: Bearer ${SUPERVISOR_TOKEN}`` preset. Callers
-        pass relative paths (``/addons/self/logs``) to ``client.get/post``;
-        ``base_url`` joins them onto the Supervisor host.
+        A new :class:`httpx.AsyncClient` bound to the Supervisor base URL.
+        Over the app's socket it carries no token; over TCP it carries
+        ``Authorization: Bearer ${SUPERVISOR_TOKEN}``. Callers pass relative
+        paths (``/addons/self/logs``) to ``client.get/post``; ``base_url``
+        joins them onto the Supervisor host.
 
     Raises:
-        RuntimeError: ``SUPERVISOR_TOKEN`` is unset or empty in the
-            environment. Callers must either gate construction on token
+        RuntimeError: no socket and ``SUPERVISOR_TOKEN`` is unset or empty in
+            the environment. Callers must either gate construction on token
             presence or translate this exception for their response surface.
             Detecting it here prevents a malformed
             ``Authorization: Bearer `` header from masking the missing
@@ -63,6 +84,13 @@ def make_supervisor_httpx_client(
         the new value — short-lived ``async with`` callers are unaffected,
         but a future long-lived caller would need to discard and re-create.
     """
+    base_url = get_supervisor_base_url()
+    if socket_path := supervisor_socket_for(base_url):
+        return httpx.AsyncClient(
+            base_url=base_url,
+            timeout=timeout,
+            transport=httpx.AsyncHTTPTransport(uds=socket_path),
+        )
     token = os.environ.get("SUPERVISOR_TOKEN", "")
     if not token:
         raise RuntimeError(
@@ -72,7 +100,7 @@ def make_supervisor_httpx_client(
             "present before invoking the factory."
         )
     return httpx.AsyncClient(
-        base_url=get_supervisor_base_url(),
+        base_url=base_url,
         timeout=timeout,
         verify=verify,
         headers={"Authorization": f"Bearer {token}"},

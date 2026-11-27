@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Home Assistant MCP Server Add-on startup script."""
 
+import functools
+import http.client
 import json
 import os
 import re
 import secrets
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -150,17 +153,53 @@ def persist_addon_options(options: dict[str, Any], supervisor_token: str) -> Non
     on failure — callers decide how loudly to surface the problem.
     """
     payload = json.dumps({"options": options}).encode()
+    socket_path = os.environ.get("SUPERVISOR_SOCKET")
+    headers = {"Content-Type": "application/json"}
+    if not socket_path:
+        # Over the app's socket Supervisor knows the app and reads no token.
+        headers["Authorization"] = f"Bearer {supervisor_token}"
     req = urllib.request.Request(
         "http://supervisor/addons/self/options",
         data=payload,
         method="POST",
-        headers={
-            "Authorization": f"Bearer {supervisor_token}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    opener = (
+        urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _SupervisorSocketHandler(socket_path)
+        )
+        if socket_path
+        else urllib.request.build_opener()
+    )
+    with opener.open(req, timeout=10) as resp:
         resp.read()
+
+
+class _SupervisorSocketConnection(http.client.HTTPConnection):
+    """An HTTP connection to Supervisor over the app's Unix socket."""
+
+    def __init__(self, socket_path: str, host: str, **kwargs: Any) -> None:
+        super().__init__(host, **kwargs)
+        self._socket_path = socket_path
+
+    def connect(self) -> None:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        sock.connect(self._socket_path)
+        self.sock = sock
+
+
+class _SupervisorSocketHandler(urllib.request.HTTPHandler):
+    """Send ``http://supervisor`` requests over the app's Unix socket."""
+
+    def __init__(self, socket_path: str) -> None:
+        super().__init__()
+        self._socket_path = socket_path
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(
+            functools.partial(_SupervisorSocketConnection, self._socket_path), req
+        )
 
 
 def maybe_persist_secret_path(

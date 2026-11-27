@@ -9,9 +9,10 @@ startup, never silently installed):
 1. **Explicit** — ``HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL`` is set. Used
    verbatim. This is the Docker / Container path (a docker-compose
    sidecar), and also lets HA OS users override auto-discovery.
-2. **HA OS / Supervised** — ``SUPERVISOR_TOKEN`` is present. A supported app
-   (slug ``*_puppet`` or ``*_wpe_screenshot_engine``) is verified through the
-   Supervisor REST API and reached on the internal network by its hostname.
+2. **HA OS / Supervised** — ``SUPERVISOR_TOKEN`` is present (the app, or Core
+   around the embedded server). A supported app (slug ``*_puppet`` or
+   ``*_wpe_screenshot_engine``) is verified through the Supervisor API and
+   reached on the internal network by its hostname.
    The user must install and start the app themselves — we never auto-install.
 3. **Neither** (stdio / standalone) — a clear :class:`ToolError` explaining
    how to enable it.
@@ -22,15 +23,16 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Literal
-
-import httpx
+from typing import TYPE_CHECKING, Any, Literal
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
 from .theme_guard import EngineCredential, addon_credential_from_options
+
+if TYPE_CHECKING:
+    from ..client.rest_client import HomeAssistantClient
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +197,7 @@ def _select_started_verified_engine(
     return started[0]
 
 
-async def resolve_engine(client: Any) -> EngineTarget:
+async def resolve_engine(client: HomeAssistantClient) -> EngineTarget:
     """Resolve the screenshot engine endpoint, or raise ToolError.
 
     See module docstring for the three-mode resolution order.
@@ -230,7 +232,9 @@ async def resolve_engine(client: Any) -> EngineTarget:
     raise AssertionError("unreachable: raise_tool_error always raises")
 
 
-async def _addon_credential_best_effort(client: Any) -> EngineCredential | None:
+async def _addon_credential_best_effort(
+    client: HomeAssistantClient,
+) -> EngineCredential | None:
     """Best-effort theme-guard credential for an explicitly configured URL.
 
     HA OS / Supervised users may set ``HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL``
@@ -263,94 +267,92 @@ async def _addon_credential_best_effort(client: Any) -> EngineCredential | None:
 
 
 async def _discover_engine_via_supervisor(
-    client: Any, *, preferred_engine: str | None = None
+    client: HomeAssistantClient, *, preferred_engine: str | None = None
 ) -> EngineTarget:
     """Find one supported app through the Supervisor and return its endpoint.
 
-    Requires the ha-mcp add-on's ``manager`` role (already declared) for the
-    read-only ``/addons`` + ``/addons/<slug>/info`` endpoints. Raises a
-    ToolError with actionable guidance when no matching engine is available.
-    ``preferred_engine`` is used only for the best-effort Puppet theme guard
-    when the operator configured an explicit URL.
+    Reads the read-only ``/addons`` + ``/addons/<slug>/info`` endpoints through
+    the transport ``ha_manage_app`` uses: the app asks Supervisor with its own
+    ``manager`` role, and the embedded server asks Core's ``supervisor/api``,
+    so Core's ``hassio`` integration reaches Supervisor as Core does (#3221).
+    Raises a ToolError with actionable guidance when no matching engine is
+    available. ``preferred_engine`` is used only for the best-effort Puppet
+    theme guard when the operator configured an explicit URL.
     """
-    from ..client.supervisor_client import make_supervisor_httpx_client
+    from ..tools.tools_addons import _supervisor_api_call
 
     try:
-        async with make_supervisor_httpx_client(timeout=15.0, verify=True) as sup:
-            listing = await sup.get("/addons")
-            listing.raise_for_status()
-            addons: list[dict[str, Any]] = listing.json()["data"]["addons"]
+        listing = await _supervisor_api_call(client, "/addons")
+        addons: list[dict[str, Any]] = listing["result"]["addons"]
 
-            profiles = tuple(
-                profile
-                for profile in _SUPPORTED_ENGINES
-                if preferred_engine is None or profile.name == preferred_engine
+        profiles = tuple(
+            profile
+            for profile in _SUPPORTED_ENGINES
+            if preferred_engine is None or profile.name == preferred_engine
+        )
+        matches = [
+            a
+            for a in addons
+            if str(a.get("slug", "")).endswith(
+                tuple(profile.slug_suffix for profile in profiles)
             )
-            matches = [
-                a
-                for a in addons
-                if str(a.get("slug", "")).endswith(
-                    tuple(profile.slug_suffix for profile in profiles)
+        ]
+        if not matches:
+            engine_names = (
+                [preferred_engine]
+                if preferred_engine
+                else [profile.name for profile in _SUPPORTED_ENGINES]
+            )
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    "A supported screenshot engine app is not installed.",
+                    context={"supported_engines": engine_names},
+                    details=_INSTALL_HELP,
                 )
-            ]
-            if not matches:
-                engine_names = (
-                    [preferred_engine]
-                    if preferred_engine
-                    else [profile.name for profile in _SUPPORTED_ENGINES]
-                )
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        "A supported screenshot engine app is not installed.",
-                        context={"supported_engines": engine_names},
-                        details=_INSTALL_HELP,
-                    )
-                )
+            )
 
-            # The /addons list is only reliable for slug discovery (the
-            # repo-hash prefix is not known ahead of time). Per-addon details
-            # are authoritative on /addons/<slug>/info — the same source
-            # ha_manage_app trusts.
-            addon_infos: list[tuple[str, dict[str, Any]]] = []
-            for match in matches:
-                slug = str(match["slug"])
-                info = await sup.get(f"/addons/{slug}/info")
-                info.raise_for_status()
-                data: dict[str, Any] = info.json()["data"]
-                addon_infos.append((slug, data))
-            slug, data, profile = _select_started_verified_engine(addon_infos, profiles)
-            hostname = data.get("hostname") or data.get("ip_address")
-            if not hostname:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Screenshot engine app '{slug}' is started but "
-                        "the Supervisor returned no hostname/ip_address.",
-                        context={"slug": slug},
-                    )
+        # The /addons list is only reliable for slug discovery (the
+        # repo-hash prefix is not known ahead of time). Per-addon details
+        # are authoritative on /addons/<slug>/info — the same source
+        # ha_manage_app trusts.
+        addon_infos: list[tuple[str, dict[str, Any]]] = []
+        for match in matches:
+            slug = str(match["slug"])
+            info = await _supervisor_api_call(client, f"/addons/{slug}/info")
+            addon_infos.append((slug, info["result"]))
+        slug, data, profile = _select_started_verified_engine(addon_infos, profiles)
+        hostname = data.get("hostname") or data.get("ip_address")
+        if not hostname:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Screenshot engine app '{slug}' is started but "
+                    "the Supervisor returned no hostname/ip_address.",
+                    context={"slug": slug},
                 )
-            options = data.get("options")
-            app_version = data.get("version")
-            return EngineTarget(
-                url=f"http://{hostname}:{profile.port}",
-                engine_kind=profile.kind,
-                engine_version=(
-                    app_version.strip()
-                    if isinstance(app_version, str) and app_version.strip()
-                    else None
-                ),
-                addon_credential=(
-                    addon_credential_from_options(
-                        options if isinstance(options, dict) else None
-                    )
-                    if profile.has_persistent_theme_override
-                    else None
-                ),
             )
+        options = data.get("options")
+        app_version = data.get("version")
+        return EngineTarget(
+            url=f"http://{hostname}:{profile.port}",
+            engine_kind=profile.kind,
+            engine_version=(
+                app_version.strip()
+                if isinstance(app_version, str) and app_version.strip()
+                else None
+            ),
+            addon_credential=(
+                addon_credential_from_options(
+                    options if isinstance(options, dict) else None
+                )
+                if profile.has_persistent_theme_override
+                else None
+            ),
+        )
     except ToolError:
         raise
-    except (httpx.HTTPError, KeyError, ValueError) as e:
+    except (KeyError, TypeError) as e:
         logger.warning("Screenshot engine discovery via Supervisor failed: %s", e)
         raise_tool_error(
             create_error_response(
