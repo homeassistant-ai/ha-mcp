@@ -4,7 +4,9 @@ Core's flow endpoints answer one step at a time, so a form after the first is
 only seen by answering the ones before it. Most helper flows are declared as
 a mapping of steps (``SchemaConfigFlowHandler.config_flow`` and
 ``options_flow``), which this command reads from the loaded handler class on
-every call and serializes the way Core serializes a form it shows. A form or
+every call and serializes the way Core serializes a form it shows (on
+Home Assistant 2026.12, as Core's flow formatter presents it: each field's
+``label``, help ``description`` and lifted ``suggested_value``). A form or
 a next step that Core computes from the answers given so far is reported as
 such, not evaluated. No flow is started and nothing here is a copy: a Core
 update changes the answer.
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .flow_format import format_form
 from .helper_collections import _convert
 
 if TYPE_CHECKING:
@@ -82,10 +85,20 @@ async def async_flow_outline(
     steps = handler.config_flow if msg["flow"] == "config" else handler.options_flow
     if not steps:
         return {"supported": False}
-    return {
-        "supported": True,
-        "steps": [_step(scf, step_id, step) for step_id, step in steps.items()],
-    }
+    described = []
+    for step_id, step in steps.items():
+        out = _step(scf, step_id, step)
+        if isinstance(step, scf.SchemaFlowFormStep) and out.get("data_schema"):
+            # Core's labels and help text; None on 2026.11, which keeps the
+            # bare fields. Remove once the hacs.json minimum is 2026.12: drop
+            # the None check and assign the formatted fields directly.
+            fields = await format_form(
+                hass, domain, msg["flow"], out["step_id"], step.schema
+            )
+            if fields is not None:
+                out["data_schema"] = fields
+        described.append(out)
+    return {"supported": True, "steps": described}
 
 
 def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:

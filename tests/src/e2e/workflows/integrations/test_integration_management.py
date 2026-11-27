@@ -519,7 +519,7 @@ class TestIntegrationManagement:
                 assert result["flow_type"] == "form", result
                 assert result["step_id"] == "reconfigure", result
                 fields = {f["name"]: f for f in result["fields"]}
-                assert fields["file_path"]["description"] == file_path_label, result
+                assert fields["file_path"]["label"] == file_path_label, result
 
                 after = await mcp.call_tool_success(
                     "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}

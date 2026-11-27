@@ -15,6 +15,7 @@ from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.translation import async_get_translations
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 
@@ -25,6 +26,7 @@ from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._backup_core import backup_settings as backup_settings
+from ._core_client import formats_flow_texts
 from ._integration_flow_steps_core import (
     ERROR_TEXTS,
     EXTERNAL,
@@ -250,14 +252,20 @@ async def test_a_form_fields_help_is_filled_with_the_steps_placeholders(
 
 
 async def test_a_step_core_ships_no_strings_for_carries_no_texts(
-    flow_tools: IntegrationTools,
+    hass: HomeAssistant, flow_tools: IntegrationTools
 ) -> None:
+    """Without a string of its own the step has no description or submit
+    label. Core's formatter titles it with the integration's name, the
+    strings lookup leaves the title out."""
     result = await flow_tools.ha_set_integration(
         domain=STEPS, config={"connection_type": "routing"}
     )
 
     assert result["step_id"] == "routing"
-    assert not {"title", "description", "submit"} & result.keys()
+    assert not {"description", "submit"} & result.keys()
+    titles = await async_get_translations(hass, "en", "title", [STEPS])
+    expected = titles[f"component.{STEPS}.title"] if formats_flow_texts(hass) else None
+    assert result.get("title") == expected
     assert "warnings" not in result
 
 
@@ -408,6 +416,8 @@ async def _open_flow(
     ],
 )
 @pytest.mark.parametrize("call", [{"config": {"host": "h"}}, {"abort": True}])
+# With the component a flow the UI opened is bound by Core's own record.
+@pytest.mark.parametrize("flow_client", ["without_component"], indirect=True)
 async def test_a_flow_not_opened_for_the_calls_target_is_refused(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
@@ -812,6 +822,7 @@ async def test_abort_ends_a_reauth_flow(
     assert config_flow_ids(hass) == []
 
 
+@pytest.mark.parametrize("flow_client", ["without_component"], indirect=True)
 async def test_a_reauth_flow_without_the_component_is_refused_with_the_install_hint(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,

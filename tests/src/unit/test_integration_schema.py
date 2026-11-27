@@ -352,15 +352,13 @@ async def test_options_form_is_described_with_help_and_current_values(
     schema = resp["options_schema"]
     assert schema["flow_type"] == "form"
     assert schema["step_id"] == "init"
-    assert schema["fields"] == [
-        {
-            "name": "host",
-            "required": True,
-            "type": "text",
-            "description": "Device IP.",
-            "current": "127.0.0.1",
-        }
-    ]
+    [field] = schema["fields"]
+    assert {k: field.get(k) for k in ("name", "required", "type")} == {
+        "name": "host",
+        "required": True,
+        "type": "text",
+    }
+    assert (field["description"], field["current"]) == ("Device IP.", "127.0.0.1")
     assert "data_schema" not in schema
     assert resp["entry"]["options"] == {"host": "127.0.0.1"}
     assert open_flow_ids(hass) == []
@@ -397,19 +395,12 @@ async def test_a_select_without_option_labels_from_core_is_described_as_given(
 
     resp = await tools.ha_get_integration(entry_id=entry.entry_id, include_schema=True)
 
-    assert resp["options_schema"]["fields"] == [
-        {
-            "name": "speed",
-            "required": True,
-            "type": "select",
-            "options": ["low", "high"],
-        },
-        {
-            "name": "color",
-            "required": True,
-            "type": "select",
-            "options": ["red", "blue"],
-        },
+    assert [
+        (f["name"], f["type"], f["options"], "option_labels" in f)
+        for f in resp["options_schema"]["fields"]
+    ] == [
+        ("speed", "select", ["low", "high"], False),
+        ("color", "select", ["red", "blue"], False),
     ]
 
 

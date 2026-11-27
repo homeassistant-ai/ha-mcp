@@ -221,7 +221,7 @@ def probe(
 @pytest.fixture
 async def client(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,
+    flow_client: HomeAssistantClient,
     probe: None,
     run: _Run,
     monkeypatch: pytest.MonkeyPatch,
@@ -233,7 +233,7 @@ async def client(
     monkeypatch.setattr(config_entry_flow_progress, "POLL_INTERVAL_S", 0.0)
     assert await async_setup_component(hass, "config", {})
     answer_translations(hass)
-    yield core_client
+    yield flow_client
     # A progress task still waiting ends, and Core moves its flow on.
     run.release.set()
     await hass.async_block_till_done()

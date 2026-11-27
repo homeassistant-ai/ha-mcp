@@ -135,7 +135,14 @@ the info handshake carries no capability entry:
   config or options flow (most helper flows): each form's fields as Core
   serializes a form it shows, and the step that follows it, read from the
   loaded flow handler on every call. A form or next step Core computes from
-  earlier answers is marked, not evaluated. See ``flow_outline.py``.
+  earlier answers is marked, not evaluated. On Home Assistant 2026.12 each
+  declared form's fields carry Core's labels and help text, from Core's flow
+  formatter. See ``flow_outline.py``.
+* ``ha_mcp_tools/flow_format`` — a flow step as Home Assistant 2026.12's
+  ``llm.flow.format_result`` formats it (titles, field labels and help, errors,
+  menu labels, progress, create-entry and abort texts), with the translations
+  Core's own config and repairs tools use; ``supported: false`` before 2026.12.
+  See ``flow_format.py``.
 * ``ha_mcp_tools/flow_record`` — what a config, options, subentry or Repairs
   fix flow in progress was started for (its handler, source, entry and issue
   anchors), read from the flow manager that holds it. Core's flow endpoints
@@ -387,6 +394,7 @@ from .. import (
     core_contract,
     dashboard_cards_ws,
     entity_restore,
+    flow_format,
     flow_outline,
     flow_record,
     helper_collections,
@@ -584,6 +592,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *todo_items.command_specs(vol),
         *update_entities.command_specs(vol),
         *flow_record.command_specs(vol),
+        *flow_format.command_specs(vol),
         *flow_outline.command_specs(vol),
         *scene_editor.command_specs(vol),
         *automation_config.command_specs(vol),

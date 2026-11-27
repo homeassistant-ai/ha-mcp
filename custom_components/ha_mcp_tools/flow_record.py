@@ -26,9 +26,10 @@ REPAIRS_CAPABILITY = "flow_record_repairs"
 # Wire name -> the attribute of ``hass.config_entries`` holding that manager.
 _MANAGERS = {"config": "flow", "options": "options", "subentries": "subentries"}
 _REPAIRS = "repairs"
+MANAGERS = (*_MANAGERS, _REPAIRS)
 
 
-def _manager(hass: HomeAssistant, name: str) -> FlowManager[Any, Any, Any] | None:
+def flow_manager(hass: HomeAssistant, name: str) -> FlowManager[Any, Any, Any] | None:
     if name == _REPAIRS:
         from homeassistant.components.repairs import repairs_flow_manager
 
@@ -43,7 +44,7 @@ def flow_record(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     """The handler, source, entry and issue anchors of ``flow_id`` in ``manager``."""
     from homeassistant.data_entry_flow import UnknownFlow
 
-    manager = _manager(hass, msg["manager"])
+    manager = flow_manager(hass, msg["manager"])
     if manager is None:  # Repairs is not set up, so it holds no flow.
         return {"found": False}
     try:
@@ -69,7 +70,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
         (
             {
                 vol.Required("type"): WS_FLOW_RECORD,
-                vol.Required("manager"): vol.In((*_MANAGERS, _REPAIRS)),
+                vol.Required("manager"): vol.In(MANAGERS),
                 vol.Required("flow_id"): str,
             },
             flow_record,

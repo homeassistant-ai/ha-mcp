@@ -241,6 +241,7 @@ async def test_a_flow_the_server_did_not_open_is_bound_by_cores_record(
         assert open_fix_flows(hass) == {started["flow_id"]: "confirm"}
 
 
+@pytest.mark.parametrize("flow_client", ["without_component"], indirect=True)
 async def test_a_flow_the_server_did_not_open_is_refused_without_the_component(
     hass: HomeAssistant, fix_tools: UpdateTools
 ) -> None:

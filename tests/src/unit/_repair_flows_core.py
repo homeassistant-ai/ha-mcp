@@ -3,8 +3,9 @@
 
 Its repairs platform hands Core's ``RepairsFlowManager`` one flow per issue
 (Core's own ``ConfirmRepairFlow`` for ``CONFIRM``); the server's client
-(``core_client``) drives them over Core's fix-flow endpoints, and Core's
-``frontend/get_translations`` reads their strings.
+(``flow_client``: without the component, and with it, where Home Assistant
+2026.12 formats the texts) drives them over Core's fix-flow endpoints, and
+Core's ``frontend/get_translations`` reads their strings.
 """
 
 from __future__ import annotations
@@ -263,7 +264,7 @@ def raise_issue(hass: HomeAssistant, issue_id: str, *, fixable: bool = True) -> 
 @pytest.fixture
 async def fix_tools(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,
+    flow_client: HomeAssistantClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[UpdateTools]:
@@ -280,4 +281,4 @@ async def fix_tools(
         raise_issue(hass, issue_id)
     raise_issue(hass, UNFIXABLE, fixable=False)
     with mock_config_flow(DOMAIN, _SetupFlow):
-        yield UpdateTools(core_client)
+        yield UpdateTools(flow_client)

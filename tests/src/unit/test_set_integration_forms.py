@@ -291,7 +291,7 @@ async def test_set_integration_describes_the_options_form_behind_a_menu(
         flow["flow_id"] for flow in hass.config_entries.options.async_progress()
     ] == [resp["flow_id"]]
     assert resp["step_id"] == "advanced"
-    assert [(f["name"], f["description"]) for f in resp["fields"]] == [("host", "Host")]
+    assert [(f["name"], f["label"]) for f in resp["fields"]] == [("host", "Host")]
     assert "entry" not in resp
 
 

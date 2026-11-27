@@ -25,8 +25,10 @@ from homeassistant.config_entries import (
     OptionsFlow,
     SubentryFlowResult,
 )
+from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
+from homeassistant.helpers.translation import async_get_translations
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry, mock_config_flow
 
@@ -47,6 +49,10 @@ _DOMAIN = "flow_error_texts"
 _SHARED = "flow_error_shared"
 _ABORTING = "flow_error_aborting"
 _UNIQUE_ID = "flow-error-device"
+# Home Assistant 2026.12 formats a flow step itself; the component reads its
+# translations in process, so the server reads no strings over WebSocket.
+# Remove once the hacs.json minimum is 2026.12: keep the True branch of each use.
+_CORE_FORMATS = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12)
 
 _STRINGS = {
     "config": {"abort": {"another_device": "Wrong device."}},
@@ -298,16 +304,20 @@ class TestRejectedSubmit:
 class TestFlowTextFromCore:
     """The tool error carries Core's string for an abort reason or form error."""
 
-    async def test_abort_without_a_core_string_keeps_only_the_reason(
-        self, client: HomeAssistantClient
+    async def test_an_abort_its_integration_has_no_string_for(
+        self, hass: HomeAssistant, client: HomeAssistantClient
     ) -> None:
+        """The reason stays. Core's formatter adds Home Assistant's common
+        text for it; the strings lookup before it has none to add."""
         with pytest.raises(ToolError) as exc_info:
             await IntegrationTools(client).ha_set_integration(domain=_ABORTING)
 
         body = error_body(exc_info)
         assert "no_devices_found" in body["error"]["message"]
-        assert "reason_text" not in body
         assert "warnings" not in body
+        common = await async_get_translations(hass, "en", "config", ["homeassistant"])
+        key = "component.homeassistant.config.abort.no_devices_found"
+        assert body.get("reason_text") == (common[key] if _CORE_FORMATS else None)
 
     async def test_options_form_errors_carry_cores_text_with_placeholders(
         self, hass: HomeAssistant, client: HomeAssistantClient
@@ -339,7 +349,9 @@ class TestFlowTextFromCore:
         assert body["error_text"] == {"base": "Cannot reach 10.0.0.2."}
         assert [f["name"] for f in body["fields"]] == ["host", "api_key"]
         assert "data_schema" not in body
-        assert _translation_requests(sent) == [("options", [_DOMAIN])]
+        assert _translation_requests(sent) == (
+            [] if _CORE_FORMATS else [("options", [_DOMAIN])]
+        )
         submitted.assert_awaited_once()
         assert open_flow_ids(hass) == [body["flow_id"]]
 
@@ -357,7 +369,9 @@ class TestFlowTextFromCore:
             await _set_subentry(client, entry, "conversation", {})
 
         assert error_body(exc_info)["reason_text"] == "The entry is not loaded."
-        assert _translation_requests(sent) == [("config_subentries", [_DOMAIN])]
+        assert _translation_requests(sent) == (
+            [] if _CORE_FORMATS else [("config_subentries", [_DOMAIN])]
+        )
 
     async def test_abort_translation_domain_names_where_the_reason_lives(
         self, hass: HomeAssistant, client: HomeAssistantClient
@@ -379,7 +393,9 @@ class TestFlowTextFromCore:
             await _set_subentry(client, entry, "conversation", {})
 
         assert error_body(exc_info)["reason_text"] == "Log in first."
-        assert _translation_requests(sent) == [("config", [_SHARED])]
+        assert _translation_requests(sent) == (
+            [] if _CORE_FORMATS else [("config", [_SHARED])]
+        )
 
     async def test_reconfigure_abort_carries_cores_reason_text(
         self, hass: HomeAssistant, client: HomeAssistantClient
@@ -481,10 +497,13 @@ def test_a_flow_ref_refuses_a_path_core_has_no_flow_for(path: str) -> None:
         FlowRef("demo", path)
 
 
-async def test_a_form_error_whose_strings_cannot_be_read_warns_at_top_level(
+async def test_a_form_error_whose_strings_cannot_be_read_is_still_reported(
     hass: HomeAssistant, component_core_client: HomeAssistantClient, flows: None
 ) -> None:
-    # Nothing registered frontend/get_translations: Core refuses the read.
+    """Nothing registered ``frontend/get_translations``: the strings lookup
+    is refused and the error says its texts are missing. Core's own formatter
+    (2026.12) reads the strings in process, so nothing is missing there; this
+    error code has no string either way."""
     assert await async_setup_component(hass, "config", {})
     entry = _entry(hass)
 
@@ -494,4 +513,5 @@ async def test_a_form_error_whose_strings_cannot_be_read_warns_at_top_level(
     body = error_body(exc_info)
     assert body["errors"] == {"base": "not_valid"}
     assert "error_text" not in body
-    assert any("could not be read" in w for w in body["warnings"])
+    unread = any("could not be read" in w for w in body.get("warnings", []))
+    assert unread is not _CORE_FORMATS
