@@ -75,9 +75,10 @@ async def async_effective_pip_spec(
     ``server_entry``'s ``install_pending`` compares it with the spec bring-up
     recorded.
     """
-    return effective_pip_spec(
-        pip_spec_override(options), await async_paired_server_requirement(hass)
-    )
+    override = pip_spec_override(options)
+    # An override decides alone, so the manifest is not read for it.
+    pin = None if override else await async_paired_server_requirement(hass)
+    return effective_pip_spec(override, pin)
 
 
 def spec_dist_name(spec: str) -> str | None:
