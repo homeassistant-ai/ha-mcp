@@ -45,13 +45,11 @@
     "server.sections.tool_surface": "Interface de ferramentas",
     "server.sections.diagnostics": "Diagnósticos",
     "server.sections.sidecar": "Sidecar da interface de configurações",
-    "server.sections.beta": "Recursos beta (perigoso)",
     "server.sections.developer": "Desenvolvedor",
     "server.sections.remote_access": "Acesso remoto",
     "server.sidecar.disable": "Desativar permanentemente o servidor de configurações",
     "server.sidecar.disable_title": "Desativa permanentemente a interface de configurações: para este servidor E escreve ~/.ha-mcp/settings_ui_disabled para que não seja reiniciado em futuros lançamentos do HA-MCP. Exclua esse arquivo para reativar.",
     "backups.loading": "Carregando estado do backup…",
-    "backups.filter.domain": "Domínio (ex.: automação)",
     "backups.filter.domain_aria": "Filtrar backups por domínio",
     "backups.filter.entity": "ID da entidade",
     "backups.filter.entity_aria": "Filtrar backups por ID da entidade",
@@ -60,7 +58,6 @@
     "policies.intro": "Controle de aprovação por ferramenta para chamadas de alto risco. O interruptor <strong>restrição de segurança</strong> na aba <strong>Ferramentas</strong> decide se uma ferramenta inteira precisa de aprovação; refine-o aqui com condições. Em uma lista de bloqueio, uma regra nomeia chamadas que precisam de aprovação e pode manter uma aprovação por um tempo; em uma lista de permissão, uma regra nomeia chamadas que são executadas sem uma. Operadores de condição: igual a, é um de, regex, contém, está presente, maior que, menor que.",
     "policies.global.title": "Configurações globais",
     "policies.global.rule_effect.label": "Modo de aprovação",
-    "policies.global.rule_effect.help": "<strong>Lista de bloqueio</strong> (padrão): as regras abaixo listam as chamadas que precisam da sua aprovação, e todas as outras chamadas são executadas. <strong>Lista de permissão</strong>: as regras abaixo listam as chamadas que são executadas sem aprovação, e todas as outras chamadas precisam dela, incluindo leituras; apenas a pesquisa de ferramentas e o gerenciamento de aprovações pendentes permanecem isentos. Aplica-se a partir da próxima chamada após você salvar. Uma lista de permissão corresponde estritamente: caso exato, cada valor que um caminho curinga ou uma lista alcança, cada ramificação de um caminho curinga que contém o campo, e objetos apenas por igualdade ou ser um de. Regex e contém ainda correspondem a substrings, então ancore um regex com <code>^…$</code>; NÃO é igual e NÃO é um de aprovam tudo o que não nomeiam. Texto com vírgula ou espaço em branco circundante não corresponde a nenhuma condição, exceto se estiver presente. Uma regra restringe apenas os argumentos que ela nomeia.",
     "policies.global.rule_effect.require_approval": "Exigir aprovação para chamadas correspondentes (lista de bloqueio)",
     "policies.global.rule_effect.allow": "Exigir aprovação, a menos que uma regra corresponda (lista de permissão)",
     "policies.global.rule_effect.confirm": "Mudar de \"{from}\" para \"{to}\"?\n\nCada regra abaixo terá então o efeito oposto: chamadas que ela restringe serão executadas sem aprovação, ou chamadas que ela aprovava precisarão de aprovação. Chamadas que nenhuma regra corresponde mudam para o outro lado, e em uma lista de permissão as condições correspondem mais estritamente.",
@@ -69,7 +66,6 @@
     "policies.global.enabled.help": "Interruptor mestre. Espelha a mesma opção em Configurações do Servidor. Desativado por padrão. Ative e reinicie o HA-MCP para ativar o middleware de controle. Enquanto desativado, as regras abaixo persistem, mas não são aplicadas.",
     "policies.global.manage_tool.label": "Permitir que agentes de IA editem estas políticas (ha_manage_security_policy)",
     "policies.global.manage_tool.help": "Registra a ferramenta ha_manage_security_policy, que lê e substitui o documento de política que esta aba edita. Desativado por padrão. Independente do interruptor mestre acima: isso controla quem pode editar as regras, não se elas são aplicadas. A ferramenta não expõe operações de fila de aprovação pendente, mas uma ação de conjunto controlada por política ainda pode exigir aprovação.",
-    "policies.global.manage_tool.warning": "Ativar isso permite que agentes de IA conectados reescrevam as políticas de segurança nesta aba, incluindo a remoção de controles de aprovação. Para manter um humano no processo, controle a ferramenta ANTES de ativá-la: na aba Ferramentas, ative \"segurança controlada\" para Gerenciar Política de Segurança. Essa regra pode ser criada enquanto a ferramenta ainda está desativada, e ela é aplicada assim que o interruptor mestre acima é ativado e o servidor é reiniciado. Reinicie o aplicativo (add-on) após alternar qualquer um dos interruptores.",
     "policies.global.wait.label": "Aguardar segundos (5-600)",
     "policies.global.wait.help": "Quanto tempo o middleware aguarda por uma aprovação antes de expirar.",
     "policies.global.ttl.label": "TTL de aprovação em minutos (1-60)",
@@ -103,9 +99,7 @@
     "visibility.boundary": "Sem o modo de imposição (abaixo), isso é redução de ruído, não controle de acesso: uma entidade oculta ainda é retornada por uma leitura direta de seu entity_id e ainda aparece em conteúdo de automação, painel e template. Não confie apenas no filtro como um limite de segurança.",
     "visibility.enabled": "Ativar filtro de visibilidade de entidade",
     "visibility.enforce.title": "Modo de imposição",
-    "visibility.enforce.help": "Estende o filtro de desorganização da pesquisa e visão geral para cada leitura de ferramenta, exceto ha_report_issue por padrão. Uma leitura direta de uma entidade oculta retorna “não encontrada”, e uma leitura de conteúdo que a revelaria é recusada. A exceção da ferramenta de relatório é controlada abaixo. Ocultação com o melhor esforço contra exposição acidental, não uma fronteira de segurança reforçada. Também pode recusar mais do que o necessário: uma leitura que apenas compartilha a chave ou ID de um script, cena ou automação oculto também pode ser recusada.",
     "visibility.enforce.only_enforced": "Tornar entidades ocultas ilegíveis em todas as leituras de ferramenta (exceto relatórios de problemas por padrão)",
-    "visibility.enforce.report_issue_help": "Enquanto estiver desativado, ha_report_issue e toda a sua saída de diagnóstico — incluindo logs — permanecem fora do modo de aplicação em cada chamada, mesmo quando os dados de visibilidade estão íntegros ou indisponíveis. Ative-o para escanear e recusar essa ferramenta como outras leituras.",
     "visibility.enforce.restrict_report_issue": "Aplicar modo de imposição a ha_report_issue",
     "visibility.categories.title": "Ocultar por categoria",
     "visibility.categories.help": "O Home Assistant marca entidades geradas automaticamente como de diagnóstico ou de configuração.",
@@ -137,16 +131,12 @@
     "features.enable_tool_security_policies.help": "Protege chamadas de ferramentas de alto risco (controle de bloqueio/alarme, escritas de automação, etc.) por trás da aprovação do usuário. Quando uma ferramenta protegida é chamada, o agente informa ao usuário para abrir a aba Políticas de Segurança de Ferramentas na interface web e clicar em Aprovar antes que a chamada prossiga. Regras por ferramenta com condições de argumento opcionais são configuradas na aba Políticas de Segurança de Ferramentas. Desativado por padrão. Requer reinício para ter efeito.",
     "features.read_only_mode.label": "Modo Somente Leitura",
     "features.read_only_mode.help": "Desativa todas as ferramentas de escrita e remove a capacidade das ferramentas de fazer chamadas de escrita ou destrutivas. Ferramentas mistas de leitura/escrita — backups, Apps (add-ons), preferências de energia, pipelines de voz e modo de código quando ativado — permanecem disponíveis com suas operações de escrita bloqueadas. Mesma alternância da aba Ferramentas da interface web. Desativado por padrão. Requer reinício para ter efeito.",
-    "features.redact_secrets.label": "Redigir Segredos",
-    "features.redact_secrets.help": "Redige segredos das respostas das ferramentas antes que cheguem ao assistente de IA. Opções de Aplicativos (add-ons) e campos de integração marcados como senhas são substituídos por um marcador de definido/vazio (para que \"esta credencial está configurada?\" continue respondível), e outras respostas de ferramentas são limpas de valores secretos que o servidor já viu (valores com menos de 6 caracteres são ignorados, pois substituir pequenos fragmentos corromperia a saída não relacionada). Outros campos não são detectados, exceto chaves privadas nas opções de aplicativos e os nomes de opções de aplicativos listados abaixo. Desativado por padrão.",
     "features.enable_mandatory_bps.label": "Anexar habilidades de melhores práticas em escritas",
     "features.enable_mandatory_bps.help": "Interruptor mestre para o recurso de entrega de conteúdo de habilidades de ferramentas de escrita (issue #1182). Quando ativado (padrão), as seis ferramentas de escrita de configuração (automações, scripts, cenas, auxiliares, painéis, YAML bruto) anexam os arquivos de referência canônicos de melhores práticas do Home Assistant em `skill_content` em cada escrita bem-sucedida, além de incorporar automaticamente quaisquer seções de referência citadas por avisos de melhores práticas. Cada ferramenta também expõe um parâmetro `MandatoryBPS` por chamada que o agente pode definir como falso em chamadas subsequentes, uma vez que tenha o conteúdo. Quando este interruptor mestre está desativado, NENHUM `skill_content` é enviado, independentemente do parâmetro por chamada ou dos avisos de BP. Recomendado LIGADO como primeira escolha; desative apenas para modelos com janelas de contexto muito pequenas. Desativar isso pode degradar a precisão da escrita. Requer reinício para ter efeito.",
     "features.enable_strict_mandatory_bps.label": "Modo de melhores práticas estritas",
-    "features.enable_strict_mandatory_bps.help": "Modo estrito: impede que o cliente use a ferramenta até que possa provar que leu as melhores práticas. Enquanto ativado, as seis ferramentas de escrita de melhores práticas (automacoes, scripts, cenas, auxiliares, paineis, YAML bruto) são bloqueadas e retornam um erro direcionando o cliente a ler a habilidade de melhores práticas via ha_get_skill_guide e retornar a chave de reconhecimento que obtém lá. Enquanto ativado, a ferramenta ha_get_skill_guide é bloqueada como ativada — é a única publicadora da chave de reconhecimento. Filho da opção \"Anexar habilidades de melhores práticas em escritas\" acima e inerte enquanto o pai estiver desativado. Requer reinício para ter efeito.",
     "features.enable_beta_features.label": "Ativar recursos beta (mestre)",
     "features.enable_beta_features.help": "⚠ PERIGO — estas ferramentas podem DANIFICAR PERMANENTEMENTE sua instalação do Home Assistant. Elas escrevem em sua configuração YAML, seu sistema de arquivos, instalam componentes personalizados, executam Python arbitrário em sandbox e editam as docstrings das ferramentas que a IA vê. Não há garantia nem suporte — você as ativa por sua CONTA E RISCO. Faça um backup do Home Assistant antes de ativar isso e nunca ative em produção sem um. Portão mestre para as sub-flags experimentais abaixo; as sub-flags são ignoradas em tempo de execução enquanto este mestre estiver desativado, mesmo quando explicitamente definidas como true. A mesma alternância também é exibida na interface de configurações web em \"Recursos beta (perigosos)\" — qualquer uma das interfaces reflete a outra no reinício.",
     "features.enable_yaml_config_editing.label": "Ativar edição de configuração YAML (beta)",
-    "features.enable_yaml_config_editing.help": "Recurso beta. Permite que assistentes de IA adicionem, substituam ou removam chaves de nível superior em configuration.yaml e packages/*.yaml. Apenas chaves na lista de permissões são permitidas (por exemplo, template, sensor, command_line, mqtt, knx); chaves principais como homeassistant, http e recorder são bloqueadas. Cada edição valida a sintaxe YAML, executa uma verificação de configuração e cria um backup automático. Alterações na maioria das chaves exigem um reinício completo do HA para ter efeito. Consulte docs/beta.md para limitações conhecidas. Ferramentas dedicadas (automacoes, scripts, cenas, auxiliares, sensores de template) devem ser preferidas quando disponíveis. REQUER que a alternância mestre \"Ativar recursos beta\" acima (e na interface web) esteja ativada — caso contrário, esta sub-flag é ignorada em tempo de execução, independentemente do seu valor aqui.",
     "features.enable_yaml_edit_confirm.label": "Exigir confirmação para edições YAML (pré-visualização de diff)",
     "features.enable_yaml_edit_confirm.help": "Sub-interruptor da edição de configuração YAML, ATIVADO por padrão (recomendado). A primeira chamada ha_config_set_yaml retorna um diff unificado do que exatamente mudaria no disco, mais um token de confirmação, e não escreve nada; a edição só é aplicada quando a chamada é repetida com esse token. Existe para que alterações não intencionais fora da edição solicitada sejam detectadas antes de chegarem ao disco (problema #1720). Desative apenas para economizar uma viagem de ida e volta por edição.",
     "features.enable_yaml_packages_automation.label": "Permitir automação em packages/*.yaml",
@@ -211,7 +201,6 @@
     "errors.addon_not_back": "O aplicativo (add-on) não voltou a ficar online. Recarregue a página manualmente.",
     "errors.server_not_back": "O servidor HA-MCP não voltou a ficar online. Recarregue a página manualmente.",
     "errors.unparseable_suffix": " (corpo da resposta não analisável)",
-    "common.operation_failed": "Falha na {operation}: {detail}",
     "common.enabled": "ativado",
     "common.disabled": "desativado",
     "common.env_locked": "bloqueado por env",
@@ -256,11 +245,7 @@
     "tools.summary.disabled": "{count} desativadas",
     "tools.read_only.save_failed": "A mudança do Modo Somente Leitura não foi salva. O servidor ainda tem o valor anterior.",
     "backup.fields.enable_auto_backup.label": "Auto-backup de edições",
-    "backup.fields.enable_auto_backup.help": "Salve um snapshot de uma entidade antes que cada chamada de ferramenta de escrita ou exclusão a altere. Enquanto esta opção estiver desativada, as ferramentas de arquivo e YAML bruto (ha_write_file, ha_delete_file, ha_config_set_yaml) se recusam a escrever.",
-    "backup.fields.enable_snapshot_actions.label": "Permitir ações de snapshot completo do HA",
-    "backup.fields.enable_snapshot_actions.help": "Permitir que assistentes de IA gerenciem snapshots completos do Home Assistant através de ha_manage_backup e os serviços de backup e comandos equivalentes em ha_call_service. Desativar esta opção bloqueia todas as ações de snapshot, incluindo a listagem. A exclusão de snapshots está disponível apenas através de ha_manage_backup e também requer Permitir exclusão de snapshots. Edições de backups e as ações de backup que uma pessoa realiza na interface de configurações web permanecem disponíveis.",
     "backup.fields.backup_read_only.label": "Tornar o gerenciamento de backup somente leitura",
-    "backup.fields.backup_read_only.help": "Permitir que assistentes de IA listem, visualizem e comparem edições de backups, e listem snapshots completos do HA quando as ações de snapshot estiverem ativadas. Bloquear a criação, restauração (incluindo restaurações de edição) e exclusão manual de backups, incluindo os serviços de backup e comandos equivalentes em ha_call_service. Backups automáticos pré-edição continuam. As ações de backup que uma pessoa realiza na interface de configurações web permanecem disponíveis.",
     "backup.fields.auto_backup_throttle_minutes.label": "Limite de auto-backup (minutos)",
     "backup.fields.auto_backup_throttle_minutes.help": "Com que frequência o backup automático pode capturar a mesma entidade. 0 captura a cada gravação; N acima de 0 captura no máximo um instantâneo a cada N minutos por entidade.",
     "backup.fields.auto_backup_retain_per_entity.label": "Retenção de backup automático (por entidade)",
@@ -306,15 +291,12 @@
     "backup.restore.unknown": "Não foi possível confirmar se esta restauração alterou o Home Assistant. Inspecione a configuração atual e a lista de backups antes de tentar novamente.",
     "backup.restore.safety": "Backup de segurança: {name}. Inspecione a configuração atual antes de restaurar este backup de segurança para recuperar o estado anterior.",
     "backup.restore.reason.unsupported_form": "O Home Assistant não forneceu um formulário adequado para esta restauração.",
-    "backup.restore.reason.unsupported_fields": "Alguns campos do snapshot não são aceitos pelo formulário atual.",
-    "backup.restore.reason.identity_changed": "Alguns campos do snapshot não são oferecidos por nenhum formulário de restauração (são definidos na criação), e eles mudaram desde o backup.",
     "backup.restore.reason.validation_failed": "O Home Assistant rejeitou a configuração restaurada como inválida.",
     "backup.restore.reason.flow_aborted": "O Home Assistant abortou o fluxo de restauração.",
     "backup.restore.fields": "Campos: {fields}",
     "backup.restore.recreated_entry": "Entrada de configuração recriada: {entry_id}",
     "backup.restore.entity_mapping": "ID da entidade: {created} → {restored}",
     "backup.restore.entity_mapping_unknown": "A renomeação da entidade não pôde ser confirmada: {created} → {target}. Inspecione a nova entrada antes de tentar novamente.",
-    "backup.restore.mapping_unavailable": "Este snapshot não tem mapeamento de entidade; o auxiliar recriado pode ter um novo ID de entidade.",
     "backup.restore.entity_collision": "O ID da entidade salvo {entity_id} já está em uso e não foi sobrescrito.",
     "backup.bulk.prompt_days": "Excluir backups com mais de N dias (deixe em branco para usar apenas os filtros atuais):",
     "backup.bulk.filter_required": "Defina pelo menos um filtro (Domínio, Entidade ou idade em dias).",
@@ -324,7 +306,6 @@
     "backup.bulk.in_use": "{count} backup(s) estão em uso. Tente novamente após a captura ou restauração ativa terminar.",
     "backup.bulk.unknown": "O resultado da exclusão não pôde ser confirmado. Verifique a lista de backups antes de tentar novamente.",
     "filesystem.custom.title": "Caminhos de sistema de arquivos personalizados (avançado)",
-    "filesystem.custom.help": "Caminhos extras (um por linha) que as ferramentas de arquivo podem <strong>ler e escrever</strong>. Caminhos relativos à configuração, incluindo nomes de arquivo exatos como <code>sensor.yaml</code>, e caminhos em <code>/share</code>, <code>/media</code> e <code>/ssl</code> (somente leitura no HAOS e Supervised) são suportados. Cada entrada permite aquele caminho e tudo abaixo dele. As entradas são correspondidas literalmente; curingas como <code>*</code> não são suportados. Você também pode gerenciar esses caminhos no Home Assistant em Configurações → Dispositivos e Serviços → “HA-MCP — Gerenciar Home Assistant com IA” (“HA-MCP Custom Component” em instalações mais antigas) → Ferramentas de Arquivo e YAML do HA-MCP → Configurar; ambos os locais editam a mesma configuração e aplicam as alterações imediatamente.",
     "filesystem.custom.blocked": "Sempre bloqueado: {paths}, travessia de caminho (<code>..</code>) e caminhos absolutos fora dos volumes HAOS permitidos.",
     "filesystem.custom.enable_first": "Ative os recursos beta e as ferramentas de sistema de arquivos acima para editar.",
     "filesystem.custom.unavailable": "Caminhos personalizados estão indisponíveis no momento.",
@@ -423,9 +404,7 @@
     "policies.editor.hint.exists": "Deixe em branco para bloquear se o argumento estiver presente, independentemente do valor.",
     "policies.editor.hint.list": "Escolha um ou mais valores, ou digite uma lista JSON. Deixe em branco para bloquear em qualquer valor.",
     "policies.editor.hint.regex": "Uma expressão regular para comparar o argumento.",
-    "policies.editor.hint.contains": "Uma substring ou item de lista. Deixe em branco para permitir qualquer valor.",
     "policies.editor.hint.number": "Um número para comparar.",
-    "policies.editor.hint.equals": "O valor que o argumento deve igualar. Deixe em branco para permitir qualquer valor.",
     "policies.editor.loading_choices": "Carregando opções…",
     "policies.editor.pick_value": "(escolha um valor)",
     "policies.editor.placeholder.blank": "geralmente deixado em branco",
@@ -475,8 +454,6 @@
     "advanced.individual_fetch_batch_size.help": "Buscas de configuração simultâneas por ID. Diminua para 1 em servidores HA seriais.",
     "advanced.enable_history_query_guardrails.label": "Proteções de consulta de histórico",
     "advanced.enable_history_query_guardrails.help": "Rejeitar consultas do gravador que excedem orçamentos conservadores de entidade e intervalo de tempo. Desativado por padrão.",
-    "advanced.hacs_refresh_after_update.label": "Atualizar o componente no HACS após uma atualização",
-    "advanced.hacs_refresh_after_update.help": "Na inicialização após uma atualização do servidor, peça ao HACS (o Marketplace no Home Assistant 2026.11+) para verificar novamente o repositório HA-MCP, para que sua atualização correspondente apareça imediatamente em vez de esperar pela próxima verificação em segundo plano. Desativado por padrão; instalações que já fizeram isso o mantêm ativado.",
     "advanced.ha_tool_concurrency.label": "Concorrência de ferramenta do Home Assistant",
     "advanced.ha_tool_concurrency.help": "Limite opcional para chamadas de ferramenta externas do Home Assistant em todas as sessões. A concorrência interna de REST, WebSocket e fan-out por ferramenta permanece inalterada. 0 mantém o comportamento ilimitado. Uma chamada esperando por capacidade falha após 60 segundos.",
     "advanced.dashboard_screenshot_engine_url.label": "URL do motor de captura de tela do painel",
@@ -526,7 +503,6 @@
     "addon.secret_path.name": "Substituição do caminho secreto",
     "addon.secret_path.description": "Caminho HTTP personalizado opcional para o servidor MCP. Deixe vazio para usar o caminho seguro gerado automaticamente.",
     "addon.enable_security_policy_tool.name": "Permitir que agentes de IA editem políticas de segurança de ferramentas",
-    "addon.enable_security_policy_tool.description": "Registra a ferramenta ha_manage_security_policy, que permite que agentes de IA conectados leiam e reescrevam as políticas de segurança das ferramentas — incluindo a remoção de portões de aprovação. Desativado por padrão. Independente da opção Políticas de Segurança de Ferramentas acima: isso controla quem pode editar as regras, não se elas são aplicadas. A ferramenta não pode ver ou decidir aprovações pendentes. Para manter um humano no ciclo, restrinja a ferramenta antes de ativá-la: ative \"segurança restrita\" para Gerenciar Política de Segurança na aba Ferramentas da interface web. Requer reinício para entrar em vigor.",
     "addon.disabled_tools.name": "Ferramentas desativadas (separadas por vírgulas)",
     "addon.disabled_tools.description": "As ferramentas listadas aqui são forçadas a serem desativadas e bloqueadas na interface web de Configurações (aba Ferramentas) — elas não podem ser reativadas lá sem desmarcar esta opção primeiro. Um pequeno conjunto de ferramentas obrigatórias (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) não pode ser desativado e continua funcionando mesmo se listado aqui. ha_get_skill_guide pode ser desativado apenas enquanto o modo de melhores práticas estritas (enable_strict_mandatory_bps) estiver desativado. Nomes de ferramentas separados por vírgulas (ex: ha_call_event,ha_eval_template).",
     "addon.pinned_tools.name": "Ferramentas fixadas (separadas por vírgulas)",
@@ -745,8 +721,7 @@
       "description": "Obtenha rastreamentos de execução para automações e scripts para depurar problemas."
     },
     "ha_get_camera_image": {
-      "title": "Obter Imagem da Câmera",
-      "description": "Obtenha uma imagem de snapshot de uma entidade de câmera do Home Assistant."
+      "title": "Obter Imagem da Câmera"
     },
     "ha_get_dashboard_screenshot": {
       "title": "Obter Captura de Tela do Painel",
@@ -759,10 +734,6 @@
     "ha_get_entity": {
       "title": "Obter Entidade",
       "description": "Obtenha entradas do registro de entidades, ou sem uma entidade as configurações do registro e entidades expostas."
-    },
-    "ha_get_hacs_info": {
-      "title": "Obter Informações do HACS",
-      "description": "Obtenha dados do HACS (Home Assistant Community Store) — pesquise na loja ou obtenha detalhes do repositório."
     },
     "ha_get_history": {
       "title": "Obter Histórico ou Estatísticas da Entidade",
@@ -832,10 +803,6 @@
       "title": "Gerenciar Preferências do Painel de Energia",
       "description": "Gerencie as preferências do Painel de Energia do Home Assistant: rede / solar /"
     },
-    "ha_manage_hacs": {
-      "title": "Gerenciar HACS",
-      "description": "Gerencie HACS (Home Assistant Community Store) — instale/atualize, remova, adicione repositórios personalizados ou atualize repositório em"
-    },
     "ha_manage_pipeline": {
       "title": "Gerenciar Pipeline do Assist",
       "description": "Gerencie pipelines do Assist do Home Assistant."
@@ -853,8 +820,7 @@
       "description": "Gerencie temas de frontend do Home Assistant."
     },
     "ha_manage_updates": {
-      "title": "Gerenciar Atualizações",
-      "description": "Gerencie atualizações do Home Assistant (listar, detalhes, instalar, ignorar) e problemas de Reparos (ignorar)."
+      "title": "Gerenciar Atualizações"
     },
     "ha_read_file": {
       "title": "Ler Arquivo",

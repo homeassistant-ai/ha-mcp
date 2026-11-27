@@ -72,14 +72,13 @@ configuration:
       padrão. Requer reinício para ter efeito.
   enable_security_policy_tool:
     name: Permitir que agentes de IA editem políticas de segurança de ferramentas
-    description: 'Registra a ferramenta ha_manage_security_policy, que permite que
-      agentes de IA conectados leiam e reescrevam as políticas de segurança das ferramentas
-      — incluindo a remoção de portões de aprovação. Desativado por padrão. Independente
-      da opção Políticas de Segurança de Ferramentas acima: isso controla quem pode
-      editar as regras, não se elas são aplicadas. A ferramenta não pode ver ou decidir
-      aprovações pendentes. Para manter um humano no ciclo, restrinja a ferramenta
-      antes de ativá-la: ative "segurança restrita" para Gerenciar Política de Segurança
-      na aba Ferramentas da interface web. Requer reinício para entrar em vigor.'
+    description: 'Registers the ha_manage_security_policy tool, which lets connected
+      AI agents read and rewrite the tool security policies — including removing approval
+      gates. Off by default. Independent of the Tool Security Policies option above:
+      this controls who can edit the rules, not whether they are enforced. The tool
+      cannot see or decide pending approvals. To keep a human in the loop, gate the
+      tool before enabling it: switch on "security gated" for Manage Security Policy
+      in the Tools tab of the web UI. Requires restart to take effect.'
   read_only_mode:
     name: Modo Somente Leitura
     description: Desativa todas as ferramentas de escrita e remove a capacidade das
@@ -89,16 +88,14 @@ configuration:
       de escrita bloqueadas. Mesma alternância da aba Ferramentas da interface web.
       Desativado por padrão. Requer reinício para ter efeito.
   redact_secrets:
-    name: Redigir Segredos
-    description: Redige segredos das respostas das ferramentas antes que cheguem ao
-      assistente de IA. Opções de Aplicativos (add-ons) e campos de integração marcados
-      como senhas são substituídos por um marcador de definido/vazio (para que "esta
-      credencial está configurada?" continue respondível), e outras respostas de ferramentas
-      são limpas de valores secretos que o servidor já viu (valores com menos de 6
-      caracteres são ignorados, pois substituir pequenos fragmentos corromperia a
-      saída não relacionada). Outros campos não são detectados, exceto chaves privadas
-      nas opções de aplicativos e os nomes de opções de aplicativos listados abaixo.
-      Desativado por padrão.
+    name: Redact Secrets
+    description: Redacts secrets from tool responses before they reach the AI assistant.
+      App (add-on) options and integration fields marked as passwords are replaced
+      with a set/empty marker (so "is this credential configured?" stays answerable),
+      and other tool responses are scrubbed of secret values the server has already
+      seen (values shorter than 6 characters are skipped, since replacing tiny fragments
+      would corrupt unrelated output). Other fields are not detected, except private
+      keys in app options and the app option names listed below. Off by default.
   redact_app_option_keys:
     name: Chaves de opção de aplicativo extras para ocultar
     description: Nomes de opções de aplicativo (add-on) para ocultar, como campos
@@ -132,29 +129,26 @@ configuration:
       para ter efeito.'
   enable_strict_mandatory_bps:
     name: Modo de melhores práticas estritas
-    description: 'Modo estrito: impede que o cliente use a ferramenta até que possa
-      provar que leu as melhores práticas. Enquanto ativado, as seis ferramentas de
-      escrita de melhores práticas (automacoes, scripts, cenas, auxiliares, paineis,
-      YAML bruto) são bloqueadas e retornam um erro direcionando o cliente a ler a
-      habilidade de melhores práticas via ha_get_skill_guide e retornar a chave de
-      reconhecimento que obtém lá. Enquanto ativado, a ferramenta ha_get_skill_guide
-      é bloqueada como ativada — é a única publicadora da chave de reconhecimento.
-      Filho da opção "Anexar habilidades de melhores práticas em escritas" acima e
-      inerte enquanto o pai estiver desativado. Requer reinício para ter efeito.'
+    description: 'Strict mode: prevents the client from using the tool until it can
+      prove that it read the best practices. While on, the six best-practice write
+      tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked
+      and return an error directing the client to read the best-practices skill via
+      ha_get_skill_guide and pass back the acknowledgment key it obtains there. While
+      on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
+      of the acknowledgment key. Child of the "Attach best-practice skills on writes"
+      option above and inert while that parent is off. Requires restart to take effect.'
   enable_yaml_config_editing:
     name: Ativar edição de configuração YAML (beta)
-    description: Recurso beta. Permite que assistentes de IA adicionem, substituam
-      ou removam chaves de nível superior em configuration.yaml e packages/*.yaml.
-      Apenas chaves na lista de permissões são permitidas (por exemplo, template,
-      sensor, command_line, mqtt, knx); chaves principais como homeassistant, http
-      e recorder são bloqueadas. Cada edição valida a sintaxe YAML, executa uma verificação
-      de configuração e cria um backup automático. Alterações na maioria das chaves
-      exigem um reinício completo do HA para ter efeito. Consulte docs/beta.md para
-      limitações conhecidas. Ferramentas dedicadas (automacoes, scripts, cenas, auxiliares,
-      sensores de template) devem ser preferidas quando disponíveis. REQUER que a
-      alternância mestre "Ativar recursos beta" acima (e na interface web) esteja
-      ativada — caso contrário, esta sub-flag é ignorada em tempo de execução, independentemente
-      do seu valor aqui.
+    description: Beta feature. Allows AI assistants to add, replace, or remove top-level
+      keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed
+      (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant,
+      http, and recorder are blocked. Each edit validates YAML syntax, runs a config
+      check, and creates an automatic backup. Changes to most keys require a full
+      HA restart to take effect. See docs/beta.md for known limitations. Dedicated
+      tools (automations, scripts, scenes, helpers, template sensors) should be preferred
+      when available. REQUIRES the master "Enable beta features" toggle above (and
+      in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
+      of its value here.
   enable_yaml_edit_confirm:
     name: Exigir confirmação para edições YAML (pré-visualização de diff)
     description: 'Sub-interruptor da edição de configuração YAML, ATIVADO por padrão
@@ -247,10 +241,9 @@ configuration:
       em tempo de execução, independentemente do seu valor aqui.'
   enable_auto_backup:
     name: Auto-backup de edições
-    description: Salve um snapshot de uma entidade antes que cada chamada de ferramenta
-      de escrita ou exclusão a altere. Enquanto esta opção estiver desativada, as
-      ferramentas de arquivo e YAML bruto (ha_write_file, ha_delete_file, ha_config_set_yaml)
-      se recusam a escrever.
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
   auto_backup_throttle_minutes:
     name: Limite de auto-backup (minutos)
     description: Com que frequência o backup automático pode capturar a mesma entidade.
@@ -261,22 +254,30 @@ configuration:
     description: O máximo de instantâneos mantidos por entidade. Cada nova captura
       remove os instantâneos mais antigos acima deste número. Intervalo 1–10000.
   enable_snapshot_actions:
-    name: Permitir ações de snapshot completo do HA
-    description: Permitir que assistentes de IA gerenciem snapshots completos do Home
-      Assistant através de ha_manage_backup e os serviços de backup e comandos equivalentes
-      em ha_call_service. Desativar esta opção bloqueia todas as ações de snapshot,
-      incluindo a listagem. A exclusão de snapshots está disponível apenas através
-      de ha_manage_backup e também requer Permitir exclusão de snapshots. Edições
-      de backups e as ações de backup que uma pessoa realiza na interface de configurações
-      web permanecem disponíveis.
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
   backup_read_only:
     name: Tornar o gerenciamento de backup somente leitura
-    description: Permitir que assistentes de IA listem, visualizem e comparem edições
-      de backups, e listem snapshots completos do HA quando as ações de snapshot estiverem
-      ativadas. Bloquear a criação, restauração (incluindo restaurações de edição)
-      e exclusão manual de backups, incluindo os serviços de backup e comandos equivalentes
-      em ha_call_service. Backups automáticos pré-edição continuam. As ações de backup
-      que uma pessoa realiza na interface de configurações web permanecem disponíveis.
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
+  enable_settings_transfer_actions:
+    name: Allow ha_manage_backup to export and import settings
+    description: Allow AI assistants to download this server's settings file and import
+      one through ha_manage_backup, as the Export and Import buttons on the Server
+      Settings tab do. An import keeps the human-only settings, and changing the security
+      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
+      security policy access. An import can also turn on developer mode, tools and
+      features, and turn off protections such as secret redaction, SSL verification
+      and the IPv6 allowlist, as the file says, so check your settings after an AI
+      assistant imports one.
   enable_snapshot_delete:
     name: Permitir exclusão de instantâneos
     description: Permitir que ha_manage_backup exclua instantâneos completos do Home
