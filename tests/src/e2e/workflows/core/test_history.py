@@ -334,7 +334,7 @@ class TestGetHistory:
                 "end_time": end.isoformat(),
                 "minimal_response": minimal,
                 "significant_changes_only": False,
-                "no_attributes": minimal,
+                "no_attributes": False,
             }
         )
         assert native["success"], native
@@ -405,7 +405,7 @@ class TestGetHistory:
                     "end_time": end.isoformat(),
                     "minimal_response": True,
                     "significant_changes_only": True,
-                    "no_attributes": True,
+                    "no_attributes": False,
                 }
             )
             assert native["success"], native
@@ -440,8 +440,11 @@ class TestGetHistory:
         ) == pytest.approx((end - start).total_seconds(), abs=0.01)
         assert result["data"]["entities"][1]["summary"]["distinct_states"] == 0
         # Only the unrecorded entity is flagged; the seed has a window-start state.
-        assert "No recorded states" in result["warnings"][0]
-        assert missing in result["warnings"][0]
+        assert_component_path(result)
+        assert any(
+            "No recorded states" in warning and missing in warning
+            for warning in result["warnings"]
+        )
         assert not any(target in warning for warning in result["warnings"])
 
 
@@ -505,6 +508,7 @@ class TestGetHistoryStatisticsSource:
             )
         (entity,) = result.get("data", result)["entities"]
         assert "statistics" not in entity
+        assert_component_path(result)
         # The seeded total only rises, so a week of it is a positive change.
         assert entity["summary"]["change"] > 0
         assert entity["unit_of_measurement"] == "kWh"

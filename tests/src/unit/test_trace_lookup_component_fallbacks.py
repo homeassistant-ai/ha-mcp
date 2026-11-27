@@ -101,6 +101,7 @@ async def test_an_unknown_component_command_falls_back_and_drops_the_capability(
     )
 
     assert match.run_id == run_id
+    assert match.warning and "only a run's own context" in match.warning
     assert _sent(component_core_client) == [
         {**COMPONENT_LOOKUP, "type": retired},
         CORE_LOOKUP,

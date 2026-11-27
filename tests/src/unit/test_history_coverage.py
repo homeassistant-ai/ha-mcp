@@ -58,6 +58,26 @@ def _warnings(result: dict[str, Any]) -> str:
     return " ".join(result.get("warnings", []))
 
 
+@pytest.mark.parametrize(
+    "bridge", ["history_page", "statistics_units", "recorder_status"]
+)
+async def test_an_advertised_recorder_bridge_that_fails_is_disclosed(
+    recorded: Recorder,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    bridge: str,
+) -> None:
+    from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
+
+    monkeypatch.delitem(hass.data["websocket_api"], "ha_mcp_tools/" + bridge)
+    if bridge == "statistics_units":
+        result = await _summary(component_core_client, entity_ids=ENTITY)
+    else:
+        result = await _history(component_core_client, START, START + HOUR)
+    assert COMPONENT_VIA_MARKETPLACE in _warnings(result)
+
+
 @pytest.fixture
 async def recorded(recorder_mock: Recorder, hass: HomeAssistant) -> Recorder:
     """Core's recorder and history, in UTC."""
@@ -170,8 +190,13 @@ async def _unrecorded(hass: HomeAssistant, client: HomeAssistantClient) -> str:
 async def test_an_entity_the_recorder_excludes_is_named(
     recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    assert f"The recorder does not record: {ENTITY}." in await _unrecorded(
-        hass, component_core_client
+    with sent_messages(component_core_client) as sent:
+        warnings = await _unrecorded(hass, component_core_client)
+    assert f"The recorder does not record: {ENTITY}." in warnings
+    assert "Marketplace" not in warnings
+    assert all(
+        call.args[0]["type"] != "recorder/entity_options/get"
+        for call in sent.call_args_list
     )
 
 

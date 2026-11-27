@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.recorder import Recorder
+from homeassistant.components.recorder import history as core_history
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
@@ -150,6 +151,25 @@ async def test_history_page_matches_core(
         call.args[0]["type"] != "history/history_during_period"
         for call in sent.call_args_list
     )
+
+
+@pytest.mark.skipif(
+    not hasattr(core_history, "get_significant_states_serialized"),
+    reason="Core 2026.12 per-entity serialization",
+)
+@pytest.mark.usefixtures("recorder")
+async def test_history_summary_uses_cores_per_entity_serializer(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    await _record(hass, "switch.pump", ("off", _BEFORE), ("on", 5))
+    with patch.object(
+        core_history,
+        "get_significant_states_serialized",
+        wraps=core_history.get_significant_states_serialized,
+    ) as read:
+        result = await _query(component_core_client, "switch.pump", 10, summary=True)
+    read.assert_called_once()
+    assert _summary(result, "switch.pump")["states"]["on"]["duration_s"] == 5
 
 
 @pytest.mark.usefixtures("recorder")

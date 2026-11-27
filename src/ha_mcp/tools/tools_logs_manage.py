@@ -295,10 +295,8 @@ class LogsManageTools:
         # is an event it stores), so every write waits, with no list of them.
         if action not in RECORDER_READS:
             status, settled = await self._recorder_settled(warnings)
-            if status is None or action.startswith("recorder."):
-                info = await self._recorder_info(warnings)
-                if action.startswith("recorder."):
-                    response["recorder"] = {**info, **(status or {})}
+            info = await self._recorder_info(warnings)
+            response["recorder"] = {**info, **(status or {})}
         if not named:
             return
         after, failure = await self._statistics_metadata(named)

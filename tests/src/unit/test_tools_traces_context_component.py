@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from freezegun import freeze_time
@@ -38,6 +39,7 @@ class TestComponentContextLookup:
         self,
         hass: HomeAssistant,
         component_core_client: HomeAssistantClient,
+        sent: AsyncMock,
     ) -> None:
         """A parent context resolves from the live store, earliest match first."""
         # The stores run under a frozen clock so Core's own start timestamps
@@ -59,6 +61,11 @@ class TestComponentContextLookup:
         )
 
         assert result["success"] is True
+        assert not result.get("warnings")
+        assert all(
+            call.args[0]["type"] not in {"trace/get", "trace/contexts"}
+            for call in sent.call_args_list
+        )
         assert result["context_match"] == "parent"
         assert result["context_id"] == "parent-1"
         assert result["context_scanned"] == 2

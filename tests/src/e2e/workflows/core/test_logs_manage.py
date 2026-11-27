@@ -160,13 +160,14 @@ async def test_a_recorder_service_reports_how_it_waited(mcp_client: Client) -> N
         "ha_manage_logs", {"action": "recorder.enable"}
     )
 
+    assert_component_path(result)
+    assert result["recorder"]["recording"] is True
     if component_surface_available():
-        assert set(result["recorder"]) == {
+        assert set(result["recorder"]) >= {
             "purge_keep_days",
             "auto_purge",
             "oldest_state",
         }
         assert "warnings" not in result
     else:
-        assert "recorder" not in result
         assert any("may still be running" in warning for warning in result["warnings"])

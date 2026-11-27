@@ -86,6 +86,22 @@ async def _refusal(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]
     return response
 
 
+async def test_history_resolves_a_target_with_core(
+    recorded: None,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    sent: AsyncMock,
+) -> None:
+    hass.states.async_set("sensor.outside", "8")
+    result = await _history(
+        component_core_client, target={"entity_id": "sensor.outside"}
+    )
+    assert [e["entity_id"] for e in result["data"]["entities"]] == ["sensor.outside"]
+    assert any(
+        call.args[0]["type"] == "extract_from_target" for call in sent.call_args_list
+    )
+
+
 def _window(days: int) -> dict[str, str]:
     return {
         "start_time": START.isoformat(),

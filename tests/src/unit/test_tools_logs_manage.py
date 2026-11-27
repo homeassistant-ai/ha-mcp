@@ -331,6 +331,7 @@ async def test_describe_returns_cores_command_schema_through_the_component(
     )
 
     assert result["result"]["status"] == "available"
+    assert not result.get("warnings")
     assert "adjustment" in result["result"]["schema"]["properties"]
     sent.assert_not_called()
 
@@ -343,6 +344,30 @@ async def test_describe_without_the_component_says_why_it_cannot(
     assert result["result"]["status"] == "unavailable"
     assert result["result"]["reason"] in result["warnings"]
     sent.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("bridge", "action", "kwargs"),
+    [
+        ("entity_aliases", "recorder/list_statistic_ids", {"query": "energy"}),
+        ("core_contract", "recorder/clear_statistics", {"describe": True}),
+        ("recorder_status", "recorder.enable", {}),
+    ],
+)
+async def test_failed_component_read_warns_after_core_answers(
+    component_client: HomeAssistantClient,
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+    bridge: str,
+    action: str,
+    kwargs: dict[str, Any],
+) -> None:
+    from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
+
+    monkeypatch.delitem(hass.data["websocket_api"], "ha_mcp_tools/" + bridge)
+    result = await _manage(component_client, action, **kwargs)
+    assert result["success"]
+    assert any(COMPONENT_VIA_MARKETPLACE in w for w in result["warnings"])
 
 
 # --- Waiting for the recorder ------------------------------------------------
@@ -703,6 +728,12 @@ async def test_service_data_may_use_the_websocket_envelope_keys(
         await _manage(client, "logger.set_level", data={"type": "debug"})
 
         assert named.level == logging.DEBUG
+        await _manage(
+            client,
+            "logger/log_level",
+            data={"module": "type", "level": "info", "persistence": "none"},
+        )
+        assert named.level == logging.INFO
     finally:
         # Core's logger setup changes process-wide state.
         named.setLevel(level)
