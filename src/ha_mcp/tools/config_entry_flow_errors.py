@@ -16,7 +16,7 @@ from ..errors import ErrorCode, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
 from .component_flow import core_flow_step
 from .config_entry_flow_introspect import menu_choices
-from .flow_translations import fetch_flow_strings, flow_text, strings_unread_warning
+from .flow_translations import flow_text, strings_in_language, strings_unread_warning
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ async def _flow_texts(
             }
     if not isinstance(domain, str):
         return {}
-    strings = await fetch_flow_strings(client, domain, path.split(".")[0])
+    strings, unread = await strings_in_language(client, domain, path.split(".")[0])
     if strings is None:
         return {"warnings": [strings_unread_warning(domain)]}
     placeholders = {
@@ -106,7 +106,10 @@ async def _flow_texts(
         for name, key in keys.items()
         if isinstance(key, str)
     }
-    return {name: text for name, text in texts.items() if text}
+    found: dict[str, Any] = {name: text for name, text in texts.items() if text}
+    if unread:
+        found["warnings"] = [unread]
+    return found
 
 
 async def _core_step(

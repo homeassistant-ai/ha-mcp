@@ -85,6 +85,18 @@ async def fetch_flow_strings(
     return resources if isinstance(resources, dict) else {}
 
 
+async def strings_in_language(
+    client: Any, domain: str, category: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """``fetch_flow_strings`` in Core's configured language, and the warning
+    when that language could not be read (English is read then)."""
+    language, unread = await configured_language(
+        client, f"Home Assistant's texts for {domain}"
+    )
+    strings = await fetch_flow_strings(client, domain, category, language=language)
+    return strings, unread
+
+
 def field_help(
     strings: Mapping[str, Any],
     domain: str,

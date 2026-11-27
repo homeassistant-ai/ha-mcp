@@ -9,6 +9,7 @@ the form, on every version.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ import probatio
 import pytest
 from homeassistant.components import websocket_api
 from homeassistant.components.frontend import websocket_get_translations
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
@@ -25,6 +27,8 @@ from homeassistant.helpers.schema_config_entry_flow import (
     SchemaFlowFormStep,
 )
 from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -40,9 +44,11 @@ from pytest_homeassistant.common import (
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
+from ha_mcp.tools.tools_integrations import IntegrationTools
 
 from ._component_core import ws_result
 from ._core_setup import install_custom_helper, with_config_component
+from ._mock_flow_integration import answer_translations, mock_flow_integration
 
 # Remove once the hacs.json minimum is 2026.12.
 needs_formatter = pytest.mark.skipif(
@@ -310,3 +316,61 @@ async def test_an_options_abort_without_its_own_text_gets_home_assistants(
     )
 
     assert result["step"]["description"] == text
+
+
+# --- Core's language ---------------------------------------------------------------
+
+_LANGUAGE_PROBE = "flow_format_language_probe"
+
+
+def _language_strings(title: str, submit: str, unit_a: str) -> dict[str, Any]:
+    return {
+        "config": {"step": {"user": {"title": title, "submit": submit}}},
+        "selector": {"unit": {"options": {"a": unit_a}}},
+    }
+
+
+class _LanguageFlow(ConfigFlow):
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_show_form(
+            step_id="user",
+            data_schema=probatio.Schema(
+                {
+                    probatio.Required("unit"): SelectSelector(
+                        SelectSelectorConfig(options=["a", "b"], translation_key="unit")
+                    )
+                }
+            ),
+        )
+
+
+async def test_a_flows_texts_are_in_core_s_language(
+    hass: HomeAssistant,
+    flow_client: HomeAssistantClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a German Home Assistant the texts the tool reads itself (the
+    submit label, a select's option labels) are German too, beside what
+    Core's formatter gives, not English."""
+    answer_translations(hass)
+    english = _language_strings("Connect", "Save", "Amps")
+    mock_flow_integration(hass, _LANGUAGE_PROBE, tmp_path, monkeypatch, english)
+    folder = (
+        tmp_path / "homeassistant" / "components" / _LANGUAGE_PROBE / "translations"
+    )
+    german = _language_strings("Verbinden", "Speichern", "Ampere")
+    (folder / "de.json").write_text(json.dumps(german), encoding="utf-8")
+    await hass.config.async_update(language="de")
+    tools = IntegrationTools(await with_config_component(hass, flow_client))
+
+    with mock_config_flow(_LANGUAGE_PROBE, _LanguageFlow):
+        result = await tools.ha_set_integration(domain=_LANGUAGE_PROBE)
+
+    assert (result["title"], result["submit"]) == ("Verbinden", "Speichern")
+    assert _by_name(result["fields"])["unit"]["option_labels"] == {"a": "Ampere"}
+    await tools.ha_set_integration(
+        domain=_LANGUAGE_PROBE, flow_id=result["flow_id"], abort=True
+    )

@@ -35,8 +35,8 @@ from ..config_entry_flow_errors import (
 )
 from ..config_entry_flow_introspect import abort_probe_flow, menu_choices
 from ..flow_translations import (
-    fetch_flow_strings,
     field_help,
+    strings_in_language,
     strings_unread_warning,
 )
 from ..helpers import exception_to_structured_error, raise_tool_error
@@ -229,7 +229,7 @@ async def _with_option_labels(
     selects = _translated_selects(schema)
     if not selects:
         return None
-    strings = await fetch_flow_strings(client, domain, "selector")
+    strings, unread = await strings_in_language(client, domain, "selector")
     if strings is None:
         return strings_unread_warning(domain)
     labels: dict[str, dict[str, str]] = {}
@@ -241,7 +241,7 @@ async def _with_option_labels(
         if found:
             labels[name] = found
     _put_labels(fields, labels)
-    return None
+    return unread
 
 
 async def _with_field_texts(
@@ -265,10 +265,12 @@ async def _with_field_texts(
         return None
     if not domain:
         return None
-    strings = await fetch_flow_strings(client, domain, path.partition(".")[0])
+    strings, unread = await strings_in_language(client, domain, path.partition(".")[0])
     if strings is None:
         described["warnings"] = [strings_unread_warning(domain)]
         return None
+    if unread:
+        described["warnings"] = [unread]
     filled = {**(placeholders or {}), **(step.get("description_placeholders") or {})}
     help_text = field_help(strings, domain, path, step_id, filled)
     _with_help(described["fields"], help_text)
