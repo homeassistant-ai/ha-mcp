@@ -25,7 +25,6 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.client.websocket_client import get_websocket_client
 from ha_mcp.tools import automation_errors
 from ha_mcp.tools.automation_errors import (
-    REJECTION_PREFIX,
     closest_matches,
     core_rejection_text,
     failed_section_from_core,
@@ -36,6 +35,8 @@ from ha_mcp.tools.automation_errors import (
 )
 from ha_mcp.tools.best_practice_checker import check_automation_config
 from ha_mcp.visibility.result_payloads import serialize_error
+
+REJECTION_PREFIX = "Home Assistant rejected the automation: "
 
 # --- the failed section ---------------------------------------------------------
 

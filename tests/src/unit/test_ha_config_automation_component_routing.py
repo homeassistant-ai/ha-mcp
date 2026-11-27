@@ -31,7 +31,6 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.client.websocket_client import websocket_manager
 from ha_mcp.tools import component_automation
-from ha_mcp.tools.automation_errors import REJECTION_PREFIX
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
 from ._automation_core import (
@@ -45,6 +44,8 @@ from ._automation_core import (
 )
 from ._client_spies import sent_messages
 from ._tool_errors import error_body
+
+REJECTION_PREFIX = "Home Assistant rejected the automation: "
 
 _PORCH = {"action": "light.turn_on", "target": {"entity_id": "light.porch"}}
 

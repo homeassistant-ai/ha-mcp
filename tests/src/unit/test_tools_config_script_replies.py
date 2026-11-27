@@ -27,6 +27,7 @@ async def test_config_without_sequence_or_blueprint_gets_cores_refusal(
     )
 
     assert body["error"]["code"] == "VALIDATION_FAILED"
+    assert body["error"]["message"].startswith("Home Assistant rejected the script: ")
     assert "required key not provided" in body["error"]["message"]
     assert body["failed_section"] == "schema"
     assert not any("blueprint" in s.lower() for s in body["error"]["suggestions"])

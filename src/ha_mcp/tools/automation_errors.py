@@ -31,12 +31,6 @@ from .helpers import bp_warnings_suggestion, raise_tool_error
 logger = logging.getLogger(__name__)
 
 
-def _rejection_prefix(domain: str) -> str:
-    return f"Home Assistant rejected the {domain}: "
-
-
-REJECTION_PREFIX = _rejection_prefix("automation")
-
 # Bounds the wait for a platform subscription's first event, which Core sends
 # right after the subscription result.
 DESCRIPTIONS_TIMEOUT_S = 5.0
@@ -208,7 +202,7 @@ async def raise_core_rejection(
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_FAILED,
-            f"{_rejection_prefix(domain)}{core_text}",
+            f"Home Assistant rejected the {domain}: {core_text}",
             suggestions=suggestions,
             context=error_context,
         )
