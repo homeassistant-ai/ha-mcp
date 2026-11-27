@@ -27,6 +27,7 @@
           "remote_access": "Permite que clientes MCP se conectem através de um webhook do Home Assistant, que funciona onde quer que o Home Assistant seja acessível (incluindo Nabu Casa). Login do Home Assistant: clientes como claude.ai fazem login com uma conta de administrador do Home Assistant. OAuth Legado: um ID de Cliente e Segredo para colar em clientes que precisam de um. URL Secreta: o próprio link do webhook é a única credencial — qualquer um que o tenha pode usar todas as ferramentas.",
           "bind_host": "Quem pode se conectar diretamente à própria porta do servidor. Somente esta máquina é o padrão seguro. A rede local permite que outros dispositivos em sua rede se conectem com a URL de acesso direto secreta mostrada na tela de Configuração.",
           "admin_token": "Um token de acesso de longa duração de uma conta de administrador. O seu próprio funciona: abra seu perfil (seu nome na parte inferior da barra lateral), selecione a aba Segurança e, em Tokens de acesso de longa duração, selecione Criar token. Seu próprio token também funciona de fora da sua rede doméstica se vazar, e o Home Assistant registra as alterações do servidor sob seu nome. Mais seguro: uma conta criada apenas para o HA-MCP, com Acesso local apenas ativado (veja os campos abaixo).",
+          "admin_username": "Apenas para uma conta criada exclusivamente para o HA-MCP, em Configurações → Pessoas → Adicionar pessoa com Permitir login, Apenas acesso local e Administrador ativados. Nunca insira seu próprio login aqui: para usar sua conta, cole o token dela acima. O HA-MCP cria o token desta conta (chamado HA-MCP Server), para que ninguém precise fazer login com ela, e a senha não é armazenada. O token funciona apenas na sua rede local, onde o servidor é executado, e o Home Assistant registra as alterações do servidor nesta conta.",
           "admin_password": "Usada uma vez, para criar o token. Nunca sua própria senha."
         }
       }
@@ -145,7 +146,8 @@
       }
     },
     "component_outdated": {
-      "title": "Atualize a integração HA-MCP"
+      "title": "Atualize a integração HA-MCP",
+      "description": "O servidor ha-mcp instalado requer a integração HA-MCP {required} ou mais recente, mas você tem a {installed}. Atualize a integração em Configurações > Sistema > Atualizações (se nenhuma atualização aparecer ainda, abra a integração HA-MCP no Marketplace e use 'Atualizar informações') e reinicie o Home Assistant. O servidor continua funcionando enquanto isso, mas alguns recursos mais novos podem não funcionar até que a integração seja atualizada."
     },
     "legacy_oauth_restart": {
       "title": "Reinicie o Home Assistant para aplicar as configurações OAuth legadas",
@@ -189,11 +191,13 @@
       "fix_flow": {
         "step": {
           "confirm": {
-            "title": "Manter o HA-MCP em uma única listagem da loja?"
+            "title": "Manter o HA-MCP em uma única listagem da loja?",
+            "description": "O HA-MCP está marcado como instalado a partir de ambos {records}. Eles contêm a mesma integração (o segundo é o espelho de distribuição de instalações anteriores). O Marketplace permite que apenas uma listagem seja dona de uma integração, portanto nenhuma delas pode atualizar o HA-MCP.\n\nEnviar mantém **{keep}**, a listagem no catálogo padrão que não precisa de repositório personalizado, e marca a outra listagem como não instalada. Nada é excluído: suas entradas, configurações e arquivos do HA-MCP permanecem exatamente como estão, e a partir de agora as atualizações aparecerão em {keep} normalmente."
           }
         },
         "abort": {
-          "already_resolved": "O HA-MCP está instalado a partir de uma única listagem da loja agora; nada a corrigir."
+          "already_resolved": "O HA-MCP está instalado a partir de uma única listagem da loja agora; nada a corrigir.",
+          "store_unavailable": "O Marketplace ainda não foi carregado, portanto as listagens não podem ser verificadas. Tente novamente em alguns minutos."
         }
       }
     }
@@ -231,8 +235,10 @@
     "connect_webhook_disabled": "O acesso remoto via webhook está desativado (modo somente local).",
     "oauth_creds_pending": "O ID do Cliente e o Segredo do Cliente aparecerão aqui assim que o servidor for iniciado.",
     "oauth_not_serving": "O OAuth legado ainda não está servindo estes — reinicie o Home Assistant quando solicitado, para ativá-los.",
+    "oauth_select_legacy_mode": "Para clientes que não oferecem suporte ao OAuth moderno, altere o modo para OAuth legado para gerar um ID e um segredo. Se você tiver problemas para se conectar ao usar \"Entrar com o Home Assistant\", recomendamos alternar para \"URL de webhook secreta\" para testar sua conexão primeiro antes de tentar o OAuth legado.",
     "panel_hint": "Abra o [painel de configurações do HA-MCP](/ha-mcp) para gerenciamento de ferramentas e configurações do servidor.",
     "tools_module_installed": "Módulo de ferramentas de arquivo e YAML beta/avançado (opcional): Instalado",
+    "tools_module_not_installed": "Módulo beta/avançado de ferramentas de arquivos e YAML (opcional): Não instalado — pressione \"Adicionar entrada\" na página desta integração e escolha \"HA-MCP File & YAML Tools\" para adicioná-lo",
     "tools_module_not_loaded": "Módulo de ferramentas de arquivo e YAML beta/avançado (opcional): Instalado mas não carregado — ative ou recarregue a entrada \"HA-MCP File & YAML Tools\" na página desta integração",
     "version_line": "Componente {component_version} - Servidor ha-mcp {server_version} ({source})",
     "server_source_paired": "instalado com esta versão do componente",
@@ -244,6 +250,9 @@
     "switch": {
       "server_access": {
         "name": "Acesso"
+      },
+      "server_read_only_mode": {
+        "name": "Modo Somente Leitura"
       }
     }
   }

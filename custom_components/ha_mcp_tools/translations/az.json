@@ -250,6 +250,9 @@
     "switch": {
       "server_access": {
         "name": "Giriş"
+      },
+      "server_read_only_mode": {
+        "name": "Yalnız oxuma rejimi"
       }
     }
   }
