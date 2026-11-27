@@ -83,29 +83,73 @@ def _summary(result: dict[str, Any], entity_id: str) -> dict[str, Any]:
 
 
 @pytest.mark.usefixtures("recorder")
-@pytest.mark.parametrize(("minimal", "no_attributes", "significant", "include_start"), [
-    (True, False, True, True), (False, False, False, True), (True, True, False, False)
-])
+@pytest.mark.parametrize(
+    ("minimal", "no_attributes", "significant", "include_start"),
+    [
+        (True, False, True, True),
+        (False, False, False, True),
+        (True, True, False, False),
+    ],
+)
 async def test_history_page_matches_core(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient,
-    minimal: bool, no_attributes: bool, significant: bool, include_start: bool,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    minimal: bool,
+    no_attributes: bool,
+    significant: bool,
+    include_start: bool,
 ) -> None:
     client = component_core_client
-    await _record(hass, "climate.hall", ("heat", _BEFORE), ("heat", 5), ("off", 20),
-                  temperature={_BEFORE: 19, 5: 20, 20: 20})
-    query = {"entity_ids": ["climate.hall"], "start_time": _iso(0), "end_time": _iso(30),
-             "minimal_response": minimal, "no_attributes": no_attributes,
-             "significant_changes_only": significant, "include_start_time_state": include_start}
-    expected = (await client.send_websocket_message({"type": "history/history_during_period", **query}))["result"]["climate.hall"]
+    await _record(
+        hass,
+        "climate.hall",
+        ("heat", _BEFORE),
+        ("heat", 5),
+        ("off", 20),
+        temperature={_BEFORE: 19, 5: 20, 20: 20},
+    )
+    query = {
+        "entity_ids": ["climate.hall"],
+        "start_time": _iso(0),
+        "end_time": _iso(30),
+        "minimal_response": minimal,
+        "no_attributes": no_attributes,
+        "significant_changes_only": significant,
+        "include_start_time_state": include_start,
+    }
+    expected = (
+        await client.send_websocket_message(
+            {"type": "history/history_during_period", **query}
+        )
+    )["result"]["climate.hall"]
     for order in ("asc", "desc"):
-        reply = await client.send_websocket_message({"type": "ha_mcp_tools/history_page",
-            "query": query, "limit": 1, "offset": 1, "order": order})
+        reply = await client.send_websocket_message(
+            {
+                "type": "ha_mcp_tools/history_page",
+                "query": query,
+                "limit": 1,
+                "offset": 1,
+                "order": order,
+            }
+        )
         page = reply["result"]["entities"]["climate.hall"]
-        assert page == {"states": (expected if order == "asc" else expected[::-1])[1:2], "total_count": len(expected), "first": expected[0]["lu"]}
-    with patch.object(client, "send_websocket_message", new_callable=AsyncMock, wraps=client.send_websocket_message) as sent:
+        assert page == {
+            "states": (expected if order == "asc" else expected[::-1])[1:2],
+            "total_count": len(expected),
+            "first": expected[0]["lu"],
+        }
+    with patch.object(
+        client,
+        "send_websocket_message",
+        new_callable=AsyncMock,
+        wraps=client.send_websocket_message,
+    ) as sent:
         result = await _query(client, "climate.hall", 30, limit=1)
     assert not result.get("warnings")
-    assert all(call.args[0]["type"] != "history/history_during_period" for call in sent.call_args_list)
+    assert all(
+        call.args[0]["type"] != "history/history_during_period"
+        for call in sent.call_args_list
+    )
 
 
 @pytest.mark.usefixtures("recorder")
@@ -168,7 +212,8 @@ async def test_attribute_update_is_not_counted_as_a_state_change(
     result = await _query(core_client, "climate.hall", 30, summary=True)
     rows = await _query(core_client, "climate.hall", 30, order="asc")
     assert [
-        row["attributes"]["temperature"] for row in rows["data"]["entities"][0]["states"]
+        row["attributes"]["temperature"]
+        for row in rows["data"]["entities"][0]["states"]
     ] == [20, 21, 21]
 
     assert [row["state"] for row in rows["data"]["entities"][0]["states"]] == [
@@ -225,8 +270,8 @@ async def test_summary_replaces_rows_with_totals_in_ha_time(
     assert changed_at.timestamp() == _START + 3600
     assert changed_at.utcoffset() == timedelta(hours=-5)
     assert result["data"]["query_params"]["summary"] is True
-    # The window is fully covered, so nothing is flagged.
-    assert "warnings" not in result
+    assert len(result["warnings"]) == 1
+    assert "full history window" in result["warnings"][0]
 
 
 @pytest.mark.usefixtures("recorder")
@@ -337,7 +382,7 @@ async def test_without_summary_the_rows_are_returned_unchanged(
     assert "summary" not in entity
     assert [row["state"] for row in entity["states"]] == ["off", "on"]
     assert result["data"]["query_params"]["summary"] is False
-    assert "warnings" not in result
+    assert any("full history window" in warning for warning in result["warnings"])
 
 
 async def test_offset_with_summary_is_rejected_before_querying(

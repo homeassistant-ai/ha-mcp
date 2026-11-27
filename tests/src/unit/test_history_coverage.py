@@ -471,7 +471,10 @@ async def test_five_minute_statistics_carry_their_own_first_row(
     result = await _late_five_minute_statistics(hass, component_core_client)
 
     assert f"purge_keep_days: {recorded.keep_days}" in _warnings(result)
-    assert f"First short-term statistic for sensor.power: {(START + HOUR).isoformat()}" in _warnings(result)
+    assert (
+        f"First short-term statistic for sensor.power: {(START + HOUR).isoformat()}"
+        in _warnings(result)
+    )
 
 
 async def test_a_recorder_without_states_says_so(
@@ -500,7 +503,9 @@ async def test_summary_accepts_cores_calendar_period(
     recorded: Recorder, core_client: HomeAssistantClient
 ) -> None:
     result = await _summary(
-        core_client, entity_ids="sensor.energy", core_options={"calendar": {"period": "day"}}
+        core_client,
+        entity_ids="sensor.energy",
+        core_options={"calendar": {"period": "day"}},
     )
     assert result["data"]["success"]
 
@@ -522,7 +527,7 @@ async def test_a_summary_without_types_takes_cores_defaults_for_each_statistic(
     changes = [entity["summary"]["change"] for entity in result["data"]["entities"]]
     assert len(changes) == 2
     assert all(isinstance(change, float) for change in changes)
-    assert "warnings" not in result
+    assert "statistics converter could not be read" in _warnings(result)
 
 
 async def test_a_summary_of_an_unknown_statistic_says_the_recorder_has_none(

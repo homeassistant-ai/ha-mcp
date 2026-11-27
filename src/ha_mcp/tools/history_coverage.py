@@ -77,7 +77,10 @@ def _usable(status: dict[str, Any], entity_ids: list[str]) -> bool:
 
 
 async def _recorder_status(
-    client: Any, entity_ids: list[str]
+    client: Any,
+    entity_ids: list[str],
+    *,
+    statistic_ids: list[str] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """The component's recorder status, or the warning that it was not read.
 
@@ -85,13 +88,28 @@ async def _recorder_status(
     component (docs/agents/custom-component.md).
     """
     try:
-        status = await ask_component(client, "recorder_status", entity_ids=entity_ids)
+        params = {"statistic_ids": statistic_ids} if statistic_ids else {}
+        status = await ask_component(
+            client, "recorder_status", entity_ids=entity_ids, **params
+        )
     except HomeAssistantConnectionError:
         status = None
-    if status is not None and _usable(status, entity_ids):
+    if (
+        status is not None
+        and _usable(status, entity_ids)
+        and (
+            not statistic_ids
+            or isinstance(status.get("first_short_term_statistics"), dict)
+        )
+    ):
         return status, []
     return None, [
-        component_unusable_warning(await get_component_caps(client), _STATUS_UNREAD)
+        component_unusable_warning(
+            await get_component_caps(client),
+            "the first short-term statistics and purge settings were not read"
+            if statistic_ids
+            else _STATUS_UNREAD,
+        )
     ]
 
 
@@ -254,6 +272,14 @@ async def statistics_coverage_warnings(
             f"5-minute statistics start after start_time for: {listed}; a longer "
             "period reads the long-term statistics."
         )
-        status, unread = await _recorder_status(client, [])
-        warnings += unread if status is None else _oldest_state_reason(status, start_ts)
+        status, unread = await _recorder_status(client, [], statistic_ids=list(late))
+        warnings.extend(unread)
+        if status is not None:
+            warnings.extend(
+                f"First short-term statistic for {i}: {when(first)}."
+                for i, first in status["first_short_term_statistics"].items()
+            )
+            warnings.append(
+                f"auto_purge: {status['auto_purge']}, purge_keep_days: {status['purge_keep_days']}."
+            )
     return warnings
