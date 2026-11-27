@@ -38,6 +38,7 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import automation_backup_target, with_auto_backup
+from .automation_action_validation import action_contains_scene_create
 from .automation_errors import (
     core_rejection_text,
     failed_section_from_core,
@@ -130,44 +131,6 @@ class _Target(NamedTuple):
     # The component's lookup reply; None when the component did not answer or
     # was not asked (``with_entity=False``).
     lookup: dict[str, Any] | None
-
-
-def _scene_create_in_choose(action: dict[str, Any]) -> bool:
-    """True if any ``choose`` option's sequence contains scene.create."""
-    opts = action.get("choose")
-    if not isinstance(opts, list):
-        return False
-    for opt in opts:
-        if isinstance(opt, dict) and isinstance(opt.get("sequence"), list):
-            for sub in opt["sequence"]:
-                if _action_contains_scene_create(sub):
-                    return True
-    return False
-
-
-def _action_contains_scene_create(action: Any) -> bool:
-    """True if the action — or any nested action under HA's wrapper keys —
-    invokes ``scene.create``.
-
-    Walks the standard wrappers: ``sequence``, ``parallel``, ``choose``
-    (with options' inner ``sequence``), ``default``, and the ``then``/
-    ``else`` siblings of ``if``. Returns True on the first hit, so a deep
-    misroute is caught before the upsert reaches HA.
-    """
-    if not isinstance(action, dict):
-        return False
-    # 'service:' is the legacy key, 'action:' the modern HA service-call
-    # key (HA 2024.8+). Both reach scene.create.
-    if "scene.create" in (action.get("service"), action.get("action")):
-        return True
-    # Wrappers whose value is a list of nested actions.
-    for nested_key in ("sequence", "parallel", "default", "then", "else"):
-        nested = action.get(nested_key)
-        if isinstance(nested, list):
-            for sub in nested:
-                if _action_contains_scene_create(sub):
-                    return True
-    return _scene_create_in_choose(action)
 
 
 def _validate_automation_entity_id(entity_id: str | None) -> None:
@@ -360,6 +323,10 @@ class AutomationConfigTools:
                 "or its config id"
             ),
         ],
+        hash_only: Annotated[
+            bool,
+            Field(description="Return only the resolved entity_id and config hash"),
+        ] = False,
     ) -> dict[str, Any]:
         """
         Get a Home Assistant automation's stored configuration.
@@ -378,7 +345,13 @@ class AutomationConfigTools:
         integrations. `automation_id` is the resolved entity_id, falling back
         to the input.
 
+        With `hash_only=True`, return only the action, resolved automation_id
+        and config_hash. Use this hash for `python_transform`, which edits the
+        stored body. For a full `config` write, read the full config and base
+        the replacement on it; a hash alone does not prevent lost edits.
+
         EXAMPLES:
+        - Get hash for a transform: ha_config_get_automation("automation.morning_routine", hash_only=True)
         - Get automation: ha_config_get_automation("automation.morning_routine")
         - Get by config id: ha_config_get_automation("1712345678901")
 
@@ -402,6 +375,13 @@ class AutomationConfigTools:
             config, config_hash, target = await self._get_automation_config_internal(
                 entity_id
             )
+            if hash_only:
+                return {
+                    "success": True,
+                    "action": "get",
+                    "automation_id": target.entity_id or entity_id,
+                    "config_hash": config_hash,
+                }
             warnings: list[str] = []
             entity, validation, references = await registry_details(
                 self._client, target.lookup, target.entity_id, warnings
@@ -1382,7 +1362,7 @@ class AutomationConfigTools:
                     "Omit entity_id and remove config['id'] to create a separate automation.",
                     (
                         "For an intentional rename or replacement, call ha_config_get_automation "
-                        "for this entity_id, inspect its config, and resubmit with its config_hash."
+                        "for this entity_id with hash_only=False, inspect its full config, and resubmit with its config_hash."
                     ),
                 ],
             )
@@ -1400,8 +1380,8 @@ class AutomationConfigTools:
                 ErrorCode.SERVICE_CALL_FAILED,
                 "Automation modified since last read (conflict)",
                 suggestions=[
-                    "Call ha_config_get_automation() again",
-                    "Use the fresh config_hash from that response",
+                    "Call ha_config_get_automation() with hash_only=False to read the full config",
+                    "Rebase the change on that config and use its fresh config_hash",
                 ],
                 context={"action": action, "entity_id": entity_id},
             )
@@ -1542,7 +1522,7 @@ class AutomationConfigTools:
             config_dict.get("actions", config_dict.get("action"))
         )
         scene_create_indices = [
-            i for i, a in enumerate(actions_list) if _action_contains_scene_create(a)
+            i for i, a in enumerate(actions_list) if action_contains_scene_create(a)
         ]
         if scene_create_indices:
             raise_tool_error(

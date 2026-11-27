@@ -276,7 +276,7 @@ async def test_returned_hash_matches_next_get(mcp_client, ha_client):
     entity_id = create_result["entity_id"]
 
     get_result = await mcp.call_tool_success(
-        "ha_config_get_automation", {"entity_id": entity_id}
+        "ha_config_get_automation", {"entity_id": entity_id, "hash_only": True}
     )
 
     transform_result = await mcp.call_tool_success(
