@@ -38,9 +38,9 @@ def _suggest(build: FrontendBuild, data: dict[str, Any]) -> dict[str, Any]:
             "reason": "The installed frontend suggests no energy meters "
             "(Settings > Energy does from Home Assistant 2026.12).",
         }
-    exported = build.exported_definitions(module_id)
-    compute = [d for d in exported if all(m in d for m in _MARKERS)]
-    editors = [d for d in exported if d.startswith("{") and "kind:" in d]
+    exported = build.module_exports(module_id)
+    compute = [n for n, d in exported.items() if all(m in d for m in _MARKERS)]
+    editors = [n for n, d in exported.items() if d.startswith("{") and "kind:" in d]
     if len(compute) != 1 or len(editors) != 1:
         # A refused read is a missing component to the server: an update that
         # reads the frontend's new layout is the fix.

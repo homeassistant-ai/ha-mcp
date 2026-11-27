@@ -28,7 +28,7 @@ _ALIAS_RE = re.compile(
 )
 
 _ENGINE_JS = r"""
-var REG = {}, CACHE = {}, STRUCTS = {}, PURE = {};
+var REG = {}, CACHE = {}, STRUCTS = {}, PURE = {}, MODS = {};
 var ANY = new Proxy(function () {}, {
   get: function (t, k) {
     if (k === Symbol.toPrimitive) return function () { return ''; };
@@ -91,6 +91,18 @@ function build(src, bindings) {
   // Editor forms may read this.hass; an inert stand-in keeps them pure.
   return Function.apply(null, names.concat([src])).apply(ANY, values);
 }
+// A module's import, read export by export: a pure export Python has
+// evaluated, else an export-needed error naming it.
+function lazy(id) {
+  return new Proxy({}, { get: function (t, k) {
+    if (typeof k !== 'string' || k === 'then' || k === '__esModule') return undefined;
+    var key = id + ':' + k;
+    if (Object.prototype.hasOwnProperty.call(PURE, key)) return PURE[key];
+    var needed = new Error('export-needed ' + key);
+    if (/^[\w$]+$/.test(k)) needed.exportNeeded = [id, k];
+    throw needed;
+  } });
+}
 function plain(v) {
   return JSON.parse(JSON.stringify(v, function (k, x) { return typeof x === 'function' ? undefined : x; }));
 }
@@ -126,8 +138,18 @@ function engine(op, p) {
       PURE[p.key] = build(p.src, p.bindings);
       return { value: true };
     }
+    if (op === 'module') {
+      // Run the module's own factory; its imports resolve export by export.
+      load(String(p.id));
+      var module = { exports: {} };
+      var lazyReq = function (id) { return lazy(String(id)); };
+      ['d', 'r', 'n', 'o', 'g', 'a'].forEach(function (k) { lazyReq[k] = req[k]; });
+      REG[String(p.id)](module, module.exports, lazyReq);
+      MODS[String(p.id)] = module.exports;
+      return { value: Object.keys(module.exports) };
+    }
     if (op === 'call') {
-      var f = PURE[p.key];
+      var f = MODS[String(p.id)][p.name];
       return { value: plain(typeof f === 'function' ? f.apply(null, p.args) : f) };
     }
     if (op === 'field_types') {
@@ -237,14 +259,25 @@ def _local_definition(body: str, name: str) -> str | None:
 
 
 _STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|`(?:\\.|[^`\\])*`')
-_PARAMS_RE = re.compile(r"\(?([\w$,]*)\)?=>")
+# Names the expression binds itself: parameters of its arrows (a default value
+# included, ``(t,r={})=>``) and its own declarations.
+_BOUND_RE = re.compile(
+    r"(?<![\w$.])([\w$]+)=>|(?:const|let|var)\s+([\w$]+)|\(([^()]*)\)=>"
+)
+
+
+def _bound_names(code: str) -> set[str]:
+    names: set[str] = set()
+    for single, declared, params in _BOUND_RE.findall(code):
+        names.update(n for n in (single, declared) if n)
+        names.update(part.split("=")[0].strip() for part in params.split(","))
+    return names - {""}
 
 
 def _closure_locals(expr: str) -> list[str]:
-    """Free names in a function expression, minus its parameters and keys."""
+    """Free names in a function expression, minus the names it binds and keys."""
     code = _STRING_RE.sub('""', expr)
-    head = _PARAMS_RE.match(code)
-    skip = set(head.group(1).split(",")) if head else set()
+    skip = _bound_names(code)
     names = []
     for m in re.finditer(r"(?<![\w$.])[A-Za-z_$][\w$]*", code):
         # An object key sits between "{" or "," and ":".
@@ -273,7 +306,7 @@ class FrontendBuild:
         self._dir = root / "frontend_latest"
         self._module_file: dict[str, Path] = {}
         self._bodies: dict[str, str] = {}  # module id -> source
-        self._exports: set[str] = set()
+        self._modules: set[str] = set()
         self._found: dict[tuple[str, ...], str | None] = {}
         self._index()
         self._engine = quickjs.Function("engine", _ENGINE_JS, own_executor=True)
@@ -318,27 +351,37 @@ class FrontendBuild:
                 at = text.find(markers[0], at + 1)
         return None
 
-    def exported_definitions(self, module_id: str) -> list[str]:
-        """The local definitions a module exports, in its export map's order."""
+    def module_exports(self, module_id: str) -> dict[str, str]:
+        """A module's exports: each exported name with the local definition it binds."""
         body = self._module_body(module_id)
-        return [
-            definition
+        return {
+            name: definition
             for m in re.finditer(r"\.d\([\w$]+,\{[^}]*\}(?:,\{[^}]*\})?\)", body)
-            for name in re.findall(r"(?<![\w$])[\w$]+:(?:\(\)=>)?([\w$]+)", m.group(0))
-            if (definition := _local_definition(body, name)) is not None
-        ]
+            for name, local in re.findall(
+                r"(?<![\w$])([\w$]+):(?:\(\)=>)?([\w$]+)", m.group(0)
+            )
+            if (definition := _local_definition(body, local)) is not None
+        }
 
-    def run_export(self, module_id: str, definition: str, *args: Any) -> Any:
-        """Call one exported function of ``module_id`` with JSON arguments, or
-        read an exported value."""
-        key = f"{module_id}:{definition}"
-        if key not in self._exports:
-            self._evaluate("export", self._module_body(module_id), definition, key)
-            self._exports.add(key)
-        out = self._js("call", {"key": key, "args": list(args)})
-        if "error" in out:
-            raise ValueError(out["error"])
-        return out["value"]
+    def run_export(self, module_id: str, name: str, *args: Any) -> Any:
+        """Call the export ``name`` of ``module_id`` with JSON arguments, or read
+        an exported value. The module's own factory runs once, so its exports
+        keep their closures; an import is resolved when it is first read."""
+        for _ in range(40):
+            if module_id in self._modules:
+                out = self._js("call", {"id": module_id, "name": name, "args": [*args]})
+            else:
+                out = self._js("module", {"id": module_id})
+                if "error" not in out:
+                    self._modules.add(module_id)
+                    continue
+            if "error" not in out:
+                return out["value"]
+            needed = out.get("export_needed")
+            if not needed:
+                raise ValueError(out["error"])
+            self._resolve_export(needed[0], needed[1], {}, 0, inert_ok=False)
+        raise ValueError("unresolved references")
 
     def _js(self, op: str, payload: Any) -> Any:
         # run_gc=True (quickjs-ng's default) calls Context.gc() after every call:
