@@ -3,7 +3,7 @@
         "step": {
             "user": {
                 "title": "HA-MCP — Home Assistant'ı Yapay Zeka ile Yönetin",
-                "description": "Ne eklemek istediğinizi seçin. **HA-MCP Sunucusu**, tam ha-mcp sunucusunu Home Assistant içinde çalıştırır ve bir Home Assistant webhook'u üzerinden erişime açar; çoğu kullanıcının istediği kurulum budur. Bağımsız bir sunucudur ve diğer tüm kurulum yöntemlerinin (Uygulama/eklenti, Docker, uvx/PyPI, stdio) tam karşılığıdır; bunu çalıştırıyorsanız diğerlerinden birini aynı anda çalıştırmayın. **HA-MCP Dosya ve YAML Araçları** iki role sahiptir: ha-mcp sunucunuz Home Assistant dışında çalışıyorsa (eklenti, Docker, uvx/PyPI, stdio), bu kayıt sunucuya dışarıdan erişemediği süreç içi bileşen yeteneklerini (hızlı süreç içi arama, yapılandırma kaydı meta verileri, kayıt defteri destekli okumalar) kazandırır ve isteğe bağlı dosya/YAML araçlarının kullandığı ayrıcalıklı dosya ve YAML düzenleme servislerini yetkilendirir. Bunun yerine HA-MCP Sunucusu kaydını eklerseniz bu paylaşılan yetenekler zaten gelir; dolayısıyla bu ikinci kayıt yalnızca isteğe bağlı dosya/YAML araçları için yetkilendirme kapısı olarak gerekir. Tüm sunucu türleriyle çalışır ve istediğiniz zaman sonradan eklenebilir.",
+                "description": "Ne eklemek istediğinizi seçin. **HA-MCP Sunucusu**, tam ha-mcp sunucusunu Home Assistant içinde çalıştırır ve bir Home Assistant webhook'u üzerinden erişime açar; çoğu kullanıcının istediği kurulum budur. Bağımsız bir sunucudur ve diğer tüm kurulum yöntemlerinin (uygulama (eklenti), Docker, uvx/PyPI, stdio) tam karşılığıdır; bunu çalıştırıyorsanız diğerlerinden birini aynı anda çalıştırmayın. **HA-MCP Dosya ve YAML Araçları** iki role sahiptir: ha-mcp sunucunuz Home Assistant dışında çalışıyorsa (uygulama (eklenti), Docker, uvx/PyPI, stdio), bu kayıt sunucuya dışarıdan erişemediği süreç içi bileşen yeteneklerini (hızlı süreç içi arama, yapılandırma kaydı meta verileri, kayıt defteri destekli okumalar) kazandırır ve isteğe bağlı dosya/YAML araçlarının kullandığı ayrıcalıklı dosya ve YAML düzenleme servislerini yetkilendirir. Bunun yerine HA-MCP Sunucusu kaydını eklerseniz bu paylaşılan yetenekler zaten gelir; dolayısıyla bu ikinci kayıt yalnızca isteğe bağlı dosya/YAML araçları için yetkilendirme kapısı olarak gerekir. Tüm sunucu türleriyle çalışır ve istediğiniz zaman sonradan eklenebilir.",
                 "menu_options": {
                     "server": "HA-MCP Sunucusu (önerilen)",
                     "tools": "HA-MCP Dosya ve YAML Araçları (isteğe bağlı)"
@@ -15,7 +15,7 @@
             },
             "server": {
                 "title": "HA-MCP Sunucusu",
-                "description": "Tam ha-mcp sunucusunu Home Assistant içinde çalıştırır. Bağımsız bir sunucudur ve eklenti, Docker, uvx/PyPI ve stdio kurulum yöntemlerinin tam karşılığıdır; başka bir ha-mcp sunucusuyla birlikte çalıştırmayın.\n\nVarsayılan olarak bu Home Assistant makinesi dışından hiçbir şey sunucuya erişemez: kenar çubuğu paneli ve Home Assistant'ın kendi konuşma ajanları çalışır, ancak diğer cihazlardaki MCP istemcileri aşağıdan bir uzaktan erişim modu veya yerel ağ erişimi seçene kadar bağlanamaz. İkisini de daha sonra entegrasyon seçeneklerinden değiştirebilirsiniz.",
+                "description": "Tam ha-mcp sunucusunu Home Assistant içinde çalıştırır. Bağımsız bir sunucudur ve uygulama (eklenti), Docker, uvx/PyPI ve stdio kurulum yöntemlerinin tam karşılığıdır; başka bir ha-mcp sunucusuyla birlikte çalıştırmayın.\n\nVarsayılan olarak bu Home Assistant makinesi dışından hiçbir şey sunucuya erişemez: kenar çubuğu paneli ve Home Assistant'ın kendi konuşma ajanları çalışır, ancak diğer cihazlardaki MCP istemcileri aşağıdan bir uzaktan erişim modu veya yerel ağ erişimi seçene kadar bağlanamaz. İkisini de daha sonra entegrasyon seçeneklerinden değiştirebilirsiniz.",
                 "data": {
                     "remote_access": "Home Assistant üzerinden uzaktan erişim",
                     "bind_host": "Ağ erişimi",
@@ -34,7 +34,7 @@
         },
         "abort": {
             "already_configured": "Bu kayıt zaten yapılandırılmış.",
-            "unsupported_home_assistant": "Süreç içi HA-MCP Sunucusu Home Assistant {required} veya daha yeni bir sürüm gerektirir; bu kurulumda {installed} çalışıyor. Eklenti veya Docker konteyneri olarak çalışan harici bir ha-mcp sunucusuyla bu bileşenin HA-MCP Dosya ve YAML Araçları kaydını yine de kullanabilirsiniz."
+            "unsupported_home_assistant": "Süreç içi HA-MCP Sunucusu Home Assistant {required} veya daha yeni bir sürüm gerektirir; bu kurulumda {installed} çalışıyor. Uygulama (eklenti) veya Docker konteyneri olarak çalışan harici bir ha-mcp sunucusuyla bu bileşenin HA-MCP Dosya ve YAML Araçları kaydını yine de kullanabilirsiniz."
         },
         "error": {
             "invalid_token": "Home Assistant bu belirteci tanımıyor. Belirtecin tamamını kopyalayın veya yeni bir belirteç oluşturun.",
@@ -98,8 +98,8 @@
                     "oauth_allow_any_callback": "Herhangi bir OAuth geri çağırma URL'sine izin ver (yukarıdaki listeyi kapatır)"
                 },
                 "data_description": {
-                    "server_port": "Bu sunucunun dinlediği port. ha-mcp eklentisi 9583 portunu kullandığı için ikisinin yan yana çalışabilmesi adına varsayılan değer 9584'tür; eklentiyi kullanmıyorsanız boş herhangi bir port çalışır.",
-                    "bind_host": "MCP sunucu portuna doğrudan kimlerin bağlanabileceğini belirler. Yerel ağ seçeneği, eklentideki gibi gizli yol kimlik bilgisiyle yerel ağınızdan erişime açar. Yalnızca bu makine seçeneği yalnızca Home Assistant makinesinden gelen bağlantılara izin verir; webhook URL'si ve kenar çubuğu paneli her iki durumda da çalışır.",
+                    "server_port": "Bu sunucunun dinlediği port. ha-mcp uygulaması (eklenti) 9583 portunu kullandığı için ikisinin yan yana çalışabilmesi adına varsayılan değer 9584'tür; uygulamayı kullanmıyorsanız boş herhangi bir port çalışır.",
+                    "bind_host": "MCP sunucu portuna doğrudan kimlerin bağlanabileceğini belirler. Yerel ağ seçeneği, uygulamadaki (eklenti) gibi gizli yol kimlik bilgisiyle yerel ağınızdan erişime açar. Yalnızca bu makine seçeneği yalnızca Home Assistant makinesinden gelen bağlantılara izin verir; webhook URL'si ve kenar çubuğu paneli her iki durumda da çalışır.",
                     "webhook_auth": "MCP istemcilerinin webhook URL'sinde kendilerini nasıl doğrulayacağını belirler. Gizli URL ile bağlantının kendisi tek kimlik bilgisidir; OAuth kullanan istemciler için izin verilen geri çağırma URL'sine dönen oturumlar otomatik onaylanır. Home Assistant ile oturum açma modunda claude.ai gibi istemciler bir Home Assistant yönetici hesabıyla (OAuth) giriş yapar. Eski OAuth modunda bu entegrasyon kendi oturum açma servisini çalıştırır ve Client ID/Secret üretir; tam olarak açıp kapatmak için Home Assistant'ı yeniden başlatmak gerekebilir.",
                     "oauth_client_id_override": "Otomatik üretilen eski OAuth Client ID değerini değiştirir. Mevcut değeri korumak için boş bırakın. Yalnızca kimlik doğrulama modu Eski OAuth iken kullanılır.",
                     "oauth_client_secret_override": "Otomatik üretilen eski OAuth Client Secret değerini değiştirir. Mevcut değeri korumak için boş bırakın. Yalnızca kimlik doğrulama modu Eski OAuth iken kullanılır.",
@@ -228,7 +228,7 @@
     },
     "common": {
         "connect_direct_access": "Home Assistant makinesinden doğrudan erişim: {url}",
-        "connect_local_lan": "Yerel/LAN (Ağ erişimi \"Yerel ağ\" olduğunda): {url}",
+        "connect_local_lan": "Yerel/LAN (Ağ erişimi \"Local network\" / Yerel ağ olduğunda): {url}",
         "connect_remote_url": "Uzaktan bağlantı URL'si: {url}",
         "connect_urls_label": "Bağlantı URL'leri:",
         "connect_urls_pending": "Sunucu başladıktan sonra bağlantı URL'leri burada görünür.",
@@ -238,8 +238,8 @@
         "oauth_select_legacy_mode": "Modern OAuth desteklemeyen istemciler için kimlik ve gizli anahtar üretmek üzere modu Eski OAuth olarak değiştirin. \"Home Assistant ile oturum aç\" seçiliyken bağlanmakta sorun yaşıyorsanız, Eski OAuth denemeden önce bağlantıyı test etmek için \"Gizli webhook URL'si\" seçeneğine geçmenizi öneririz.",
         "panel_hint": "Araç yönetimi ve sunucu ayarları için [HA-MCP ayar panelini](/ha-mcp) açın.",
         "tools_module_installed": "Beta/gelişmiş dosya ve YAML araçları modülü (isteğe bağlı): Kurulu",
-        "tools_module_not_installed": "Beta/gelişmiş dosya ve YAML araçları modülü (isteğe bağlı): Kurulu değil — eklemek için bu entegrasyonun sayfasında \"Kayıt ekle\"ye basıp \"HA-MCP Dosya ve YAML Araçları\"nı seçin",
-        "tools_module_not_loaded": "Beta/gelişmiş dosya ve YAML araçları modülü (isteğe bağlı): Kurulu ancak yüklü değil — bu entegrasyonun sayfasında \"HA-MCP Dosya ve YAML Araçları\" kaydını etkinleştirin veya yeniden yükleyin",
+        "tools_module_not_installed": "Beta/gelişmiş dosya ve YAML araçları modülü (isteğe bağlı): Kurulu değil — eklemek için bu entegrasyonun sayfasında \"Kayıt ekle\"ye basıp \"HA-MCP File & YAML Tools\" seçeneğini seçin",
+        "tools_module_not_loaded": "Beta/gelişmiş dosya ve YAML araçları modülü (isteğe bağlı): Kurulu ancak yüklü değil — bu entegrasyonun sayfasında \"HA-MCP File & YAML Tools\" kaydını etkinleştirin veya yeniden yükleyin",
         "version_line": "Bileşen {component_version} - Sunucu ha-mcp {server_version} ({source})",
         "server_source_paired": "bu bileşen sürümüyle birlikte kurulu",
         "server_source_override": "pip paketi geçersiz kılma",

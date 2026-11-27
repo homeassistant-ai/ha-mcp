@@ -27,7 +27,7 @@
     "tabs.policies": "Araç Güvenlik Politikaları",
     "tabs.visibility": "Varlık Görünürlüğü",
     "tabs.accessibility": "Erişilebilirlik",
-    "notice.shared_settings": "Sunucu genelindeki özellikler (Araç Arama, YAML yapılandırma düzenleme, dosya sistemi araçları vb.) hem <strong>Sunucu Ayarları</strong> sekmesinde hem de uygulama (eklenti) Yapılandırma sayfasında görünür; ikisi aynı ayarlardır. Eklenti yeniden başlatıldığında iki yüzey birbiriyle eşitlenir. Değişiklikler HA-MCP'nin yeniden başlatılmasını gerektirir.",
+    "notice.shared_settings": "Sunucu genelindeki özellikler (Araç Arama, YAML yapılandırma düzenleme, dosya sistemi araçları vb.) hem <strong>Sunucu Ayarları</strong> sekmesinde hem de uygulama (eklenti) Yapılandırma sayfasında görünür; ikisi aynı ayarlardır. Uygulama (eklenti) yeniden başlatıldığında iki yüzey birbiriyle eşitlenir. Değişiklikler HA-MCP'nin yeniden başlatılmasını gerektirir.",
     "notice.embedded_settings": "Araç Arama, YAML yapılandırma düzenleme ve dosya sistemi araçları gibi sunucu genelindeki özellikleri <strong>Sunucu Ayarları</strong> sekmesinden yönetin. Değişiklikleri uygulamak için HA-MCP'yi yeniden başlatın. Bağlantı ayarları ve başlangıç bildirimi için entegrasyon sayfasını açıp <strong>HA-MCP Sunucusu</strong> yanındaki dişli simgesini seçin.",
     "notice.integration_settings_link": "Gelişmiş entegrasyon ayarları",
     "notice.integration_settings_embedded_only": "(yalnızca gömülü kurulumlar için)",
