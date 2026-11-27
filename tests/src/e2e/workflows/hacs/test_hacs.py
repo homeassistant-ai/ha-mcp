@@ -96,6 +96,21 @@ async def remove_once_settled(mcp_client, repo_id: str, timeout: float = 120) ->
     )
 
 
+async def installed_once_settled(
+    mcp_client, repo_id: str, timeout: float = 180
+) -> None:
+    """Wait for an install the download call stopped waiting for, as the
+    call's own timeout tells the caller to: read the repository back."""
+    await wait_for_tool_result(
+        mcp_client,
+        "ha_get_hacs_info",
+        {"action": "info", "repository_id": repo_id},
+        lambda data: data["data"]["installed"] is True,
+        timeout=timeout,
+        description=f"{repo_id} installed",
+    )
+
+
 def skip_on_github(data: dict) -> None:
     """Skip a GitHub-bound step that GitHub refused for the runner's account."""
     code = data.get("ha_error_code")
@@ -346,7 +361,11 @@ class TestWrites:
                 {"action": "download", "repository_id": repo_id},
             )
             skip_on_github(download)
-            assert download.get("success"), download
+            if (download.get("error") or {}).get("code") == "TIMEOUT_OPERATION":
+                # The tool stopped waiting; Core goes on installing.
+                await installed_once_settled(mcp_client, repo_id)
+            else:
+                assert download.get("success"), download
             async with MCPAssertions(mcp_client) as mcp:
                 await mcp.call_tool_success(
                     "ha_manage_hacs", {"action": "remove", "repository_id": repo_id}
@@ -365,9 +384,12 @@ class TestWrites:
                         await remove_once_settled(mcp_client, repo_id)
 
     async def test_beta_versions_are_shown_and_hidden(self, mcp_client):
-        found = await search(mcp_client, max_results=1)
-        assert found["results"], found
-        repo_id = str(found["results"][0]["id"])
+        # A pinned repository: the catalog's first result is whatever a third
+        # party pushed last, and Core refuses a beta change on a broken one.
+        found = await search(mcp_client, category="theme", query=_THEME, max_results=5)
+        repo_id = str(
+            next(r for r in found["results"] if r["full_name"] == _THEME)["id"]
+        )
         await accept_warning(mcp_client)
 
         shown = await store_call(

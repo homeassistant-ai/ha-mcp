@@ -192,7 +192,8 @@ with a new uid, at the place the list gives new items.
 The automation config tools prefer the component's
 `ha_mcp_tools/automation_config` bridge (capability `automation_config`).
 Its `validate` runs Core's own automation validator in process and answers
-Core's validation status and humanized error, so a config Core would refuse
+Core's validation status and humanized error (and, from Core 2026.12, the
+located `errors` list Core's config view returns), so a config Core would refuse
 is refused before the write, naming the section Core failed on. Its
 `describe` returns Core's registered trigger or condition descriptions;
 when Core's error names an unknown trigger or condition key, the closest
@@ -284,6 +285,17 @@ flows, the `core.helper` domains of `integration/descriptions`; a custom helper
 integration's entry is matched on its title, its config is withheld as
 `options_withheld: custom_integration` (the component's own marker), and the
 result is `partial`.
+
+Where Core ships its own presentation of something a tool returns, the
+component runs it instead of the server copying how Core looks the texts
+up: a flow step's title, field labels and help, errors, menu labels and
+progress, create-entry and abort texts come from Core's flow formatter
+(`homeassistant.components.llm.flow.format_result`, 2026.12) through the
+`ha_mcp_tools/flow_format` bridge (capability `flow_format`), called in
+process and never through Core's LLM API. What it does not present (a
+submit label, menu option descriptions, a select's option labels) is added
+from Core's strings, and a Core without the formatter or an install without
+the component gets the strings lookup it had before.
 
 Home Assistant's flows (config, options, reconfigure, subentry) are answered
 one step per tool call, as the frontend's dialog runs them: the tool returns

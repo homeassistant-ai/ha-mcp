@@ -511,7 +511,8 @@ def _redact_flow_schema_in_place(data_schema: list[Any]) -> None:
             value = description["suggested_value"]
             harvest_secret_strings(value)
             description["suggested_value"] = sentinel_replacement(value)
-        for key in ("default", "value"):
+        # Core's formatter lifts ``suggested_value`` to the field itself.
+        for key in ("default", "value", "suggested_value"):
             if key in field and field[key] is not None:
                 value = field[key]
                 harvest_secret_strings(value)

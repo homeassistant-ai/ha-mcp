@@ -16,6 +16,7 @@ from ..utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ..utilities.cleanup import CleanupSteps
 from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -2156,22 +2157,26 @@ class TestSearchEntitiesSeededAreasIssue1170:
 
     @pytest.fixture
     async def seeded_bedroom(self, mcp_client):
-        """Assign 4 entities of 3 different domains to the seeded
-        ``bedroom`` area, then unassign on teardown.
+        """Put 4 entities of 3 different domains in the seeded ``bedroom``
+        area, then put their devices back on teardown.
 
-        Cleanup is wrapped in try/finally so an unexpected fixture-body
-        failure (e.g. wait_for_tool_result timing out) still unwinds the
-        seed-area assignments — otherwise subsequent tests inherit the
-        leaked assignment.
+        Each seed entity is its device's main entity, and Core refuses an area
+        of its own on one ("set the area on its device instead"), so the area
+        goes on the device and the entity takes it from there.
         """
+        mcp = MCPAssertions(mcp_client)
+        previous: dict[str, str] = {}
         try:
             for eid, area_id in self.SEED_ASSIGNMENTS:
-                try:
-                    await mcp_client.call_tool(
-                        "ha_set_entity", {"entity_id": eid, "area_id": area_id}
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    pytest.skip(f"Seed entity {eid} unavailable: {exc}")
+                entry = await mcp.call_tool_success("ha_get_entity", {"entity_id": eid})
+                device_id = entry["entity_entry"]["device_id"]
+                found = await mcp.call_tool_success(
+                    "ha_get_device", {"device_id": device_id}
+                )
+                previous[device_id] = found["device"].get("area_id") or ""
+                await mcp.call_tool_success(
+                    "ha_set_device", {"device_id": device_id, "area_id": area_id}
+                )
             # Wait until all 4 are visible in the bedroom area
             expected = {eid for eid, _ in self.SEED_ASSIGNMENTS}
             await wait_for_tool_result(
@@ -2188,19 +2193,14 @@ class TestSearchEntitiesSeededAreasIssue1170:
                 "entity_ids": [eid for eid, _ in self.SEED_ASSIGNMENTS],
             }
         finally:
-            # Cleanup runs even on pytest.skip or fixture-body exceptions.
-            # ha_set_entity requires at least one update field, so we set
-            # area_id to empty-string (which the tool maps to "no area")
-            # rather than None.
-            for eid, _ in self.SEED_ASSIGNMENTS:
-                try:
-                    await mcp_client.call_tool(
-                        "ha_set_entity", {"entity_id": eid, "area_id": ""}
-                    )
-                except Exception as exc:  # noqa: BLE001  # pragma: no cover — cleanup best-effort
-                    logger.warning(
-                        f"Cleanup of area assignment for {eid} failed: {exc}"
-                    )
+            # An empty area_id clears the area; later tests read these devices.
+            with CleanupSteps() as cleanup:
+                for device_id, area_id in previous.items():
+                    with cleanup.step():
+                        await mcp.call_tool_success(
+                            "ha_set_device",
+                            {"device_id": device_id, "area_id": area_id},
+                        )
 
     @pytest.mark.asyncio
     async def test_area_only_returns_all_assigned_domains(

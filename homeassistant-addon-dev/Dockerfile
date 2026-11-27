@@ -36,6 +36,7 @@ WORKDIR /app
 # Copy the virtual environment and startup script from builder
 COPY --from=builder /app/.venv /app/.venv
 COPY homeassistant-addon/start.py /
+COPY homeassistant-addon/supervisor_transport.py /
 COPY homeassistant-addon/app_options.json /
 
 # Activate virtual environment via PATH

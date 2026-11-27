@@ -7,6 +7,10 @@ module holds the settings singleton and the embedded-mode connection.
 """
 
 # isort: off
+import threading
+
+from ha_mcp.runtime_config import register_settings_reset
+
 from ha_mcp.config_backup import (
     _apply_backup_overrides as _apply_backup_overrides,
     get_backup_setting_origin as get_backup_setting_origin,
@@ -100,6 +104,7 @@ def parse_extra_yaml_write_keys(settings: Settings) -> list[str]:
 
 # Global settings instance
 _settings: Settings | None = None
+_SETTINGS_LOCK = threading.RLock()
 
 # In-process (embedded) HA connection, set only when ha-mcp runs inside Home
 # Assistant core via the ha_mcp_tools custom component's in-process server entry.
@@ -245,13 +250,15 @@ def get_global_settings() -> Settings:
     re-picks it up).
     """
     global _settings
-    if _settings is None:
-        _settings = get_settings()
-        _apply_feature_flag_overrides(_settings)
-        _apply_backup_overrides(_settings)
-        _apply_advanced_overrides(_settings)
-        _apply_embedded_connection(_settings)
-    return _settings
+    with _SETTINGS_LOCK:
+        if _settings is None:
+            settings = get_settings()
+            _apply_feature_flag_overrides(settings)
+            _apply_backup_overrides(settings)
+            _apply_advanced_overrides(settings)
+            _apply_embedded_connection(settings)
+            _settings = settings
+        return _settings
 
 
 def reset_global_settings() -> None:
@@ -264,12 +271,19 @@ def reset_global_settings() -> None:
     process restart). The settings POST handlers call it to publish a freshly
     edited override file value to runtime consumers (``get_global_settings`` is
     the only documented read path; the ``@with_auto_backup`` decorator reads it
-    per tool call), and tests that mutate env vars call it to force a re-read.
+    per tool call). The dependency-light runtime-config bridge also calls it
+    after the Home Assistant switch writes the shared override file, without
+    importing this package from HA's executor. Tests that mutate env vars call
+    it to force a re-read as well.
     """
     global _settings
-    _settings = None
-    # Drop the gate-log dedup set too — once Settings has been
-    # rebuilt, an operator who's re-investigating "why is my beta
-    # tool off?" should see the next gate fire logged. This keeps
-    # the dedup tight to the lifetime of one cached Settings.
-    _BETA_GATE_LOGGED.clear()
+    with _SETTINGS_LOCK:
+        _settings = None
+        # Drop the gate-log dedup set too — once Settings has been
+        # rebuilt, an operator who's re-investigating "why is my beta
+        # tool off?" should see the next gate fire logged. This keeps
+        # the dedup tight to the lifetime of one cached Settings.
+        _BETA_GATE_LOGGED.clear()
+
+
+register_settings_reset(reset_global_settings)

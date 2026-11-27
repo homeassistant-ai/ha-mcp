@@ -204,10 +204,11 @@ Notes:
   API, whose tools (logs, history, templates, search, integrations, system
   health) overlap some of this toolset. Selecting both on one agent works:
   Core prefixes only tool names that clash, with the API's ID.
-- With Home Assistant's own Model Context Protocol server turned on,
-  **Settings → System → AI** also lists this API's own URL
-  (`/api/mcp/<api id>`). External MCP clients signed in as an administrator
-  can use it, whichever APIs the server entry itself selects.
+- When Home Assistant’s built-in MCP server is enabled, **Settings → System → AI**
+  lists `/api/mcp/<api-id>` for this conversation-agent toolset. Administrators
+  can reach it over MCP, and the **LLM API** toggles determine which tools it
+  exposes for Assist chat and voice. Avoid this URL when setting up an external
+  ha-mcp client. Copy the [connect URL](#connect-urls) from **HA-MCP Server → Configure**.
 
 **Security:** the toolset runs with the server's admin access. Selecting it
 on an agent hands that power to everyone who can talk to that agent,
@@ -371,6 +372,25 @@ The switch is a configuration entity, so Assist does not expose it by default.
 Exposing it would let a conversation agent or voice satellite turn access on.
 Do not disable the switch entity while access is off: nothing can turn access
 back on until you enable the entity again.
+
+The same device also has a **Read Only Mode** switch, disabled by default. It
+controls the setting of the same name in the HA-MCP settings panel: on blocks
+writes, and off permits them. Enable the entity on the device page to use it in
+scenes and automations. Like the Access switch, Assist does not expose it by
+default; exposing it would let a conversation agent or voice satellite remove
+the write restriction. Its state persists across restarts, and a panel change
+appears on the entity within its 30-second polling interval. Turning it on
+takes effect on the next tool call, without restarting the server. When the
+`READ_ONLY_MODE` environment variable is set, that environment value wins and
+the switch refuses changes until the variable is removed. The `/readonly`
+connection remains read-only even while **Read Only Mode** is off.
+
+Because both controls are disabled by default, an automation that turns all
+enabled switches off changes neither setting on an install that did not opt in.
+After enabling them, an everything-off scene closes access and turns **Read
+Only Mode** off. A lock-down scene should explicitly turn **Read Only Mode** on
+as well as turn **Access** off. The order does not matter: the Read Only Mode
+switch can still persist that safer state while server access is off.
 
 Turning access off does not revoke credentials a client already holds; when
 access is on again, they work as before. With **Authentication mode**

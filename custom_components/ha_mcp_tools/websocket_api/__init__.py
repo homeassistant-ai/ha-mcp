@@ -78,6 +78,9 @@ the info handshake carries no capability entry:
   ``area_id`` / label *ids*, not resolved names) without the caller fanning out
   its own area/floor/label registry reads. Registry-only entities (no state) are
   enriched too — the join keys off the registry, not the state machine.
+* ``ha_mcp_tools/entity_aliases`` — Core's own names for a set of entity_ids
+  (``er.async_get_entity_aliases``), which the statistics listing's query
+  matches.
 * ``ha_mcp_tools/exposure`` — voice-assistant exposure with names/areas attached.
   List mode mirrors core's ``ws_list_exposed_entities`` (``{exposed_entities:
   {id: {assistant: True}}}`` — the same entries as ``homeassistant/expose_entity/
@@ -132,7 +135,14 @@ the info handshake carries no capability entry:
   config or options flow (most helper flows): each form's fields as Core
   serializes a form it shows, and the step that follows it, read from the
   loaded flow handler on every call. A form or next step Core computes from
-  earlier answers is marked, not evaluated. See ``flow_outline.py``.
+  earlier answers is marked, not evaluated. On Home Assistant 2026.12 each
+  declared form's fields carry Core's labels and help text, from Core's flow
+  formatter. See ``flow_outline.py``.
+* ``ha_mcp_tools/flow_format`` — a flow step as Home Assistant 2026.12's
+  ``llm.flow.format_result`` formats it (titles, field labels and help, errors,
+  menu labels, progress, create-entry and abort texts), with the translations
+  Core's own config and repairs tools use; ``supported: false`` before 2026.12.
+  See ``flow_format.py``.
 * ``ha_mcp_tools/flow_record`` — what a config, options, subentry or Repairs
   fix flow in progress was started for (its handler, source, entry and issue
   anchors), read from the flow manager that holds it. Core's flow endpoints
@@ -188,10 +198,15 @@ the info handshake carries no capability entry:
   ``visibility_warnings`` carried by the response so filtering is not silently
   incomplete.
 * ``ha_mcp_tools/server_entry`` — the component locates its OWN server config
-  entry (``entry.data[CONF_ENTRY_TYPE] == server``, the one marker key it reads
-  from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
-  pip_spec from ``entry.options``), so ``ha_dev_manage_server`` need not probe
-  every ``ha_mcp_tools``-domain entry's options-flow schema from the outside.
+  entry (``entry.data[CONF_ENTRY_TYPE] == server``) and returns
+  ``{entry_id, pip_spec, install_pending}`` (pip_spec from ``entry.options``;
+  install_pending, gated by ``server_entry_install_pending``, compares the spec
+  bring-up resolves with the one the component recorded after its last
+  completed, non-deferred package step, ``_server_entry_prep``), so
+  ``ha_dev_manage_server`` need not probe every ``ha_mcp_tools``-domain entry's
+  options-flow schema from the outside. The type marker and that record are
+  the two ``entry.data`` keys this package reads, the data-minimization
+  exception: neither is returned, install_pending is only a boolean or null.
 * ``ha_mcp_tools/server_entry_update`` — the WRITE counterpart of ``server_entry``:
   applies a ``channel`` / ``pip_spec`` delta to the server entry via
   ``hass.config_entries.async_update_entry`` DIRECTLY (what core's finish-flow
@@ -379,6 +394,7 @@ from .. import (
     core_contract,
     dashboard_cards_ws,
     entity_restore,
+    flow_format,
     flow_outline,
     flow_record,
     helper_collections,
@@ -403,6 +419,7 @@ from .lookups import (
     _blueprint_get_prep,
     _do_blueprint_get,
     _do_device_list,
+    _do_entity_aliases,
     _do_entity_enrich,
     _do_entity_lookup,
     _do_exposure,
@@ -422,6 +439,7 @@ from .schemas import (
     _dashboards_schema,
     _device_get_schema,
     _device_list_schema,
+    _entity_aliases_schema,
     _entity_enrich_schema,
     _entity_lookup_schema,
     _exposure_schema,
@@ -450,6 +468,7 @@ from .system import (
     _do_server_entry_update,
     _do_system_snapshot,
     _do_template_diagnose,
+    _server_entry_prep,
     _server_entry_update_prep,
     _template_diagnose_prep,
     do_info,
@@ -522,6 +541,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_device_get_schema(), do_device_get, None),
         (_device_list_schema(), _do_device_list, None),
         (_entity_enrich_schema(), _do_entity_enrich, None),
+        (_entity_aliases_schema(), _do_entity_aliases, None),
         (_exposure_schema(), _do_exposure, None),
         (_config_entries_schema(), _do_config_entries, _config_entries_prep),
         (_registry_lookup_schema(), _do_registry_lookup, None),
@@ -540,7 +560,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         # Core's live trace store: one in-process pass matches a run's own
         # context or a triggering parent context across every stored item.
         (_trace_context_schema(), _do_trace_context, _trace_context_prep),
-        (_server_entry_schema(), _do_server_entry, None),
+        (_server_entry_schema(), _do_server_entry, _server_entry_prep),
         # The WRITE counterpart of server_entry: the deferred ``async_update_entry``
         # scheduling is inherently async, so it lives in ``_server_entry_update_prep``
         # and ``_do_server_entry_update`` is a pure formatter (same seam as the
@@ -572,6 +592,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *todo_items.command_specs(vol),
         *update_entities.command_specs(vol),
         *flow_record.command_specs(vol),
+        *flow_format.command_specs(vol),
         *flow_outline.command_specs(vol),
         *scene_editor.command_specs(vol),
         *automation_config.command_specs(vol),

@@ -14,14 +14,13 @@ resolve stops firing and an empty dashboard reads as a failure.
 
 from __future__ import annotations
 
-import json
 from typing import Any, NoReturn
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..error_wording import dashboard_has_no_config, dashboard_unknown
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
-from .helpers import extract_tool_error_message, raise_tool_error
+from .helpers import extract_tool_error_message, raise_tool_error, tool_error_ha_code
 
 CONFIG_NOT_FOUND_CODE = "config_not_found"
 DASHBOARD_FETCH_FAILED_PREFIX = "Dashboard fetch failed: "
@@ -48,19 +47,9 @@ def no_stored_config(reply: dict[str, Any]) -> bool:
     return config_not_found(reply) and dashboard_has_no_config(get_error_message(reply))
 
 
-def dashboard_error_code(exc: ToolError) -> str | None:
-    """Read Core's code preserved by the tool at the MCP boundary."""
-    try:
-        payload = json.loads(str(exc))
-    except ValueError, TypeError:
-        return None
-    code = payload.get("ha_error_code") if isinstance(payload, dict) else None
-    return code if isinstance(code, str) else None
-
-
 def is_no_stored_config_error(exc: ToolError) -> bool:
     """Whether ``_get_dashboard_config_internal``'s ToolError means no config."""
-    if dashboard_error_code(exc) != CONFIG_NOT_FOUND_CODE:
+    if tool_error_ha_code(exc) != CONFIG_NOT_FOUND_CODE:
         return False
     message = extract_tool_error_message(exc).removeprefix(
         DASHBOARD_FETCH_FAILED_PREFIX

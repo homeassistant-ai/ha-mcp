@@ -55,7 +55,7 @@ class ThemesTools:
         explicit_url = (
             get_global_settings().dashboard_screenshot_engine_url or ""
         ).strip()
-        engine_target = await resolve_engine()
+        engine_target = await resolve_engine(self._client)
         # An explicit URL is never provably paired with a credential. Even on
         # HA OS, _addon_credential_best_effort() hands back the DISCOVERED
         # Puppet app's credential without checking it identifies the engine

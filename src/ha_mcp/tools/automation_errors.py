@@ -46,6 +46,13 @@ def section_from_status(status: str | None) -> str | None:
     )
 
 
+def verdict_errors(verdict: dict[str, Any]) -> dict[str, Any]:
+    """``{"errors": [...]}`` from a component ``validate`` verdict that lists
+    Core's located errors (Core 2026.12); empty otherwise."""
+    errors = verdict.get("errors")
+    return {"errors": errors} if isinstance(errors, list) else {}
+
+
 def core_rejection_text(exc: HomeAssistantAPIError) -> str | None:
     """Core's message for a 400 it answered, None for any other error."""
     if exc.status_code != 400 or not isinstance(exc.response_data, dict):

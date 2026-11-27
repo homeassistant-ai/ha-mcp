@@ -520,9 +520,8 @@ class TestConfigEntryFlow:
         """include_schema describes the options form in Core's own words.
 
         The demo entry's options flow opens with form ``options_1``; a
-        field's help text is Core's ``data_description`` for it, or its
-        ``data`` label when Core has no description, read here from Core's
-        translations.
+        field carries Core's ``data`` label and its ``data_description`` help
+        text where Core has one, read here from Core's translations.
         """
         translations = await ha_client.send_websocket_message(
             {
@@ -534,10 +533,8 @@ class TestConfigEntryFlow:
         )
         resources = translations["result"]["resources"]
         step = "component.demo.options.step.options_1"
-        expected = resources.get(
-            f"{step}.data_description.bool", resources.get(f"{step}.data.bool")
-        )
-        assert expected, "Core serves a label for the demo options field"
+        label = resources.get(f"{step}.data.bool")
+        assert label, "Core serves a label for the demo options field"
 
         async with MCPAssertions(mcp_client) as mcp:
             list_data = await mcp.call_tool_success(
@@ -554,7 +551,10 @@ class TestConfigEntryFlow:
         assert schema["step_id"] == "options_1"
         assert "data_schema" not in schema
         fields = {f["name"]: f for f in schema["fields"]}
-        assert fields["bool"]["description"] == expected
+        assert fields["bool"]["label"] == label
+        assert fields["bool"].get("description") == resources.get(
+            f"{step}.data_description.bool"
+        )
 
     async def test_create_group_helper_missing_menu_selection(self, mcp_client):
         """Answering a group helper's menu with config returns a helpful error

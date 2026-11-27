@@ -45,7 +45,7 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 from ha_mcp._vendor.fastmcp.server.transforms import Transform
 from ha_mcp._vendor.fastmcp.tools import Tool
 
-from .config import get_global_settings
+from .config import get_global_settings, is_embedded_mode
 from .errors import ErrorCode, create_error_response
 from .renamed_tools import current_tool_name
 from .tool_dispatch import CALL_PROXY_META_TOOLS, coerce_proxy_arguments
@@ -86,6 +86,12 @@ def read_only_remedy_hint() -> str:
     so it stays nameable when it is the (or an) active source.
     """
     if get_global_settings().read_only_mode:
+        if is_embedded_mode():
+            return (
+                "To allow changes, the user must turn off the Read Only Mode "
+                "switch on the HA-MCP Server device or in the HA-MCP settings "
+                "panel."
+            )
         return (
             "To allow changes, the user must turn off Read Only Mode in the "
             "ha-mcp settings UI (Tools tab) or the app (add-on) configuration."

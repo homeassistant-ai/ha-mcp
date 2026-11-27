@@ -294,3 +294,28 @@ def detect_platform() -> dict[str, str]:
         "architecture": platform.machine(),
         "python_version": platform.python_version(),
     }
+
+
+def llm_connection_route(
+    marker: str | None, user_agent: str
+) -> tuple[str | None, str | None]:
+    """Identify the embedded LLM adapter or Core's discovered MCP client (#3210)."""
+    setup = "Connect the external client directly to HA-MCP using the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/)."
+    if marker == "mcp_server":
+        return (
+            "Home Assistant built-in MCP server via the LLM API",
+            f"This external MCP client is misconfigured. {setup}",
+        )
+    if marker == "llm_api":
+        return "Home Assistant LLM API", None
+    # Core's MCP client uses the same User-Agent for an external relay and
+    # for a conversation agent. It does not forward the originating platform.
+    if user_agent.startswith("HomeAssistant/"):
+        return (
+            "Home Assistant MCP client integration (likely LLM API, inferred from User-Agent)",
+            (
+                "If you are using an external MCP client, it is misconfigured. "
+                f"{setup} This route is expected for a Home Assistant conversation agent."
+            ),
+        )
+    return None, None

@@ -1,11 +1,14 @@
 {
   "src/ha_mcp/settings_ui/locales": [
     "messages.advanced.extra_yaml_write_keys.label",
+    "messages.features.read_only_mode.label",
     "messages.footer.deployment.unknown",
-    "messages.oauth_callbacks.title"
+    "messages.oauth_callbacks.title",
+    "messages.tools.read_only.label"
   ],
   "custom_components/ha_mcp_tools/translations": [
     "common.version_unknown",
+    "entity.switch.server_read_only_mode.name",
     "options.step.init.data.oauth_redirect_allowlist",
     "options.step.tools_info.data.extra_yaml_keys"
   ]

@@ -16,6 +16,7 @@ from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
 
 # Import test utilities
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.core_version import core_at_least
 from ...utilities.topology import component_surface_available
 
 # Set up logging
@@ -310,6 +311,23 @@ class TestUpdateManagement:
                 )
 
             logger.info("Update details test passed")
+
+    async def test_release_notes_language(self, mcp_client, ha_client):
+        """A language reaches Core 2026.12's release notes; an older Core,
+        which takes none, still answers the notes, with a warning."""
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_manage_updates",
+                {
+                    "action": "get",
+                    "entity_ids": ["update.demo_update_with_progress"],
+                    "language": "de",
+                },
+            )
+
+        assert result["release_notes_source"] == "websocket", result
+        dropped = any("takes no language" in w for w in result.get("warnings", []))
+        assert dropped is not await core_at_least(ha_client, (2026, 12)), result
 
 
 @pytest.mark.updates

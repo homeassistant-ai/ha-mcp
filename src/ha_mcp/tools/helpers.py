@@ -116,6 +116,23 @@ def extract_tool_error_message(te: ToolError | str) -> str:
         return str(te)
 
 
+def ha_error_code_field(code: object) -> dict[str, str]:
+    """The ``ha_error_code`` of a per-item failure row: Core's code when the
+    failure carries one as a string, else nothing, so a failure without a
+    code from Core has no such key rather than null."""
+    return {"ha_error_code": code} if isinstance(code, str) and code else {}
+
+
+def tool_error_ha_code(exc: ToolError) -> str | None:
+    """Core's code a ToolError keeps as ``ha_error_code``, if any."""
+    try:
+        payload = json.loads(str(exc))
+    except ValueError, TypeError:
+        return None
+    code = payload.get("ha_error_code") if isinstance(payload, dict) else None
+    return code if isinstance(code, str) else None
+
+
 def extract_structured_error_reason(exc: BaseException) -> str | None:
     """Extract "message" + first actionable suggestion from a structured error.
 
@@ -654,7 +671,12 @@ def raise_core_refusal(
     )
 
 
-def raise_entity_refusal(what: str, result: dict[str, Any], entity_id: str) -> NoReturn:
+def raise_entity_refusal(
+    what: str,
+    result: dict[str, Any],
+    entity_id: str,
+    suggestions: list[str] | None = None,
+) -> NoReturn:
     """:func:`raise_core_refusal` for a command on one entity; when Core does
     not know the entity, the caller is also told how to find a valid id."""
     unknown = result.get("error_code") == "not_found"
@@ -662,7 +684,7 @@ def raise_entity_refusal(what: str, result: dict[str, Any], entity_id: str) -> N
         what,
         result,
         {"entity_id": entity_id},
-        ["Use ha_search() to find valid entity IDs"] if unknown else None,
+        ["Use ha_search() to find valid entity IDs"] if unknown else suggestions,
     )
 
 

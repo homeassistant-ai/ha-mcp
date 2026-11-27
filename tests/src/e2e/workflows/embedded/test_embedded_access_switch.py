@@ -1,15 +1,13 @@
-"""The Access switch closes and reopens the in-process server in real HA (#2801).
+"""The server safety switches operate through real Home Assistant entities.
 
-The unit tests cover the switch, the setup gate and the teardown against
-fakes. This drives the switch through Home Assistant itself: the entity the
-component registers disabled, enabling it, ``switch.turn_off`` closing the
-webhook, the state and the stopped server surviving an entry reload, and
-``switch.turn_on`` bringing the server back.
+The unit tests cover the entities and persistence against real Core fixtures. This drives
+both switches through Home Assistant itself: Access closes and reopens the
+webhook across a reload, while Read Only Mode updates the live tool catalog.
 
 It switches off the server of this worker's session container and turns it
-back on in ``finally``, waiting for the webhook, then disables the entity
-again, which removes it without a reload; xdist gives every worker its own
-container, so no other test sees the gap or the enabled switch.
+back on in ``finally``, waiting for the webhook, then restores write access
+and disables both opt-in entities. Xdist gives every worker its own container,
+so no other test sees the gap or either enabled switch.
 """
 
 from __future__ import annotations
@@ -18,6 +16,9 @@ import asyncio
 from typing import Any
 
 import pytest
+
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 
 from ..._conftest_embedded import (
     _EMBEDDED_ENTRY_ID,
@@ -32,7 +33,7 @@ pytestmark = pytest.mark.embedded_only
 _READY_TIMEOUT_S = 300
 
 
-async def _access_switch_id(ha_client: Any) -> str:
+async def _switch_id(ha_client: Any, unique_id: str) -> str:
     entries = await ha_client.send_websocket_message(
         {"type": "config/entity_registry/list"}
     )
@@ -40,7 +41,7 @@ async def _access_switch_id(ha_client: Any) -> str:
     [entity_id] = [
         e["entity_id"]
         for e in entries["result"]
-        if e.get("unique_id") == f"{_EMBEDDED_ENTRY_ID}_server_access"
+        if e.get("unique_id") == f"{_EMBEDDED_ENTRY_ID}_{unique_id}"
     ]
     return str(entity_id)
 
@@ -67,12 +68,13 @@ async def _server_summary(ha_client: Any) -> dict[str, Any]:
     return dict(download["data"]["server"])
 
 
-@pytest.mark.timeout(900)
-async def test_switching_access_off_closes_the_server_until_switched_on(
-    ha_client: Any, ha_container_with_fresh_config: dict[str, Any]
-) -> None:
-    webhook_url = ha_container_with_fresh_config["embedded_webhook_url"]
-    entity_id = await _access_switch_id(ha_client)
+async def _tool_names(url: str) -> set[str]:
+    async with Client(StreamableHttpTransport(url=url)) as client:
+        return {tool.name for tool in await client.list_tools()}
+
+
+async def _exercise_access_switch(ha_client: Any, webhook_url: str) -> None:
+    entity_id = await _switch_id(ha_client, "server_access")
     # Registered disabled, so no state until a user enables it.
     assert not await _has_state(ha_client, entity_id)
 
@@ -124,3 +126,51 @@ async def test_switching_access_off_closes_the_server_until_switched_on(
     finally:
         with CleanupSteps() as cleanup, cleanup.step():
             await _set_switch_enabled(ha_client, entity_id, False)
+
+
+async def _exercise_read_only_mode_switch(ha_client: Any, webhook_url: str) -> None:
+    read_only_id = await _switch_id(ha_client, "server_read_only_mode")
+    assert not await _has_state(ha_client, read_only_id)
+    await _set_switch_enabled(ha_client, read_only_id, True)
+    try:
+
+        async def _read_only_mode_added() -> bool:
+            states = {
+                state["entity_id"]: state["state"]
+                for state in await ha_client.get_states()
+            }
+            return states.get(read_only_id) in ("on", "off")
+
+        assert await wait_for_condition(
+            _read_only_mode_added,
+            timeout=120,
+            condition_name="read only mode switch added",
+        )
+        assert await asyncio.to_thread(
+            _wait_for_embedded_webhook_ready, webhook_url, _READY_TIMEOUT_S
+        )
+
+        await ha_client.call_service("switch", "turn_on", {"entity_id": read_only_id})
+        assert (await ha_client.get_entity_state(read_only_id))["state"] == "on"
+        assert "ha_call_service" not in await _tool_names(webhook_url)
+
+        await ha_client.call_service("switch", "turn_off", {"entity_id": read_only_id})
+        assert (await ha_client.get_entity_state(read_only_id))["state"] == "off"
+        assert "ha_call_service" in await _tool_names(webhook_url)
+    finally:
+        with CleanupSteps() as cleanup:
+            with cleanup.step():
+                await ha_client.call_service(
+                    "switch", "turn_off", {"entity_id": read_only_id}
+                )
+            with cleanup.step():
+                await _set_switch_enabled(ha_client, read_only_id, False)
+
+
+@pytest.mark.timeout(900)
+async def test_server_safety_switches_apply_live(
+    ha_client: Any, ha_container_with_fresh_config: dict[str, Any]
+) -> None:
+    webhook_url = ha_container_with_fresh_config["embedded_webhook_url"]
+    await _exercise_access_switch(ha_client, webhook_url)
+    await _exercise_read_only_mode_switch(ha_client, webhook_url)

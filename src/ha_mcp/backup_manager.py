@@ -85,7 +85,6 @@ from .backup_diff import (
     json_equal,
 )
 from .backup_entities import (
-    current_entity_id,
     fetch_entity,
     restore_entity,
     restore_locks,
@@ -101,6 +100,8 @@ from .backup_files import (
     _restore_file,
     file_read_error_code,
 )
+from .backup_groups import fetch_group, restore_group
+from .backup_helper_target import comparison_target as _comparison_target
 from .backup_helper_target import fetch_helper as _fetch_helper
 from .backup_helper_target import note_no_safety_backup as _note_no_safety_backup
 from .backup_helper_target import (
@@ -117,7 +118,7 @@ from .backup_registry_items import fetch_label as _fetch_label
 from .backup_registry_items import restore_area_or_floor as _restore_area_or_floor
 from .backup_registry_items import restore_category as _restore_category
 from .backup_registry_items import restore_label as _restore_label
-from .backup_scenes import fetch_scene, restore_scene, scene_key
+from .backup_scenes import fetch_scene, restore_scene
 from .backup_snapshot_identity import (
     entity_id_aliases as _entity_id_aliases,
 )
@@ -129,7 +130,6 @@ from .backup_snapshot_identity import (
     safe_entity_id as _safe_entity_id,
 )
 from .backup_tags import restore_tag, tag_snapshot
-from .backup_todo import current_key as todo_current_key
 from .backup_todo import fetch_todo_item, restore_todo_item
 from .backup_todo import snapshot_item as todo_snapshot_item
 from .backup_zones import fetch_zone, restore_zone
@@ -336,6 +336,10 @@ def _flow_failure_reason(step: str, error: BaseException) -> str:
     if isinstance(error, MandatoryBackupError):
         return "backup_capture_failed"
     return "upstream_error"
+
+
+def _skipped(key: str, cause: str) -> str:
+    return f"No pre-write backup of {key} was taken: {cause}"
 
 
 def _flow_safe_failure_detail(step: str, error: BaseException) -> str | None:
@@ -805,12 +809,18 @@ class BackupManager:
         ``holds`` is the id the captured item must have; another item raises
         ``BackupRestoreError`` before anything is written.
         """
+        # Core lowercases an entity_id: one entity, one snapshot name.
+        entity_id = entity_id.lower() if domain == "entity" else entity_id
         if not force:
             await self.ensure_directory_ready()
         handler = self._resolve_snapshot_handler(
             domain, entity_id, force=force, mandatory=mandatory
         )
         if handler is None:
+            if self._init_dir_error is not None and skip_reasons is not None:
+                skip_reasons.append(
+                    _skipped(f"{domain}:{entity_id}", "directory unusable")
+                )
             return None
 
         if _is_flow_helper_domain(domain) and "." in entity_id:
@@ -850,9 +860,13 @@ class BackupManager:
                 return None
             if holds is not None:
                 _require_holds(config, holds, entity_id)
-            return await self._write_and_rotate(
+            path = await self._write_and_rotate(
                 domain, entity_id, key, config, tool_name, now, mandatory=mandatory
             )
+            if path is None and skip_reasons is not None:
+                # A failed write, or a snapshot that vanished before capture completed.
+                skip_reasons.append(_skipped(key, "snapshot not saved"))
+            return path
 
     def _resolve_snapshot_handler(
         self, domain: str, entity_id: str, *, force: bool, mandatory: bool
@@ -861,8 +875,9 @@ class BackupManager:
 
         Raises ``MandatoryBackupError`` for the fail-closed cases (an unusable
         backup dir, an unregistered domain) under ``mandatory``. A None return
-        is a legitimate skip (feature disabled, no entity id, no handler) — the
-        caller returns None and lets the wrapped write proceed.
+        is a skip (feature disabled, no entity id, no handler, or an unusable
+        backup dir outside ``mandatory``, which ``maybe_snapshot`` reports) —
+        the caller returns None and lets the wrapped write proceed.
         """
         if self._init_dir_error is not None and not force:
             if mandatory:
@@ -937,10 +952,7 @@ class BackupManager:
             if skip_reasons is not None:
                 # Only locally authored detail: a remote error may carry values.
                 detail = _flow_safe_failure_detail("capture", err)
-                skip_reasons.append(
-                    f"No pre-write backup of {key} was taken: "
-                    + (detail or type(err).__name__)
-                )
+                skip_reasons.append(_skipped(key, detail or type(err).__name__))
             return _SNAPSHOT_SKIP
         if config is None:
             # Entity didn't exist at fetch time (create operation, or
@@ -1670,17 +1682,6 @@ class BackupManager:
 
     # ----- diff ----------------------------------------------------------
 
-    async def _comparison_target(self, domain: str, data: dict[str, Any]) -> str | None:
-        """The id the item a snapshot holds has now."""
-        target: str = data["entity_id"]
-        if domain == "entity":
-            return await current_entity_id(self._client, target, data["config"])
-        if domain == "todo_item":
-            return todo_current_key(target, data["config"])
-        if domain == "scene":
-            return scene_key(data["config"]) or target
-        return target
-
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
         """Read a snapshot and the live config for its stable target identity.
         The envelope carries the comparison's ``warnings``, never the file's."""
@@ -1696,7 +1697,7 @@ class BackupManager:
         handler = self.handler_for(domain)
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
-        target = await self._comparison_target(domain, data)
+        target = await _comparison_target(self._client, domain, data)
         current = await handler.fetch(self._client, target) if target else None
         if domain == "dashboard":
             _stored, legacy = dashboard_snapshot(data)
@@ -2221,35 +2222,6 @@ def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
     """
     drop = _REGISTRY_READONLY_KEYS | set(extra)
     return {k: v for k, v in config.items() if k not in drop}
-
-
-# Groups — group.set service. Fetch via state API.
-
-
-async def _fetch_group(client: Any, entity_id: str) -> Any:
-    eid = entity_id if entity_id.startswith("group.") else f"group.{entity_id}"
-    state = await _rest_get_or_none(client, f"states/{eid}")
-    if state is None:
-        return None
-    attrs = state.get("attributes", {}) if isinstance(state, dict) else {}
-    return {
-        "object_id": eid.split(".", 1)[1],
-        "name": attrs.get("friendly_name"),
-        "entities": attrs.get("entity_id", []),
-        "icon": attrs.get("icon"),
-    }
-
-
-async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
-    object_id = config.get("object_id") or entity_id.split(".", 1)[-1]
-    service_data: dict[str, Any] = {"object_id": object_id}
-    for key in ("name", "icon"):
-        if config.get(key):
-            service_data[key] = config[key]
-    if config.get("entities") is not None:
-        service_data["entities"] = config["entities"]
-    group_set = {"type": "call_service", "domain": "group", "service": "set"}
-    return await _ws_send(client, {**group_set, "service_data": service_data})
 
 
 # Devices — config/device_registry/{list,update}. ``ha_set_device`` mutates
@@ -3345,7 +3317,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     )
     mgr.register(DomainHandler("label", _fetch_label, _restore_label))
     mgr.register(DomainHandler("category", _fetch_category, _restore_category))
-    mgr.register(DomainHandler("group", _fetch_group, _restore_group))
+    mgr.register(DomainHandler("group", fetch_group, restore_group))
     mgr.register(
         DomainHandler("calendar_event", _fetch_calendar_event, _restore_calendar_event)
     )

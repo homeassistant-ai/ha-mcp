@@ -1,11 +1,14 @@
 """Assistant checks and bulk ``homeassistant/expose_entity`` calls."""
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from typing import Any
 
+from ..client.exceptions import HomeAssistantCommandNotSent, HomeAssistantError
+from ..errors import ErrorCode, create_error_response
 from .entity_exposure import get_entries_or_unregistered
-from .helpers import raise_core_refusal
+from .entity_registry_reads import _extract_ws_error
+from .helpers import exception_to_structured_error, raise_core_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -48,32 +51,18 @@ async def reject_unknown_assistants(
         await read_expose_new(client, assistant)
 
 
-async def apply_bulk_expose(
-    client: Any,
-    entity_ids: list[str],
-    parsed_expose_to: dict[str, bool],
-    extract_error: Callable[[dict[str, Any]], str],
-) -> tuple[str | None, set[str]]:
-    """Expose/hide many entities in one homeassistant/expose_entity call per set.
+async def expose_write(
+    client: Any, assistants: list[str], entity_ids: list[str], should_expose: bool
+) -> tuple[str | None, HomeAssistantError | dict[str, Any] | None, set[str]]:
+    """Send one ``homeassistant/expose_entity`` write: (error, failure, changed).
 
-    The command's schema accepts the full entity_ids list, so bulk exposure
-    needs at most two WS calls (one for the assistants being turned on, one
-    for those being turned off) regardless of entity count — not one per
-    entity. Returns (error, changed): error is None on success, or the message
-    of the first failing set, which applies to every id in the list. changed
-    holds the ids Core reports it changed, and is empty on error.
+    error is None on success, and changed holds the ids Core reports it
+    changed. A refusal, or a write that never left, failed for sure; one sent
+    without an answer may have been applied, and says so. failure is Core's
+    reply when it refused, else the client's exception for a write that was
+    not sent or got no answer.
     """
-    expose_true = [a for a, v in parsed_expose_to.items() if v]
-    expose_false = [a for a, v in parsed_expose_to.items() if not v]
-    applied: list[str] = []
-    changed: set[str] = set()
-    for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
-        if not assistants:
-            continue
-        logger.info(
-            f"{'Exposing' if should_expose else 'Hiding'} {len(entity_ids)} "
-            f"entities {'to' if should_expose else 'from'} {assistants}"
-        )
+    try:
         result = await client.send_websocket_message(
             {
                 "type": "homeassistant/expose_entity",
@@ -82,20 +71,91 @@ async def apply_bulk_expose(
                 "should_expose": should_expose,
             }
         )
-        if not result.get("success"):
-            error = extract_error(result)
-            if applied:
-                # The earlier assistant group already changed — say so, or
-                # the all-failed report implies no exposure was touched.
-                error = (
-                    f"{error} (note: expose changes for "
-                    f"{', '.join(applied)} were already applied before "
-                    "this failure)"
-                )
-            return error, set()
-        applied.extend(assistants)
-        changed |= changed_entity_ids(result)
-    return None, changed
+    except HomeAssistantError as exc:
+        detail = _extract_ws_error({"error": str(exc)})
+        if isinstance(exc, HomeAssistantCommandNotSent):
+            error = f"Exposure failed: {detail}"
+        else:
+            error = (
+                f"Exposure outcome unknown: Home Assistant did not answer ({detail}); "
+                "the exposure may have been applied, and sending it again is safe"
+            )
+        return error, exc, set()
+    if result.get("success"):
+        return None, None, changed_entity_ids(result)
+    return f"Exposure failed: {_extract_ws_error(result)}", result, set()
+
+
+def expose_failure_response(
+    error: str,
+    failure: HomeAssistantError | dict[str, Any] | None,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """The tool error for a failed exposure write: a refusal is a failed
+    service call with Core's code kept as ``ha_error_code``; a write without
+    an answer keeps the code and suggestions its transport gives (connection,
+    timeout, auth), and one that was sent says with ``write_outcome_unknown``
+    that it may have been applied."""
+    if isinstance(failure, HomeAssistantError):
+        if not isinstance(failure, HomeAssistantCommandNotSent):
+            context = {**context, "write_outcome_unknown": True}
+        response = exception_to_structured_error(failure, context, raise_error=False)
+        response["error"]["message"] = error
+    else:
+        response = create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            error,
+            context={**context, "ha_error_code": (failure or {}).get("error_code")},
+        )
+    return response
+
+
+async def apply_bulk_expose(
+    client: Any,
+    entity_ids: list[str],
+    parsed_expose_to: dict[str, bool],
+) -> tuple[dict[str, Any] | None, set[str], dict[str, bool]]:
+    """Expose/hide many entities in one homeassistant/expose_entity call per set.
+
+    The command's schema accepts the full entity_ids list, so bulk exposure
+    needs at most two WS calls (one for the assistants being turned on, one
+    for those being turned off) regardless of entity count — not one per
+    entity. Returns (failure, changed, applied). failure is None on success,
+    else the tool error (:func:`expose_failure_response`) of the first failing
+    set, which applies to every id in the list: a refusal or an unsent command
+    failed, while a connection lost after sending leaves the outcome unknown.
+    A refusal keeps the code Core gave as ``ha_error_code``. changed holds the ids Core reports it
+    changed, and is empty on error. applied maps each assistant whose set
+    landed to its value.
+    """
+    expose_true = [a for a, v in parsed_expose_to.items() if v]
+    expose_false = [a for a, v in parsed_expose_to.items() if not v]
+    applied: dict[str, bool] = {}
+    changed: set[str] = set()
+    for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
+        if not assistants:
+            continue
+        logger.info(
+            f"{'Exposing' if should_expose else 'Hiding'} {len(entity_ids)} "
+            f"entities {'to' if should_expose else 'from'} {assistants}"
+        )
+        error, failure, changed_now = await expose_write(
+            client, assistants, entity_ids, should_expose
+        )
+        if error is None:
+            applied.update(dict.fromkeys(assistants, should_expose))
+            changed |= changed_now
+            continue
+        if applied:
+            # The earlier assistant group already changed — say so, or
+            # the all-failed report implies no exposure was touched.
+            error = (
+                f"{error} (note: expose changes for "
+                f"{', '.join(applied)} were already applied before "
+                "this failure)"
+            )
+        return expose_failure_response(error, failure, {}), set(), applied
+    return None, changed, applied
 
 
 async def expose_targets(
@@ -123,13 +183,20 @@ async def expose_targets(
         elif eid in known:
             targets[eid] = known[eid][0]
         else:
-            failed.append({"entity_id": eid, "error": errors[eid]})
+            failed.append({"entity_id": eid, **errors[eid]})
     return targets, failed
+
+
+def expose_update(parsed_expose_to: dict[str, bool], unchanged: bool) -> str:
+    """The updates entry for expose_to, saying so when Core changed nothing."""
+    if unchanged:
+        return f"expose_to={parsed_expose_to} (already set, nothing changed)"
+    return f"expose_to={parsed_expose_to}"
 
 
 def refresh_warning(entity_id: str, error: str) -> str:
     """The warning for an entry that could not be re-read after its exposure."""
     return (
         f"{entity_id}: the exposure was applied, but re-reading the registry "
-        f"entry failed ({error}); entity_entry shows it as before."
+        f"entry failed ({error}); an entity_entry in this reply shows it as before."
     )

@@ -40,6 +40,50 @@ def connection(monkeypatch: pytest.MonkeyPatch) -> Any:
     return _set
 
 
+@pytest.mark.parametrize(
+    "report_type", ["runtime_bug", "agent_behavior", "feature_request"]
+)
+@pytest.mark.parametrize(
+    ("headers", "route", "warn"),
+    [
+        (
+            {"x-ha-mcp-llm-caller": "mcp_server"},
+            "Home Assistant built-in MCP server",
+            True,
+        ),
+        ({"x-ha-mcp-llm-caller": "llm_api"}, "Home Assistant LLM API", False),
+        (
+            {"user-agent": "HomeAssistant/2026.11.3 httpx2/2 Python/3.14"},
+            "Home Assistant MCP client integration",
+            True,
+        ),
+        ({"user-agent": "python-httpx/0.28"}, None, False),
+    ],
+)
+async def test_llm_route_in_user_warning_and_filed_report(
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    report_type: str,
+    headers: dict[str, str],
+    route: str | None,
+    warn: bool,
+) -> None:
+    monkeypatch.setattr(tools_bug_report, "get_http_headers", lambda include: headers)
+    report = await report_issue(
+        core_client, report_type=report_type, fields="issue_body,issue_url"
+    )
+    for body in (
+        report["issue_body"],
+        parse_qs(urlparse(report["issue_url"]).query)["body"][0],
+    ):
+        if route:
+            assert route in body
+        assert ("Setup Wizard" in body) == warn
+    assert (
+        any("Setup Wizard" in warning for warning in report.get("warnings", [])) == warn
+    )
+
+
 class TestConfigToggles:
     """The report's config section lists the settings the server runs with."""
 

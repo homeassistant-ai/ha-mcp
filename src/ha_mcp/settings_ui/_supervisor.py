@@ -97,8 +97,8 @@ async def _supervisor_fetch_current_options(
         ) as sclient:
             resp = await sclient.get("/addons/self/info")
     except RuntimeError as exc:
-        # `make_supervisor_httpx_client` raises RuntimeError when
-        # SUPERVISOR_TOKEN is unset. Both current callers gate on that
+        # `make_supervisor_httpx_client` raises RuntimeError when neither
+        # the app's socket nor SUPERVISOR_TOKEN is set. Both current callers gate on that
         # env var, but treat this as transport (env / setup failure) so
         # a future third caller missing the gate gets a sane 502 rather
         # than an uncaught 500.
@@ -246,8 +246,8 @@ def _schedule_supervisor_self_restart(
             # Supervisor killed us mid-call — expected; no action needed.
             pass
         except RuntimeError:
-            # ``make_supervisor_httpx_client`` raises RuntimeError when
-            # SUPERVISOR_TOKEN is unset. The route guard at handler entry
+            # ``make_supervisor_httpx_client`` raises RuntimeError when neither
+            # the app's socket nor SUPERVISOR_TOKEN is set. The route guard at handler entry
             # already checks for this, but a race that unsets the token
             # between request entry and the 300ms-later task wakeup
             # would otherwise propagate uncaught and surface only as

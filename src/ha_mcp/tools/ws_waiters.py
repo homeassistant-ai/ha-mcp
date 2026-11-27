@@ -656,6 +656,48 @@ async def wait_for_state_change(
     return None
 
 
+async def wait_for_state_attributes(
+    client: Any,
+    entity_id: str,
+    expected: dict[str, Any],
+    timeout: float = 10.0,
+    poll_interval: float = 0.3,
+) -> dict[str, Any] | None:
+    """Wait until an entity's state attributes hold every ``expected`` value.
+
+    For a change that moves attributes and not the state, such as the home
+    zone's location. Same event-then-sample loop as ``wait_for_state_change``;
+    returns the state dict, or None when the attributes did not get there.
+    """
+
+    async def sample() -> dict[str, Any] | None:
+        try:
+            raw = await client.get_entity_state(entity_id)
+        except HomeAssistantAPIError as e:
+            logger.debug(f"API error sampling {entity_id} attributes: {e}")
+            return None
+        if not isinstance(raw, dict):
+            return None
+        state: dict[str, Any] = raw
+        attributes = state.get("attributes")
+        if isinstance(attributes, dict) and all(
+            attributes.get(key) == value for key, value in expected.items()
+        ):
+            return state
+        return None
+
+    result = await _ws_wait_for_condition(
+        client,
+        entity_id,
+        sample,
+        event_types=("state_changed",),
+        timeout=timeout,
+        poll_interval=poll_interval,
+        description="attribute change",
+    )
+    return result if isinstance(result, dict) else None
+
+
 async def _discover_automation_sample(
     client: Any,
     unique_id: str,
