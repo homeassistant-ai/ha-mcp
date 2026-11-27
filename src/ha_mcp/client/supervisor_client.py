@@ -19,28 +19,21 @@ from __future__ import annotations
 
 import os
 import ssl
-from urllib.parse import urlsplit
 
 import httpx
 
 from .._version import get_supervisor_base_url
 
-__all__ = ["make_supervisor_httpx_client", "supervisor_socket_for"]
+__all__ = ["make_supervisor_httpx_client", "supervisor_socket"]
 
 
-def supervisor_socket_for(url: str) -> str | None:
-    """Return Supervisor's Unix socket when ``url`` is a Supervisor address.
+def supervisor_socket() -> str | None:
+    """Return the Unix socket Supervisor mounted for this app, if it has one.
 
-    ``None`` when Supervisor gave this process no socket (an older Supervisor,
-    or not an app) or ``url`` leads somewhere else, such as the embedded
-    server's loopback URL to Core.
+    ``None`` on an older Supervisor, or for an app whose slug is too long for a
+    socket path; the app then calls Supervisor over TCP with its token.
     """
-    socket_path = os.environ.get("SUPERVISOR_SOCKET")
-    if not socket_path:
-        return None
-    if urlsplit(url).netloc != urlsplit(get_supervisor_base_url()).netloc:
-        return None
-    return socket_path
+    return os.environ.get("SUPERVISOR_SOCKET") or None
 
 
 def make_supervisor_httpx_client(
@@ -85,7 +78,7 @@ def make_supervisor_httpx_client(
         but a future long-lived caller would need to discard and re-create.
     """
     base_url = get_supervisor_base_url()
-    if socket_path := supervisor_socket_for(base_url):
+    if socket_path := supervisor_socket():
         return httpx.AsyncClient(
             base_url=base_url,
             timeout=timeout,

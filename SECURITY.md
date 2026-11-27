@@ -67,8 +67,8 @@ with the Supervisor-issued token, over plain HTTP on the internal `hassio`
 docker network that is not reachable from the LAN; the isolation of that
 network, enforced by the Home Assistant OS platform, is the boundary
 protecting the token. The app reaches Core through Supervisor's `/core` proxy
-over that network with the same token; Supervisor's middleware passes those
-proxy paths through without its token check. The embedded server makes no
+over that network with the same token, which the proxy handler checks itself.
+Supervisor does not count those proxy paths as Supervisor API use. The embedded server makes no
 Supervisor call of its own: it asks Core's `hassio` integration, which reaches
 Supervisor as Core does.
 
