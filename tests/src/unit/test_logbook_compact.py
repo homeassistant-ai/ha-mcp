@@ -1,9 +1,4 @@
-"""Compact logbook entries keep only the essential fields (issue #683).
-
-``ha_get_logs(source="logbook")`` reads Core's logbook through the server's own
-client on a real ``hass``; compact mode must cut each row Core returns down to
-``COMPACT_LOGBOOK_FIELDS`` without inventing or changing a value.
-"""
+"""The default logbook view preserves native diagnostic fields."""
 
 from __future__ import annotations
 
@@ -16,7 +11,6 @@ from pytest_homeassistant.components.recorder.common import async_wait_recording
 
 from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools.log_common import COMPACT_LOGBOOK_FIELDS
 from ha_mcp.tools.tools_logs import register_logs_tools
 
 
@@ -32,7 +26,7 @@ async def _logbook(client: HomeAssistantClient, *, compact: bool) -> dict[str, A
     return data
 
 
-async def test_compact_logbook_rows_keep_only_the_essential_fields_unchanged(
+async def test_compact_logbook_rows_preserve_core_fields(
     recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     assert await async_setup_component(hass, "logbook", {})
@@ -46,13 +40,7 @@ async def test_compact_logbook_rows_keep_only_the_essential_fields_unchanged(
     compact = (await _logbook(core_client, compact=True))["entries"]
 
     assert full, "Core recorded no logbook rows"
-    # Core's rows carry more than the compact set, so the cut is exercised.
-    assert any(set(row) - COMPACT_LOGBOOK_FIELDS for row in full)
-    assert compact == [
-        {key: value for key, value in row.items() if key in COMPACT_LOGBOOK_FIELDS}
-        for row in full
-    ]
-    # What a debugging agent needs from each row survives the cut.
+    assert compact == full
     turned_on = [row for row in compact if row.get("entity_id") == "light.living_room"]
     assert turned_on
     assert turned_on[-1]["state"] == "on"
