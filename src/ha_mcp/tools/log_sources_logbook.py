@@ -349,18 +349,18 @@ class LogbookLogSourceMixin:
             return self._component_page(response.get("result"))
 
         self._raise_logbook_rejection(response, LOGBOOK_EVENTS_COMMAND)
-        if (
+        if not (
             isinstance(response, dict)
             and response.get("error_code") == "unknown_command"
         ):
-            # Older component without the command: stop routing to it.
-            invalidate_caps(self._client)
-            return None
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONNECTION_FAILED, "No reply to the paged Logbook read."
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONNECTION_FAILED, "No reply to the paged Logbook read."
+                )
             )
-        )
+        # Older component without the command: stop routing to it.
+        invalidate_caps(self._client)
+        return None
 
     @staticmethod
     def _component_page(result: Any) -> dict[str, Any]:
