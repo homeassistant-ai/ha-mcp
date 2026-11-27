@@ -495,6 +495,15 @@ async def _summary(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]
     return result
 
 
+async def test_summary_accepts_cores_calendar_period(
+    recorded: Recorder, core_client: HomeAssistantClient
+) -> None:
+    result = await _summary(
+        core_client, entity_ids="sensor.energy", core_options={"calendar": {"period": "day"}}
+    )
+    assert result["data"]["success"]
+
+
 async def test_a_summary_without_types_takes_cores_defaults_for_each_statistic(
     recorded: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:

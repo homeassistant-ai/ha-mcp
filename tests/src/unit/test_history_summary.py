@@ -141,6 +141,9 @@ async def test_attribute_update_is_not_counted_as_a_state_change(
 
     result = await _query(core_client, "climate.hall", 30, summary=True)
     rows = await _query(core_client, "climate.hall", 30, order="asc")
+    assert [
+        row["attributes"]["temperature"] for row in rows["data"]["entities"][0]["states"]
+    ] == [20, 21, 21]
 
     assert [row["state"] for row in rows["data"]["entities"][0]["states"]] == [
         "heat",

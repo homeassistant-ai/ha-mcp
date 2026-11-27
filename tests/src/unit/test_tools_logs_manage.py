@@ -403,6 +403,7 @@ async def test_a_purge_returns_the_recorders_oldest_state(
     oldest = recorder_mock.states_manager.oldest_ts
     assert oldest is not None and oldest > old
     assert result["recorder"] == {
+        **(await component_client.send_websocket_message({"type": "recorder/info"}))["result"],
         "purge_keep_days": recorder_mock.keep_days,
         "auto_purge": recorder_mock.auto_purge,
         "oldest_state": datetime.fromtimestamp(oldest, UTC).isoformat(
@@ -419,7 +420,7 @@ async def test_without_the_component_the_wait_names_what_it_cannot_see(
     result = await _manage(client, "recorder.purge", data={"keep_days": 5})
 
     assert result["success"] is True
-    assert "recorder" not in result
+    assert result["recorder"]["recording"] is True
     assert any("may still be running" in warning for warning in result["warnings"])
 
 
