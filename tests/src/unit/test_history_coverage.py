@@ -523,7 +523,8 @@ async def _summary(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]
     ("native_period", "hours"),
     [
         ({"calendar": {"period": "day"}}, (0, 24)),
-        ({"rolling_window": {"duration": {"hours": 4}}}, (8, 12)),
+        # The ticking clock is past noon, so the 08:00 hour starts before the window.
+        ({"rolling_window": {"duration": {"hours": 4}}}, (9, 12)),
     ],
 )
 async def test_a_summary_over_cores_own_period_totals_that_period(
@@ -584,9 +585,7 @@ async def test_with_guardrails_a_summary_over_cores_own_period_is_refused_unsent
             core_options={"calendar": {"period": "day"}},
         )
 
-    assert json.loads(str(refused.value))["error"]["code"] == (
-        "VALIDATION_INVALID_PARAMETER"
-    )
+    assert json.loads(str(refused.value))["error"]["code"] == "VALIDATION_FAILED"
     assert all(
         call.args[0]["type"] != "recorder/statistic_during_period"
         for call in sent.call_args_list

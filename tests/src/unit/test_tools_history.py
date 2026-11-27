@@ -148,8 +148,8 @@ async def test_no_attributes_leaves_the_attributes_out_of_every_row(
     await record_states(
         hass,
         "climate.hall",
-        ("heat", {"temperature": 20}, START.timestamp()),
-        ("heat", {"temperature": 21}, START.timestamp() + 60),
+        ("heat", {"temperature": 20}, START.timestamp() + 60),
+        ("off", {"temperature": 21}, START.timestamp() + 120),
     )
 
     async def attributes(**kwargs: Any) -> list[Any]:
