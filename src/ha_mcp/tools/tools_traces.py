@@ -20,6 +20,7 @@ from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
     safe_progress,
@@ -30,7 +31,6 @@ from .trace_diagnostics import _gather_diagnostics
 from .trace_logbook import TraceLogbook, fetch_trace_logbook
 from .trace_lookup import (
     ContextTraceMatch,
-    _raise_trace_ws_failure,
     _requested_sections,
     resolve_context_trace,
     resolve_global_context,
@@ -487,8 +487,9 @@ class TraceTools:
                 }
             )
             if not result.get("success"):
-                _raise_trace_ws_failure(
-                    result.get("error", "Failed to retrieve trace"),
+                raise_core_refusal(
+                    "trace/get failed",
+                    result,
                     {
                         "entity_id": entity_id,
                         "domain": domain,
@@ -546,8 +547,9 @@ class TraceTools:
         result = await self._client.send_websocket_message(message)
 
         if not result.get("success"):
-            _raise_trace_ws_failure(
-                result.get("error", "Failed to list traces"),
+            raise_core_refusal(
+                "trace/list failed",
+                result,
                 {"entity_id": entity_id, "domain": domain, "item_id": item_id},
             )
 

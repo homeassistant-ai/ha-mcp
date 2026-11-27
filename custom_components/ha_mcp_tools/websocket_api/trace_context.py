@@ -21,11 +21,16 @@ from typing import Any
 from homeassistant.components import websocket_api
 from homeassistant.components.trace.const import DATA_TRACE, DATA_TRACE_STORE
 from homeassistant.components.trace.util import async_restore_traces
-from homeassistant.components.trace.websocket_api import TRACE_DOMAINS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.json import ExtendedJSONEncoder
 
 from .seam import PreSerializedResult
+
+try:
+    from homeassistant.components.trace.const import TRACE_DOMAINS
+except ImportError:
+    # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
+    from homeassistant.components.trace.websocket_api import TRACE_DOMAINS
 
 CAPABILITIES = ("trace_context",)
 
@@ -41,13 +46,13 @@ async def _trace_context_prep(
             _encode_result, msg["id"], _empty_result(scanned=0, available=False)
         )
         return {"payload": payload}
-    # Core sets DATA_TRACES_RESTORED before awaiting the store load, so a
-    # second caller would see the marker and scan an empty store. The lock makes
-    # it wait for a restore this command started; Core's own trace commands
-    # restore outside it.
     lock = hass.data.setdefault(_TRACE_RESTORE_LOCK, asyncio.Lock())
     async with lock:
         await async_restore_traces(hass)
+        # Core's restore marks itself done before awaiting Store.async_load().
+        store = hass.data[DATA_TRACE_STORE]
+        if store._load_future is not None:
+            await store.async_load()
     result = _trace_context_payload(hass, msg)
     payload = await hass.async_add_executor_job(_encode_result, msg["id"], result)
     return {"payload": payload}
