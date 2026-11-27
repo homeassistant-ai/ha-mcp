@@ -407,6 +407,7 @@ def _logbook_events_schema() -> dict[Any, Any]:
     row_key = vol.ExactSequence([vol.Coerce(float), vol.In((0, 1)), int])
     return {
         vol.Required("type"): WS_LOGBOOK_EVENTS,
+        vol.Optional("action_calls"): bool,
         vol.Required("start_time"): str,
         vol.Optional("end_time"): str,
         vol.Optional("entity_ids"): [cv.entity_id],

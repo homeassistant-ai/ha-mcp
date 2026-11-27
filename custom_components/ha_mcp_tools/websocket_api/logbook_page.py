@@ -16,9 +16,14 @@ from homeassistant.components.logbook.models import (
 )
 from homeassistant.components.logbook.processor import EventProcessor
 from homeassistant.components.logbook.queries import statement_for_request
+from homeassistant.components.logbook.queries.action_calls import action_calls_stmt
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import Events, States
-from homeassistant.components.recorder.models import extract_event_type_ids
+from homeassistant.components.recorder.models import (
+    extract_event_type_ids,
+    extract_metadata_ids,
+)
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.json import json_bytes
 from homeassistant.helpers.recorder import session_scope
 from sqlalchemy import case, func, literal, select, tuple_
@@ -33,8 +38,7 @@ type RowKey = tuple[float, int, int]
 
 
 def _key(row: Row[Any]) -> RowKey:
-    # Events and states have separate primary-key sequences. Preserve Core's
-    # event-then-state union order at a tie and disambiguate with the primary key.
+    # Core orders by time only. HA-MCP breaks ties by kind and primary key.
     return (row[TIME_FIRED_TS_POS], int(row[EVENT_TYPE_POS] is None), row[ROW_ID_POS])
 
 
@@ -44,9 +48,30 @@ def _columns(source: Subquery) -> tuple[Any, Any, Any]:
 
 
 def _branches(source: Subquery) -> Sequence[Select[Any]]:
-    """Core's whole-instance Logbook statement is the UNION of events and states."""
-    union = cast(CompoundSelect[Any], source.element)
-    return cast("Sequence[Select[Any]]", union.selects)
+    """Validate Core's visible branches and optional context-only suffix."""
+    union = source.element
+    if isinstance(union, CompoundSelect):
+        branches = union.selects
+        shape = []
+        for branch in branches:
+            if not isinstance(branch, Select):
+                break
+            cols = branch.selected_columns
+            pk = cols.get("row_id")
+            flag = cols.get("context_only")
+            if pk is None or flag is None:
+                break
+            state = pk.shares_lineage(States.__table__.c.state_id)
+            if not state and not pk.shares_lineage(Events.__table__.c.event_id):
+                break
+            shape.append((state, flag.element.value))
+        if len(shape) == len(branches) and shape in (
+            [(False, None), (True, None)],
+            [(False, None), (False, "1"), (True, "1")],
+            [(False, None), (True, None), (False, "1"), (True, "1")],
+        ):
+            return cast("Sequence[Select[Any]]", branches)
+    raise HomeAssistantError("Unsupported Core logbook statement shape for paging")
 
 
 def _context_origins(
@@ -119,6 +144,8 @@ def _read_rows(
         c = branch.selected_columns
         kind = int(c.row_id.shares_lineage(States.__table__.c.state_id))
         cols = (c.time_fired_ts, c.row_id)
+        if c.context_only.element.value is not None:
+            continue
         query = branch.with_only_columns(*cols)
         if after := page.get("after"):
             stamp, anchor_kind, row_id = after
@@ -170,7 +197,9 @@ def _hydrate_rows(
     sizes = {
         (stamp, kind, row_id): chars
         for stamp, kind, row_id, chars in session.connection().execute(
-            select(*cols, size).where(keys.in_(candidates[:RAW_PAGE_ROWS]))
+            select(*cols, size).where(
+                source.c.context_only.is_(None), keys.in_(candidates[:RAW_PAGE_ROWS])
+            )
         )
     }
     chosen: list[RowKey] = []
@@ -186,7 +215,9 @@ def _hydrate_rows(
     # Core always humanifies in chronological order, including newest-first pages.
     rows = list(
         session.connection().execute(
-            select(source).where(keys.in_(chosen)).order_by(*cols)
+            select(source)
+            .where(source.c.context_only.is_(None), keys.in_(chosen))
+            .order_by(*cols)
         )
     )
     return rows, len(chosen) < len(candidates)
@@ -197,6 +228,7 @@ def _source(
     period: tuple[datetime, datetime],
     types: tuple[int, ...],
     page: dict[str, Any] | None = None,
+    metadata_ids: list[int] | None = None,
 ) -> Subquery:
     start, end = period
     if page and (after := page.get("after")):
@@ -208,7 +240,20 @@ def _source(
         else:
             start = max(start, anchor - timedelta(microseconds=1))
     source: Subquery = (
-        statement_for_request(start, end, types, filters=processor.filters)
+        (
+            action_calls_stmt(start.timestamp(), end.timestamp(), types)
+            if processor.action_calls
+            else statement_for_request(
+                start,
+                end,
+                types,
+                processor.entity_ids,
+                metadata_ids,
+                processor.device_ids,
+                processor.filters,
+                processor.context_id,
+            )
+        )
         .order_by(None)
         .subquery()
     )
@@ -225,21 +270,46 @@ def read_logbook_page(
             extract_event_type_ids(manager.get_many(processor.event_types, session))
         )
         period = (start, end)
-        source = _source(processor, period, types)
+        instance = get_instance(processor.hass)
+        metadata = (
+            extract_metadata_ids(
+                instance.states_meta_manager.get_many(
+                    processor.entity_ids, session, False
+                )
+            )
+            if processor.entity_ids
+            else None
+        )
+        source = _source(processor, period, types, metadata_ids=metadata)
         if bounds := page.get("count_range"):
             return _count_matches(
                 session, processor, source, bounds, page, types, period
             )
         if "keys" in page:
             return _render_keys(session, processor, source, page)
-        probe = _source(processor, period, types, page) if page.get("after") else source
+        probe = (
+            _source(processor, period, types, page, metadata)
+            if page.get("after")
+            else source
+        )
         rows, more = _read_rows(session, probe, page, types)
-        if rows and (page.get("after") or (more and page["order"] == "newest")):
+        if rows and (
+            page.get("after")
+            or more
+            or processor.entity_ids
+            or processor.device_ids
+            or processor.action_calls
+        ):
             for context, origin in _context_origins(
-                session, source, rows, _key(rows[0])
+                session, source, rows, _key(rows[-1])
             ).items():
                 processor.logbook_run.context_lookup[context] = origin
-        rendered = [(row, processor.humanify([row])) for row in rows]
+        parent_users = (
+            processor._fetch_parent_user_ids(session, rows, instance.max_bind_vars)
+            if processor.entity_ids or processor.device_ids
+            else None
+        )
+        rendered = [(row, processor.humanify([row], parent_users)) for row in rows]
     if page["order"] == "newest":
         rendered.reverse()
     return _select_page(rendered, page, more)

@@ -120,6 +120,7 @@ class LogTools(
         order: Literal["newest", "oldest"] | None,
         structured: bool = False,
         top_n: int | None = None,
+        action_calls: bool = False,
     ) -> dict[str, Any]:
         # Only a supervisor/system_service page read can take its order from a
         # token, so only those two are given ``order`` as it came.
@@ -137,6 +138,7 @@ class LogTools(
                 search=search,
                 compact=compact,
                 order=chosen,
+                action_calls=action_calls,
             )
         if source == "system":
             return await self._get_system_log(
@@ -197,6 +199,7 @@ class LogTools(
         order: Literal["newest", "oldest"] | None = None,
         structured: bool = False,
         top_n: int | None = None,
+        action_calls: bool = False,
     ) -> dict[str, Any]:
         level = _validate_log_level(level)
         offset = _validate_log_offset(source, offset)
@@ -249,6 +252,7 @@ class LogTools(
             order,
             structured=structured_error_log,
             top_n=top_n,
+            action_calls=action_calls,
         )
         if warnings:
             # Prepend, don't overwrite: the structured error_log path emits its
@@ -446,6 +450,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             ),
         ] = True,
+        action_calls: Annotated[
+            bool,
+            Field(
+                description="Logbook only. Read admin-only action calls and their service data for the time window. Omit entity, device and context filters."
+            ),
+        ] = False,
         # System/error_log-specific
         level: Annotated[
             str | None,
@@ -532,4 +542,5 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             order=order,
             structured=structured,
             top_n=top_n,
+            action_calls=action_calls,
         )

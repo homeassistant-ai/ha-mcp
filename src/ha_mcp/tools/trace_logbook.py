@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from .component_api import component_unusable_warning, get_component_caps
 from .log_sources_logbook import LogbookLogSourceMixin
 
 LOGBOOK_ROW_LIMIT = 50
@@ -16,7 +17,7 @@ class TraceLogbook:
     entries: list[dict[str, Any]]
     transport: Literal["component", "rest"] | None
     warnings: list[str]
-    total: int = 0
+    total: int | None = 0
     truncated: bool = False
 
 
@@ -61,30 +62,52 @@ async def fetch_trace_logbook(
         )
 
     reader = _TraceLogbookReader(client)
-    entries = await reader._fetch_logbook_component(
-        {"start_time": start_time, "context_id": str(context_id)}
-    )
-    transport: Literal["component", "rest"] = "component"
-    if entries is None:
-        transport = "rest"
-        entries = await client.get_logbook(
-            start_time=start_time,
-            end_time=datetime.now(UTC).isoformat(),
-            context_id=str(context_id),
-        )
-    if not isinstance(entries, list):
-        return TraceLogbook(
-            [],
-            transport,
-            ["The logbook reply was not a row list."],
-        )
+    command = {
+        "start_time": start_time,
+        "end_time": datetime.now(UTC).isoformat(),
+        "context_id": str(context_id),
+    }
+    request = {"order": "oldest", "limit": LOGBOOK_ROW_LIMIT, "skip": 0}
+    page = await reader._fetch_logbook_component(command, request)
+    if isinstance(page, dict):
+        entries = list(page["entries"])
+        total = page["total"]
+        from .logbook_cursor import MAX_PAGE_READS
 
-    total = len(entries)
-    capped = entries[:LOGBOOK_ROW_LIMIT]
+        for _ in range(MAX_PAGE_READS - 1):
+            if (
+                not page.get("after")
+                or page.get("byte_limited")
+                or len(entries) == LOGBOOK_ROW_LIMIT
+            ):
+                break
+            page = await reader._required_component_page(
+                command,
+                {
+                    **request,
+                    "after": page["after"],
+                    "limit": LOGBOOK_ROW_LIMIT - len(entries),
+                    "used_bytes": page["used_bytes"],
+                },
+            )
+            if page["total"] is not None:
+                total = len(entries) + page["total"]
+            entries.extend(page["entries"])
+        return TraceLogbook(entries, "component", [], total, bool(page.get("after")))
+    rows = await client.get_logbook(**command)
+    warnings = [
+        component_unusable_warning(
+            await get_component_caps(client), "the trace Logbook uses REST"
+        )
+    ]
+    if not isinstance(rows, list):
+        return TraceLogbook(
+            [], "rest", [*warnings, "The logbook reply was not a row list."]
+        )
     return TraceLogbook(
-        capped,
-        transport,
-        [],
-        total,
-        total > LOGBOOK_ROW_LIMIT,
+        rows[:LOGBOOK_ROW_LIMIT],
+        "rest",
+        warnings,
+        len(rows),
+        len(rows) > LOGBOOK_ROW_LIMIT,
     )
