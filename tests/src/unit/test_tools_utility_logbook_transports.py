@@ -33,6 +33,7 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.tools_logs import LogTools
 
+from ..e2e.utilities.component_path import component_fallback_warnings
 from ._command_faults import dropped_on, pooled_socket, unanswered
 from ._log_tool_calls import call_kwargs
 
@@ -146,6 +147,7 @@ async def test_component_rows_are_cores_own_and_skip_the_rest_view(
     command = sent_command(sent, COMPONENT_COMMAND)
     assert command["start_time"] < command["end_time"]
     rest.assert_not_awaited()
+    assert not component_fallback_warnings(result["data"])
     kitchen = by_entity(result)["light.kitchen"]
     assert kitchen["name"] == "Kitchen Light"
     assert dt_util.parse_datetime(kitchen["when"]) is not None
@@ -165,6 +167,7 @@ async def test_component_receives_the_entity_and_device_filters(
     command = sent_command(sent, COMPONENT_COMMAND)
     assert command["entity_ids"] == ["light.kitchen", "light.hall"]
     assert command["device_ids"] == [kitchen_device]
+    assert command["page"]["limit"] > 0
     assert set(by_entity(result)) == {"light.kitchen", "light.hall"}
 
 
@@ -188,7 +191,8 @@ async def test_component_that_lost_the_command_falls_back_to_rest(
         result = await tools.get_logs(**call_kwargs(source="logbook", search=search))
 
     assert COMPONENT_COMMAND in sent_types(sent)
-    rest.assert_awaited()
+    rest.assert_awaited_once()
+    assert component_fallback_warnings(result["data"])
     assert by_entity(result)["light.kitchen"]["name"] == "Kitchen Light"
 
 
