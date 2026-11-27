@@ -437,8 +437,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             bool,
             Field(
                 description=(
-                    f"logbook / system only: save context. Logbook strips "
-                    f"attribute dicts; system keeps the start and end of each "
+                    "Logbook returns every native field in either mode. For system logs, "
+                    f"compact mode keeps the start and end of each "
                     f"message string within {_SYSTEM_LOG_MESSAGE_CAP} characters "
                     f"(counted in 'truncated_messages'). search still matches the "
                     f"full message; text inside the cut is not shown. To read one "

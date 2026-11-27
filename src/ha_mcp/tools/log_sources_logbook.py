@@ -39,7 +39,7 @@ from .component_api import (
     is_unknown_command,
 )
 from .helpers import exception_to_structured_error, raise_tool_error
-from .log_common import _coerce_limit, _compact_logbook_entries
+from .log_common import _coerce_limit
 from .logbook_cursor import (
     LogbookCursor,
     fill_logbook_page,
@@ -753,7 +753,7 @@ class LogbookLogSourceMixin:
         data: dict[str, Any] = {
             "success": True,
             "source": "logbook",
-            "entries": _compact_logbook_entries(entries) if compact else entries,
+            "entries": entries,
             "period": f"{hours} hours back from {end.isoformat()}",
             "start_time": start.isoformat(),
             "end_time": end.isoformat(),
@@ -937,12 +937,6 @@ class LogbookLogSourceMixin:
             paginated_entries, total_entries, has_more = self._paginate_logbook_entries(
                 response, numeric_offset, effective_limit, order
             )
-
-            # In compact mode, strip entries to essential fields only.
-            # This prevents full attribute dictionaries from exhausting
-            # the LLM context window during debugging workflows.
-            if compact and isinstance(paginated_entries, list):
-                paginated_entries = _compact_logbook_entries(paginated_entries)
 
             logbook_data: dict[str, Any] = {
                 "success": True,

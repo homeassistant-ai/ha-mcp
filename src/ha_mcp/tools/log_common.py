@@ -7,26 +7,12 @@ Module Size; per-source fetchers live in ``log_sources`` and
 ``log_sources_supervisor``, and the tool surface in ``tools_logs``.
 """
 
-from typing import Any, Literal
+from typing import Literal
 
 from .._version import is_running_in_addon
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
 from .tools_addons import _is_valid_supervisor_slug
-
-# Fields to keep in compact logbook mode (strips attribute dictionaries
-# and other bulky fields that can cause context exhaustion — see #683)
-COMPACT_LOGBOOK_FIELDS = {
-    "when",
-    "entity_id",
-    "state",
-    "name",
-    "message",
-    "domain",
-    "context_id",
-    "source",
-}
-
 
 # Supervisor-managed system services exposed via /<slug>/logs. The set is
 # Supervisor's own route list (its ``_register_advanced_logs`` call sites),
@@ -48,19 +34,6 @@ SUPERVISOR_SEARCH_WINDOW_LINES = 2000
 MAX_LIMIT = 500
 
 VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG", "CRITICAL")
-
-
-def _compact_logbook_entries(entries: list[Any]) -> list[dict[str, Any]]:
-    """Strip logbook entries to essential fields only.
-
-    Returns entries with only the fields in COMPACT_LOGBOOK_FIELDS,
-    filtering out any non-dict entries.
-    """
-    return [
-        {k: v for k, v in entry.items() if k in COMPACT_LOGBOOK_FIELDS}
-        for entry in entries
-        if isinstance(entry, dict)
-    ]
 
 
 def _coerce_limit(
