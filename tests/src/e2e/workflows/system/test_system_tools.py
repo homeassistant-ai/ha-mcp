@@ -26,6 +26,7 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.core_version import core_at_least
 
 logger = logging.getLogger(__name__)
 
@@ -650,18 +651,30 @@ class TestSystemTools:
         logger.info(f"Unknown include warnings: {data['warnings']}")
 
     @pytest.mark.asyncio
-    async def test_get_system_health_dialog_sections(self, mcp_client):
+    async def test_get_system_health_dialog_sections(self, mcp_client, ha_client):
         """
-        Test: the baseline labels and the System information and Integration
-        startup dialog sections come from Core.
+        Test: the baseline labels and the System information, Integration
+        startup and Storage (2026.12+) sections come from Core.
 
         Supervisor runs only on a Supervisor install, so on other backends the
         section reports its absence.
         """
         async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_success(
-                "ha_get_system_health", {"include": "integration_startup,supervisor"}
+                "ha_get_system_health",
+                {
+                    "include": "integration_startup,supervisor,database_usage",
+                    "refresh_database_usage": True,
+                },
             )
+
+        if await core_at_least(ha_client, (2026, 12)):
+            usage = data["database_usage"]
+            assert usage["total_bytes"] > 0
+            assert usage["entity_count"] >= len(usage["entities"]) > 0
+        else:
+            assert "database_usage" not in data
+            assert any("no database usage report" in w for w in data["warnings"])
 
         health_info = data["health_info"]
         assert health_info["lovelace"]["name"] == "Dashboards"

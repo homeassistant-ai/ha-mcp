@@ -26,9 +26,14 @@ class _SurfaceFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     ) -> importlib.machinery.ModuleSpec | None:
         if fullname not in self._modules:
             return None
-        return importlib.util.spec_from_loader(
+        spec = importlib.util.spec_from_loader(
             fullname, self, is_package=fullname == "ha_mcp"
         )
+        if fullname == "ha_mcp" and spec is not None:
+            spec.submodule_search_locations = [
+                str(Path(__file__).parents[3] / "src" / "ha_mcp")
+            ]
+        return spec
 
     def create_module(self, spec: importlib.machinery.ModuleSpec) -> ModuleType:
         return self._modules[spec.name]

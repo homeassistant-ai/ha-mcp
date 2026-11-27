@@ -250,6 +250,9 @@
     "switch": {
       "server_access": {
         "name": "접근"
+      },
+      "server_read_only_mode": {
+        "name": "읽기 전용 모드"
       }
     }
   }

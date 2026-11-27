@@ -18,9 +18,9 @@ import pytest
 
 from ha_mcp._vendor import websockets as vendored_websockets
 from ha_mcp.tools import tools_bug_report
+from ha_mcp.tools.bug_report_templates import format_websockets_dependency_value
 from ha_mcp.tools.tools_bug_report import (
     detect_mcp_transport,
-    format_websockets_dependency_value,
     websockets_dependency_state,
 )
 

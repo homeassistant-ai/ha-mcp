@@ -19,6 +19,7 @@ from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
 
 from ..client.rest_client import HomeAssistantAPIError, HomeAssistantError
 from ..client.websocket_client import get_websocket_client
+from ..client_error_responses import core_validation_errors
 from ..error_wording import (
     config_key_malformed,
     config_view_rejection,
@@ -45,6 +46,13 @@ def section_from_status(status: str | None) -> str | None:
         if status and status.startswith("failed_")
         else None
     )
+
+
+def verdict_errors(verdict: dict[str, Any]) -> dict[str, Any]:
+    """``{"errors": [...]}`` from a component ``validate`` verdict that lists
+    Core's located errors (Core 2026.12); empty otherwise."""
+    errors = verdict.get("errors")
+    return {"errors": errors} if isinstance(errors, list) else {}
 
 
 def core_rejection_text(exc: HomeAssistantAPIError) -> str | None:
@@ -109,6 +117,7 @@ async def raise_if_core_rejected(
     core_text = core_rejection_text(exc)
     if core_text is None:
         return
+    context = {**context, **core_validation_errors(exc)}
     if config_key_malformed(core_text):
         # Core refused the key before it judged the config: no config hint applies.
         suggestions = [f"Use the {domain} id Core suggests in its message"]

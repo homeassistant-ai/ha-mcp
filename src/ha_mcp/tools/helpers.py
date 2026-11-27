@@ -654,7 +654,12 @@ def raise_core_refusal(
     )
 
 
-def raise_entity_refusal(what: str, result: dict[str, Any], entity_id: str) -> NoReturn:
+def raise_entity_refusal(
+    what: str,
+    result: dict[str, Any],
+    entity_id: str,
+    suggestions: list[str] | None = None,
+) -> NoReturn:
     """:func:`raise_core_refusal` for a command on one entity; when Core does
     not know the entity, the caller is also told how to find a valid id."""
     unknown = result.get("error_code") == "not_found"
@@ -662,7 +667,7 @@ def raise_entity_refusal(what: str, result: dict[str, Any], entity_id: str) -> N
         what,
         result,
         {"entity_id": entity_id},
-        ["Use ha_search() to find valid entity IDs"] if unknown else None,
+        ["Use ha_search() to find valid entity IDs"] if unknown else suggestions,
     )
 
 

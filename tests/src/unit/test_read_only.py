@@ -731,9 +731,9 @@ _ADDON_CONFIG_WRITE_PARAMS_MANIFEST = (
 # dispatch fields the predicate inspects) would silently classify as a
 # read in Read Only Mode.
 _EXEMPT_GATED_OR_READ_ARGS = {
-    # data: the fields of an action the predicate lets through, never sent
-    # with describe; limit and offset page the statistics listing client-side.
-    "ha_manage_logs": {"data", "limit", "offset"},
+    # data: the fields of an action the predicate lets through, never sent with
+    # describe; limit, offset and query page and filter the listing client-side.
+    "ha_manage_logs": {"data", "limit", "offset", "query"},
     "ha_manage_theme": {
         # Consumed only under the action dispatch the predicate inspects:
         # the backend-default write payload ('set')...
@@ -850,7 +850,7 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         *("entity_ids", "categories", "backup", "version", "channel"),
         *("repairs", "flow_id", "config", "menu_choice", "abort"),
         # ...and read-path modifiers of the allowed list/get actions.
-        *("include_skipped", "include_release_notes"),
+        *("include_skipped", "include_release_notes", "language"),
     },
     "ha_manage_security_policy": {
         # Both carry the write payload for action='set', which the

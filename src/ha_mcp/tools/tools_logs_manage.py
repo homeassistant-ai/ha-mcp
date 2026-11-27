@@ -31,6 +31,7 @@ from .helpers import (
 )
 from .history_coverage import MIGRATING, when
 from .response_helpers import build_pagination_metadata
+from .statistics_search import matching_statistics
 from .tool_hints import write_hints
 from .tools_services import _fetch_catalog_and_translations, _process_services
 
@@ -331,7 +332,12 @@ class LogsManageTools:
             warnings.extend(_unapplied_unit(data, after))
 
     async def _run(
-        self, action: str, data: dict[str, Any], limit: int, offset: int
+        self,
+        action: str,
+        data: dict[str, Any],
+        limit: int,
+        offset: int,
+        query: str | None = None,
     ) -> dict[str, Any]:
         named = (
             _named_statistics(data)
@@ -357,6 +363,11 @@ class LogsManageTools:
                 f"was read ({lost}); do not repeat it on that account."
             )
         if action == _PAGED_ACTION and isinstance(result, list):
+            if query:
+                result, query_warnings = await matching_statistics(
+                    self._client, result, query
+                )
+                warnings.extend(query_warnings)
             # Core lists stored statistics first, so a clear or a first sample
             # moves one; pages follow the IDs instead.
             result = sorted(result, key=lambda row: row["statistic_id"])
@@ -427,6 +438,18 @@ class LogsManageTools:
                 ge=0, description="Page start for 'recorder/list_statistic_ids' only."
             ),
         ] = 0,
+        query: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "For 'recorder/list_statistic_ids' only: keep the statistics "
+                    "where every word is part of one of the row's values (id, "
+                    "name, source, units) or, with the ha_mcp_tools component, "
+                    "of the names Home Assistant gives the statistic's entity. "
+                    "Core's own statistic_type filter goes in data."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage Home Assistant's recorder, its long-term statistics and its logs.
 
@@ -458,6 +481,7 @@ class LogsManageTools:
         EXAMPLES:
         - ha_manage_logs(action="recorder/adjust_sum_statistics", describe=True)
         - ha_manage_logs(action="recorder/clear_statistics", data={"statistic_ids": ["sensor.old_meter"]})
+        - ha_manage_logs(action="recorder/list_statistic_ids", query="gas meter")
         - ha_manage_logs(action="system_log.write", data={"message": "checkpoint"})
         """
         try:
@@ -471,7 +495,7 @@ class LogsManageTools:
                 if warnings:
                     response["warnings"] = warnings
                 return response
-            return await self._run(action, data or {}, limit, offset)
+            return await self._run(action, data or {}, limit, offset, query)
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001

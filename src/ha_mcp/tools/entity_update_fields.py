@@ -5,7 +5,107 @@ from typing import Any
 
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
 from .entity_registry_reads import NotInRegistry
-from .helpers import clearable_value, raise_tool_error
+from .helpers import clearable_value, raise_core_refusal, raise_tool_error
+
+
+async def automatic_entity_id(
+    client: Any, entity_id: str, name: str | None, area_id: str | None
+) -> str:
+    """The entity_id Core would generate for the entry (the UI's restore),
+    with the call's unsaved ``name`` and ``area_id`` as Core 2026.12's
+    ``overrides``; a Core that refuses them answers for the stored ones."""
+    request: dict[str, Any] = {
+        "type": "config/entity_registry/get_automatic_entity_ids",
+        "entity_ids": [entity_id],
+    }
+    overrides = {
+        key: clearable_value(value, key)
+        for key, value in (("name", name), ("area_id", area_id))
+        if value is not None
+    }
+    result = await client.send_websocket_message(
+        {**request, "overrides": {entity_id: overrides}} if overrides else request,
+        expected_error_codes=frozenset({"invalid_format"}),
+    )
+    # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
+    if overrides and result.get("error_code") == "invalid_format":
+        result = await client.send_websocket_message(request)
+    what = f"No automatic entity_id for {entity_id}"
+    context = {"entity_id": entity_id}
+    if not result.get("success"):
+        raise_core_refusal(what, result, context)
+    # Core lowercases the ids it is sent and keys its reply so.
+    automatic = (result.get("result") or {}).get(entity_id.lower())
+    if not automatic:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.ENTITY_NOT_FOUND,
+                f"{what}: not in the entity registry",
+                context=context,
+                suggestions=["Use ha_search() to find valid entity IDs"],
+            )
+        )
+    return str(automatic)
+
+
+CONVERTIBLE_UNITS = "sensor/device_class_convertible_units"
+
+
+async def reject_unconvertible_unit(
+    client: Any,
+    entity_id: str,
+    options: dict[str, dict[str, Any]] | None,
+    fetch_entity: Callable[[str], Awaitable[dict[str, Any]]],
+) -> str | None:
+    """Refuse a sensor unit Core does not list for the sensor's device class.
+
+    The units come from ``sensor/device_class_convertible_units``, the list
+    the entity settings dialog offers. The device class is the integration's
+    (``original_device_class``): the sensor converts with its own device
+    class, not one set in the registry. Returns a warning when Core did not
+    answer with its list, so the unit goes to Core unchecked.
+    """
+    unit = ((options or {}).get("sensor") or {}).get("unit_of_measurement")
+    if unit is None or not entity_id.lower().startswith("sensor."):
+        return None
+    try:
+        entry = await fetch_entity(entity_id)
+    except NotInRegistry:
+        return None  # Core refuses options for an entity it does not register
+    device_class = entry.get("original_device_class")
+    units: list[str] = []
+    if device_class:
+        reply = await client.send_websocket_message(
+            {"type": CONVERTIBLE_UNITS, "device_class": device_class}
+        )
+        if not reply.get("success"):
+            return (
+                f"The unit {unit!r} was not checked against the units Home "
+                f"Assistant lists for device class {device_class}: "
+                f"{CONVERTIBLE_UNITS} answered {reply.get('error')!r}"
+            )
+        units = (reply.get("result") or {}).get("units") or []
+    if unit not in units:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"{unit!r} is not among the units Home Assistant lists for "
+                f"{entity_id}'s device class ({device_class or 'none'})",
+                context={
+                    "entity_id": entity_id,
+                    "unit_of_measurement": unit,
+                    "device_class": device_class,
+                    "convertible_units": units,
+                    "checked_with": CONVERTIBLE_UNITS,
+                },
+                suggestions=[
+                    f"Use one of: {', '.join(units)}"
+                    if units
+                    else "Home Assistant lists no units this sensor converts to"
+                ],
+            )
+        )
+    return None
 
 
 def reject_name_with_use_device_name(

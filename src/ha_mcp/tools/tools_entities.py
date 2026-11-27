@@ -41,7 +41,10 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .config_helpers.registry import validate_registry_ids
+from .config_helpers.registry import (
+    registry_refusal_hints,
+    validate_registry_write_ids,
+)
 from .entity_expose_batch import (
     apply_bulk_expose,
     changed_entity_ids,
@@ -75,10 +78,12 @@ from .entity_registry_wide import (
 )
 from .entity_removal import remove_registry_entries, remove_registry_entry
 from .entity_update_fields import (
+    automatic_entity_id,
     build_name_visibility_fields,
     build_state_tag_fields,
     ensure_use_device_name_allowed,
     reject_name_with_use_device_name,
+    reject_unconvertible_unit,
 )
 from .helpers import (
     WHITESPACE_CLEARS_NOTE,
@@ -407,31 +412,6 @@ class EntityTools:
         labels_to_remove = set(parsed_labels)
         return [lbl for lbl in current_labels if lbl not in labels_to_remove]
 
-    async def _automatic_entity_id(self, entity_id: str) -> str:
-        """The entity_id Core would generate for the entry now (the UI's restore)."""
-        result = await self._client.send_websocket_message(
-            {
-                "type": "config/entity_registry/get_automatic_entity_ids",
-                "entity_ids": [entity_id],
-            }
-        )
-        what = f"No automatic entity_id for {entity_id}"
-        context = {"entity_id": entity_id}
-        if not result.get("success"):
-            raise_core_refusal(what, result, context)
-        # Core lowercases the ids it is sent and keys its reply so.
-        automatic = (result.get("result") or {}).get(entity_id.lower())
-        if not automatic:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"{what}: not in the entity registry",
-                    context=context,
-                    suggestions=["Use ha_search() to find valid entity IDs"],
-                )
-            )
-        return str(automatic)
-
     async def _execute_registry_update(
         self,
         entity_id: str,
@@ -454,7 +434,10 @@ class EntityTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                raise_entity_refusal("Failed to update entity", result, entity_id)
+                hints = registry_refusal_hints(result)
+                raise_entity_refusal(
+                    "Failed to update entity", result, entity_id, hints
+                )
 
             core_result = dict(result.get("result") or {})
 
@@ -800,7 +783,9 @@ class EntityTools:
         """Update a single entity. Orchestrates the phase pipeline."""
         reject_name_with_use_device_name(name, use_device_name)
         if new_entity_id == "auto":
-            new_entity_id = await self._automatic_entity_id(entity_id)
+            new_entity_id = await automatic_entity_id(
+                self._client, entity_id, name, area_id
+            )
         # Normalized before Phase 3: a quote-only value must be rejected before the
         # entity registry write, and a blank one must not count as deferred work.
         device_name_blank = new_device_name is not None and not new_device_name.strip()
@@ -885,6 +870,9 @@ class EntityTools:
             # Save original entity_id before potential rename
             original_entity_id = entity_id
 
+            unit_warning = await reject_unconvertible_unit(
+                self._client, entity_id, parsed_options, self._fetch_entity
+            )
             # Issue #2159: validate cross-registry references immediately before
             # the write — the narrowest window against a concurrent registry
             # deletion (#2160 placed the area check here for the same reason).
@@ -892,12 +880,11 @@ class EntityTools:
             # For label add, only the added IDs are checked: the merged
             # set may legitimately carry pre-existing dangling labels, whose
             # cleanup path (label_operation="remove") must stay open.
-            await validate_registry_ids(
+            await validate_registry_write_ids(
                 self._client,
                 message.get("area_id"),  # normalized by build_name_visibility_fields
                 parsed_labels if label_operation in ("set", "add") else None,
                 parsed_categories,
-                fail_closed=True,
             )
 
             # Phase 3: Send entity registry update (covers all fields except expose_to)
@@ -951,7 +938,7 @@ class EntityTools:
             new_entity_id,
             exposure_result,
             device_rename_result,
-            [w for w in (device_name_warning, exposure_warning) if w],
+            [w for w in (unit_warning, device_name_warning, exposure_warning) if w],
             core_result,
         )
 
@@ -1253,7 +1240,9 @@ class EntityTools:
                 description=(
                     "Per-domain entity registry options (e.g. sensor 'display_precision', "
                     "weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, "
-                    'e.g. {"sensor": {"display_precision": 2}}. '
+                    'e.g. {"sensor": {"display_precision": 2}}. A sensor '
+                    "'unit_of_measurement' must be one Home Assistant lists for "
+                    "the integration's device class; others are refused with it. "
                     "For 'Show As' use device_class; for "
                     "voice-assistant exposure use expose_to, not "
                     "options.<assistant>.should_expose."
@@ -1528,12 +1517,11 @@ class EntityTools:
             # entity also revalidates under its lock to catch references deleted
             # while waiting, preserving per-entity partial-progress reporting.
             if is_bulk:
-                await validate_registry_ids(
+                await validate_registry_write_ids(
                     self._client,
                     None,
                     parsed_labels if label_operation in ("set", "add") else None,
                     parsed_categories,
-                    fail_closed=True,
                 )
 
             # Single entity case

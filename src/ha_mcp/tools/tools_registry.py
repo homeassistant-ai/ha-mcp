@@ -25,7 +25,7 @@ from .component_devices import (
     fetch_device_list_via_component,
     fetch_device_via_component,
 )
-from .config_helpers.registry import validate_registry_ids
+from .config_helpers.registry import registry_refusal_hints, validate_registry_write_ids
 from .device_enrichment import (
     enrich_matter_diagnostics,
     enrich_zha_metrics,
@@ -654,9 +654,7 @@ class RegistryTools:
             # Issue #2159: HA stores an unknown area_id or label_id on the
             # device verbatim. Device labels replace the existing set, so the
             # supplied list is the full set to check; an empty list clears.
-            await validate_registry_ids(
-                self._client, area_id, labels, None, fail_closed=True
-            )
+            await validate_registry_write_ids(self._client, area_id, labels, None)
 
             logger.info(f"Updating device {device_id}: {', '.join(updates_made)}")
             result = await self._client.send_websocket_message(message)
@@ -669,7 +667,7 @@ class RegistryTools:
                     {"device_id": device_id},
                     ["Verify the device_id exists using ha_get_device()"]
                     if unknown
-                    else None,
+                    else registry_refusal_hints(result),
                 )
             return {
                 "success": True,
