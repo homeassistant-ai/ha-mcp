@@ -9,9 +9,10 @@ build that lacks a part is the real module with that attribute removed.
 from __future__ import annotations
 
 import copy
+import importlib
 import logging
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import probatio
 import pytest
@@ -157,6 +158,21 @@ async def test_a_failed_config_lists_every_error_with_its_path(
     assert all(path[0] == "actions" for path in paths)
     assert {path[1] for path in paths} == {0, 1}
     assert ["actions", 1, "choose", 0, "sequence", 0] in [p[:6] for p in paths]
+
+
+async def test_a_refused_config_imports_nothing_in_the_handler(
+    component_ws: MockHAClientWebSocket,
+) -> None:
+    """The handler runs on the event loop, where Core reports an import as a
+    blocking call and asks the user to file a bug against this integration."""
+    with patch.object(
+        importlib, "import_module", wraps=importlib.import_module
+    ) as imported:
+        got = await _command(component_ws, action="validate", config=_BAD_TRIGGER)
+
+    assert got["status"] == "failed_triggers"
+    looked_up = [call.args[0] for call in imported.call_args_list if call.args]
+    assert "homeassistant.helpers.validation_errors" not in looked_up
 
 
 async def test_validation_leaves_the_callers_config_unchanged(

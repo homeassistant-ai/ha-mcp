@@ -28,6 +28,17 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Core 2026.12's module that lists a failed config's errors with their paths.
+# Resolved once here, when the integration is imported: the handlers run on the
+# event loop, where Core reports an import as a blocking call.
+_VALIDATION_ERRORS: Any
+try:
+    _VALIDATION_ERRORS = importlib.import_module(
+        "homeassistant.helpers.validation_errors"
+    )
+except ModuleNotFoundError:
+    _VALIDATION_ERRORS = None
+
 WS_AUTOMATION_CONFIG = "ha_mcp_tools/automation_config"
 # Advertised by websocket_api's info; the server's automation tools use it and
 # fall back to Core's automation REST API and WebSocket commands.
@@ -96,16 +107,12 @@ async def _located_errors(
     """``{"errors": [...]}``: every error of a failed config with its path, as
     Core's config view answers them (2026.12, ``validation_errors_as_dicts`` of
     what the public validator raises); empty on a Core without them."""
-    try:
-        located = importlib.import_module("homeassistant.helpers.validation_errors")
-    except ModuleNotFoundError:
-        return {}
-    if core.validate_or_raise is None:
+    if _VALIDATION_ERRORS is None or core.validate_or_raise is None:
         return {}
     try:
         await core.validate_or_raise(hass, "", copy.deepcopy(config))
     except core.invalid as err:
-        return {"errors": located.validation_errors_as_dicts(err)}
+        return {"errors": _VALIDATION_ERRORS.validation_errors_as_dicts(err)}
     return {}
 
 
