@@ -38,7 +38,7 @@ from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandE
 from ha_mcp.tools.tools_entities import EntityTools
 
 from ._backup_core import backup_settings as backup_settings
-from ._backup_core import break_backup_dir, place_snapshot
+from ._backup_core import break_backup_dir, manage_backup, place_snapshot
 from ._backup_restore_consumers_core import fill_the_disk
 from ._command_faults import unanswered
 from ._entity_backup_core import (
@@ -569,7 +569,6 @@ async def test_a_bulk_call_backs_up_every_entity_before_writing(
 @pytest.mark.parametrize(
     "entity_id",
     [
-        ["light.desk", "LIGHT.DESK"],
         ["LIGHT.DESK", "light.desk"],
         ["LIGHT.DESK"],
         "LIGHT.DESK",
@@ -588,6 +587,35 @@ async def test_an_entity_is_backed_up_once_under_cores_id(
 
     files = await asyncio.to_thread(backup_files, backup_dir(backup_settings))
     assert [name.split(".20")[0] for name in files] == ["entity.light.desk"]
+
+
+async def test_an_on_demand_backup_is_filed_under_cores_id(
+    entity_client: HomeAssistantClient,
+    backup_settings: config.Settings,
+    desk: Desk,
+) -> None:
+    """An explicit capture files an entity under the id Core keeps, as a
+    write's backup does, and an entity filter in either case finds it."""
+    created = await manage_backup(
+        entity_client,
+        scope="edits",
+        action="create",
+        domain="entity",
+        entity_id="LIGHT.DESK",
+    )
+    name = created["data"]["backup_name"]
+
+    assert name.split(".20")[0] == "entity.light.desk"
+    assert created["data"]["entity_id"] == "light.desk"
+    for entity_id in ("LIGHT.DESK", "light.desk"):
+        listed = await manage_backup(
+            entity_client,
+            scope="edits",
+            action="list",
+            domain="entity",
+            entity_id=entity_id,
+        )
+        assert [row["name"] for row in listed["data"]["backups"]] == [name]
 
 
 async def test_a_refused_list_takes_no_backup(

@@ -286,9 +286,8 @@ async def back_up_entities(
     try:
         mgr = get_backup_manager(client, settings)
         for eid in entity_ids:
-            # Core lowercases an entity_id: one entity, one snapshot name.
             await mgr.maybe_snapshot(
-                "entity", eid.lower(), tool_name=tool_name, skip_reasons=skipped
+                "entity", eid, tool_name=tool_name, skip_reasons=skipped
             )
     except _CAPTURE_TRANSIENT_ERRORS as err:
         logger.warning("Entity backup failed: %s", err)

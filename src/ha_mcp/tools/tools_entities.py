@@ -195,9 +195,8 @@ def _single_entity_target(kw: dict[str, Any]) -> str:
     """
     entity_id = kw.get("entity_id")
     if isinstance(entity_id, list):
-        entity_id = entity_id[0] if len(entity_id) == 1 else ""
-    # Filed under Core's lowercase id, as a list path files it.
-    return str(entity_id or "").lower()
+        return str(entity_id[0]) if len(entity_id) == 1 else ""
+    return str(entity_id or "")
 
 
 def _unique_entity_ids(entity_ids: list[str]) -> list[str]:

@@ -809,6 +809,8 @@ class BackupManager:
         ``holds`` is the id the captured item must have; another item raises
         ``BackupRestoreError`` before anything is written.
         """
+        # Core lowercases an entity_id: one entity, one snapshot name.
+        entity_id = entity_id.lower() if domain == "entity" else entity_id
         if not force:
             await self.ensure_directory_ready()
         handler = self._resolve_snapshot_handler(
