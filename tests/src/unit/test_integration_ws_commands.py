@@ -455,4 +455,6 @@ async def test_each_bridge_names_its_own_feature_without_the_component(
     result = await ask(core_client)
 
     assert result["status"] == "unavailable"
-    assert f"does not expose {feature}." in result["reason"]
+    assert result["reason"].startswith(
+        f"No ha_mcp_tools component answered, so {feature} is unavailable."
+    )
