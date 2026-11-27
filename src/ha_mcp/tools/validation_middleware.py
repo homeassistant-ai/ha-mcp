@@ -62,43 +62,14 @@ _UNKNOWN_ARGUMENT = "unexpected_keyword_argument"
 
 _RejectionKind = Literal["misplaced", "undeclared", "other"]
 
-# Config root keys that models habitually pass as top-level tool arguments on
-# the config-writing tools. When one arrives top-level, the rejection says the
-# key belongs inside `config` instead of only listing the valid tool
-# parameters (issue #2649 section 1).
-#
-# Scoped per tool on purpose: only the config-writing tools take a `config`
-# body, so only their top-level arguments can be misplaced config keys.
-# (Only these two were measured in BAT runs.) The script set is a fallback:
-# when the component serves `ha_mcp_tools/script_config_keys`, Core's own
-# script keys replace it.
-_CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
-    "ha_config_set_automation": {
-        "alias",
-        "description",
-        "triggers",
-        "trigger",
-        "actions",
-        "action",
-        "conditions",
-        "condition",
-        "mode",
-        "max",
-        "max_exceeded",
-        "variables",
-        "use_blueprint",
-    },
-    "ha_config_set_script": {
-        "alias",
-        "description",
-        "mode",
-        "sequence",
-        "max",
-        "max_exceeded",
-        "fields",
-        "icon",
-        "use_blueprint",
-    },
+# The config-writing tools whose `config` body takes Core's automation or
+# script config: a config root key passed as a top-level argument is told to
+# move inside `config` (issue #2649 section 1). The keys come from Core
+# through the component's `ha_mcp_tools/config_keys`; without it there is no
+# list, and any undeclared name gets the field hint and the reason.
+_CONFIG_DOMAIN_BY_TOOL = {
+    "ha_config_set_automation": "automation",
+    "ha_config_set_script": "script",
 }
 
 
@@ -111,30 +82,34 @@ _FIELD_GOES_IN_CONFIG = (
     "Home Assistant's name for it"
 )
 
-_SCRIPT_TOOL = "ha_config_set_script"
-# When Core's script keys could not be read and the script set of
-# _CONFIG_ROOT_KEYS_BY_TOOL answered instead: added to any other name, and
-# the reason, with the component install or update step, to the suggestions.
-_SCRIPT_FIELD_HINT = "; if it is a script config field, pass it inside `config`"
-_SCRIPT_FIELDS_UNREAD = "Core's script fields could not be read"
+
+def _config_field_hint(domain: str) -> str:
+    """Added to any undeclared name when Core's keys were not read."""
+    article = "an" if domain == "automation" else "a"
+    return f"; if it is {article} {domain} config field, pass it inside `config`"
 
 
-async def _script_config_keys(client: Any) -> tuple[set[str] | None, str | None]:
-    """Core's script config keys through the component, or why they were not read.
+async def _config_keys_from_core(
+    client: Any, domain: str
+) -> tuple[set[str] | None, str | None]:
+    """Core's config keys for ``domain`` through the component, or why they
+    were not read.
 
     A failed or malformed read counts as no component; the base error class
     also covers an OAuth client that cannot name the requesting user, which
     would otherwise replace the rejection.
     """
     try:
-        reply = await ask_component(client, "script_config_keys")
+        reply = await ask_component(client, "config_keys", domain=domain)
         keys = reply.get("keys") if reply is not None else None
         if isinstance(keys, list) and keys and all(isinstance(k, str) for k in keys):
             return set(keys), None
         caps = await get_component_caps(client)
     except HomeAssistantError:
         caps = None
-    return None, component_unusable_warning(caps, _SCRIPT_FIELDS_UNREAD)
+    return None, component_unusable_warning(
+        caps, f"Core's {domain} fields could not be read"
+    )
 
 
 async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] | None:
@@ -298,24 +273,28 @@ class ValidationErrorMiddleware(Middleware):
     """Convert argument-validation failures into structured ToolErrors."""
 
     def __init__(self, get_client: Callable[[], Any] | None = None) -> None:
-        # Reads Core's script config keys through the component; with no
-        # getter, or no component, the server's own set answers.
+        # Reads Core's config keys through the component; with no getter, or
+        # no component, the config tools have no key list.
         self._get_client = get_client
 
     async def _config_keys(
         self, tool_name: str | None
     ) -> tuple[set[str] | None, str, str | None]:
         """The tool's config root keys, the hint added to any other name, and
-        why Core's keys were not read when the server's own set answered."""
+        why Core's keys were not read when there is no list."""
         if tool_name in _FIELDS_IN_CONFIG_TOOLS:
             return None, _FIELD_GOES_IN_CONFIG, None
-        listed = _CONFIG_ROOT_KEYS_BY_TOOL.get(tool_name) if tool_name else None
-        if tool_name != _SCRIPT_TOOL or self._get_client is None:
-            return listed, "", None
-        core_keys, unread_note = await _script_config_keys(self._get_client())
+        domain = _CONFIG_DOMAIN_BY_TOOL.get(tool_name) if tool_name else None
+        if domain is None:
+            return None, "", None
+        if self._get_client is None:
+            return None, _config_field_hint(domain), None
+        core_keys, unread_note = await _config_keys_from_core(
+            self._get_client(), domain
+        )
         if core_keys is not None:
             return core_keys, "", None
-        return listed, _SCRIPT_FIELD_HINT, unread_note
+        return None, _config_field_hint(domain), unread_note
 
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext

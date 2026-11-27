@@ -419,13 +419,11 @@ def _suggestions(body: dict) -> list[str]:
     return error.get("suggestions") or [error["suggestion"]]
 
 
-def _make_config_set_like_mcp(client: HomeAssistantClient | None = None) -> FastMCP:
+def _make_config_set_like_mcp(client: HomeAssistantClient) -> FastMCP:
     """Tools shaped like ha_config_set_automation/_script for the config-key hint,
-    the middleware reading Core through ``client`` when one is given."""
+    the middleware reading Core's keys through ``client``."""
     mcp = FastMCP("test")
-    mcp.add_middleware(
-        ValidationErrorMiddleware(None if client is None else lambda: client)
-    )
+    mcp.add_middleware(ValidationErrorMiddleware(lambda: client))
 
     @mcp.tool()
     async def ha_config_set_automation(
@@ -447,10 +445,12 @@ def _make_config_set_like_mcp(client: HomeAssistantClient | None = None) -> Fast
 
 
 @pytest.mark.asyncio
-async def test_misplaced_automation_config_key_says_it_belongs_in_config() -> None:
+async def test_misplaced_automation_config_key_says_it_belongs_in_config(
+    component_core_client: HomeAssistantClient,
+) -> None:
     """A config root key passed as a top-level argument says it belongs inside
     `config` instead of only listing valid parameters (issue #2649 section 1)."""
-    mcp = _make_config_set_like_mcp()
+    mcp = _make_config_set_like_mcp(component_core_client)
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool("ha_config_set_automation", {"alias": "Goodnight"})
 
@@ -463,6 +463,19 @@ async def test_misplaced_automation_config_key_says_it_belongs_in_config() -> No
     assert any(
         "Move `alias` inside the `config` argument" in s for s in _suggestions(body)
     )
+
+
+async def test_a_singular_automation_key_core_renames_is_told_to_move_into_config(
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Core still takes ``action`` for ``actions``; it is not a key of the
+    config schema itself, only of the renames in front of it."""
+    mcp = _make_config_set_like_mcp(component_core_client)
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_config_set_automation", {"action": []})
+
+    (only,) = _suggestions(json.loads(str(exc_info.value)))
+    assert "Move `action` inside the `config` argument" in only
 
 
 @pytest.mark.asyncio
@@ -491,9 +504,11 @@ async def test_a_helper_field_passed_top_level_is_told_it_goes_in_config() -> No
 
 
 @pytest.mark.asyncio
-async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
+async def test_misplaced_script_config_key_says_it_belongs_in_config(
+    component_core_client: HomeAssistantClient,
+) -> None:
     """Same as above for ha_config_set_script (issue #2649 section 1)."""
-    mcp = _make_config_set_like_mcp()
+    mcp = _make_config_set_like_mcp(component_core_client)
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool(
             "ha_config_set_script",
@@ -509,54 +524,75 @@ async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
     )
 
 
-async def _script_trace_rejection(client: HomeAssistantClient) -> dict:
+_TRACE_CALLS = {
+    "script": ("ha_config_set_script", {"script_id": "blink", "trace": {}}),
+    "automation": ("ha_config_set_automation", {"trace": {}}),
+}
+
+
+async def _trace_rejection(client: HomeAssistantClient, domain: str) -> dict:
     mcp = _make_config_set_like_mcp(client)
+    tool, arguments = _TRACE_CALLS[domain]
     with pytest.raises(ToolError) as exc_info:
-        await mcp.call_tool("ha_config_set_script", {"script_id": "blink", "trace": {}})
+        await mcp.call_tool(tool, arguments)
     return json.loads(str(exc_info.value))
 
 
-async def test_a_script_field_core_takes_is_told_to_move_into_config(
-    component_core_client: HomeAssistantClient,
+@pytest.mark.parametrize("domain", ["script", "automation"])
+async def test_a_config_field_core_takes_is_told_to_move_into_config(
+    component_core_client: HomeAssistantClient, domain: str
 ) -> None:
-    """``trace`` is not in the server's own list; the component reads it from
-    Core's script schema."""
-    body = await _script_trace_rejection(component_core_client)
+    """``trace`` is a field of both of Core's config schemas; the component
+    reads the keys from Core."""
+    body = await _trace_rejection(component_core_client, domain)
 
     assert "Move `trace` inside the `config` argument" in _suggestions(body)[0]
 
 
-def _assert_script_keys_unread(body: dict, reason: str) -> None:
+def _assert_keys_unread(body: dict, domain: str, reason: str) -> None:
     message = body["error"]["message"]
-    assert "if it is a script config field, pass it inside `config`" in message
+    article = "an" if domain == "automation" else "a"
+    assert f"if it is {article} {domain} config field, pass it inside `config`" in (
+        message
+    )
     note = _suggestions(body)[-1]
     assert reason in note
-    assert "Core's script fields could not be read" in note
+    assert f"Core's {domain} fields could not be read" in note
     assert not any("Move `trace`" in s for s in _suggestions(body))
 
 
-async def test_without_the_component_the_script_hint_says_core_was_not_read(
-    core_client: HomeAssistantClient,
+@pytest.mark.parametrize("domain", ["script", "automation"])
+async def test_without_the_component_the_hint_says_core_was_not_read(
+    core_client: HomeAssistantClient, domain: str
 ) -> None:
-    _assert_script_keys_unread(
-        await _script_trace_rejection(core_client), "No ha_mcp_tools component answered"
+    _assert_keys_unread(
+        await _trace_rejection(core_client, domain),
+        domain,
+        "No ha_mcp_tools component answered",
     )
 
 
-async def test_a_component_without_the_script_keys_is_answered_the_same(
-    monkeypatch: pytest.MonkeyPatch, component_core_client: HomeAssistantClient
+@pytest.mark.parametrize("domain", ["script", "automation"])
+async def test_a_component_without_the_config_keys_is_answered_the_same(
+    monkeypatch: pytest.MonkeyPatch,
+    component_core_client: HomeAssistantClient,
+    domain: str,
 ) -> None:
-    older_component(monkeypatch, "script_config_keys")
+    older_component(monkeypatch, "config_keys")
 
-    _assert_script_keys_unread(
-        await _script_trace_rejection(component_core_client), "component is too old"
+    _assert_keys_unread(
+        await _trace_rejection(component_core_client, domain),
+        domain,
+        "component is too old",
     )
 
 
 @pytest.mark.asyncio
-async def test_non_config_key_on_config_tool_still_gets_did_you_mean() -> None:
+async def test_non_config_key_on_config_tool_still_gets_did_you_mean(
+    component_core_client: HomeAssistantClient,
+) -> None:
     """Unknown arguments that are NOT config keys keep the did-you-mean hint."""
-    mcp = _make_config_set_like_mcp()
+    mcp = _make_config_set_like_mcp(component_core_client)
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool("ha_config_set_automation", {"configg": {"alias": "x"}})
 
@@ -603,10 +639,12 @@ async def test_renamed_parameter_names_a_stale_client_tool_list() -> None:
 
 
 @pytest.mark.asyncio
-async def test_misplaced_config_key_gets_no_stale_tool_list_hint() -> None:
+async def test_misplaced_config_key_gets_no_stale_tool_list_hint(
+    component_core_client: HomeAssistantClient,
+) -> None:
     """A config key passed top-level is the agent's mistake, not an old tool
     list, so only the move-into-config suggestion applies."""
-    mcp = _make_config_set_like_mcp()
+    mcp = _make_config_set_like_mcp(component_core_client)
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool("ha_config_set_automation", {"alias": "Goodnight"})
 
@@ -692,11 +730,13 @@ async def test_a_rejected_call_does_not_log_a_secret_inside_a_json_string(
 
 
 @pytest.mark.asyncio
-async def test_stale_tool_list_hint_names_only_the_undeclared_arguments() -> None:
+async def test_stale_tool_list_hint_names_only_the_undeclared_arguments(
+    component_core_client: HomeAssistantClient,
+) -> None:
     """In a call that also has a misplaced config key and a type error, one
     stale-list suggestion names the undeclared arguments and nothing else, and
     the move-into-config suggestion stays."""
-    mcp = _make_config_set_like_mcp()
+    mcp = _make_config_set_like_mcp(component_core_client)
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool(
             "ha_config_set_automation",

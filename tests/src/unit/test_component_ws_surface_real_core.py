@@ -21,6 +21,7 @@ from custom_components.ha_mcp_tools import (
     automation_config,
     card_definitions,
     config_file_items,
+    config_keys,
     config_references,
     core_contract,
     entity_restore,
@@ -29,7 +30,6 @@ from custom_components.ha_mcp_tools import (
     helper_collections,
     recorder_status,
     scene_editor,
-    script_config_keys,
     todo_items,
     update_entities,
 )
@@ -144,7 +144,7 @@ async def test_every_command_is_registered_and_config_get_is_not(
         recorder_status.WS_RECORDER_STATUS,
         flow_outline.WS_FLOW_OUTLINE,
         scene_editor.WS_SCENE_IGNORED_DOMAINS,
-        script_config_keys.WS_SCRIPT_CONFIG_KEYS,
+        config_keys.WS_CONFIG_KEYS,
     }
     assert "ha_mcp_tools/config_get" not in registered
 
