@@ -384,9 +384,12 @@ class TestWrites:
                         await remove_once_settled(mcp_client, repo_id)
 
     async def test_beta_versions_are_shown_and_hidden(self, mcp_client):
-        found = await search(mcp_client, max_results=1)
-        assert found["results"], found
-        repo_id = str(found["results"][0]["id"])
+        # A pinned repository: the catalog's first result is whatever a third
+        # party pushed last, and Core refuses a beta change on a broken one.
+        found = await search(mcp_client, category="theme", query=_THEME, max_results=5)
+        repo_id = str(
+            next(r for r in found["results"] if r["full_name"] == _THEME)["id"]
+        )
         await accept_warning(mcp_client)
 
         shown = await store_call(
