@@ -26,7 +26,8 @@ async def resolve_entities(
     client: Any, ids: str | list[str] | None, target: dict[str, Any] | None
 ) -> list[str]:
     if target is None:
-        return _parse_entity_ids(ids or [])
+        # An empty string goes to Core, which refuses it with its own code.
+        return _parse_entity_ids([] if ids is None else ids)
     selected = _parse_entity_ids(ids) if ids is not None else []
     resolved = await _resolve_target(client, target)
     entities = list(
