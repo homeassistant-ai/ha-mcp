@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from homeassistant.components.recorder import Recorder
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -26,9 +27,17 @@ async def _logbook(client: HomeAssistantClient, *, compact: bool) -> dict[str, A
     return data
 
 
+@pytest.mark.parametrize("component_enabled", [False, True])
 async def test_compact_logbook_rows_preserve_core_fields(
-    recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    component_enabled: bool,
 ) -> None:
+    if component_enabled:
+        from custom_components.ha_mcp_tools.websocket_api import async_register_commands
+
+        async_register_commands(hass)
     assert await async_setup_component(hass, "logbook", {})
     attributes = {"friendly_name": "Living Room Light", "icon": "mdi:lightbulb"}
     hass.states.async_set("light.living_room", "off", attributes)
@@ -44,6 +53,7 @@ async def test_compact_logbook_rows_preserve_core_fields(
     turned_on = [row for row in compact if row.get("entity_id") == "light.living_room"]
     assert turned_on
     assert turned_on[-1]["state"] == "on"
+    assert turned_on[-1]["icon"] == "mdi:lightbulb"
     assert turned_on[-1]["when"]
 
 

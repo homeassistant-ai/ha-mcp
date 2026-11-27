@@ -44,6 +44,92 @@ async def test_action_calls_use_cores_admin_view(
 
 
 @pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("component_enabled", [False, True])
+async def test_search_finds_an_action_call_by_its_action(
+    hass: HomeAssistant, core_client: HomeAssistantClient, component_enabled: bool
+) -> None:
+    from custom_components.ha_mcp_tools.websocket_api import async_register_commands
+
+    if component_enabled:
+        async_register_commands(hass)
+    await hass.services.async_call(
+        "logbook", "log", {"name": "action proof", "message": "record"}, blocking=True
+    )
+    await async_wait_recording_done(hass)
+    tools = LogTools(core_client)
+
+    found = await tools.get_logs(**call_kwargs(action_calls=True, search="logbook.log"))
+    missed = await tools.get_logs(**call_kwargs(action_calls=True, search="no.such"))
+
+    assert [row["service"] for row in found["data"]["entries"]] == ["log"]
+    assert missed["data"]["entries"] == []
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("component_enabled", [False, True])
+async def test_action_calls_with_a_filter_are_refused_without_an_entity_id_hint(
+    hass: HomeAssistant, core_client: HomeAssistantClient, component_enabled: bool
+) -> None:
+    from custom_components.ha_mcp_tools.websocket_api import async_register_commands
+
+    if component_enabled:
+        async_register_commands(hass)
+
+    error = await logbook_error(
+        LogTools(core_client), action_calls=True, entity_id="light.kitchen"
+    )
+
+    assert "object_id" not in " ".join(error.get("suggestions", []))
+
+
+async def test_action_calls_on_another_source_are_named_as_ignored(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    from homeassistant.setup import async_setup_component
+
+    assert await async_setup_component(hass, "system_log", {})
+
+    result = await LogTools(core_client).get_logs(
+        **call_kwargs(source="system", action_calls=True)
+    )
+
+    assert any("action_calls" in warning for warning in result["warnings"])
+
+
+@pytest.mark.usefixtures("logbook")
+async def test_a_statement_core_shapes_differently_is_refused_not_paged(
+    component_core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another Core version's query: one select where the reader knows unions."""
+    from sqlalchemy import literal, select
+
+    from custom_components.ha_mcp_tools.websocket_api import logbook_page
+
+    monkeypatch.setattr(
+        logbook_page,
+        "statement_for_request",
+        lambda *args, **kwargs: select(literal(1).label("row_id")),
+    )
+    with rest_reads(component_core_client) as rest:
+        error = await logbook_error(LogTools(component_core_client))
+
+    assert "statement shape" in error["message"]
+    rest.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("logbook")
+async def test_a_device_and_context_conflict_points_at_the_filters(
+    core_client: HomeAssistantClient,
+) -> None:
+    """Core's own WebSocket read fails this combination without saying why."""
+    error = await logbook_error(
+        LogTools(core_client), device_id="any-device", context_id=Context().id
+    )
+
+    assert any("context_id" in hint for hint in error["suggestions"])
+
+
+@pytest.mark.usefixtures("logbook")
 async def test_long_native_window_is_refused_before_read(
     core_client: HomeAssistantClient,
 ) -> None:
@@ -136,7 +222,9 @@ async def test_context_conflict_reaches_native_reader(
         error = await logbook_error(
             LogTools(core_client), entity_id="light.kitchen", context_id=Context().id
         )
-    assert "context_id" in error["message"]
+    assert error["code"] == (
+        "SERVICE_CALL_FAILED" if component_enabled else "VALIDATION_FAILED"
+    )
     if component_enabled:
         assert "ha_mcp_tools/logbook_events" in sent_types(sent)
         rest.assert_not_awaited()

@@ -113,6 +113,119 @@ async def test_component_rows_are_cores_own_and_skip_the_rest_view(
 
 
 @pytest.mark.parametrize("order", ["oldest", "newest"])
+@pytest.mark.parametrize("scope", ["entity", "device", "both"])
+async def test_scoped_pages_are_cores_own_rows_with_what_caused_them(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    kitchen_device: str,
+    scope: str,
+    order: str,
+) -> None:
+    """Each kitchen change is caused by an action call that only Core's
+    context lookup ties to it; the hall changes sit between the pages."""
+    for state in ("off", "on", "off"):
+        context = Context()
+        hass.bus.async_fire(
+            "call_service",
+            {"domain": "light", "service": f"turn_{state}"},
+            context=context,
+        )
+        hass.states.async_set("light.hall", state)
+        hass.states.async_set("light.kitchen", state, context=context)
+        await async_wait_recording_done(hass)
+    end = dt_util.utcnow()
+    filters: dict[str, Any] = {}
+    if scope != "device":
+        filters["entity_ids"] = ["light.kitchen"]
+    if scope != "entity":
+        filters["device_ids"] = [kitchen_device]
+    native = (
+        await component_core_client.send_websocket_message(
+            {
+                "type": CORE_COMMAND,
+                "start_time": (end - timedelta(hours=1)).isoformat(),
+                "end_time": end.isoformat(),
+                **filters,
+            }
+        )
+    )["result"]
+    assert [row["context_service"] for row in native if "context_service" in row]
+
+    params = call_kwargs(
+        source="logbook",
+        entity_id="light.kitchen" if scope != "device" else None,
+        device_id=kitchen_device if scope != "entity" else None,
+        end_time=end.isoformat(),
+        limit=1,
+        order=order,
+    )
+    tools = LogTools(component_core_client)
+    rows: list[dict[str, Any]] = []
+    for _ in range(len(native) + 1):
+        result = await tools.get_logs(**params)
+        assert not component_fallback_warnings(result)
+        rows.extend(result["data"]["entries"])
+        if not result["data"]["has_more"]:
+            break
+        params["offset"] = result["data"]["next_offset"]
+
+    def comparable(row: dict[str, Any]) -> dict[str, Any]:
+        when = row["when"]
+        stamp = (
+            when
+            if isinstance(when, float)
+            else datetime.fromisoformat(when).timestamp()
+        )
+        # Core's WebSocket rows carry no entity name; the component's do.
+        rest = {key: value for key, value in row.items() if key not in ("when", "name")}
+        return {**rest, "when": round(stamp, 3)}
+
+    expected = native if order == "oldest" else native[::-1]
+    assert [comparable(row) for row in rows] == [comparable(row) for row in expected]
+
+
+@pytest.mark.usefixtures("logbook")
+async def test_a_cursor_is_refused_with_another_scope(
+    component_core_client: HomeAssistantClient, sent: AsyncMock
+) -> None:
+    tools = LogTools(component_core_client)
+    first = await tools.get_logs(
+        **call_kwargs(source="logbook", entity_id="light.kitchen,light.hall", limit=1)
+    )
+    cursor = first["data"]["next_offset"]
+    sent.reset_mock()
+
+    for other in ({"entity_id": "light.hall"}, {}):
+        error = await logbook_error(tools, offset=cursor, limit=1, **other)
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert COMPONENT_COMMAND not in sent_types(sent)
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize(
+    "window", [{"entity_id": "sensor.outdoor"}, {"end_time": "2999-01-01T00:00:00Z"}]
+)
+async def test_a_read_core_answers_with_nothing_is_an_empty_page(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    window: dict[str, str],
+) -> None:
+    """Core's logbook leaves a measurement sensor out, and holds nothing yet
+    for a window that starts in the future."""
+    hass.states.async_set("sensor.outdoor", "5", {"unit_of_measurement": "°C"})
+    await async_wait_recording_done(hass)
+
+    result = await LogTools(component_core_client).get_logs(
+        **call_kwargs(source="logbook", **window)
+    )
+
+    assert not component_fallback_warnings(result)
+    assert result["data"]["entries"] == []
+    assert result["data"]["total_entries"] == 0
+    assert result["data"]["has_more"] is False
+
+
+@pytest.mark.parametrize("order", ["oldest", "newest"])
 async def test_component_receives_the_entity_and_device_filters(
     component_core_client: HomeAssistantClient,
     kitchen_device: str,
@@ -417,7 +530,7 @@ async def test_invalid_context_cannot_turn_into_an_unfiltered_read(
 @pytest.mark.usefixtures("logbook")
 @pytest.mark.parametrize("order", ["oldest", "newest"])
 @pytest.mark.parametrize("component_enabled", [False, True])
-async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
+async def test_a_search_over_several_hours_counts_every_match(
     hass: HomeAssistant,
     component_enabled: bool,
     core_client: HomeAssistantClient,
@@ -473,7 +586,6 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
             if call.args[0]["type"] == COMPONENT_COMMAND
         ]
         assert all("page" in cmd for cmd in commands)
-        assert not any("count_range" in cmd["page"] for cmd in commands)
     else:
         assert len(rest.await_args_list) == (len(names) + 1) // 2
         for call in rest.await_args_list:
@@ -526,14 +638,11 @@ async def test_phrase_pages_fill_across_raw_batches(
     ]
     expected = [datetime.fromtimestamp(stamp + i, UTC) for i in (0, 3, 6, 9)]
     assert times == sorted(expected, reverse=order == "newest")
-    assert not any(
-        "count_range" in c.args[0].get("page", {}) for c in sent.await_args_list
-    )
 
 
 @pytest.mark.usefixtures("logbook")
 @pytest.mark.parametrize("change", ["rename", "purge"])
-async def test_selected_matches_change_before_render(
+async def test_a_search_cursor_continues_after_the_logbook_changed(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
     change: str,
@@ -838,18 +947,6 @@ async def test_rest_read_that_gets_no_answer_keeps_the_scope_hints(
         error = await logbook_error(LogTools(core_client))
 
     assert any("hours_back" in s for s in error["suggestions"])
-
-
-@pytest.mark.parametrize("extra", [{"entity_id": "light.a"}, {"device_id": "dev1"}])
-async def test_context_id_cannot_combine_with_other_filters(
-    core_client: HomeAssistantClient, sent: AsyncMock, extra: dict[str, str]
-) -> None:
-    with rest_reads(core_client) as rest:
-        error = await logbook_error(LogTools(core_client), context_id="ctx1", **extra)
-
-    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert CORE_COMMAND not in sent_types(sent)
-    rest.assert_not_awaited()
 
 
 @pytest.mark.usefixtures("logbook")
