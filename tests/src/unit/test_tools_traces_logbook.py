@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components import websocket_api
 from homeassistant.components.automation.trace import AutomationTrace
 from homeassistant.components.recorder import Recorder
 from homeassistant.components.trace import async_store_trace
@@ -146,6 +147,26 @@ class TestFetchTraceLogbook:
         assert [(row["entity_id"], row["state"]) for row in logbook.entries] == [
             ("light.matched", "on")
         ]
+
+    @pytest.mark.asyncio
+    async def test_advertised_trace_command_lost_returns_warning(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client: WebSocketGenerator,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        trace = await _trace(hass, hass_ws_client, context=Context())
+        await get_component_caps(component_core_client)
+        del hass.data[websocket_api.DOMAIN]["ha_mcp_tools/logbook_events"]
+        with patch.object(
+            component_core_client,
+            "get_logbook",
+            AsyncMock(wraps=component_core_client.get_logbook),
+        ) as rest:
+            result = await fetch_trace_logbook(component_core_client, trace)
+        rest.assert_awaited_once()
+        assert result.transport == "rest"
+        assert any("ha_mcp_tools" in warning for warning in result.warnings)
 
     @pytest.mark.asyncio
     async def test_rows_before_the_run_start_are_excluded(

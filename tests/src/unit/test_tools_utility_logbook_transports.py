@@ -7,25 +7,21 @@ stand-in is a client that gets no answer at all.
 
 from __future__ import annotations
 
-import json
-from collections.abc import AsyncIterator, Iterator
-from contextlib import AsyncExitStack, contextmanager
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components import websocket_api
-from homeassistant.components.recorder import Recorder
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
@@ -36,6 +32,9 @@ from ha_mcp.tools.tools_logs import LogTools
 from ..e2e.utilities.component_path import component_fallback_warnings
 from ._command_faults import dropped_on, pooled_socket, unanswered
 from ._log_tool_calls import call_kwargs
+from ._logbook_test_support import _recorder as _recorder
+from ._logbook_test_support import logbook as logbook
+from ._logbook_test_support import logbook_error, rest_reads, sent_types
 
 # Core closes a socket whose token it refused; the client's close reply then
 # re-arms aiohttp's heartbeat timer on that closed server socket.
@@ -43,25 +42,6 @@ _REFUSED_SOCKET_TIMER = pytest.mark.parametrize("expected_lingering_timers", [Tr
 
 COMPONENT_COMMAND = "ha_mcp_tools/logbook_events"
 CORE_COMMAND = "logbook/get_events"
-
-
-@pytest.fixture(autouse=True)
-def _recorder(recorder_mock: Recorder) -> None:
-    """Core's recorder, requested before ``hass`` is built as it requires."""
-
-
-@pytest.fixture
-async def logbook(hass: HomeAssistant) -> None:
-    """Core's logbook on its recorder, with a kitchen light that turned on."""
-    assert await async_setup_component(hass, "logbook", {})
-    attributes = {"friendly_name": "Kitchen Light"}
-    hall = {"friendly_name": "Hall"}
-    hass.states.async_set("light.kitchen", "off", attributes)
-    hass.states.async_set("light.hall", "off", hall)
-    await hass.async_block_till_done()
-    hass.states.async_set("light.kitchen", "on", attributes)
-    hass.states.async_set("light.hall", "on", hall)
-    await async_wait_recording_done(hass)
 
 
 @pytest.fixture
@@ -101,32 +81,11 @@ async def rejected_client(
         yield client
 
 
-@contextmanager
-def rest_reads(client: HomeAssistantClient) -> Iterator[AsyncMock]:
-    """Spy on the client's REST logbook read; Core still answers it."""
-    with patch.object(client, "get_logbook", wraps=client.get_logbook) as spy:
-        yield spy
-
-
-def sent_types(sent: AsyncMock) -> list[str]:
-    """The command types the client sent over its WebSocket bridge."""
-    return [call.args[0]["type"] for call in sent.await_args_list]
-
-
 def sent_command(sent: AsyncMock, command: str) -> dict[str, Any]:
     """The first message of this type the client sent."""
     return next(
         call.args[0] for call in sent.await_args_list if call.args[0]["type"] == command
     )
-
-
-async def logbook_error(tools: LogTools, **kwargs: Any) -> dict[str, Any]:
-    """The structured error ``ha_get_logs`` raised for these arguments."""
-    with pytest.raises(ToolError) as exc_info:
-        await tools.get_logs(**call_kwargs(source="logbook", **kwargs))
-    payload: dict[str, Any] = json.loads(str(exc_info.value))
-    error: dict[str, Any] = payload["error"]
-    return error
 
 
 def by_entity(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -962,69 +921,3 @@ async def test_pagination_hint_keeps_pages_in_the_same_window(
 
     hint = result["data"]["pagination_hint"]
     assert f"end_time='{result['data']['end_time']}'" in hint
-
-
-@pytest.mark.usefixtures("logbook")
-@pytest.mark.parametrize("component_enabled", [False, True])
-async def test_action_calls_use_cores_admin_view(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    component_enabled: bool,
-    sent: AsyncMock,
-) -> None:
-    from custom_components.ha_mcp_tools.websocket_api import async_register_commands
-
-    if component_enabled:
-        async_register_commands(hass)
-    await hass.services.async_call(
-        "logbook", "log", {"name": "action proof", "message": "record"}, blocking=True
-    )
-    await async_wait_recording_done(hass)
-    with rest_reads(core_client) as rest:
-        result = await LogTools(core_client).get_logs(**call_kwargs(action_calls=True))
-    entries = result["data"]["entries"]
-    assert any(e.get("service_data", {}).get("name") == "action proof" for e in entries)
-    assert bool(component_fallback_warnings(result)) != component_enabled
-    assert ("logbook/get_action_calls" in sent_types(sent)) != component_enabled
-    rest.assert_not_awaited()
-
-
-@pytest.mark.usefixtures("logbook")
-async def test_long_native_window_is_refused_before_read(
-    core_client: HomeAssistantClient,
-) -> None:
-    with rest_reads(core_client) as rest:
-        error = await logbook_error(LogTools(core_client), hours_back=720)
-    assert "ha_mcp_tools" in error["message"]
-    rest.assert_not_awaited()
-
-
-@pytest.mark.usefixtures("logbook")
-async def test_tied_state_and_event_follow_native_order(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
-) -> None:
-    state = hass.states.get("light.kitchen")
-    assert state
-    hass.bus.async_fire(
-        "logbook_entry",
-        {"name": "tie", "message": "marker"},
-        time_fired=state.last_updated_timestamp,
-    )
-    await async_wait_recording_done(hass)
-    end = dt_util.utcnow()
-    native = await component_core_client.get_logbook(
-        start_time=(end - timedelta(hours=1)).isoformat(), end_time=end.isoformat()
-    )
-    assert native
-    params = call_kwargs(end_time=end.isoformat(), limit=1, order="oldest")
-    rows = []
-    tools = LogTools(component_core_client)
-    for _ in range(len(native)):
-        page = (await tools.get_logs(**params))["data"]
-        rows.extend(page["entries"])
-        if not page["has_more"]:
-            break
-        params["offset"] = page["next_offset"]
-    for row in rows + native:
-        row["when"] = datetime.fromisoformat(row["when"])
-    assert rows == native
