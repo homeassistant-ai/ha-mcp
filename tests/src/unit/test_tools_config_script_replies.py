@@ -13,7 +13,7 @@ from homeassistant.setup import async_setup_component
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
-from ._scripts_core import BODY, KEY, WRITE_MODES, _stored, _write_arguments
+from ._scripts_core import BODY, KEY, WRITE_MODES, stored_scripts, write_arguments
 from ._scripts_core import tools as tools
 from ._tool_errors import rejected_call_body
 
@@ -31,7 +31,7 @@ async def test_config_without_sequence_or_blueprint_gets_cores_refusal(
     assert "required key not provided" in body["error"]["message"]
     assert body["failed_section"] == "schema"
     assert not any("blueprint" in s.lower() for s in body["error"]["suggestions"])
-    assert await _stored(hass) == {KEY: BODY}
+    assert await stored_scripts(hass) == {KEY: BODY}
 
 
 @pytest.mark.parametrize("mode", WRITE_MODES)
@@ -57,7 +57,7 @@ async def test_a_refused_action_names_the_sequence_as_what_failed(
 
     assert body["error"]["code"] == "VALIDATION_FAILED"
     assert body["failed_section"] == "sequence"
-    assert await _stored(hass) == {KEY: BODY}
+    assert await stored_scripts(hass) == {KEY: BODY}
 
 
 async def test_an_unknown_trigger_in_a_script_names_the_closest_registered_ones(
@@ -78,7 +78,7 @@ async def test_an_unknown_trigger_in_a_script_names_the_closest_registered_ones(
     )
 
     assert "schedule.block_started" in body["closest_matches"]
-    assert await _stored(hass) == {KEY: BODY}
+    assert await stored_scripts(hass) == {KEY: BODY}
 
 
 async def test_a_missing_blueprint_points_to_the_blueprint_list(
@@ -113,7 +113,7 @@ async def test_a_write_says_whether_it_created_or_updated_the_script(
     """As the automation tool does (#2903): ``operation`` from whether Core held
     a config under the key before the write, beside the entity and the hash
     of the config Core stored."""
-    arguments = await _write_arguments(tools, mode, script_id)
+    arguments = await write_arguments(tools, mode, script_id)
     if mode == "hash_checked":
         current = await tools.ha_config_get_script(script_id=script_id)
         arguments["config_hash"] = current["config_hash"]
@@ -132,7 +132,7 @@ async def test_a_failed_read_back_keeps_the_write_successful(
 ) -> None:
     """Core stored the script; only its hash is missing, and a warning says so.
     A transform reads the script before its write, so it is not driven here."""
-    arguments = await _write_arguments(tools, "full_config", KEY)
+    arguments = await write_arguments(tools, "full_config", KEY)
     with patch.object(
         core_client,
         "get_script_config",
@@ -143,4 +143,4 @@ async def test_a_failed_read_back_keeps_the_write_successful(
     assert result["success"] is True
     assert "config_hash" not in result
     assert any("re-read it for a config_hash" in w for w in result["warnings"])
-    assert (await _stored(hass))[KEY] != BODY
+    assert (await stored_scripts(hass))[KEY] != BODY

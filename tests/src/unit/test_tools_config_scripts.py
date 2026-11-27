@@ -38,8 +38,8 @@ from ._scripts_core import (
     NEW_SEQUENCE,
     TRANSFORM,
     WRITE_MODES,
-    _stored,
-    _write_arguments,
+    stored_scripts,
+    write_arguments,
 )
 from ._scripts_core import tools as tools
 from ._tool_errors import rejected_call_body
@@ -85,7 +85,7 @@ async def test_wait_follows_a_renamed_script_to_its_current_entity(
     """Waiting on ``script.<storage_key>`` after a rename never succeeds and
     reports a saved script as not queryable."""
     renamed = await _rename(hass, entity_registry, "current_name")
-    arguments = await _write_arguments(tools, mode, KEY)
+    arguments = await write_arguments(tools, mode, KEY)
 
     with _waits() as waited:
         result = await tools.ha_config_set_script(script_id=KEY, **arguments)
@@ -102,7 +102,7 @@ async def test_bulk_write_without_wait_skips_resolution_and_wait(
 ) -> None:
     """``wait=False`` without a category is for bulk writes: no registry
     round-trips or state wait slow each one down."""
-    arguments = await _write_arguments(tools, mode, KEY)
+    arguments = await write_arguments(tools, mode, KEY)
 
     with _resolutions() as resolved, _waits() as waited:
         result = await tools.ha_config_set_script(script_id=KEY, wait=wait, **arguments)
@@ -124,7 +124,7 @@ async def test_registry_outage_waits_on_the_callers_entity(
     entity the caller named, not to ``script.<storage_key>``, which a rename
     left behind."""
     renamed = await _rename(hass, entity_registry, "caller_alias")
-    arguments = await _write_arguments(tools, mode, "caller_alias")
+    arguments = await write_arguments(tools, mode, "caller_alias")
 
     with (
         patch.object(
@@ -164,7 +164,7 @@ async def test_unqueryable_script_is_saved_with_a_warning(
 
     assert result["success"] is True
     assert any("not yet queryable" in w for w in result["warnings"])
-    assert (await _stored(hass))[KEY]["sequence"] == NEW_SEQUENCE
+    assert (await stored_scripts(hass))[KEY]["sequence"] == NEW_SEQUENCE
 
 
 async def test_connection_lost_during_wait_keeps_the_write_successful(
@@ -181,7 +181,7 @@ async def test_connection_lost_during_wait_keeps_the_write_successful(
 
     assert result["success"] is True
     assert any("verification failed" in w for w in result["warnings"])
-    assert (await _stored(hass))[KEY]["sequence"] == NEW_SEQUENCE
+    assert (await stored_scripts(hass))[KEY]["sequence"] == NEW_SEQUENCE
 
 
 async def test_new_script_with_a_sequence_is_saved(
@@ -192,7 +192,7 @@ async def test_new_script_with_a_sequence_is_saved(
     result = await tools.ha_config_set_script(script_id="test_script", config=config)
 
     assert result["success"] is True
-    assert (await _stored(hass))["test_script"] == config
+    assert (await stored_scripts(hass))["test_script"] == config
 
 
 @pytest.mark.parametrize(
@@ -221,7 +221,7 @@ async def test_blueprint_script_keeps_the_blueprints_sequence(
     )
 
     assert result["success"] is True
-    stored = (await _stored(hass))["bedtime"]
+    stored = (await stored_scripts(hass))["bedtime"]
     assert stored["use_blueprint"] == use_blueprint
     assert stored.get("sequence") == stored_sequence
 
@@ -313,7 +313,7 @@ async def test_write_to_a_renamed_script_updates_its_storage_key(
     creating a second one under that name. The tool resolved the key and
     hands it over instead of looking it up again (#1813)."""
     renamed = await _rename(hass, entity_registry, "renamed_script")
-    arguments = await _write_arguments(tools, mode, renamed)
+    arguments = await write_arguments(tools, mode, renamed)
     if with_hash and mode == "full_config":
         current = await tools.ha_config_get_script(script_id=renamed)
         arguments["config_hash"] = current["config_hash"]
@@ -326,7 +326,7 @@ async def test_write_to_a_renamed_script_updates_its_storage_key(
         )
 
     assert result["success"] is True
-    stored = await _stored(hass)
+    stored = await stored_scripts(hass)
     assert list(stored) == [KEY]
     assert stored[KEY] != BODY
     args, kwargs = upserts.call_args
@@ -412,7 +412,7 @@ async def test_write_without_alias_keeps_the_callers_name(
         wait=False,
     )
 
-    assert (await _stored(hass))[KEY] == {
+    assert (await stored_scripts(hass))[KEY] == {
         "alias": "renamed_script",
         "sequence": NEW_SEQUENCE,
     }
@@ -431,7 +431,7 @@ async def test_unknown_category_is_refused_before_anything_is_written(
     elif source == "parameter":
         arguments["config"] = config
     else:
-        arguments.update(await _write_arguments(tools, "transform", KEY))
+        arguments.update(await write_arguments(tools, "transform", KEY))
 
     body = await rejected_call_body(
         tools.ha_config_set_script(script_id=KEY, wait=False, **arguments)
@@ -440,7 +440,7 @@ async def test_unknown_category_is_refused_before_anything_is_written(
     assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert body["category"] == "ghost_category"
     assert body["scope"] == "script"
-    assert await _stored(hass) == {KEY: BODY}
+    assert await stored_scripts(hass) == {KEY: BODY}
 
 
 async def test_unreachable_category_registry_refuses_the_write(
@@ -468,7 +468,7 @@ async def test_unreachable_category_registry_refuses_the_write(
 
     assert body["error"]["code"] == "CONNECTION_FAILED"
     upserts.assert_not_called()
-    assert await _stored(hass) == {KEY: BODY}
+    assert await stored_scripts(hass) == {KEY: BODY}
 
 
 @pytest.mark.parametrize("mode", WRITE_MODES)
@@ -486,7 +486,7 @@ async def test_category_lands_on_a_renamed_scripts_current_entity(
         name="Lighting", scope="script"
     ).category_id
     renamed = await _rename(hass, entity_registry, "renamed_alias")
-    arguments = await _write_arguments(tools, mode, KEY)
+    arguments = await write_arguments(tools, mode, KEY)
 
     result = await tools.ha_config_set_script(
         script_id=KEY, category=category_id, wait=False, **arguments
@@ -550,12 +550,12 @@ class TestCollidingIds:
         await tools.ha_config_set_script(
             script_id=script_id, config={**BODY, "alias": "New"}, wait=False
         )
-        stored = await _stored(hass)
+        stored = await stored_scripts(hass)
         assert {key: body["alias"] for key, body in stored.items()} == aliases
 
         removed = await tools.ha_config_remove_script(script_id=script_id)
 
-        assert set(await _stored(hass)) == {kept}
+        assert set(await stored_scripts(hass)) == {kept}
         # The removal wait watched the deleted script's entity, not the other one.
         assert "warnings" not in removed
 
@@ -590,7 +590,7 @@ class TestCollidingIds:
             body = await rejected_call_body(call)
 
         assert "registry unavailable" in body["error"]["message"]
-        stored = await _stored(hass)
+        stored = await stored_scripts(hass)
         assert {key: s["alias"] for key, s in stored.items()} == {
             "key_a": "A",
             "key_b": "B",
@@ -608,7 +608,7 @@ class TestCollidingIds:
 
         assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert any("'script.key_a'" in s for s in body["error"]["suggestions"])
-        assert set(await _stored(hass)) == {"key_b"}
+        assert set(await stored_scripts(hass)) == {"key_b"}
 
     @pytest.mark.parametrize("mode", ["config", "hashed", "transform"])
     async def test_a_recreate_by_a_removed_key_leaves_the_other_script(
@@ -632,7 +632,7 @@ class TestCollidingIds:
 
         assert body["error"]["code"] == "VALIDATION_FAILED"
         assert any("'script.key_a'" in s for s in body["error"]["suggestions"])
-        assert {k: s["alias"] for k, s in (await _stored(hass)).items()} == {
+        assert {k: s["alias"] for k, s in (await stored_scripts(hass)).items()} == {
             "key_b": "B"
         }
 
@@ -650,7 +650,7 @@ class TestCollidingIds:
 
         await backup_manager.restore_snapshot(path.name)
 
-        assert {k: s["alias"] for k, s in (await _stored(hass)).items()} == {
+        assert {k: s["alias"] for k, s in (await stored_scripts(hass)).items()} == {
             "key_a": "A",
             "key_b": "B",
         }
@@ -672,7 +672,7 @@ class TestCollidingIds:
 
         await backup_manager.restore_snapshot(path.name)
 
-        assert {k: s["alias"] for k, s in (await _stored(hass)).items()} == {
+        assert {k: s["alias"] for k, s in (await stored_scripts(hass)).items()} == {
             "key_a": "A",
             "key_b": "B",
         }
@@ -749,7 +749,7 @@ class TestCollidingIds:
         with registry_lookup_failing(hass, "config/entity_registry/list"):
             result = await tools.ha_config_remove_script(script_id="key_a")
 
-        assert set(await _stored(hass)) == {"key_b"}
+        assert set(await stored_scripts(hass)) == {"key_b"}
         assert any("registry unavailable" in w for w in result["warnings"])
 
     async def test_a_key_without_a_registry_entry_has_no_entity(
@@ -797,7 +797,7 @@ class TestCollidingIds:
         category_id = category_registry.async_create(
             name="Lighting", scope="script"
         ).category_id
-        arguments = await _write_arguments(tools, mode, "key_a")
+        arguments = await write_arguments(tools, mode, "key_a")
 
         with registry_lookup_failing(hass, "config/entity_registry/list"):
             result = await tools.ha_config_set_script(

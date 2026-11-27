@@ -42,14 +42,14 @@ async def tools(
     return ConfigScriptTools(core_client)
 
 
-async def _stored(hass: HomeAssistant) -> dict[str, Any]:
+async def stored_scripts(hass: HomeAssistant) -> dict[str, Any]:
     """The scripts Core's config view keeps in scripts.yaml."""
     return await hass.async_add_executor_job(
         load_yaml_dict, hass.config.path("scripts.yaml")
     )
 
 
-async def _write_arguments(
+async def write_arguments(
     tools: ConfigScriptTools, mode: str, script_id: str
 ) -> dict[str, Any]:
     """A full config, or a transform with the hash of a fresh read."""
