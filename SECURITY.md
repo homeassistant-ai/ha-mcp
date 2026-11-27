@@ -159,20 +159,22 @@ is refused when the file holds part of a hidden script, scene or automation's
 definition as Home Assistant's loader reads the configuration, `!include`,
 `!include_dir_*` and packages included (judged per file, whatever slice was
 asked for); the write and delete are refused before their auto-backup is taken.
-A copy Home Assistant does not load defines nothing and stays readable. A file
-that holds a single value, or no text at all (only numbers, booleans or nulls),
-can stay readable too: `!include` names the included value after the including
-file, and `!include_dir_merge_list` keeps only each file's items. Core's log
-files and `secrets.yaml` are not checked. `ha_manage_backup(scope="edits")`
-refuses to show, compare, restore or take a backup of a file while the file
-defines a hidden item, and, while enforce mode hides a script, scene or
-automation, a backup whose file it cannot tell (a legacy backup that could not
-be read, or whose name does not map to exactly one file). The check judges the
-file as it is now: any backup whose file no longer defines the item stays
-readable, including one taken by an `ha_config_set_yaml` write, which is not
-checked. Those enforced
-paths fail closed when registry data or the configuration cannot be loaded, or
-the component cannot be reached or lacks the check.
+A copy Home Assistant does not load defines nothing and stays readable. That
+includes a file an agent makes into such a copy by rewriting the file that
+includes it: the check reads the files on disk, not the configuration Home
+Assistant has loaded. A file that holds a single value, or no text at all (only
+numbers, booleans or nulls), can stay readable too: `!include` names the
+included value after the including file, and `!include_dir_merge_list` keeps
+only each file's items. Core's log files and `secrets.yaml` are not checked.
+`ha_manage_backup(scope="edits")` refuses to show, compare, restore or take a
+backup of a file while the file defines a hidden item, and, while enforce mode
+hides a script, scene or automation, a backup whose file it cannot tell (a
+legacy backup that could not be read, or whose name does not map to exactly one
+file). The check judges the file as it is now: any backup whose file no longer
+defines the item stays readable, including one taken by an `ha_config_set_yaml`
+write, which is not checked. Those enforced paths fail closed when registry data
+or the configuration cannot be loaded, or the component cannot be reached or
+lacks the check.
 
 One shape-bounded exception preserves an allowed entity's state: JSON
 `ha_get_state` results omit fields, mapping keys, list items, or related records
