@@ -12,7 +12,7 @@ from typing import Any, Literal
 from .._version import is_running_in_addon
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
-from .tools_addons import _validate_supervisor_slug
+from .tools_addons import _is_valid_supervisor_slug
 
 # Fields to keep in compact logbook mode (strips attribute dictionaries
 # and other bulky fields that can cause context exhaustion — see #683)
@@ -205,10 +205,20 @@ def _validate_log_slug(source: str, slug: str | None) -> None:
                 ],
             )
         )
-    elif source == "supervisor" and slug:
+    elif source == "supervisor" and slug and not _is_valid_supervisor_slug(slug):
         # The slug is one segment of the app's log path, so it is checked as the
         # app tools check theirs.
-        _validate_supervisor_slug(slug)
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid app slug '{slug}': use only ASCII letters, numbers, "
+                "hyphens, underscores and periods, and not '.' or '..' alone",
+                suggestions=[
+                    "Provide the app (add-on) slug, e.g. slug='core_mosquitto'",
+                    "Use ha_get_app() to list installed app slugs",
+                ],
+            )
+        )
 
 
 def _addon_auth_error_suggestions() -> list[str]:

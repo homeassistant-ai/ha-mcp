@@ -239,7 +239,9 @@ class TestTheSlugParameter:
         with pytest.raises(ToolError) as refused:
             await ask(route.client, APP, slug=slug)
 
-        assert error_body(refused)["error"]["code"] == "VALIDATION_FAILED"
+        error = error_body(refused)["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert any("ha_get_app()" in s for s in error["suggestions"])
         assert route.supervisor.requests == []
 
     async def test_a_service_log_with_no_slug_is_refused_before_asking(
