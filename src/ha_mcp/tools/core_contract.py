@@ -31,13 +31,12 @@ async def include_core_contract(
             "status": "unavailable",
             "reason": "Core schema discovery failed; the read result is preserved.",
         }
-        if command.startswith(("recorder/", "history/", "logger/")):
-            contract["warnings"] = [
-                component_unusable_warning(
-                    await get_component_caps(client),
-                    "the requested Core schema could not be described",
-                )
-            ]
+        contract["warnings"] = [
+            component_unusable_warning(
+                await get_component_caps(client),
+                "the requested Core schema could not be described",
+            )
+        ]
     warnings = contract.pop("warnings", [])
     if contract.get("status") == "unavailable":
         warnings.append(contract["reason"])
@@ -80,12 +79,9 @@ async def _contract_bridge(
     }
     try:
         caps = await get_component_caps(client, strict=True)
-        if str(params.get("command", "")).startswith(
-            ("recorder/", "history/", "logger/")
-        ):
-            unavailable["reason"] += " " + component_unusable_warning(
-                caps, "the requested Core schema could not be described"
-            )
+        unavailable["reason"] += " " + component_unusable_warning(
+            caps, "the requested Core schema could not be described"
+        )
         if not component_supports(caps, capability):
             return unavailable
         ws = await get_websocket_client(

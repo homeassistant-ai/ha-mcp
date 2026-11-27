@@ -40,6 +40,8 @@ def recorder_status(
 
     instance = get_instance(hass)
     status: dict[str, Any] = {
+        # What recorder.disable turns off; recorder/info's `recording` is not it.
+        "enabled": instance.enabled,
         "purge_keep_days": instance.keep_days,
         "auto_purge": instance.auto_purge,
         "oldest_state": instance.states_manager.oldest_ts,

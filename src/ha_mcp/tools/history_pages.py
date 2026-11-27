@@ -28,8 +28,23 @@ async def resolve_entities(
     if target is None:
         return _parse_entity_ids(ids or [])
     selected = _parse_entity_ids(ids) if ids is not None else []
-    expanded = await target_entities(client, target)
-    return _parse_entity_ids(list(dict.fromkeys([*selected, *expanded])))
+    resolved = await _resolve_target(client, target)
+    entities = list(
+        dict.fromkeys([*selected, *sorted(resolved["referenced_entities"])])
+    )
+    if not entities:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "The target matches no entities",
+                context={
+                    key: sorted(value)
+                    for key, value in resolved.items()
+                    if key.startswith("missing_") and value
+                },
+            )
+        )
+    return entities
 
 
 def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
@@ -74,13 +89,15 @@ def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
     return entity_ids
 
 
-async def target_entities(client: Any, target: dict[str, Any]) -> list[str]:
+async def _resolve_target(client: Any, target: dict[str, Any]) -> dict[str, Any]:
+    """Core's own expansion of a target, with what it could not find."""
     reply = await client.send_websocket_message(
         {"type": "extract_from_target", "target": target}
     )
     if not reply.get("success"):
         raise_core_refusal("extract_from_target failed", reply)
-    return sorted(reply["result"]["referenced_entities"])
+    result: dict[str, Any] = reply["result"]
+    return result
 
 
 async def history_pages(

@@ -257,6 +257,8 @@ class LogsManageTools:
                 warnings.append(MIGRATING)
             oldest = status["oldest_state"]
             return {
+                # A component released before the field came answers without it.
+                **({"enabled": status["enabled"]} if "enabled" in status else {}),
                 "purge_keep_days": status["purge_keep_days"],
                 "auto_purge": status["auto_purge"],
                 "oldest_state": None if oldest is None else when(oldest),
@@ -295,8 +297,9 @@ class LogsManageTools:
         # is an event it stores), so every write waits, with no list of them.
         if action not in RECORDER_READS:
             status, settled = await self._recorder_settled(warnings)
-            info = await self._recorder_info(warnings)
-            response["recorder"] = {**info, **(status or {})}
+            if action.startswith("recorder"):
+                info = await self._recorder_info(warnings)
+                response["recorder"] = {**info, **(status or {})}
         if not named:
             return
         after, failure = await self._statistics_metadata(named)
