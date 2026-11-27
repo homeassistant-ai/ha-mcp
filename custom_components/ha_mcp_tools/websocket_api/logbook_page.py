@@ -273,12 +273,12 @@ def read_logbook_page(
 ) -> dict[str, Any]:
     """Use Core's query and renderer, keeping just one bounded database page."""
     with session_scope(hass=processor.hass, read_only=True) as session:
-        manager = get_instance(processor.hass).event_type_manager
+        instance = get_instance(processor.hass)
+        manager = instance.event_type_manager
         types = tuple(
             extract_event_type_ids(manager.get_many(processor.event_types, session))
         )
         period = (start, end)
-        instance = get_instance(processor.hass)
         metadata = (
             extract_metadata_ids(
                 instance.states_meta_manager.get_many(
@@ -295,6 +295,7 @@ def read_logbook_page(
             else source
         )
         rows, more = _read_rows(session, probe, page, types)
+        origins = {}
         if rows and (
             page.get("after")
             or more
@@ -302,16 +303,20 @@ def read_logbook_page(
             or processor.device_ids
             or processor.action_calls
         ):
-            for context, origin in _context_origins(
-                session, source, rows, _key(rows[-1])
-            ).items():
-                processor.logbook_run.context_lookup[context] = origin
+            origins = _context_origins(session, source, rows, _key(rows[-1]))
         parent_users = (
             processor._fetch_parent_user_ids(session, rows, instance.max_bind_vars)
             if processor.entity_ids or processor.device_ids
             else None
         )
-        rendered = [(row, processor.humanify([row], parent_users)) for row in rows]
+        rendered = []
+        for row in rows:
+            for pos in (CONTEXT_ID_BIN_POS, CONTEXT_PARENT_ID_BIN_POS):
+                if (origin := origins.get(row[pos])) is not None and _key(
+                    origin
+                ) < _key(row):
+                    processor.logbook_run.context_lookup.setdefault(row[pos], origin)
+            rendered.append((row, processor.humanify([row], parent_users)))
     if page["order"] == "newest":
         rendered.reverse()
     return _select_page(rendered, page, more)

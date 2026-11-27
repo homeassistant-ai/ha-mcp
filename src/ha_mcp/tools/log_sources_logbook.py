@@ -103,6 +103,7 @@ class LogbookLogSourceMixin:
         search: str | None,
         compact_bool: bool,
         order: Literal["newest", "oldest"] = "newest",
+        action_calls: bool = False,
     ) -> str:
         """Build reproducible pagination hint string for logbook results.
 
@@ -115,6 +116,8 @@ class LogbookLogSourceMixin:
             f"limit={effective_limit}",
             f"offset={next_offset}",
         ]
+        if action_calls:
+            param_parts.append("action_calls=True")
         if entity_id:
             param_parts.append(f"entity_id={entity_id!r}")
         if device_id:
@@ -389,23 +392,23 @@ class LogbookLogSourceMixin:
                 exception_to_structured_error(
                     exc, context={"device_ids": command.get("device_ids")}
                 )
-            self._raise_logbook_ws_required(command.get("device_ids"), reason=str(exc))
+            self._raise_logbook_ws_required(command, reason=str(exc))
         except HomeAssistantCommandError as exc:
             if not is_unknown_command(exc):
                 raise
-            self._raise_logbook_ws_required(command.get("device_ids"))
+            self._raise_logbook_ws_required(command)
 
         if isinstance(response, dict) and response.get("success"):
             result = response.get("result")
             return result if isinstance(result, list) else []
-        self._raise_logbook_rejection(response, "logbook/get_events")
+        self._raise_logbook_rejection(response, command["type"])
         # No REST device fallback exists after this point, so a tolerated
         # soft failure (``unknown_command`` on an old Core, or a code-less
         # proxy envelope such as a post-connect 403) must surface instead of
         # being reported as an empty logbook.
         reason = response.get("error") if isinstance(response, dict) else None
         return self._raise_logbook_ws_required(
-            command.get("device_ids"),
+            command,
             reason=str(reason) if reason else None,
         )
 
@@ -449,9 +452,9 @@ class LogbookLogSourceMixin:
         )
 
     def _raise_logbook_ws_required(
-        self, device_ids: Any, *, reason: str | None = None
+        self, command: dict[str, Any], *, reason: str | None = None
     ) -> NoReturn:
-        """The device filter needs the WebSocket transport, which is down."""
+        """Surface an unavailable native WebSocket-only read."""
         message = (
             "The device_id filter requires Home Assistant's WebSocket API, "
             "which is unavailable."
@@ -462,7 +465,10 @@ class LogbookLogSourceMixin:
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,
                 message,
-                context={"device_ids": device_ids},
+                context={
+                    "command": command["type"],
+                    "device_ids": command.get("device_ids"),
+                },
                 suggestions=[
                     "Check the Home Assistant WebSocket connection",
                     "Filter by entity_id instead",
@@ -659,6 +665,7 @@ class LogbookLogSourceMixin:
                     search,
                     compact,
                     order,
+                    bool(scope.get("action_calls")),
                 )
         elif more and after is not None:
             data["next_offset"] = LogbookCursor(

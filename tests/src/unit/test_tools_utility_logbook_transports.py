@@ -112,22 +112,39 @@ async def test_component_rows_are_cores_own_and_skip_the_rest_view(
     assert dt_util.parse_datetime(kitchen["when"]) is not None
 
 
+@pytest.mark.parametrize("order", ["oldest", "newest"])
 async def test_component_receives_the_entity_and_device_filters(
-    component_core_client: HomeAssistantClient, kitchen_device: str, sent: AsyncMock
+    component_core_client: HomeAssistantClient,
+    kitchen_device: str,
+    sent: AsyncMock,
+    order: str,
 ) -> None:
-    result = await LogTools(component_core_client).get_logs(
-        **call_kwargs(
-            source="logbook",
-            entity_id="light.kitchen, light.hall",
-            device_id=kitchen_device,
-        )
+    params = call_kwargs(
+        source="logbook",
+        entity_id="light.kitchen, light.hall",
+        device_id=kitchen_device,
+        limit=1,
+        order=order,
     )
+    tools = LogTools(component_core_client)
+    with rest_reads(component_core_client) as rest:
+        result = await tools.get_logs(**params)
+        second = await tools.get_logs(
+            **(params | {"offset": result["data"]["next_offset"]})
+        )
+    rest.assert_not_awaited()
+    assert not component_fallback_warnings(result)
+    assert not component_fallback_warnings(second)
+    assert not second["data"]["has_more"]
 
     command = sent_command(sent, COMPONENT_COMMAND)
     assert command["entity_ids"] == ["light.kitchen", "light.hall"]
     assert command["device_ids"] == [kitchen_device]
     assert command["page"]["limit"] > 0
-    assert set(by_entity(result)) == {"light.kitchen", "light.hall"}
+    assert set(by_entity(result)) | set(by_entity(second)) == {
+        "light.kitchen",
+        "light.hall",
+    }
 
 
 @pytest.mark.usefixtures("logbook")
