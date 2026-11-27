@@ -17,6 +17,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from custom_components.ha_mcp_tools.embedded_read_only import set_read_only_mode
 from ha_mcp import settings_transfer as transfer
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -27,6 +28,7 @@ from ha_mcp.config import (
     reset_global_settings,
 )
 from ha_mcp.tools.tools_dev import FEATURE_FLAG, DevTools
+from ha_mcp.utils.data_paths import get_data_dir
 
 from ._dev_tool_env import _isolated_env as _isolated_env
 from ._file_services import make_file_service
@@ -276,6 +278,54 @@ class TestSettingsMatrix:
             dev_tools.ha_dev_manage_settings(action="set", setting="debug", value=True),
         )
         assert stored_overrides() == {"log_level": "DEBUG", "debug": True}
+
+    async def test_cancelled_set_holds_lock_until_atomic_write_finishes(
+        self, dev_tools: DevTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cancellation cannot let an older snapshot overwrite another writer."""
+        original_replace = os.replace
+        write_started = threading.Event()
+        release_write = threading.Event()
+
+        def delayed_first_replace(src: os.PathLike[str], dst: os.PathLike[str]) -> None:
+            if not write_started.is_set():
+                write_started.set()
+                assert release_write.wait(5)
+            original_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", delayed_first_replace)
+        first = asyncio.create_task(
+            dev_tools.ha_dev_manage_settings(
+                action="set", setting="log_level", value="DEBUG"
+            )
+        )
+        second: asyncio.Task[None] | None = None
+        try:
+            assert await asyncio.to_thread(write_started.wait, 5)
+            first.cancel()
+            await asyncio.sleep(0)
+            first.cancel()
+            second = asyncio.create_task(
+                asyncio.to_thread(set_read_only_mode, get_data_dir(), True)
+            )
+            await asyncio.sleep(0.05)
+
+            # Repeated cancellation may finish the awaiting task immediately;
+            # correctness comes from the worker retaining the file lock until
+            # its atomic replace completes.
+            assert first.cancelled()
+            assert not second.done()
+        finally:
+            release_write.set()
+            pending = [first]
+            if second is not None:
+                pending.append(second)
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        assert stored_overrides() == {
+            "log_level": "DEBUG",
+            "read_only_mode": True,
+        }
 
 
 class TestUnreadableOverrideFile:

@@ -10,24 +10,23 @@ File I/O for the three JSON files the settings UI owns in the data dir:
 - ``backup_settings.json`` — the standalone-mode auto-backup override
   (``_load_backup_settings_override`` / ``_save_backup_settings_override``).
 
-``_atomic_write_json`` is the shared tmp-then-rename writer.
+``_atomic_write_json`` re-exports the dependency-light shared tmp-then-rename
+writer so the embedded component and server use the same implementation.
 Leaf module (no imports from the settings_ui package)
 so the handler families and ``__init__`` can depend on it without cycles.
 """
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-import os
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..config import get_global_settings
 from ..llm_exposure import LLM_API_CONFIG_KEY
 from ..renamed_tools import current_tool_name, rename_retired_keys
+from ..runtime_config import atomic_write_json as _atomic_write_json
 from ..utils.data_paths import get_data_dir
 
 if TYPE_CHECKING:
@@ -280,42 +279,6 @@ def effective_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     cfg = load_tool_config(settings)
     tools = {**cfg.get("tools", {}), **env_pinned_tools(settings)}
     return {**cfg, "tools": tools}
-
-
-def _atomic_write_json(
-    path: Path, payload: dict[str, Any] | list[dict[str, Any]]
-) -> None:
-    """Write ``payload`` to ``path`` atomically.
-
-    Writes to a unique same-directory temp file (``mkstemp``, since
-    #1993) first and ``os.replace``s into place so a
-    crash or out-of-space mid-write cannot leave a partial/empty file —
-    callers that read the file back (``load_tool_config`` /
-    ``_load_backup_settings_override``) would otherwise treat a
-    half-written file as "no config" and silently fall back to defaults
-    (e.g. re-enabling auto-backup or re-enabling tools the user
-    disabled). Mirrors the pattern ``BackupManager._write_snapshot``
-    already uses for snapshot files.
-
-    Raises OSError on filesystem failure — same surface as the previous
-    ``path.write_text`` so caller try/except shapes don't need updating.
-    On failure, the temp file is cleaned up so a partial write does not
-    accumulate next to the real file. The temp name is UNIQUE (``mkstemp``,
-    same pattern as ``policy.persistence.save_policy``) so two concurrent
-    writers to the same ``path`` can't collide on a shared ``.tmp`` and
-    corrupt each other's write.
-    """
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(json.dumps(payload, indent=2))
-        os.replace(tmp_name, str(path))
-    except OSError, ValueError:
-        with contextlib.suppress(FileNotFoundError, OSError):
-            Path(tmp_name).unlink()
-        raise
 
 
 def save_tool_config(config: dict[str, Any]) -> bool:
