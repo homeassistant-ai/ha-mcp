@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import (
     wait_for_condition,
     wait_for_entity_registration,
@@ -661,3 +662,47 @@ async def test_none_and_all_targets_are_not_warned(mcp_client) -> None:
             assert not any(w.get("value") in ("none", "all") for w in warnings), created
         finally:
             await _remove(mcp_client, config_id)
+
+
+_YAML_PACKAGE = "custom_packages/e2e_yaml_defined.yaml"
+
+
+@pytest.mark.component_topology
+async def test_package_automation_and_script_read_as_loaded_and_refuse_writes(
+    mcp_client: Any,
+) -> None:
+    """An automation and a script from a YAML package were reported as having
+    no config, and a script write stored a second copy in scripts.yaml."""
+    with_component = component_surface_available()
+    reads = {
+        "automation": ("entity_id", "automation.e2e_yaml_defined_night", "actions", 4),
+        "script": ("script_id", "e2e_yaml_defined_speakers", "sequence", 14),
+    }
+    async with MCPAssertions(mcp_client) as mcp:
+        for domain, (param, target, steps, line) in reads.items():
+            data = await mcp.call_tool_success(
+                f"ha_config_get_{domain}", {param: target}
+            )
+            assert data["config"][steps] == [
+                {"event": f"e2e_yaml_defined_{domain}_only"}
+            ]
+            assert data["source"] == {
+                "kind": "yaml",
+                "editable": False,
+                "file": _YAML_PACKAGE if with_component else None,
+                "line": line if with_component else None,
+            }, data["source"]
+            # Without the component the file is unknown, and the read says so.
+            says_so = any("loaded_config command" in w for w in data["warnings"])
+            assert says_so != with_component, data["warnings"]
+
+        refused = await mcp.call_tool_failure(
+            "ha_config_set_script",
+            {
+                "script_id": "e2e_yaml_defined_speakers",
+                "config": {"alias": "Changed", "sequence": [{"delay": 1}]},
+            },
+            expected_error="defined in YAML",
+        )
+        assert refused["error"]["code"] == "CONFIG_NOT_FOUND", refused
+        assert refused["source"]["kind"] == "yaml", refused

@@ -18,6 +18,7 @@ from .. import (
     flow_outline,
     flow_record,
     helper_collections,
+    loaded_config,
     recorder_status,
     scene_editor,
     todo_items,
@@ -267,6 +268,7 @@ CAPABILITIES: list[str] = [
     automation_config.SCRIPT_LOOKUP_CAPABILITY,
     config_references.CAPABILITY,
     config_file_items.CAPABILITY,
+    loaded_config.CAPABILITY,
     recorder_status.CAPABILITY,
     *card_definitions.CAPABILITIES,
 ]

@@ -1,0 +1,16 @@
+# An automation and a script Core's config API does not store (#3192): the
+# config tools read them from Core's loaded definition and refuse to write them.
+automation:
+  - id: e2e_yaml_defined_night
+    alias: E2E YAML Defined Night
+    initial_state: false
+    triggers:
+      - trigger: event
+        event_type: e2e_yaml_defined_unfired
+    actions:
+      - event: e2e_yaml_defined_automation_only
+script:
+  e2e_yaml_defined_speakers:
+    alias: E2E YAML Defined Speakers
+    sequence:
+      - event: e2e_yaml_defined_script_only

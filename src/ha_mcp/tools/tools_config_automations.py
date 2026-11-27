@@ -80,6 +80,7 @@ from .helpers import (
     reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
+from .loaded_config import STORAGE_SOURCE, YamlDefinedError, raise_automation_not_stored
 from .reference_validator import ValidationMeta
 from .reference_validator import validate_config_references as ref_check
 from .tool_hints import read_only_hints, write_hints
@@ -327,10 +328,14 @@ class AutomationConfigTools:
         ] = False,
     ) -> dict[str, Any]:
         """
-        Get a Home Assistant automation's stored configuration.
+        Get a Home Assistant automation's configuration.
 
         `config` is the body Home Assistant stores, as it stores it; its
         `config_hash` stays the same across reads of an unchanged automation.
+        `source.kind` is `storage` for an automation the UI and the config
+        tools store, and `yaml` for one from a package or another YAML file:
+        `config` is then the definition Home Assistant has loaded, `source`
+        names its file and line, and the config tools cannot change it.
         `entity` is the automation's entity registry row, `validation` holds
         Home Assistant's status and error when the automation failed to load
         (None when it loaded), and `references` lists the entities, devices,
@@ -367,12 +372,21 @@ class AutomationConfigTools:
                     "Use ha_search(domain_filter='automation') to list automations",
                 ],
             )
-            # The body always comes from Core's REST config endpoint, which
-            # reads the file under its mutation lock; the in-memory raw_config
-            # lags it until the reload after a write completes.
-            config, config_hash, target = await self._get_automation_config_internal(
-                entity_id
-            )
+            # A stored body comes from Core's REST config endpoint; the loaded
+            # raw_config lags it until the reload after a write completes.
+            warnings: list[str] = []
+            source = STORAGE_SOURCE
+            try:
+                read = await self._get_automation_config_internal(entity_id)
+            except YamlDefinedError as err:
+                loaded = err.definition
+                source, warnings = loaded.source, loaded.warnings
+                seen = await automation_lookup(self._client, entity_id=loaded.entity_id)
+                target = _Target(
+                    str(loaded.config.get("id") or ""), loaded.entity_id, seen
+                )
+                read = loaded.config, compute_config_hash(loaded.config), target
+            config, config_hash, target = read
             if hash_only:
                 return {
                     "success": True,
@@ -380,7 +394,6 @@ class AutomationConfigTools:
                     "automation_id": target.entity_id or entity_id,
                     "config_hash": config_hash,
                 }
-            warnings: list[str] = []
             entity, validation, references = await registry_details(
                 self._client, target.lookup, target.entity_id, warnings
             )
@@ -394,6 +407,7 @@ class AutomationConfigTools:
                 "automation_id": target.entity_id or entity_id,
                 "config": config,
                 "config_hash": config_hash,
+                "source": source,
                 "entity": entity,
                 "validation": validation,
                 "references": references,
@@ -1388,25 +1402,9 @@ class AutomationConfigTools:
         """Raise RESOURCE_NOT_FOUND with ``available_automation_ids`` (up to 10).
 
         A ``target`` the registry resolved has an automation Core's config API
-        cannot reach: one defined in YAML or a package, CONFIG_NOT_FOUND.
+        cannot reach, as has any that Core has loaded: CONFIG_NOT_FOUND.
         """
-        if target is not None and target.entity_id:
-            row = (target.lookup or {}).get("entity") or {}
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.CONFIG_NOT_FOUND,
-                    f"Automation {target.entity_id} exists (config id "
-                    f"{target.config_id}) but is not stored in automations.yaml, "
-                    "so Home Assistant's config API cannot read, edit or remove "
-                    "it; it is defined in YAML or a package.",
-                    context={
-                        "automation_id": target.entity_id,
-                        "config_id": target.config_id,
-                        "registry_platform": row.get("platform"),
-                    },
-                    suggestions=["Edit it in the YAML file or package defining it"],
-                )
-            )
+        await raise_automation_not_stored(self._client, entity_id, target)
         available_ids = await list_visible_registry_ids(self._client, "automation")
         raise_tool_error(
             create_error_response(

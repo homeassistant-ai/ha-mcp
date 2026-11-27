@@ -157,6 +157,10 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/config_file_items`` — the scripts, scenes and automations
   whose definition draws on a given config file, from the configuration loaded
   the way Core loads it. See ``config_file_items.py``.
+* ``ha_mcp_tools/loaded_config`` — the automation or script definition Core
+  has loaded and the file and line its YAML loader read it from, for one
+  defined outside the storage Core's config API edits. See
+  ``loaded_config.py``.
 * ``ha_mcp_tools/recorder_status`` — the recorder's purge settings and oldest
   state, and whether it records an entity, which Core's API does not serve;
   with ``wait``, held until the recorder has finished its work. See
@@ -403,6 +407,7 @@ from .. import (
     flow_outline,
     flow_record,
     helper_collections,
+    loaded_config,
     recorder_status,
     scene_editor,
     todo_items,
@@ -604,6 +609,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
         *config_file_items.command_specs(vol),
+        *loaded_config.command_specs(vol),
         *recorder_status.command_specs(vol),
         *dashboard_cards_ws.command_specs(vol),
         *_oauth_callback_specs(),

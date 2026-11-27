@@ -67,21 +67,21 @@ class TestAutomationOutsideAutomationsYaml:
         ids=["component-entity-id", "fallback-entity-id", "component-config-id"],
         indirect=["tools"],
     )
-    async def test_get_says_the_automation_is_not_editable_here(
+    async def test_get_returns_the_definition_home_assistant_loaded(
         self, hass: HomeAssistant, tools: AutomationConfigTools, by_entity_id: bool
     ) -> None:
-        """A package automation was reported as not existing although Home
-        Assistant runs it, and its id was missing from the ids offered."""
+        """A package automation was reported as having no config although Home
+        Assistant runs it, so nothing could say what it does."""
         entity_id = await define_in_package(hass, _PACKAGED)
 
-        body = await _refusal(
-            tools,
-            "ha_config_get_automation",
-            entity_id=entity_id if by_entity_id else _ID,
+        result = await tools.ha_config_get_automation(
+            entity_id=entity_id if by_entity_id else _ID
         )
 
-        assert body["error"]["code"] == "CONFIG_NOT_FOUND", body
-        assert body["config_id"] == _ID, body
+        assert result["config"] == _PACKAGED
+        assert result["automation_id"] == entity_id
+        assert result["source"]["kind"] == "yaml"
+        assert result["source"]["editable"] is False
 
     async def test_write_to_it_is_refused_not_created(
         self,
