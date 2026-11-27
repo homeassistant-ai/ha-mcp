@@ -94,11 +94,8 @@ _MAGNITUDE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)([KMGT])(?![A-Za-z])")
 _PERCENT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s?[%％]")
 # Match the whole amount when comparing Turkish prefix and suffix forms.
 # Otherwise "%90,5" could satisfy "5%" when both numbers occur in the text.
-_PERCENT_AMOUNT = r"(\d+(?:[.,]\d+)*)"
-_TR_SUFFIX_PERCENT_RE = re.compile(
-    r"(?<![A-Za-z0-9])" + _PERCENT_AMOUNT + r"\s?[%％](?!\d)"
-)
-_TR_PREFIX_PERCENT_RE = re.compile(r"(?<!\d)%" + _PERCENT_AMOUNT)
+_TR_SUFFIX_PERCENT_RE = re.compile(rf"({_NUMBER_RE.pattern})\s?[%％](?!\d)")
+_TR_PREFIX_PERCENT_RE = re.compile(rf"(?<!\d)%({_NUMBER_RE.pattern})")
 # A storage unit is part of the claim too: "1-256 MB" and "1-256 GB" differ by
 # three orders of magnitude while the digits match.
 _COMPOUND_UNIT_RE = re.compile(
