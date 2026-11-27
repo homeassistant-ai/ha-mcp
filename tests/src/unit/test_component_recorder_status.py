@@ -40,6 +40,7 @@ async def test_the_status_is_the_recorder_instances_own(
     )
 
     assert status == {
+        "enabled": recorder_mock.enabled,
         "purge_keep_days": recorder_mock.keep_days,
         "auto_purge": recorder_mock.auto_purge,
         "oldest_state": START.timestamp(),
