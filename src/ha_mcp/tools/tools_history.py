@@ -23,6 +23,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from ..history_summary import summarize_states
 from .coercion import JSON_STRING_COERCION
 from .core_contract import include_core_contract, merge_core_options
 from .helpers import (
@@ -36,7 +37,6 @@ from .history_coverage import history_coverage_warnings
 from .history_pages import history_fields, history_pages, resolve_entities
 from .history_response import (
     format_history_response,
-    summarize_states,
     summary_warnings,
 )
 from .response_helpers import (

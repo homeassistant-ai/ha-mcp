@@ -4,10 +4,10 @@ from typing import Any
 
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from ..history_summary import summarize_states
 from .coercion import parse_string_list_param
 from .component_api import ask_component, component_unusable_warning, get_component_caps
 from .helpers import raise_core_refusal, raise_tool_error
-from .history_response import summarize_states
 from .recorder_errors import raise_recorder_refusal
 
 
