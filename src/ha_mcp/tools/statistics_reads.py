@@ -15,12 +15,29 @@ from .statistics_helpers import (
     fetch_statistics_metadata,
     format_entity_statistics,
     label_requested_units,
-    resolve_requested_units,
     statistics_unit,
     statistics_warnings,
 )
 
 _DEFAULT_LIMIT = 100
+
+
+async def _statistics_metadata(
+    client: Any, ids: list[str], units: dict[str, Any], warnings: list[str]
+) -> tuple[dict[str, dict[str, Any]], str | None, dict[str, dict[str, Any]]]:
+    converted = await converter_records(client, ids, units, warnings)
+    if converted is not None:
+        metadata = {
+            key: {
+                k: v
+                for k, v in row.items()
+                if k not in {"output_unit_of_measurement", "conversion_unit_class"}
+            }
+            for key, row in converted.items()
+        }
+        return metadata, None, converted
+    metadata, failure = await fetch_statistics_metadata(client, ids)
+    return metadata, failure, {}
 
 
 async def fetch_statistics(
@@ -64,7 +81,11 @@ async def fetch_statistics(
         raise_recorder_refusal("statistics", response, entity_id_list)
 
     result_data = response.get("result", {})
-    metadata, metadata_failure = await fetch_statistics_metadata(client, entity_id_list)
+    units = command_params.get("units", {})
+    warnings: list[str] = []
+    metadata, metadata_failure, converted = await _statistics_metadata(
+        client, entity_id_list, units, warnings
+    )
     entities_statistics = format_entity_statistics(
         result_data,
         entity_id_list,
@@ -74,10 +95,8 @@ async def fetch_statistics(
         metadata,
         metadata_failure,
     )
-    warnings: list[str] = []
-    await resolve_requested_units(
-        client, entities_statistics, command_params.get("units", {}), warnings
-    )
+    if units:
+        label_requested_units(entities_statistics, converted, units)
     all_stat_types = (
         stat_types_list
         if stat_types_list is not None
@@ -158,7 +177,7 @@ async def fetch_statistics_totals(
     statistic_types: str | list[str] | None,
     core_options: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Ask Core for each statistic's totals over the window, as one fixed period."""
+    """Ask Core for each statistic's totals over its selected period."""
     time_range = {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
     types = _parse_statistic_types(statistic_types)
     params = merge_core_options(
@@ -172,14 +191,16 @@ async def fetch_statistics_totals(
         },
         core_options,
     )
-    if "calendar" in params or "rolling_window" in params:
+    native_period = {
+        key: params[key] for key in ("calendar", "rolling_window") if key in params
+    }
+    if native_period:
         params.pop("fixed_period")
     if types is None:
         params.pop("types")
-    metadata, metadata_failure = await fetch_statistics_metadata(client, statistic_ids)
     requested = params.get("units")
     warnings: list[str] = []
-    converted = await converter_records(
+    metadata, metadata_failure, converted = await _statistics_metadata(
         client, statistic_ids, requested or {}, warnings
     )
     entities = []
@@ -214,10 +235,7 @@ async def fetch_statistics_totals(
         "success": True,
         "source": "statistics",
         "entities": entities,
-        "time_range": next(
-            (params[key] for key in ("calendar", "rolling_window") if key in params),
-            time_range,
-        ),
+        "time_range": native_period or time_range,
         "query_params": {"statistic_types": types, "summary": True},
     }
     warnings += statistics_warnings(

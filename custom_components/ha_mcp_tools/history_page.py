@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .core_contract import validate_request
 
@@ -21,7 +21,9 @@ def _page(
         from ha_mcp.tools.history_response import summarize_states
 
         rows = [row for row in rows if row["lu"] < until]
-        data = {"summary": summarize_states(rows, start, until, msg["limit"])}
+        data: dict[str, Any] = {
+            "summary": summarize_states(rows, start, until, msg["limit"])
+        }
     else:
         offset, limit = msg["offset"], msg["limit"]
         if msg["order"] == "asc":
@@ -48,13 +50,15 @@ def _read(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     if serialized := getattr(history, "get_significant_states_serialized", None):
         return dict(serialized(hass, start, end, ids, **params, serialize=page))
     # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
-    pages = {}
+    pages: dict[str, Any] = {}
     for entity_id in ids:
         states = history.get_significant_states(
             hass, start, end, [entity_id], compressed_state_format=True, **params
         )
-        if rows := states.get(entity_id):
-            pages.update([page(entity_id, rows)])  # type: ignore[arg-type]
+        if entity_id in states:
+            rows = cast(list[dict[str, Any]], states.pop(entity_id))
+            _, pages[entity_id] = page(entity_id, rows)
+            del rows
     return pages
 
 

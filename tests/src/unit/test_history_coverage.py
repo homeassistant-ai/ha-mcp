@@ -265,7 +265,8 @@ async def test_a_statistic_the_recorder_does_not_have_is_told_from_an_empty_wind
         START + 31 * DAY,
     )
 
-    assert result["warnings"] == [
+    assert "statistics converter could not be read" in result["warnings"][0]
+    assert result["warnings"][1:] == [
         "The recorder has no statistics under: sensor.enrgy.",
         "No statistics in this window for: sensor.energy.",
     ]
@@ -524,15 +525,20 @@ async def _summary(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]
     return result
 
 
-async def test_summary_accepts_cores_calendar_period(
-    recorded: Recorder, core_client: HomeAssistantClient
+@pytest.mark.parametrize(
+    "native_period",
+    [{"calendar": {"period": "day"}}, {"rolling_window": {"duration": {"hours": 4}}}],
+)
+async def test_summary_accepts_cores_period(
+    recorded: Recorder, core_client: HomeAssistantClient, native_period: dict[str, Any]
 ) -> None:
     result = await _summary(
         core_client,
         entity_ids="sensor.energy",
-        core_options={"calendar": {"period": "day"}},
+        core_options=native_period,
     )
     assert result["data"]["success"]
+    assert result["data"]["time_range"] == native_period
 
 
 async def test_a_summary_without_types_takes_cores_defaults_for_each_statistic(
@@ -691,8 +697,7 @@ async def test_a_summary_through_the_component_keeps_value_and_label_together(
 async def test_a_summary_labels_its_total_from_the_read_that_gave_its_unit(
     recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    """The metadata and Core's converter choice are two reads; the unit asked
-    for comes from the second, so the label does too."""
+    """Read metadata and the unit for the totals from one component reply."""
     hass.states.async_set("sensor.energy", "1", {"unit_of_measurement": "kWh"})
     await import_statistic(
         hass,
@@ -705,11 +710,19 @@ async def test_a_summary_labels_its_total_from_the_read_that_gave_its_unit(
     def to_watt_hours(msg: dict[str, Any]) -> None:
         hass.states.async_set("sensor.energy", "1", {"unit_of_measurement": "Wh"})
 
-    with before_handling(hass, "ha_mcp_tools/statistics_units", to_watt_hours):
+    with (
+        before_handling(hass, "ha_mcp_tools/statistics_units", to_watt_hours),
+        sent_messages(component_core_client) as sent,
+    ):
         result = await _summary(
             component_core_client, entity_ids="sensor.energy", statistic_types="change"
         )
 
+    assert not result.get("warnings")
+    assert all(
+        call.args[0]["type"] != "recorder/get_statistics_metadata"
+        for call in sent.call_args_list
+    )
     entity = result["data"]["entities"][0]
     assert (entity["summary"]["change"], entity["unit_of_measurement"]) == (
         3000.0,

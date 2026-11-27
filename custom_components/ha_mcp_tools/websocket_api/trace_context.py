@@ -27,7 +27,7 @@ from homeassistant.helpers.json import ExtendedJSONEncoder
 from .seam import PreSerializedResult
 
 try:
-    from homeassistant.components.trace.const import TRACE_DOMAINS
+    from homeassistant.components.trace.const import TRACE_DOMAINS  # type: ignore[attr-defined]
 except ImportError:
     # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
     from homeassistant.components.trace.websocket_api import TRACE_DOMAINS

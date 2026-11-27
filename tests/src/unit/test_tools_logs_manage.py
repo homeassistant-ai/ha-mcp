@@ -731,7 +731,7 @@ async def test_service_data_may_use_the_websocket_envelope_keys(
         await _manage(
             client,
             "logger/log_level",
-            data={"module": "type", "level": "info", "persistence": "none"},
+            data={"module": "type", "level": "INFO", "persistence": "none"},
         )
         assert named.level == logging.INFO
     finally:

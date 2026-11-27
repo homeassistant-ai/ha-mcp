@@ -117,7 +117,9 @@ async def history_pages(
         rows = all_rows
         if until is not None:
             rows = [row for row in all_rows if row["lu"] < until]
-            page = {"summary": summarize_states(rows, start, until, limit)}
+            page: dict[str, Any] = {
+                "summary": summarize_states(rows, start, until, limit)
+            }
         else:
             ordered = rows if order == "asc" else rows[::-1]
             page = {
