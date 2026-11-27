@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v3.0.6 (2026-11-27)
+
+### Breaking change for connections with OAuth turned off
+
+- The proxy now sends sign-in redirects only to allowed callback URLs. The
+  built-in list covers Claude, Claude Code, the standard ChatGPT connector, and
+  Gemini Enterprise. If your connector stops on a page showing its callback URL,
+  add that URL under **Allowed OAuth callback URLs** and restart the app.
+  A custom list replaces the defaults, so include every callback you use.
+  ChatGPT connectors with an app-specific URL and Copilot Studio connectors
+  need their own entries. [Callback configuration](DOCS.md#oauth-callbacks-in-none-mode)
+
+### Maintenance
+
+- The proxy uses the app's Unix socket for Supervisor API calls when Supervisor
+  provides one (2026.11.1 or later). These calls no longer send the Supervisor
+  token. Installations without the socket continue to use TCP.
+- The app uses the supported `homeassistant_config` mount at the existing
+  `/config` path and builds its image on Python 3.14.
+
 ## v3.0.5 (2026-11-09)
 
 ### Features
