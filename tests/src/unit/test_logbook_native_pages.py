@@ -79,7 +79,9 @@ async def test_action_calls_with_a_filter_are_refused_without_an_entity_id_hint(
         LogTools(core_client), action_calls=True, entity_id="light.kitchen"
     )
 
-    assert "object_id" not in " ".join(error.get("suggestions", []))
+    hints = [error.get("suggestion", ""), *error.get("suggestions", [])]
+    assert hints != [""]
+    assert "object_id" not in " ".join(hints)
 
 
 async def test_action_calls_on_another_source_are_named_as_ignored(
@@ -168,6 +170,35 @@ async def test_tied_state_and_event_follow_native_order(
     for row in rows + native:
         row["when"] = datetime.fromisoformat(row["when"])
     assert rows == native
+
+
+@pytest.mark.usefixtures("logbook")
+async def test_a_cursor_reaches_rows_recorded_after_its_first_page(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """The recorder commits a few seconds behind: rows fired before the first
+    page can reach the database after it."""
+    for name in ("one", "two", "three", "four"):
+        hass.bus.async_fire("logbook_entry", {"name": name, "message": "probe"})
+    await async_wait_recording_done(hass)
+    late = dt_util.utcnow().timestamp()
+    tools = LogTools(component_core_client)
+    params = call_kwargs(search="probe", limit=2, order="oldest")
+    page = (await tools.get_logs(**params))["data"]
+    names = [row["name"] for row in page["entries"]]
+    assert page["total_entries"] == 4
+
+    for name in ("five", "six"):
+        hass.bus.async_fire(
+            "logbook_entry", {"name": name, "message": "probe"}, time_fired=late
+        )
+    await async_wait_recording_done(hass)
+    while page["has_more"]:
+        page = (await tools.get_logs(**params, offset=page["next_offset"]))["data"]
+        names += [row["name"] for row in page["entries"]]
+
+    assert names == ["one", "two", "three", "four", "five", "six"]
+    assert page["total_entries"] == 6
 
 
 @pytest.mark.usefixtures("logbook")

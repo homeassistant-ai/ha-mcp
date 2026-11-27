@@ -348,10 +348,10 @@ class TraceTools:
           resolving the context id, and is 0 when Core's own-context map
           answered.
         - `logbook_entries`, `logbook_transport`, `logbook_total` and
-          `logbook_truncated` describe the run's logbook rows. A truncated
-          read has not counted them: `logbook_total` is null and
-          `logbook_total_lower_bound` says how many were seen; read the rest
-          with ha_get_logs(source='logbook', context_id=...).
+          `logbook_truncated` describe the run's logbook rows. `logbook_total`
+          is null only when the read stopped before counting them all; then
+          `logbook_total_lower_bound` says how many were seen. Read the rest
+          of a truncated run with ha_get_logs(source='logbook', context_id=...).
         """
         try:
             if run_id is not None and context_id is not None:

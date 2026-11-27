@@ -64,6 +64,9 @@ async def fill_logbook_page(
             total = seen + page["total"]
         seen += page["matched"]
         lower = max(lower, seen)
+        if total is not None and seen >= total and page.get("after"):
+            # Rows were recorded after the cursor's count: count on from here.
+            total = None
         if continuation is None:
             entries.extend(page["entries"])
             if (
