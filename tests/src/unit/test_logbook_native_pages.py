@@ -194,7 +194,9 @@ async def test_a_cursor_reaches_rows_recorded_after_its_first_page(
         )
     await async_wait_recording_done(hass)
     while page["has_more"]:
-        page = (await tools.get_logs(**params, offset=page["next_offset"]))["data"]
+        page = (await tools.get_logs(**(params | {"offset": page["next_offset"]})))[
+            "data"
+        ]
         names += [row["name"] for row in page["entries"]]
 
     assert names == ["one", "two", "three", "four", "five", "six"]

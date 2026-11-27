@@ -598,13 +598,14 @@ async def test_cursor_reads_matches_committed_after_the_initial_count(
     with patch("ha_mcp.tools.log_sources_logbook.datetime", wraps=datetime) as clock:
         clock.now.return_value = end + timedelta(seconds=1)
         second = (await tools.get_logs(**params))["data"]
-    assert second["total_entries"] == 2
+    # The count the cursor carried is exhausted, so the rows are counted again.
+    assert second["total_entries"] == 3
     assert [row["name"] for row in second["entries"]] == ["second"]
     assert second["has_more"]
     params["offset"] = second["next_offset"]
     last = (await tools.get_logs(**params))["data"]
     assert [row["name"] for row in last["entries"]] == ["late"]
-    assert last["total_entries"] == 2
+    assert last["total_entries"] == 3
 
 
 @pytest.mark.usefixtures("logbook")
