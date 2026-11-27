@@ -3,7 +3,7 @@
 The tool runs on the server's own client connected to a real ``hass`` with
 Core's ``energy`` integration: Core validates and normalizes every save and
 answers every read, so these tests pin what HA-MCP adds on top (optimistic
-locking, duplicate guards, previews, post-save reporting) against Core's real
+locking, previews, post-save reporting) against Core's real
 behaviour rather than a second schema in a fake server.
 """
 
@@ -21,7 +21,6 @@ from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools import tools_energy
 from ha_mcp.tools.tools_energy import EnergyTools
 from ha_mcp.utils.config_hash import compute_config_hash
 
@@ -66,6 +65,16 @@ async def _save_elsewhere(client: HomeAssistantClient, **prefs: Any) -> None:
 
 def _sent(spy: AsyncMock, command: str) -> list[dict[str, Any]]:
     return [c.args[0] for c in spy.call_args_list if c.args[0]["type"] == command]
+
+
+async def _save_key(tool: EnergyTools, key: str, value: list[Any]) -> dict[str, Any]:
+    """Save one top-level key under its per-key hash from a fresh read."""
+    current = await tool.ha_manage_energy_prefs(mode="get")
+    return await tool.ha_manage_energy_prefs(
+        mode="set",
+        config={key: value},
+        config_hash={key: current["config_hash_per_key"][key]},
+    )
 
 
 @pytest.fixture
@@ -261,51 +270,15 @@ async def test_component_preview_validates_with_cores_schema(
 
 
 @pytest.mark.usefixtures("energy")
-async def test_native_proposal_rejection_prevents_convenience_preview(
-    component_core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Core's schema sees the whole mutated list, and its rejection stops the
-    preview; nothing is saved."""
-    validator = AsyncMock(wraps=tools_energy.validate_energy_proposal)
-    monkeypatch.setattr(tools_energy, "validate_energy_proposal", validator)
-    invalid = {"type": "solar"}  # Core requires stat_energy_from
-
-    with (
-        sent_messages(component_core_client) as spy,
-        pytest.raises(ToolError, match="VALIDATION_FAILED"),
-    ):
-        await EnergyTools(component_core_client).ha_manage_energy_prefs(
-            mode="add_source", source=invalid, dry_run=True
-        )
-
-    assert validator.call_args.args[1] == {"energy_sources": [invalid]}
-    assert not _sent(spy, "energy/save_prefs")
-
-
-@pytest.mark.usefixtures("energy")
-async def test_whole_mutated_list_is_previewed(
-    core_client: HomeAssistantClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    validator = AsyncMock(wraps=tools_energy.validate_energy_proposal)
-    monkeypatch.setattr(tools_energy, "validate_energy_proposal", validator)
-
-    await EnergyTools(core_client).ha_manage_energy_prefs(
-        mode="add_device", stat_consumption="sensor.new", dry_run=True
-    )
-
-    assert validator.call_args.args[1] == {
-        "device_consumption": [_FRIDGE, {"stat_consumption": "sensor.new"}]
-    }
-
-
-@pytest.mark.usefixtures("energy")
 async def test_post_save_issues_remain_visible_without_reporting_failed_save(
     core_client: HomeAssistantClient,
 ) -> None:
     """Core's energy/validate flags the new device's missing entity; the save
     still stands and the issue is reported."""
-    result = await EnergyTools(core_client).ha_manage_energy_prefs(
-        mode="add_device", stat_consumption="sensor.new"
+    result = await _save_key(
+        EnergyTools(core_client),
+        "device_consumption",
+        [_FRIDGE, {"stat_consumption": "sensor.new"}],
     )
 
     assert result["success"] is True
@@ -327,8 +300,10 @@ async def test_post_save_validate_failure_remains_visible_without_failing_save(
         AsyncMock(side_effect=HomeAssistantError("offline")),
     )
 
-    result = await EnergyTools(core_client).ha_manage_energy_prefs(
-        mode="add_device", stat_consumption="sensor.new"
+    result = await _save_key(
+        EnergyTools(core_client),
+        "device_consumption",
+        [_FRIDGE, {"stat_consumption": "sensor.new"}],
     )
 
     assert result["success"] is True
@@ -340,81 +315,26 @@ async def test_post_save_validate_failure_remains_visible_without_failing_save(
 
 
 @pytest.mark.usefixtures("energy")
-async def test_core_save_rejection_is_not_silently_accepted(
+async def test_core_save_refusal_keeps_cores_code_and_saves_nothing(
     core_client: HomeAssistantClient,
 ) -> None:
+    """Core's refusal reaches the caller with Core's code and message, not as a
+    generic service failure behind the client's "Command failed:" prefix."""
+    tool = EnergyTools(core_client)
     before = await _core_prefs(core_client)
     with sent_messages(core_client) as spy, pytest.raises(ToolError) as exc_info:
-        await EnergyTools(core_client).ha_manage_energy_prefs(
-            mode="add_source", source={"type": "future"}
-        )
+        await _save_key(tool, "energy_sources", [{"type": "future"}])
 
-    assert "Failed to save energy prefs" in str(exc_info.value)
+    error = str(exc_info.value)
+    assert "VALIDATION_INVALID_PARAMETER" in error
+    assert '"ha_error_code": "invalid_format"' in error
+    assert "Command failed" not in error
     assert _sent(spy, "energy/save_prefs")
     assert not _sent(spy, "energy/validate")
     assert await _core_prefs(core_client) == before
 
 
-@pytest.mark.usefixtures("energy")
-@pytest.mark.parametrize("water", [False, True])
-async def test_device_convenience_roundtrip_preserves_siblings(
-    core_client: HomeAssistantClient, water: bool
-) -> None:
-    tool = EnergyTools(core_client)
-    before = await _core_prefs(core_client)
-    await tool.ha_manage_energy_prefs(
-        mode="add_device",
-        stat_consumption="sensor.new",
-        name="New",
-        included_in_stat="sensor.parent",
-        water=water,
-    )
-    key = "device_consumption_water" if water else "device_consumption"
-    assert (await _core_prefs(core_client))[key][-1] == {
-        "stat_consumption": "sensor.new",
-        "name": "New",
-        "included_in_stat": "sensor.parent",
-    }
-
-    await tool.ha_manage_energy_prefs(
-        mode="remove_device", stat_consumption="sensor.new", water=water
-    )
-
-    assert await _core_prefs(core_client) == before
-
-
-@pytest.mark.usefixtures("energy")
-@pytest.mark.parametrize("dry_run", [False, True])
-@pytest.mark.parametrize(
-    ("mode", "kwargs", "code"),
-    [
-        (
-            "add_device",
-            {"stat_consumption": "sensor.fridge"},
-            "RESOURCE_ALREADY_EXISTS",
-        ),
-        ("remove_device", {"stat_consumption": "sensor.absent"}, "RESOURCE_NOT_FOUND"),
-        ("add_device", {}, "VALIDATION_MISSING_PARAMETER"),
-        ("remove_device", {}, "VALIDATION_MISSING_PARAMETER"),
-        ("add_source", {}, "VALIDATION_MISSING_PARAMETER"),
-    ],
-)
-async def test_invalid_convenience_operation_never_saves(
-    core_client: HomeAssistantClient,
-    dry_run: bool,
-    mode: str,
-    kwargs: dict[str, Any],
-    code: str,
-) -> None:
-    with sent_messages(core_client) as spy, pytest.raises(ToolError, match=code):
-        await EnergyTools(core_client).ha_manage_energy_prefs(
-            mode=mode, dry_run=dry_run, **kwargs
-        )
-
-    assert not _sent(spy, "energy/save_prefs")
-
-
-async def test_added_source_reaches_core_verbatim_and_existing_siblings_survive(
+async def test_saved_list_reaches_core_verbatim(
     recorder_mock: Recorder,
     hass: HomeAssistant,
     hass_storage: dict[str, Any],
@@ -434,68 +354,10 @@ async def test_added_source_reaches_core_verbatim_and_existing_siblings_survive(
     }
 
     with sent_messages(core_client) as spy:
-        await EnergyTools(core_client).ha_manage_energy_prefs(
-            mode="add_source", source=new
-        )
+        await _save_key(EnergyTools(core_client), "energy_sources", [existing, new])
 
     assert _sent(spy, "energy/save_prefs")[0]["energy_sources"] == [existing, new]
     assert (await _core_prefs(core_client))["energy_sources"] == [existing, new]
-
-
-@pytest.mark.usefixtures("energy")
-@pytest.mark.parametrize(
-    ("source", "duplicate"),
-    [
-        (
-            {
-                "type": "battery",
-                "stat_energy_from": "sensor.battery_out",
-                "stat_energy_to": "sensor.battery_in",
-            },
-            True,
-        ),
-        (
-            {
-                "type": "grid",
-                "stat_energy_from": "sensor.grid",
-                "cost_adjustment_day": 0,
-            },
-            False,
-        ),
-    ],
-    ids=["battery", "grid"],
-)
-async def test_source_duplicate_guard_is_a_wrapper_policy(
-    core_client: HomeAssistantClient, source: dict[str, Any], duplicate: bool
-) -> None:
-    """A second identical non-grid source is refused by the wrapper before Core
-    sees it; a grid source is never refused by the wrapper, Core decides."""
-    tool = EnergyTools(core_client)
-    await tool.ha_manage_energy_prefs(mode="add_source", source=source)
-
-    with sent_messages(core_client) as spy, pytest.raises(ToolError) as exc_info:
-        await tool.ha_manage_energy_prefs(mode="add_source", source=source)
-
-    refused_by_wrapper = "RESOURCE_ALREADY_EXISTS" in str(exc_info.value)
-    assert refused_by_wrapper is duplicate
-    assert bool(_sent(spy, "energy/save_prefs")) is not duplicate
-    assert len((await _core_prefs(core_client))["energy_sources"]) == 1
-
-
-@pytest.mark.usefixtures("energy")
-async def test_convenience_preview_does_not_write(
-    core_client: HomeAssistantClient,
-) -> None:
-    before = await _core_prefs(core_client)
-    with sent_messages(core_client) as spy:
-        result = await EnergyTools(core_client).ha_manage_energy_prefs(
-            mode="add_device", stat_consumption="sensor.new", dry_run=True
-        )
-
-    assert result["new_count"] == 2
-    assert result["proposal_validation"]["status"] == "unavailable"
-    assert await _core_prefs(core_client) == before
-    assert not _sent(spy, "energy/save_prefs")
 
 
 async def test_never_configured_install_reads_as_empty_prefs(
