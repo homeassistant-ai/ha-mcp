@@ -310,7 +310,7 @@ class ConfigScriptTools:
         ``actual_config`` is the inner script body (not the REST wrapper) and
         ``resolved_id`` is the storage key the REST client resolved the input to
         (from the envelope's ``script_id``). Threading ``resolved_id`` lets the
-        upsert call site skip the redundant re-resolve (issue #1813 Phase 0).
+        upsert call site skip a second entity-registry lookup.
         Used internally by _fetch_and_verify_hash and _take_control_config.
 
         ``resolved_id`` is ``None`` when the envelope omits ``script_id`` — the
@@ -335,9 +335,9 @@ class ConfigScriptTools:
 
         Returns ``(actual_config, resolved_id)`` — the inner script body and the
         storage key the REST client resolved the input to. Threading
-        ``resolved_id`` lets the upsert call site skip the redundant re-resolve
-        (issue #1813 Phase 0); it is ``None`` when the envelope omitted the key,
-        so the upsert re-resolves rather than writing to the caller slug. Raises
+        ``resolved_id`` lets the upsert call site skip a second lookup; it is
+        ``None`` when the envelope omitted the key, so the upsert resolves the
+        id again rather than writing to the caller slug. Raises
         ToolError when a bare ``script_id`` resolved to another script's key, or
         when the hash does not match (conflict).
         """
@@ -373,7 +373,7 @@ class ConfigScriptTools:
         ``script_id`` is always the CALLER's identifier (used to default a
         missing alias). ``resolved_id``, the storage key the tool resolved, is
         passed as the write target so the REST client skips the redundant
-        entity-registry lookup (issue #1813 Phase 0); ``None`` lets the REST
+        entity-registry lookup; ``None`` lets the REST
         client resolve. Passing the caller id separately keeps a renamed
         script's alias caller-facing (#1935). A 400 carrying the config view's
         verdict is raised with Core's text and its hints, as for automations;
@@ -699,7 +699,7 @@ class ConfigScriptTools:
             )
 
             # The storage key is resolved here, by the hash check when it runs,
-            # and threaded through so the upsert doesn't re-resolve (#1813).
+            # and threaded through so the upsert doesn't resolve it again.
             if config_hash:
                 _, resolved_key = await self._fetch_and_verify_hash(
                     script_id, config_hash, "set"
@@ -969,7 +969,7 @@ class ConfigScriptTools:
         references = await ref_check(self._client, transformed_config, "script")
         # Save transformed config. ``_fetch_and_verify_hash`` already
         # resolved the storage key; pass it as the write target so the
-        # upsert skips the redundant re-resolve (issue #1813 Phase 0).
+        # upsert skips a second entity-registry lookup.
         # ``script_id`` stays the caller id (the fetched config already
         # carries an alias here, so the default is a no-op, but keep the
         # contract consistent — #1935).
