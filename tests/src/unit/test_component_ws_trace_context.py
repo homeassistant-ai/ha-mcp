@@ -261,7 +261,7 @@ async def test_extended_trace_keeps_cores_json_types(
 
 @pytest.mark.usefixtures("trace_store")
 async def test_saved_traces_are_restored_before_the_match(
-    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A restart leaves traces on disk only; the command restores them first."""
     saved = automation_run("r1", context_id="ctx-1")
@@ -275,7 +275,25 @@ async def test_saved_traces_are_restored_before_the_match(
     hass.data[DATA_TRACE] = {}
     hass.data.pop(DATA_TRACES_RESTORED, None)
 
-    result = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
+    load = store._async_load
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def delayed_load():
+        started.set()
+        await release.wait()
+        return await load()
+
+    monkeypatch.setattr(store, "_async_load", delayed_load)
+    restoring = asyncio.create_task(trace_context.async_restore_traces(hass))
+    await started.wait()
+    lookup = asyncio.create_task(ws_result(component_ws, _COMMAND, context_id="ctx-1"))
+    try:
+        done, _ = await asyncio.wait({lookup}, timeout=0.3)
+        assert not done
+    finally:
+        release.set()
+        await restoring
+        result = await lookup
 
     assert result["match"] == "trace"
     assert result["run_id"] == "r1"
