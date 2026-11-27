@@ -75,6 +75,8 @@ class Supervisor:
     accepts_options: bool = True
     gets: list[str] = field(default_factory=list)
     posts: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # The Authorization header of each request, None where it had none.
+    authorizations: list[str | None] = field(default_factory=list)
 
     @staticmethod
     def model_fields(fields: dict[str, Any]) -> dict[str, Any]:
@@ -112,6 +114,7 @@ class Supervisor:
 
     async def serve(self, request: web.Request) -> web.Response:
         path = "/" + request.match_info["path"]
+        self.authorizations.append(request.headers.get("Authorization"))
         if request.method == "POST":
             accepted = self.post(path, await request.json())
             return web.json_response({"result": "ok"}, status=200 if accepted else 503)
@@ -425,14 +428,20 @@ async def connect_core(
         )
         return link.send(routed, timeout)
 
-    monkeypatch.setattr(
-        app.start,
-        "urllib",
-        SimpleNamespace(
-            request=SimpleNamespace(Request=urllib.request.Request, urlopen=urlopen),
-            error=urllib.error,
+    routed_urllib = SimpleNamespace(
+        request=SimpleNamespace(
+            Request=urllib.request.Request,
+            urlopen=urlopen,
+            build_opener=urllib.request.build_opener,
+            ProxyHandler=urllib.request.ProxyHandler,
         ),
+        error=urllib.error,
     )
+    monkeypatch.setattr(app.start, "urllib", routed_urllib)
+    # A flavor that sends its Supervisor calls through supervisor_transport
+    # opens them with that module's urllib.
+    if transport := getattr(app.start, "urlopen_supervisor", None):
+        monkeypatch.setitem(transport.__globals__, "urllib", routed_urllib)
     monkeypatch.setenv("SUPERVISOR_TOKEN", hass_access_token)
     # Core scans custom_components again, so it finds the proxy component.
     hass.data.pop(loader.DATA_CUSTOM_COMPONENTS, None)

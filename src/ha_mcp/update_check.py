@@ -151,12 +151,18 @@ def _fetch_supervisor_addon_info() -> dict[str, Any] | None:
     token = os.environ.get("SUPERVISOR_TOKEN")
     if not token:
         return None
+    from .client.supervisor_client import supervisor_socket
+
+    base_url = get_supervisor_base_url()
+    # Over the app's socket Supervisor knows the app and reads no token.
+    socket_path = supervisor_socket()
     try:
-        resp = httpx.get(
-            f"{get_supervisor_base_url()}/addons/self/info",
-            headers={"Authorization": f"Bearer {token}"},
+        with httpx.Client(
+            transport=httpx.HTTPTransport(uds=socket_path) if socket_path else None,
+            headers={} if socket_path else {"Authorization": f"Bearer {token}"},
             timeout=_HTTP_TIMEOUT_SECONDS,
-        )
+        ) as supervisor:
+            resp = supervisor.get(f"{base_url}/addons/self/info")
         resp.raise_for_status()
         body = resp.json()
         # Supervisor REST envelope is {"result": "ok", "data": {...}}; some mocks

@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from typing import Any, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 from urllib.parse import quote
 
 import httpx
@@ -27,6 +27,9 @@ from .engine_compat import is_legacy_puppet
 from .provision import TOKEN_HINT, EngineKind, resolve_engine
 from .theme_check import check_requested_theme
 from .theme_guard import ThemeGuard
+
+if TYPE_CHECKING:
+    from ..client.rest_client import HomeAssistantClient
 
 ScreenshotFormat = Literal["png", "jpeg", "webp", "bmp"]
 ViewportPreset = Literal["mobile", "tablet", "desktop"]
@@ -851,7 +854,7 @@ async def capture_dashboard_images(
     image_format: ScreenshotFormat = "png",
     render_timeout_seconds: float = DEFAULT_RENDER_TIMEOUT_SECONDS,
     partial_failures: list[dict[str, Any]] | None = None,
-    client: Any | None = None,
+    client: HomeAssistantClient,
     capture_warnings: list[str] | None = None,
 ) -> list[DashboardImageCapture]:
     """Render one or more ordered dashboard images via the screenshot engine.
@@ -890,7 +893,7 @@ async def capture_dashboard_images(
     if capture_warnings is not None:
         capture_warnings.extend(theme_warnings)
 
-    engine_target = await resolve_engine()
+    engine_target = await resolve_engine(client)
     engine_url = engine_target.url
     url = f"{engine_url}/{path}"
     mime_type = _MIME_TYPES[options.image_format]

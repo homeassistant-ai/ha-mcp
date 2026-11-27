@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass, field, fields, replace
-from typing import Annotated, Any, Literal, NoReturn, cast, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn, cast, overload
 
 from pydantic import Field
 
@@ -103,6 +103,9 @@ from .helpers import (
     ws_failure_code,
 )
 from .tool_hints import read_only_hints, write_hints
+
+if TYPE_CHECKING:
+    from ..client.rest_client import HomeAssistantClient
 
 logger = logging.getLogger(__name__)
 
@@ -1267,7 +1270,7 @@ async def _capture_dashboard_screenshot_result(
     result: dict[str, Any],
     url_path: str | None,
     *,
-    client: Any | None,
+    client: HomeAssistantClient,
     config: dict[str, Any] | None,
     options: DashboardScreenshotOptions,
 ) -> ToolResult:
@@ -1277,13 +1280,6 @@ async def _capture_dashboard_screenshot_result(
     render_path = dashboard_frontend_path(url_path)
     if options.view_path is not None or config is not None:
         if config is None:
-            if client is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.INTERNAL_ERROR,
-                        "Dashboard client is unavailable for view_path resolution.",
-                    )
-                )
             config, _ = await _get_dashboard_config_internal(client, url_path)
         target = resolve_dashboard_view(
             url_path or "default", config, options.view_path
@@ -1364,7 +1360,7 @@ async def maybe_attach_screenshot(
     url_path: str | None,
     requested: bool,
     *,
-    client: Any | None = None,
+    client: HomeAssistantClient,
     config: dict[str, Any] | None = None,
     options: DashboardScreenshotOptions | None = None,
     full_page: bool = False,

@@ -416,6 +416,7 @@ class TestCaptureBracket:
 
     async def test_a_capture_reports_the_flip_and_writes_nothing(
         self,
+        core_client: HomeAssistantClient,
         supervisor: Supervisor,
         aiohttp_client: Any,
         hass: HomeAssistant,
@@ -429,7 +430,7 @@ class TestCaptureBracket:
         warnings: list[str] = []
 
         captures = await capture.capture_dashboard_images(
-            "lovelace/0", capture_warnings=warnings
+            "lovelace/0", capture_warnings=warnings, client=core_client
         )
 
         assert captures[0].data == PNG
@@ -441,6 +442,7 @@ class TestCaptureBracket:
 
     async def test_an_engine_that_keeps_the_theme_adds_no_warning(
         self,
+        core_client: HomeAssistantClient,
         supervisor: Supervisor,
         aiohttp_client: Any,
         hass: HomeAssistant,
@@ -452,7 +454,9 @@ class TestCaptureBracket:
         await save_theme(hass, engine, DARK)
         warnings: list[str] = []
 
-        await capture.capture_dashboard_images("lovelace/0", capture_warnings=warnings)
+        await capture.capture_dashboard_images(
+            "lovelace/0", capture_warnings=warnings, client=core_client
+        )
 
         assert warnings == []
         assert await saved_theme(hass, engine) == DARK
@@ -482,6 +486,7 @@ class TestCaptureBracket:
 
     async def test_a_failed_render_still_reports_the_flip(
         self,
+        core_client: HomeAssistantClient,
         supervisor: Supervisor,
         aiohttp_client: Any,
         hass: HomeAssistant,
@@ -494,7 +499,7 @@ class TestCaptureBracket:
         await save_theme(hass, engine, DARK)
 
         with pytest.raises(ToolError) as exc_info:
-            await capture.capture_dashboard_images("lovelace/0")
+            await capture.capture_dashboard_images("lovelace/0", client=core_client)
 
         assert seen[SET] == []
         warnings = error_body(exc_info).get("warnings", [])

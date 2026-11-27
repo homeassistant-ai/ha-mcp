@@ -129,6 +129,7 @@ async def test_an_entity_without_a_registry_entry_gets_no_note(
 
     payload = json.loads(str(exc_info.value))
     assert payload["error"]["code"] == "ENTITY_NOT_FOUND"
+    assert payload["ha_error_code"] == "not_found"
     assert "warnings" not in payload
 
 

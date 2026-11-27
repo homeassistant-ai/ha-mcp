@@ -24,6 +24,9 @@ leaks into the dev tree. `homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oa
 is a byte-identical copy of `custom_components/ha_mcp_tools/oauth_redirect_allowlist.py`,
 kept equal by `tests/src/unit/test_oauth_redirect_allowlist.py`: edit the source and
 copy it over. The promote workflow brings the stable copy level.
+`homeassistant-addon-webhook-proxy-dev/supervisor_transport.py` is likewise a
+byte-identical copy of `homeassistant-addon/supervisor_transport.py`, kept equal by
+`tests/addon/test_addon_startup.py`: edit the main app's file and copy it over.
 
 ## Dev-first, promote-only
 **A PR never edits the stable tree directly in regular operation.** The

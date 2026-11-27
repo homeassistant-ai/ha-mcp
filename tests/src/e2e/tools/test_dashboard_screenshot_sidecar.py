@@ -330,8 +330,8 @@ async def test_wpe_supervisor_discovery_returns_dashboard_image(
     import httpx
 
     import ha_mcp.config
-    from ha_mcp.client import supervisor_client
     from ha_mcp.dashboard_screenshot import provision
+    from ha_mcp.tools import tools_addons
 
     engine_port = urlparse(fake_engine.url).port
     assert engine_port is not None
@@ -349,8 +349,12 @@ async def test_wpe_supervisor_discovery_returns_dashboard_image(
     monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
     ha_mcp.config._settings = None
 
-    addons = {"data": {"addons": [{"slug": "test_wpe_screenshot_engine"}]}}
+    addons = {
+        "result": "ok",
+        "data": {"addons": [{"slug": "test_wpe_screenshot_engine"}]},
+    }
     engine_info = {
+        "result": "ok",
         "data": {
             "name": "WPE Screenshot Engine",
             "state": "started",
@@ -365,7 +369,7 @@ async def test_wpe_supervisor_discovery_returns_dashboard_image(
                 "home_assistant_token": "not-used-by-discovery",
                 "dashboard_path": "lovelace/energy",
             },
-        }
+        },
     }
 
     def supervisor_response(request: httpx.Request) -> httpx.Response:
@@ -378,7 +382,7 @@ async def test_wpe_supervisor_discovery_returns_dashboard_image(
         return httpx.Response(200, json=payload, request=request)
 
     monkeypatch.setattr(
-        supervisor_client,
+        tools_addons,
         "make_supervisor_httpx_client",
         lambda **kwargs: httpx.AsyncClient(
             base_url="http://supervisor",
@@ -559,7 +563,7 @@ async def test_legacy_full_page_retry_surfaces_warning_through_mcp(
     from ha_mcp.dashboard_screenshot import capture
     from ha_mcp.dashboard_screenshot.provision import EngineTarget
 
-    async def resolve_legacy_puppet() -> EngineTarget:
+    async def resolve_legacy_puppet(_client: object) -> EngineTarget:
         return EngineTarget(
             url=fake_engine.url,
             engine_kind="puppet",

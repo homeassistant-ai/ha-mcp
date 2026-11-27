@@ -166,3 +166,8 @@ def webhook_logger_supported(variant: Variant) -> bool:
 
 def cloudhook_relay_supported(variant: Variant) -> bool:
     return (variant.component_dir / "cloudhook.py").exists()
+
+
+def supervisor_socket_supported(variant: Variant) -> bool:
+    """The flavor calls Supervisor over the app's Unix socket when it has one."""
+    return (variant.addon_dir / "supervisor_transport.py").exists()

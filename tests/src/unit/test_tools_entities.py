@@ -22,7 +22,6 @@ from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.json import json_bytes
-from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import RegistryEntryWithDefaults
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -32,7 +31,11 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.tools_entities import EntityTools
 
+from ._command_faults import registry_lookup_failing
 from ._entity_registry_core import sent_types
+from ._entity_tools_core import labels as labels
+from ._entity_tools_core import registry_entity, stored_entry
+from ._entity_tools_core import tools as tools
 from ._tool_errors import error_body, error_of
 
 _UPDATE = "config/entity_registry/update"
@@ -48,43 +51,11 @@ precheck_only = pytest.mark.skipif(
 )
 
 
-@pytest.fixture
-async def tools(hass: HomeAssistant, core_client: HomeAssistantClient) -> EntityTools:
-    """The entity tools on a ``hass`` that serves Core's registry commands."""
-    assert await async_setup_component(hass, "config", {})
-    return EntityTools(core_client)
-
-
-@pytest.fixture
-def labels(label_registry: lr.LabelRegistry) -> list[str]:
-    """Labels ``outdoor`` and ``smart`` in Core's label registry."""
-    return [label_registry.async_create(name).label_id for name in ("Outdoor", "Smart")]
-
-
-def _entity(
-    registry: er.EntityRegistry, entity_id: str, **changes: Any
-) -> er.RegistryEntry:
-    """A registry entry for ``entity_id`` with ``changes`` applied."""
-    domain, object_id = entity_id.split(".")
-    entry = registry.async_get_or_create(
-        domain, "demo", object_id, suggested_object_id=object_id
-    )
-    if changes:
-        entry = registry.async_update_entity(entry.entity_id, **changes)
-    return entry
-
-
-def _stored(registry: er.EntityRegistry, entity_id: str) -> er.RegistryEntry:
-    entry = registry.async_get(entity_id)
-    assert entry is not None
-    return entry
-
-
 def _aliases(registry: er.EntityRegistry, entity_id: str) -> list[str | None]:
     """The stored aliases, with ``None`` for the entity's own name."""
     return [
         None if alias is er.COMPUTED_NAME else alias
-        for alias in _stored(registry, entity_id).aliases
+        for alias in stored_entry(registry, entity_id).aliases
     ]
 
 
@@ -108,13 +79,13 @@ class TestLabels:
         entity_registry: er.EntityRegistry,
         labels: list[str],
     ) -> None:
-        _entity(entity_registry, "light.test")
+        registry_entity(entity_registry, "light.test")
 
         result = await tools.ha_set_entity(entity_id="light.test", labels=labels)
 
         assert result["success"] is True
         assert f"labels={labels}" in result["updates"]
-        assert _stored(entity_registry, "light.test").labels == set(labels)
+        assert stored_entry(entity_registry, "light.test").labels == set(labels)
 
     async def test_an_empty_label_list_clears_the_labels(
         self,
@@ -122,11 +93,11 @@ class TestLabels:
         entity_registry: er.EntityRegistry,
         labels: list[str],
     ) -> None:
-        _entity(entity_registry, "light.test", labels=set(labels))
+        registry_entity(entity_registry, "light.test", labels=set(labels))
 
         await tools.ha_set_entity(entity_id="light.test", labels=[])
 
-        assert _stored(entity_registry, "light.test").labels == set()
+        assert stored_entry(entity_registry, "light.test").labels == set()
 
     async def test_a_json_array_of_labels_is_stored(
         self,
@@ -134,11 +105,11 @@ class TestLabels:
         entity_registry: er.EntityRegistry,
         labels: list[str],
     ) -> None:
-        _entity(entity_registry, "light.test")
+        registry_entity(entity_registry, "light.test")
 
         await tools.ha_set_entity(entity_id="light.test", labels='["outdoor", "smart"]')
 
-        assert _stored(entity_registry, "light.test").labels == set(labels)
+        assert stored_entry(entity_registry, "light.test").labels == set(labels)
 
     async def test_unparseable_labels_are_refused(
         self, tools: EntityTools, sent: AsyncMock
@@ -157,11 +128,11 @@ class TestLabels:
         entity_registry: er.EntityRegistry,
         labels: list[str],
     ) -> None:
-        _entity(entity_registry, "light.test", labels=set(labels))
+        registry_entity(entity_registry, "light.test", labels=set(labels))
 
         await tools.ha_set_entity(entity_id="light.test", name="New Name")
 
-        stored = _stored(entity_registry, "light.test")
+        stored = stored_entry(entity_registry, "light.test")
         assert stored.name == "New Name"
         assert stored.labels == set(labels)
 
@@ -171,13 +142,13 @@ class TestLabels:
         entity_registry: er.EntityRegistry,
         labels: list[str],
     ) -> None:
-        _entity(entity_registry, "light.test", labels={"outdoor"})
+        registry_entity(entity_registry, "light.test", labels={"outdoor"})
 
         await tools.ha_set_entity(
             entity_id="light.test", labels=["smart"], label_operation="add"
         )
 
-        assert _stored(entity_registry, "light.test").labels == set(labels)
+        assert stored_entry(entity_registry, "light.test").labels == set(labels)
 
     async def test_remove_drops_only_the_named_labels(
         self,
@@ -185,13 +156,13 @@ class TestLabels:
         entity_registry: er.EntityRegistry,
         labels: list[str],
     ) -> None:
-        _entity(entity_registry, "light.test", labels=set(labels))
+        registry_entity(entity_registry, "light.test", labels=set(labels))
 
         await tools.ha_set_entity(
             entity_id="light.test", labels=["smart"], label_operation="remove"
         )
 
-        assert _stored(entity_registry, "light.test").labels == {"outdoor"}
+        assert stored_entry(entity_registry, "light.test").labels == {"outdoor"}
 
     @pytest.mark.parametrize("label_operation", ["set", "add"])
     async def test_an_unknown_label_is_refused_before_the_write(
@@ -202,7 +173,7 @@ class TestLabels:
         sent: AsyncMock,
         label_operation: str,
     ) -> None:
-        _entity(entity_registry, "light.test", labels={"outdoor"})
+        registry_entity(entity_registry, "light.test", labels={"outdoor"})
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(
@@ -215,7 +186,30 @@ class TestLabels:
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert body["unknown_labels"] == ["ghost_label"]
         assert _UPDATE not in sent_types(sent)
-        assert _stored(entity_registry, "light.test").labels == {"outdoor"}
+        assert stored_entry(entity_registry, "light.test").labels == {"outdoor"}
+
+    async def test_a_refused_label_read_writes_nothing(
+        self,
+        hass: HomeAssistant,
+        tools: EntityTools,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+        sent: AsyncMock,
+    ) -> None:
+        """The merge needs the current labels: a write after a refused read
+        would replace them with a list built from nothing."""
+        registry_entity(entity_registry, "light.test", labels=set(labels))
+
+        with registry_lookup_failing(hass), pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(
+                entity_id="light.test", labels=["outdoor"], label_operation="remove"
+            )
+
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert body["ha_error_code"] == "home_assistant_error"
+        assert _UPDATE not in sent_types(sent)
+        assert stored_entry(entity_registry, "light.test").labels == set(labels)
 
 
 @pytest.mark.parametrize("load_registries", [False])
@@ -256,7 +250,7 @@ class TestStoredLabels:
         """Removing a label that is gone from the label registry is the cleanup
         path; checking it against that registry would block it."""
         assert label_registry.async_get_label("ghost_label") is None
-        assert _stored(entity_registry, "light.test").labels == {
+        assert stored_entry(entity_registry, "light.test").labels == {
             "ghost_label",
             "outdoor",
         }
@@ -267,7 +261,7 @@ class TestStoredLabels:
 
         assert result["success"] is True
         assert _LABELS not in sent_types(sent)
-        assert _stored(entity_registry, "light.test").labels == {"outdoor"}
+        assert stored_entry(entity_registry, "light.test").labels == {"outdoor"}
 
 
 class TestRegistryReferences:
@@ -281,7 +275,7 @@ class TestRegistryReferences:
     ) -> None:
         """An unknown area id would be stored as a dangling assignment."""
         area_registry.async_create("Living Room")
-        _entity(entity_registry, "light.test")
+        registry_entity(entity_registry, "light.test")
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(entity_id="light.test", area_id="extérieur nord")
@@ -290,7 +284,7 @@ class TestRegistryReferences:
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert body["area_id"] == "extérieur nord"
         assert sent_types(sent) == [_AREAS]
-        assert _stored(entity_registry, "light.test").area_id is None
+        assert stored_entry(entity_registry, "light.test").area_id is None
 
     async def test_an_area_is_checked_once_then_written(
         self,
@@ -300,12 +294,12 @@ class TestRegistryReferences:
         sent: AsyncMock,
     ) -> None:
         area = area_registry.async_create("Living Room")
-        _entity(entity_registry, "light.test")
+        registry_entity(entity_registry, "light.test")
 
         await tools.ha_set_entity(entity_id="light.test", area_id=area.id)
 
         assert sent_types(sent) == ([] if CORE_CHECKS_AREA else [_AREAS]) + [_UPDATE]
-        assert _stored(entity_registry, "light.test").area_id == area.id
+        assert stored_entry(entity_registry, "light.test").area_id == area.id
 
     async def test_an_unknown_category_is_refused_in_its_own_scope(
         self,
@@ -315,7 +309,7 @@ class TestRegistryReferences:
         sent: AsyncMock,
     ) -> None:
         category_registry.async_create(scope="automation", name="Lighting")
-        _entity(entity_registry, "light.test")
+        registry_entity(entity_registry, "light.test")
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(
@@ -328,7 +322,7 @@ class TestRegistryReferences:
         assert sent.call_args_list == [
             call({"type": "config/category_registry/list", "scope": "automation"})
         ]
-        assert _stored(entity_registry, "light.test").categories == {}
+        assert stored_entry(entity_registry, "light.test").categories == {}
 
     @pytest.mark.parametrize(
         ("registry", "method", "kwargs", "lookup"),
@@ -363,7 +357,7 @@ class TestRegistryReferences:
     ) -> None:
         """Without the registry the reference cannot be checked, so nothing is
         written rather than a possibly dangling one."""
-        _entity(entity_registry, "light.test")
+        registry_entity(entity_registry, "light.test")
         monkeypatch.setattr(
             registry,
             method,
@@ -397,7 +391,7 @@ class TestSingleEntityUpdate:
         sent: AsyncMock,
     ) -> None:
         """No exposure write is sent when expose_to is not given."""
-        _entity(entity_registry, "light.test")
+        registry_entity(entity_registry, "light.test")
 
         result = await tools.ha_set_entity(entity_id="light.test", name="New Name")
 
@@ -433,7 +427,7 @@ class TestSingleEntityUpdate:
     async def test_a_device_rename_without_a_device_is_a_warning_not_partial(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        _entity(entity_registry, "light.test")
+        registry_entity(entity_registry, "light.test")
 
         result = await tools.ha_set_entity(
             entity_id="light.test", new_device_name="Living Room"
@@ -444,142 +438,6 @@ class TestSingleEntityUpdate:
         assert any(
             "no associated device" in w for w in result["device_rename"]["warnings"]
         )
-
-
-class TestBulk:
-    async def test_labels_are_stored_on_every_entity(
-        self,
-        tools: EntityTools,
-        entity_registry: er.EntityRegistry,
-        labels: list[str],
-    ) -> None:
-        ids = ["light.a", "light.b", "light.c"]
-        for entity_id in ids:
-            _entity(entity_registry, entity_id)
-
-        result = await tools.ha_set_entity(entity_id=ids, labels=["outdoor"])
-
-        assert result["success"] is True
-        assert (result["total"], result["succeeded_count"]) == (3, 3)
-        assert result["failed_count"] == 0
-        for entity_id in ids:
-            assert _stored(entity_registry, entity_id).labels == {"outdoor"}
-
-    @pytest.mark.parametrize(
-        "single_entity_param",
-        [
-            {"name": "Test Name"},
-            {"device_class": "window"},
-            {"options": {"sensor": {"display_precision": 2}}},
-            {"use_entity_name_alias": False},
-        ],
-        ids=["name", "device_class", "options", "use_entity_name_alias"],
-    )
-    async def test_a_single_entity_parameter_is_refused(
-        self,
-        tools: EntityTools,
-        sent: AsyncMock,
-        single_entity_param: dict[str, Any],
-    ) -> None:
-        """A bulk update would drop it silently, so it is refused."""
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_entity(
-                entity_id=["light.a", "light.b"],
-                labels=["outdoor"],
-                **single_entity_param,
-            )
-
-        error = error_of(exc_info)
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert next(iter(single_entity_param)) in error["message"]
-        sent.assert_not_called()
-
-    async def test_an_entity_core_refuses_fails_alone(
-        self,
-        tools: EntityTools,
-        entity_registry: er.EntityRegistry,
-        labels: list[str],
-    ) -> None:
-        _entity(entity_registry, "light.a")
-
-        result = await tools.ha_set_entity(
-            entity_id=["light.a", "light.b"], labels=["outdoor"]
-        )
-
-        assert result["success"] is False
-        assert result["partial"] is True
-        assert [row["entity_id"] for row in result["succeeded"]] == ["light.a"]
-        assert [row["entity_id"] for row in result["failed"]] == ["light.b"]
-        assert _stored(entity_registry, "light.a").labels == {"outdoor"}
-
-    async def test_an_empty_entity_list_is_refused(self, tools: EntityTools) -> None:
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_entity(entity_id=[], labels=["outdoor"])
-
-        assert "empty" in error_of(exc_info)["message"].lower()
-
-    async def test_add_keeps_each_entitys_own_labels(
-        self,
-        tools: EntityTools,
-        entity_registry: er.EntityRegistry,
-        label_registry: lr.LabelRegistry,
-    ) -> None:
-        for name in ("Existing", "Other", "New Label"):
-            label_registry.async_create(name)
-        _entity(entity_registry, "light.a", labels={"existing"})
-        _entity(entity_registry, "light.b", labels={"other"})
-
-        result = await tools.ha_set_entity(
-            entity_id=["light.a", "light.b"],
-            labels=["new_label"],
-            label_operation="add",
-        )
-
-        assert result["succeeded_count"] == 2
-        entries = {row["entity_id"]: row["entity_entry"] for row in result["succeeded"]}
-        assert set(entries["light.a"]["labels"]) == {"existing", "new_label"}
-        assert set(entries["light.b"]["labels"]) == {"other", "new_label"}
-        assert _stored(entity_registry, "light.b").labels == {"other", "new_label"}
-
-    async def test_a_category_is_stored_on_every_entity(
-        self,
-        tools: EntityTools,
-        entity_registry: er.EntityRegistry,
-        category_registry: cr.CategoryRegistry,
-    ) -> None:
-        category = category_registry.async_create(scope="automation", name="Lights")
-        ids = ["light.a", "light.b"]
-        for entity_id in ids:
-            _entity(entity_registry, entity_id)
-
-        result = await tools.ha_set_entity(
-            entity_id=ids, categories={"automation": category.category_id}
-        )
-
-        assert result["succeeded_count"] == 2
-        for entity_id in ids:
-            assert _stored(entity_registry, entity_id).categories == {
-                "automation": category.category_id
-            }
-
-    async def test_an_unknown_label_is_refused_before_any_entity_is_touched(
-        self,
-        tools: EntityTools,
-        entity_registry: er.EntityRegistry,
-        labels: list[str],
-        sent: AsyncMock,
-    ) -> None:
-        """One check at the entry guards the whole list."""
-        for entity_id in ("light.a", "light.b"):
-            _entity(entity_registry, entity_id)
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.ha_set_entity(
-                entity_id=["light.a", "light.b"], labels=["ghost_label"]
-            )
-
-        assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert sent_types(sent) == [_LABELS]
 
 
 class TestDisableGuardrail:
@@ -629,6 +487,24 @@ class TestDisableGuardrail:
         assert not any("retry" in item.lower() for item in suggestions)
         sent.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("entity_id", "pointer"),
+        [
+            ("SCRIPT.my_script", "script_id='script.my_script'"),
+            ("AUTOMATION.test", "entity_id='automation.test'"),
+        ],
+    )
+    async def test_disabling_in_another_case_is_refused(
+        self, tools: EntityTools, sent: AsyncMock, entity_id: str, pointer: str
+    ) -> None:
+        """Core lowercases the id it is sent, so the refusal points at the
+        lowercase id, the one the suggested tool matches."""
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_entity(entity_id=entity_id, enabled=False)
+
+        assert pointer in str(exc_info.value)
+        sent.assert_not_called()
+
     async def test_disabling_an_automation_in_a_one_item_list_is_refused(
         self, tools: EntityTools, sent: AsyncMock
     ) -> None:
@@ -644,7 +520,7 @@ class TestDisableGuardrail:
     async def test_enabling_an_automation_is_written(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        _entity(
+        registry_entity(
             entity_registry,
             "automation.test",
             disabled_by=er.RegistryEntryDisabler.USER,
@@ -653,12 +529,12 @@ class TestDisableGuardrail:
         result = await tools.ha_set_entity(entity_id="automation.test", enabled=True)
 
         assert result["success"] is True
-        assert _stored(entity_registry, "automation.test").disabled_by is None
+        assert stored_entry(entity_registry, "automation.test").disabled_by is None
 
     async def test_disabling_another_domain_is_written(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        _entity(entity_registry, "sensor.temperature")
+        registry_entity(entity_registry, "sensor.temperature")
 
         result = await tools.ha_set_entity(
             entity_id="sensor.temperature", enabled=False
@@ -666,7 +542,7 @@ class TestDisableGuardrail:
 
         assert result["success"] is True
         assert (
-            _stored(entity_registry, "sensor.temperature").disabled_by
+            stored_entry(entity_registry, "sensor.temperature").disabled_by
             is er.RegistryEntryDisabler.USER
         )
 
@@ -678,7 +554,7 @@ class TestRemoveEntity:
         entity_registry: er.EntityRegistry,
         dropped: AsyncMock,
     ) -> None:
-        _entity(entity_registry, "sensor.test_entity")
+        registry_entity(entity_registry, "sensor.test_entity")
 
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_remove_entity(entity_id="sensor.test_entity")
@@ -695,7 +571,7 @@ class TestRemoveEntity:
         entity_registry: er.EntityRegistry,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        _entity(entity_registry, "sensor.test_entity")
+        registry_entity(entity_registry, "sensor.test_entity")
         monkeypatch.setattr(
             entity_registry,
             "async_remove",
@@ -713,13 +589,13 @@ class TestShowAsAndOptions:
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
         """The UI's Show As reads device_class; an option would not show."""
-        _entity(entity_registry, "binary_sensor.test")
+        registry_entity(entity_registry, "binary_sensor.test")
 
         result = await tools.ha_set_entity(
             entity_id="binary_sensor.test", device_class="window"
         )
 
-        stored = _stored(entity_registry, "binary_sensor.test")
+        stored = stored_entry(entity_registry, "binary_sensor.test")
         assert stored.device_class == "window"
         assert stored.options == {}
         assert "device_class='window'" in result["updates"]
@@ -727,13 +603,13 @@ class TestShowAsAndOptions:
     async def test_an_empty_device_class_clears_the_override(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        _entity(entity_registry, "binary_sensor.test", device_class="door")
+        registry_entity(entity_registry, "binary_sensor.test", device_class="door")
 
         result = await tools.ha_set_entity(
             entity_id="binary_sensor.test", device_class=""
         )
 
-        assert _stored(entity_registry, "binary_sensor.test").device_class is None
+        assert stored_entry(entity_registry, "binary_sensor.test").device_class is None
         assert "device_class cleared" in result["updates"]
 
     async def test_options_alone_leave_the_other_fields_as_they_are(
@@ -742,13 +618,13 @@ class TestShowAsAndOptions:
         entity_registry: er.EntityRegistry,
         sent: AsyncMock,
     ) -> None:
-        _entity(entity_registry, "sensor.temp", device_class="temperature")
+        registry_entity(entity_registry, "sensor.temp", device_class="temperature")
 
         await tools.ha_set_entity(
             entity_id="sensor.temp", options={"sensor": {"display_precision": 2}}
         )
 
-        stored = _stored(entity_registry, "sensor.temp")
+        stored = stored_entry(entity_registry, "sensor.temp")
         assert stored.options["sensor"] == {"display_precision": 2}
         assert stored.device_class == "temperature"
         assert sent_types(sent) == [_UPDATE]
@@ -756,7 +632,7 @@ class TestShowAsAndOptions:
     async def test_options_for_two_domains_are_all_stored(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        _entity(entity_registry, "sensor.temp")
+        registry_entity(entity_registry, "sensor.temp")
         options = {
             "sensor": {"display_precision": 1},
             "weather": {"forecast_type": "hourly"},
@@ -764,18 +640,21 @@ class TestShowAsAndOptions:
 
         result = await tools.ha_set_entity(entity_id="sensor.temp", options=options)
 
-        stored = _stored(entity_registry, "sensor.temp")
+        stored = stored_entry(entity_registry, "sensor.temp")
         assert {domain: stored.options[domain] for domain in options} == options
         assert result["entity_entry"]["options"] == dict(stored.options)
 
+    @pytest.mark.parametrize("include_entity_entry", [True, False])
     async def test_a_refused_second_domain_says_what_was_written(
         self,
         tools: EntityTools,
         entity_registry: er.EntityRegistry,
         monkeypatch: pytest.MonkeyPatch,
+        include_entity_entry: bool,
     ) -> None:
-        """A caller retrying blindly would apply the first domain twice."""
-        _entity(entity_registry, "sensor.temp")
+        """A caller retrying blindly would apply the first domain twice; the
+        entry stays out of a compact reply."""
+        registry_entity(entity_registry, "sensor.temp")
         update_options = er.EntityRegistry.async_update_entity_options
 
         def refuse_weather(
@@ -799,14 +678,16 @@ class TestShowAsAndOptions:
                     "sensor": {"display_precision": 1},
                     "weather": {"forecast_type": "hourly"},
                 },
+                include_entity_entry=include_entity_entry,
             )
 
         body = error_body(exc_info)
+        assert ("entity_entry" in body) is include_entity_entry
         assert "weather" in body["error"]["message"]
         assert body["options_domain"] == "weather"
         assert body["partial"] is True
         assert body["options_succeeded"] == {"sensor": {"display_precision": 1}}
-        stored = _stored(entity_registry, "sensor.temp")
+        stored = stored_entry(entity_registry, "sensor.temp")
         assert stored.options["sensor"] == {"display_precision": 1}
         assert "weather" not in stored.options
 
@@ -833,7 +714,7 @@ class TestShowAsAndOptions:
     async def test_device_class_and_options_are_both_stored(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        _entity(entity_registry, "binary_sensor.test")
+        registry_entity(entity_registry, "binary_sensor.test")
 
         await tools.ha_set_entity(
             entity_id="binary_sensor.test",
@@ -841,7 +722,7 @@ class TestShowAsAndOptions:
             options={"sensor": {"display_precision": 2}},
         )
 
-        stored = _stored(entity_registry, "binary_sensor.test")
+        stored = stored_entry(entity_registry, "binary_sensor.test")
         assert stored.device_class == "window"
         assert stored.options["sensor"] == {"display_precision": 2}
 
@@ -852,7 +733,7 @@ class TestAliases:
     async def test_a_string_list_keeps_the_own_name(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        _entity(entity_registry, "light.t", aliases=[er.COMPUTED_NAME])
+        registry_entity(entity_registry, "light.t", aliases=[er.COMPUTED_NAME])
 
         result = await tools.ha_set_entity(entity_id="light.t", aliases=["Maanlamp"])
 
@@ -862,7 +743,7 @@ class TestAliases:
     async def test_a_string_list_leaves_the_own_name_off(
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
-        _entity(entity_registry, "light.t", aliases=["old"])
+        registry_entity(entity_registry, "light.t", aliases=["old"])
 
         await tools.ha_set_entity(entity_id="light.t", aliases=["new"])
 
@@ -872,7 +753,7 @@ class TestAliases:
         self, tools: EntityTools, entity_registry: er.EntityRegistry
     ) -> None:
         """Otherwise the entity stops answering to its name in Assist."""
-        _entity(entity_registry, "light.t", aliases=[er.COMPUTED_NAME, "old"])
+        registry_entity(entity_registry, "light.t", aliases=[er.COMPUTED_NAME, "old"])
 
         await tools.ha_set_entity(entity_id="light.t", aliases=[])
 
@@ -890,7 +771,7 @@ class TestAliases:
         sent: AsyncMock,
         aliases: list[str | None] | str,
     ) -> None:
-        _entity(entity_registry, "light.t", aliases=["old"])
+        registry_entity(entity_registry, "light.t", aliases=["old"])
 
         await tools.ha_set_entity(entity_id="light.t", aliases=aliases)
 
@@ -904,9 +785,10 @@ class TestAliases:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(entity_id="light.t", aliases=["x"])
 
-        error = error_of(exc_info)
-        assert error["code"] == "SERVICE_CALL_FAILED"
-        assert "Entity not found" in error["message"]
+        body = error_body(exc_info)
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "Entity not found" in body["error"]["message"]
+        assert body["ha_error_code"] == "not_found"
         assert sent_types(sent) == [_GET]
 
     @pytest.mark.parametrize(
@@ -927,7 +809,7 @@ class TestAliases:
         note: str,
     ) -> None:
         """The switch decides the own-name entry, even one passed in aliases."""
-        _entity(entity_registry, "light.t")
+        registry_entity(entity_registry, "light.t")
         given: list[str | None] = [None, "Maanlamp"] if not switch else ["Maanlamp"]
 
         result = await tools.ha_set_entity(
@@ -950,7 +832,7 @@ class TestAliases:
         switch: bool,
         expected: list[str | None],
     ) -> None:
-        _entity(entity_registry, "light.t", aliases=[er.COMPUTED_NAME, "old"])
+        registry_entity(entity_registry, "light.t", aliases=[er.COMPUTED_NAME, "old"])
 
         result = await tools.ha_set_entity(
             entity_id="light.t", use_entity_name_alias=switch

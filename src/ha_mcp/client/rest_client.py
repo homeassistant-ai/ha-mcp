@@ -976,9 +976,9 @@ class HomeAssistantClient:
         Branch on ``is_running_in_addon()``, which requires a truthy
         ``SUPERVISOR_TOKEN`` and excludes ``HA_MCP_EMBEDDED``: inside the app
         (add-on) container goes directly to the Supervisor
-        REST API at ``http://supervisor/addons/{slug}/logs`` with the
-        Supervisor token. The HA Core proxy at
-        ``/api/hassio/addons/{slug}/logs`` rejects this token+path combination
+        REST API at ``http://supervisor/addons/{slug}/logs`` (over the app's
+        socket when it has one). The HA Core proxy at
+        ``/api/hassio/addons/{slug}/logs`` rejects an app's request for this path
         on current HA Core releases (see #1116) — the direct path bypasses
         HA Core entirely and is the documented Supervisor contract.
 
@@ -1080,12 +1080,12 @@ class HomeAssistantClient:
 
         Bypasses ``HomeAssistantClient.httpx_client`` because that client targets
         Home Assistant Core through ``http://supervisor/core/api``, while logs
-        belong to Supervisor at ``http://supervisor``. Plain HTTP here is the
-        platform contract, not a downgrade: Supervisor serves its API over
-        HTTP only (no TLS endpoint or IPC socket exists), on the internal
-        ``hassio`` docker network whose isolation is the boundary protecting
-        the token — see SECURITY.md § "Local network is the trusted zone". Both clients use the same
-        ``SUPERVISOR_TOKEN``; the Core proxy requires ``homeassistant_api``, while
+        belong to Supervisor at ``http://supervisor``. The request goes over
+        the app's Supervisor socket when Supervisor gave it one, otherwise over
+        plain HTTP on the internal ``hassio`` docker network — see
+        SECURITY.md § "Local network is the trusted zone". Over TCP both
+        clients use the same ``SUPERVISOR_TOKEN``; the Core proxy requires
+        ``homeassistant_api``, while
         system-service and arbitrary app-log paths require ``hassio_api`` and
         ``hassio_role: manager``. The recognized-app-token exception is
         ``/addons/self/logs``.
@@ -1222,8 +1222,8 @@ class HomeAssistantClient:
 
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
         inside the app (add-on) container goes directly to Supervisor at
-        ``http://supervisor/{service}/logs`` with the Supervisor token
-        (``hassio_api`` and ``hassio_role: manager`` required). On non-app
+        ``http://supervisor/{service}/logs``, over the app's socket when it has
+        one (``hassio_api`` and ``hassio_role: manager`` required). On non-app
         installs (Docker
         without Supervisor, pip pointing at a normal HA URL),
         falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.

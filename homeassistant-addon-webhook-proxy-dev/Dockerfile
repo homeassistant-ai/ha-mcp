@@ -10,6 +10,7 @@ FROM ${PYTHON_BASE}
 
 COPY start.py /
 COPY app_options.py /
+COPY supervisor_transport.py /
 COPY mcp_proxy_dev /opt/mcp_proxy_dev
 
 ARG BUILD_VERSION
