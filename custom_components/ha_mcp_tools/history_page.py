@@ -27,8 +27,13 @@ def _summarize_states() -> Callable[..., dict[str, Any]]:
         raise ImportError("the ha-mcp server package is not installed")
     path = Path(next(iter(package.submodule_search_locations))) / "history_summary.py"
     spec = importlib.util.spec_from_file_location("ha_mcp_tools_history_summary", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {path}")
+    if not path.is_file() or spec is None or spec.loader is None:
+        # A server wheel from before the file existed: remove once the
+        # manifest pins a release that has it.
+        from ha_mcp.tools.history_response import summarize_states
+
+        legacy: Callable[..., dict[str, Any]] = summarize_states
+        return legacy
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     summarize: Callable[..., dict[str, Any]] = module.summarize_states
