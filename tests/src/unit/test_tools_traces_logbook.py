@@ -214,6 +214,17 @@ class TestFetchTraceLogbook:
         assert logbook.total is None
         assert logbook.lower_bound == LOGBOOK_ROW_LIMIT
 
+        named = await TraceTools(component_core_client).ha_get_automation_traces(
+            domain="automation",
+            item_id="uid_1",
+            run_id="r1",
+            sections="logbook",
+            detailed=True,
+        )
+
+        assert named["logbook_total"] is None
+        assert named["logbook_total_lower_bound"] == LOGBOOK_ROW_LIMIT
+
     @pytest.mark.asyncio
     async def test_a_component_timeout_is_not_replayed_over_rest(
         self,

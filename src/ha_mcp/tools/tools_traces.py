@@ -756,6 +756,7 @@ _TRACE_METADATA_KEYS = frozenset(
         "logbook_entries",
         "logbook_transport",
         "logbook_total",
+        "logbook_total_lower_bound",
         "logbook_truncated",
     }
 )
