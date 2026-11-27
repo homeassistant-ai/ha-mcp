@@ -62,7 +62,9 @@ _RejectionKind = Literal["misplaced", "undeclared", "other"]
 #
 # Scoped per tool on purpose: only the config-writing tools take a `config`
 # body, so only their top-level arguments can be misplaced config keys.
-# (Only these two were measured in BAT runs.)
+# (Only these two were measured in BAT runs.) Each holds every field Core's
+# schema takes, plus the singular aliases and `use_blueprint`; a unit test reads
+# the running Core's schema, so a field Core adds fails it.
 _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
     "ha_config_set_automation": {
         "alias",
@@ -77,7 +79,12 @@ _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
         "max",
         "max_exceeded",
         "variables",
+        "trigger_variables",
         "use_blueprint",
+        "id",
+        "trace",
+        "initial_state",
+        "hide_entity",
     },
     "ha_config_set_script": {
         "alias",
@@ -88,6 +95,8 @@ _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
         "max_exceeded",
         "fields",
         "icon",
+        "variables",
+        "trace",
         "use_blueprint",
     },
 }

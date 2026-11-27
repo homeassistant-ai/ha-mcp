@@ -4,8 +4,13 @@ import json
 import logging
 import re
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from homeassistant.components.automation.config import (
+    PLATFORM_SCHEMA as AUTOMATION_SCHEMA,
+)
+from homeassistant.components.script.config import SCRIPT_ENTITY_SCHEMA
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -501,6 +506,42 @@ async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
     assert any(
         "Move `sequence` inside the `config` argument" in s for s in _suggestions(body)
     )
+
+
+def _core_config_keys(schema: Any) -> list[str]:
+    """The top-level keys Core's config ``schema`` takes, from the schema itself."""
+    parts = [schema, *getattr(schema, "validators", [])]
+    (fields,) = [
+        p.schema for p in parts if isinstance(getattr(p, "schema", None), dict)
+    ]
+    return sorted(str(key) for key in fields)
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "key"),
+    [
+        *(
+            ("ha_config_set_automation", {}, key)
+            for key in _core_config_keys(AUTOMATION_SCHEMA)
+        ),
+        *(
+            ("ha_config_set_script", {"script_id": "blink"}, key)
+            for key in _core_config_keys(SCRIPT_ENTITY_SCHEMA)
+        ),
+    ],
+)
+async def test_every_field_cores_schema_takes_is_told_to_move_into_config(
+    tool: str, arguments: dict[str, Any], key: str
+) -> None:
+    """A field the tool's list lacks would be called a stale tool list instead
+    (#3204: ``trace`` on scripts). The keys are read from the Core this suite
+    runs, so a Core that adds one fails here, on the beta Core lane first."""
+    mcp = _make_config_set_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(tool, {**arguments, key: None})
+
+    body = json.loads(str(exc_info.value))
+    assert f"Move `{key}` inside the `config` argument" in " ".join(_suggestions(body))
 
 
 @pytest.mark.asyncio
