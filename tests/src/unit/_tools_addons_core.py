@@ -17,14 +17,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import tempfile
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field, fields, replace
 from datetime import timedelta
 from ipaddress import IPv4Address
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+import pytest_socket
 from aiohasupervisor.models import (
     AddonBoot,
     AddonStage,
@@ -428,6 +432,35 @@ async def serve_supervisor(aiohttp_client: Any, target: TargetApp) -> Supervisor
 async def supervisor(aiohttp_client: Any, target_app: TargetApp) -> Supervisor:
     """The stand-in Supervisor, in front of ``target_app``."""
     return await serve_supervisor(aiohttp_client, target_app)
+
+
+@pytest.fixture
+async def socket_supervisor(
+    target_app: TargetApp, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Supervisor]:
+    """The stand-in Supervisor on the app's Unix socket, mounted as Supervisor
+    2026.11 mounts it (``SUPERVISOR_SOCKET``); ``http://supervisor`` leads
+    nowhere, so only a request over the socket is answered."""
+    # The plugin's allow list refuses Unix sockets; Core's hassio tests reset it.
+    pytest_socket.socket_allow_hosts(["127.0.0.1"], allow_unix_socket=True)
+    found = Supervisor(target_app)
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", found.serve)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Not tmp_path: it can exceed the 104-byte sun_path limit on macOS.
+    socket_dir = tempfile.mkdtemp(dir="/tmp")
+    socket_path = Path(socket_dir, "supervisor.sock")
+    await web.UnixSite(runner, str(socket_path)).start()
+    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+    monkeypatch.delenv("SUPERVISOR_BASE_URL", raising=False)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", APP_TOKEN)
+    monkeypatch.setenv("SUPERVISOR_SOCKET", str(socket_path))
+    try:
+        yield found
+    finally:
+        await runner.cleanup()
+        shutil.rmtree(socket_dir)
 
 
 @pytest.fixture

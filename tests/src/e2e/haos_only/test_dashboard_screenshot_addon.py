@@ -47,6 +47,8 @@ from typing import Any
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from tests.src.haos_runtime import HA_MCP_DEV_ADDON_SLUG
 
 from ..utilities.assertions import parse_mcp_result, safe_call_tool
 from ..utilities.cleanup import CleanupSteps
@@ -565,3 +567,23 @@ async def _engine_outcome_after_restart(mcp_client: Any) -> bytes | None:
         f"Engine did not respond after restart within {_ENGINE_READY_TIMEOUT}s: "
         f"{last_err!r}"
     )
+
+
+async def test_app_reaches_supervisor_without_its_token_over_tcp(
+    mcp_client: Any, ha_client: HomeAssistantClient, screenshot_engine_started: Any
+) -> None:
+    """Engine discovery and the app tools ask Supervisor over the app's
+    socket, so Supervisor records no deprecated TCP use by this local app (it
+    raises that issue for an app in the local repository)."""
+    await _screenshot(mcp_client, DEFAULT_DASHBOARD_PATH)
+    result = await ha_client.send_websocket_message(
+        {"type": "supervisor/api", "endpoint": "/resolution/info", "method": "get"}
+    )
+    issues = result["result"]["issues"]
+    tcp_use = [
+        issue
+        for issue in issues
+        if issue.get("type") == "deprecated_tcp_api_request"
+        and issue.get("reference") == HA_MCP_DEV_ADDON_SLUG
+    ]
+    assert tcp_use == [], issues

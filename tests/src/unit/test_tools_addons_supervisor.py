@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_addons
 
 from ._core_client import refused_url
@@ -36,6 +37,7 @@ from ._tools_addons_core import app_route as app_route
 from ._tools_addons_core import core_route as core_route
 from ._tools_addons_core import core_supervisor as core_supervisor
 from ._tools_addons_core import quick_retry as quick_retry
+from ._tools_addons_core import socket_supervisor as socket_supervisor
 from ._tools_addons_core import supervisor as supervisor
 from ._tools_addons_core import supervisor_wait as supervisor_wait
 from ._tools_addons_core import target_app as target_app
@@ -79,6 +81,22 @@ class TestTheRoute:
         assert result["addon"]["slug"] == SLUG
         headers = app_route.supervisor.headers("GET", INFO)
         assert headers["Authorization"] == f"Bearer {APP_TOKEN}"
+        sent.assert_not_awaited()
+
+    async def test_in_the_app_with_its_socket_supervisor_is_asked_over_it(
+        self,
+        socket_supervisor: Supervisor,
+        core_client: HomeAssistantClient,
+        sent: AsyncMock,
+    ) -> None:
+        """Supervisor deprecates the app's token over TCP: with the app's
+        socket mounted the tools ask over it, and send no token there."""
+        socket_supervisor.running()
+
+        result = await read(core_client, slug=SLUG)
+
+        assert result["addon"]["slug"] == SLUG
+        assert "Authorization" not in socket_supervisor.headers("GET", INFO)
         sent.assert_not_awaited()
 
     async def test_outside_the_app_core_relays_the_request(

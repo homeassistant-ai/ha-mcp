@@ -195,7 +195,7 @@ def _select_started_verified_engine(
     return started[0]
 
 
-async def resolve_engine() -> EngineTarget:
+async def resolve_engine(client: Any) -> EngineTarget:
     """Resolve the screenshot engine endpoint, or raise ToolError.
 
     See module docstring for the three-mode resolution order.
@@ -206,11 +206,11 @@ async def resolve_engine() -> EngineTarget:
     if explicit:
         return EngineTarget(
             url=explicit.rstrip("/"),
-            addon_credential=await _addon_credential_best_effort(),
+            addon_credential=await _addon_credential_best_effort(client),
         )
 
     if os.environ.get("SUPERVISOR_TOKEN"):
-        return await _discover_engine_via_supervisor()
+        return await _discover_engine_via_supervisor(client)
 
     raise_tool_error(
         create_error_response(
@@ -230,7 +230,7 @@ async def resolve_engine() -> EngineTarget:
     raise AssertionError("unreachable: raise_tool_error always raises")
 
 
-async def _addon_credential_best_effort() -> EngineCredential | None:
+async def _addon_credential_best_effort(client: Any) -> EngineCredential | None:
     """Best-effort theme-guard credential for an explicitly configured URL.
 
     HA OS / Supervised users may set ``HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL``
@@ -251,7 +251,7 @@ async def _addon_credential_best_effort() -> EngineCredential | None:
         # theme changes to the Home Assistant user profile. WPE applies these
         # options temporarily and suppresses the corresponding user-data write.
         return (
-            await _discover_engine_via_supervisor(preferred_engine="Puppet")
+            await _discover_engine_via_supervisor(client, preferred_engine="Puppet")
         ).addon_credential
     except Exception:
         logger.debug(
@@ -263,7 +263,7 @@ async def _addon_credential_best_effort() -> EngineCredential | None:
 
 
 async def _discover_engine_via_supervisor(
-    *, preferred_engine: str | None = None
+    client: Any, *, preferred_engine: str | None = None
 ) -> EngineTarget:
     """Find one supported app through the Supervisor and return its endpoint.
 

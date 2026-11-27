@@ -559,7 +559,7 @@ async def test_legacy_full_page_retry_surfaces_warning_through_mcp(
     from ha_mcp.dashboard_screenshot import capture
     from ha_mcp.dashboard_screenshot.provision import EngineTarget
 
-    async def resolve_legacy_puppet() -> EngineTarget:
+    async def resolve_legacy_puppet(_client: object) -> EngineTarget:
         return EngineTarget(
             url=fake_engine.url,
             engine_kind="puppet",

@@ -890,7 +890,7 @@ async def capture_dashboard_images(
     if capture_warnings is not None:
         capture_warnings.extend(theme_warnings)
 
-    engine_target = await resolve_engine()
+    engine_target = await resolve_engine(client)
     engine_url = engine_target.url
     url = f"{engine_url}/{path}"
     mime_type = _MIME_TYPES[options.image_format]
