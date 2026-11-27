@@ -91,43 +91,67 @@ async def expose_write(
     return f"Exposure failed: {_extract_ws_error(result)}", result, set()
 
 
+def expose_failure_response(
+    error: str,
+    failure: HomeAssistantError | dict[str, Any] | None,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """The tool error for a failed exposure write: a refusal is a failed
+    service call with Core's code kept as ``ha_error_code``; a write without
+    an answer keeps the code and suggestions its transport gives (connection,
+    timeout, auth), and one that was sent says with ``write_outcome_unknown``
+    that it may have been applied."""
+    if isinstance(failure, HomeAssistantError):
+        if not isinstance(failure, HomeAssistantCommandNotSent):
+            context = {**context, "write_outcome_unknown": True}
+        response = exception_to_structured_error(failure, context, raise_error=False)
+        response["error"]["message"] = error
+    else:
+        response = create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            error,
+            context={**context, "ha_error_code": (failure or {}).get("error_code")},
+        )
+    return response
+
+
 def raise_expose_failure(
     error: str,
     failure: HomeAssistantError | dict[str, Any] | None,
     context: dict[str, Any],
 ) -> NoReturn:
-    """Raise the tool error for a failed exposure write: a refusal is a failed
-    service call with Core's code kept as ``ha_error_code``; a write without
-    an answer keeps the code and suggestions its transport gives (connection,
-    timeout, auth)."""
-    if isinstance(failure, HomeAssistantError):
-        response = exception_to_structured_error(failure, context, raise_error=False)
-        response["error"]["message"] = error
-        raise_tool_error(response)
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            error,
-            context={**context, "ha_error_code": (failure or {}).get("error_code")},
-        )
-    )
+    """Raise :func:`expose_failure_response`."""
+    raise_tool_error(expose_failure_response(error, failure, context))
+
+
+def failure_row(response: dict[str, Any]) -> dict[str, Any]:
+    """A bulk row's failure fields from a tool error: its message and code,
+    Core's code as ``ha_error_code``, and ``write_outcome_unknown`` when set."""
+    row = {
+        "error": response["error"]["message"],
+        "code": response["error"]["code"],
+        **ha_error_code_field(response.get("ha_error_code")),
+    }
+    if response.get("write_outcome_unknown"):
+        row["write_outcome_unknown"] = True
+    return row
 
 
 async def apply_bulk_expose(
     client: Any,
     entity_ids: list[str],
     parsed_expose_to: dict[str, bool],
-) -> tuple[dict[str, str] | None, set[str], dict[str, bool]]:
+) -> tuple[dict[str, Any] | None, set[str], dict[str, bool]]:
     """Expose/hide many entities in one homeassistant/expose_entity call per set.
 
     The command's schema accepts the full entity_ids list, so bulk exposure
     needs at most two WS calls (one for the assistants being turned on, one
     for those being turned off) regardless of entity count — not one per
     entity. Returns (failure_row, changed, applied). failure_row is None on
-    success, else the row fields for the first failing set, which apply to
-    every id in the list: a refusal or an unsent command failed, while a
-    connection lost after sending leaves the outcome unknown. A refusal keeps
-    the code Core gave as ``ha_error_code``. changed holds the ids Core reports it
+    success, else the row fields (``failure_row``) for the first failing set,
+    which apply to every id in the list: a refusal or an unsent command failed,
+    while a connection lost after sending leaves the outcome unknown. A refusal
+    keeps the code Core gave as ``ha_error_code``. changed holds the ids Core reports it
     changed, and is empty on error. applied maps each assistant whose set
     landed to its value.
     """
@@ -157,8 +181,7 @@ async def apply_bulk_expose(
                 f"{', '.join(applied)} were already applied before "
                 "this failure)"
             )
-        code = failure.get("error_code") if isinstance(failure, dict) else None
-        return {"error": error, **ha_error_code_field(code)}, set(), applied
+        return failure_row(expose_failure_response(error, failure, {})), set(), applied
     return None, changed, applied
 
 

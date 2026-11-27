@@ -565,19 +565,41 @@ async def test_a_bulk_call_backs_up_every_entity_before_writing(
     assert restored.hidden_by is None
 
 
-async def test_a_list_repeating_one_entity_backs_it_up(
+@pytest.mark.parametrize("repeat", ["light.desk", "LIGHT.DESK"])
+async def test_a_list_repeating_one_entity_backs_it_up_once(
     entity_client: HomeAssistantClient,
     backup_settings: config.Settings,
     desk: Desk,
+    repeat: str,
 ) -> None:
-    """The repeat collapses to one entity, and that entity still gets its
-    backup."""
+    """The repeat collapses to one entity, in any case, and that entity still
+    gets its backup, one."""
     await EntityTools(entity_client).ha_set_entity(
-        entity_id=[desk.entity_id, desk.entity_id], hidden=True
+        entity_id=[desk.entity_id, repeat], hidden=True
     )
 
     files = await asyncio.to_thread(backup_files, backup_dir(backup_settings))
     assert [name.split(".20")[0] for name in files] == ["entity.light.desk"]
+
+
+async def test_a_refused_list_takes_no_backup(
+    entity_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    backup_settings: config.Settings,
+    desk: Desk,
+) -> None:
+    """A call refused before any write leaves nothing to restore, so it files
+    no snapshot either."""
+    entity_registry.async_get_or_create(
+        "light", "hue", "lamp", suggested_object_id="lamp"
+    )
+
+    with pytest.raises(ToolError):
+        await EntityTools(entity_client).ha_set_entity(
+            entity_id=["light.desk", "light.lamp"]
+        )
+
+    assert await asyncio.to_thread(backup_files, backup_dir(backup_settings)) == []
 
 
 @pytest.mark.parametrize("fault", ["read", "write", "vanished", "directory"])
@@ -620,9 +642,7 @@ async def test_each_backup_a_bulk_call_could_not_take_is_named(
     )
     with unreadable:
         result = await tools.ha_set_entity(entity_id=ids, hidden=True)
-        single = await tools.ha_set_entity(entity_id="light.desk", icon="mdi:lamp")
 
-    assert single["warnings"][0].startswith("No pre-write backup of entity:light.desk")
     assert result["succeeded_count"] == 2
     assert [w.split(" was taken")[0] for w in result["warnings"]] == [
         f"No pre-write backup of entity:{eid}" for eid in ids
@@ -631,6 +651,47 @@ async def test_each_backup_a_bulk_call_could_not_take_is_named(
         entry = entity_registry.async_get(eid)
         assert entry is not None
         assert entry.hidden_by is er.RegistryEntryHider.USER
+
+
+async def test_a_single_call_names_the_backup_it_could_not_take(
+    entity_client: HomeAssistantClient,
+    entity_manager: bm.BackupManager,
+    backup_settings: config.Settings,
+    desk: Desk,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The decorator's write goes ahead without its backup, so the reply says
+    the entity has none."""
+    fill_the_disk(entity_manager, monkeypatch)
+
+    result = await EntityTools(entity_client).ha_set_entity(
+        entity_id="light.desk", icon="mdi:lamp"
+    )
+
+    assert any("light.desk" in warning for warning in result["warnings"])
+
+
+@pytest.mark.parametrize("repeat", ["light.desk", "LIGHT.DESK"])
+async def test_a_list_repeating_one_entity_removes_and_backs_it_up_once(
+    entity_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    backup_settings: config.Settings,
+    desk: Desk,
+    repeat: str,
+) -> None:
+    """A repeat, in any case, is one entity: one removal, one outcome, and its
+    one backup, which the decorator does not take for a list of two."""
+    result = await EntityTools(entity_client).ha_remove_entity(
+        entity_id=[desk.entity_id, repeat]
+    )
+
+    assert (result["total"], result["removed"], result["skipped"]) == (
+        1,
+        ["light.desk"],
+        [],
+    )
+    files = await asyncio.to_thread(backup_files, backup_dir(backup_settings))
+    assert [name.split(".20")[0] for name in files] == ["entity.light.desk"]
 
 
 async def test_removing_a_list_backs_up_every_entity_once(

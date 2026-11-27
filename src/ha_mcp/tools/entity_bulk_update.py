@@ -11,6 +11,7 @@ pre-write snapshot, as a single-entity call does.
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -23,20 +24,29 @@ from .entity_expose_batch import (
     apply_bulk_expose,
     expose_targets,
     expose_update,
+    failure_row,
     refresh_warning,
 )
 from .entity_registry_reads import get_entries_raw
-from .helpers import (
-    extract_tool_error_message,
-    ha_error_code_field,
-    raise_tool_error,
-    tool_error_ha_code,
-)
+from .helpers import exception_to_structured_error, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
 # Keys of the single-entity reply that a bulk row sets itself or drops.
 _ROW_KEYS = frozenset({"success", "entity_id", "entity_entry", "updates"})
+
+
+def _failure_row(entity_id: str, exc: Exception) -> dict[str, Any]:
+    """The row of an entity whose update failed, with the error its single
+    call would raise."""
+    if isinstance(exc, ToolError):
+        response = json.loads(str(exc))
+    else:
+        # Not from the update send, which raises a ToolError: a read before
+        # it, or a fault on this side.
+        logger.warning("Bulk update of %s failed", entity_id, exc_info=exc)
+        response = exception_to_structured_error(exc, raise_error=False)
+    return {"entity_id": entity_id, **failure_row(response)}
 
 
 async def _registry_phase(
@@ -73,17 +83,8 @@ async def _registry_phase(
         if isinstance(result, BaseException) and not isinstance(result, Exception):
             # Never swallow cancellation/shutdown into per-entity errors.
             raise result
-        if isinstance(result, ToolError):
-            failed.append(
-                {
-                    "entity_id": eid,
-                    "error": extract_tool_error_message(result),
-                    **ha_error_code_field(tool_error_ha_code(result)),
-                }
-            )
-        elif isinstance(result, BaseException):
-            logger.warning("Bulk update of %s failed", eid, exc_info=result)
-            failed.append({"entity_id": eid, "error": str(result)})
+        if isinstance(result, Exception):
+            failed.append(_failure_row(eid, result))
         else:
             # update_one returned its success shape.
             entry_by_id[eid] = result.get("entity_entry")
@@ -118,16 +119,14 @@ async def _expose_phase(
     eligible_ids = [eid for eid in eligible_ids if eid in targets]
     if not eligible_ids:
         return [], failed, []
-    failure_row, changed, applied = await apply_bulk_expose(
+    failure, changed, applied = await apply_bulk_expose(
         client,
         [targets[eid] for eid in eligible_ids],
         parsed_expose_to,
     )
-    if failure_row is not None:
+    if failure is not None:
         landed = {"partial": True, "exposure_succeeded": applied} if applied else {}
-        failed.extend(
-            {"entity_id": eid, **failure_row, **landed} for eid in eligible_ids
-        )
+        failed.extend({"entity_id": eid, **failure, **landed} for eid in eligible_ids)
         return [], failed, []
 
     for eid in eligible_ids:

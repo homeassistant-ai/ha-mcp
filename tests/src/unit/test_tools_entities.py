@@ -180,7 +180,6 @@ class TestLabels:
         assert _UPDATE not in sent_types(sent)
         assert stored_entry(entity_registry, "light.test").labels == {"outdoor"}
 
-
     async def test_a_refused_label_read_writes_nothing(
         self,
         hass: HomeAssistant,

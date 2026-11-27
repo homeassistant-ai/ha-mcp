@@ -16,6 +16,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..client.rest_client import (
     _NO_ANSWER_ERRORS,
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantError,
 )
 from ..client.websocket_client import get_websocket_client
@@ -193,13 +194,23 @@ def _single_entity_target(kw: dict[str, Any]) -> str:
     return str(entity_id or "")
 
 
+def _unique_entity_ids(entity_ids: list[str]) -> list[str]:
+    """Each entity once, as the caller first spelled it: Core lowercases an
+    entity_id, so ``light.a`` and ``LIGHT.A`` are one entity."""
+    first: dict[str, str] = {}
+    for eid in entity_ids:
+        first.setdefault(eid.lower(), eid)
+    return list(first.values())
+
+
 def _parse_set_entity_ids(
     entity_id: str | list[str] | None,
 ) -> tuple[list[str], bool]:
     """Parse entity_id into (entity_ids, is_bulk). Raises on invalid input.
 
-    A repeated id is updated once. is_bulk follows the list as given, as the
-    auto-backup target does, so the bulk path backs up a collapsed ``[a, a]``.
+    A repeated id, in any case, is updated once. is_bulk follows the list as
+    given, as the auto-backup target does, so the bulk path backs up a
+    collapsed ``[a, a]``.
     """
     if isinstance(entity_id, str):
         return [entity_id], False
@@ -224,7 +235,7 @@ def _parse_set_entity_ids(
                 "All entity_id values must be strings",
             )
         )
-    return list(dict.fromkeys(entity_id)), len(entity_id) > 1
+    return _unique_entity_ids(entity_id), len(entity_id) > 1
 
 
 def _parse_get_entity_ids(
@@ -434,7 +445,9 @@ class EntityTools:
         """Send entity registry update. Returns (effective_entity_id, core_result, has_registry_updates).
 
         ``core_result`` is Core's reply: ``entity_entry`` plus, when the update
-        enabled the entity, ``require_restart`` or ``reload_delay``.
+        enabled the entity, ``require_restart`` or ``reload_delay``. An update
+        sent without an answer may have been written: its error says so with
+        ``write_outcome_unknown``.
         """
         has_registry_updates = len(message) > 2  # more than just type + entity_id
         core_result: dict[str, Any] = {}
@@ -443,7 +456,13 @@ class EntityTools:
             logger.info(
                 f"Updating entity registry for {entity_id}: {', '.join(updates_made)}"
             )
-            result = await self._client.send_websocket_message(message)
+            try:
+                result = await self._client.send_websocket_message(message)
+            except _NO_ANSWER_ERRORS as exc:
+                context: dict[str, Any] = {"entity_id": entity_id}
+                if not isinstance(exc, HomeAssistantCommandNotSent):
+                    context["write_outcome_unknown"] = True
+                exception_to_structured_error(exc, context=context)
 
             if not result.get("success"):
                 raise_entity_refusal("Failed to update entity", result, entity_id)
@@ -1237,6 +1256,7 @@ class EntityTools:
 
         BULK OPERATIONS:
         When entity_id is a list of two or more, only labels, categories, enabled, hidden, and expose_to are supported.
+        A row whose registry update or exposure write failed has the code its single call would give; write_outcome_unknown=true marks a write sent without an answer, which may have been applied (sending it again is safe).
         Other parameters (area_id, name, use_device_name, icon, device_class, options, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
 
         SHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload
@@ -1712,8 +1732,8 @@ class EntityTools:
 
     async def _bulk_remove_entities(self, entity_ids: list[str]) -> dict[str, Any]:
         """Validate the id list, back up each entity (auto-backup on), then
-        remove the ids one at a time; registry writes are not parallelized
-        (see ``remove_registry_entries``)."""
+        remove each entity once, a repeat in any case collapsed, one at a time;
+        registry writes are not parallelized (see ``remove_registry_entries``)."""
         if not isinstance(entity_ids, list):
             raise_tool_error(
                 create_error_response(
@@ -1751,14 +1771,16 @@ class EntityTools:
                 suggestions=["Use ha_search() to find valid entity IDs"],
             )
 
-        logger.info(f"Bulk removing {len(entity_ids)} entities")
-        # The decorator backs up a list of one.
+        unique_ids = _unique_entity_ids(entity_ids)
+        logger.info(f"Bulk removing {len(unique_ids)} entities")
+        # The decorator backs up a list of one, as given: a collapsed [a, a]
+        # is backed up here.
         warnings = (
-            await back_up_entities(self._client, entity_ids, "ha_remove_entity")
+            await back_up_entities(self._client, unique_ids, "ha_remove_entity")
             if len(entity_ids) > 1
             else []
         )
-        result = await remove_registry_entries(self._client, entity_ids)
+        result = await remove_registry_entries(self._client, unique_ids)
         if warnings:
             result["warnings"] = warnings
         return result

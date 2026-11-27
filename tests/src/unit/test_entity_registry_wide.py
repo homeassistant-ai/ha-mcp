@@ -815,19 +815,11 @@ class TestEntityWriteFailure:
         assert _types(sent)[-1] == _EXPOSE
 
     @pytest.mark.parametrize(
-        ("fault", "error", "ha_error_code"),
+        ("fault", "code", "outcome_unknown", "ha_error_code"),
         [
-            (
-                "refused",
-                "Exposure failed: Command failed: boom",
-                "home_assistant_error",
-            ),
-            ("not_sent", "Exposure failed: not sent", "absent"),
-            (
-                "dropped",
-                "Exposure outcome unknown: Home Assistant did not answer",
-                "absent",
-            ),
+            ("refused", "SERVICE_CALL_FAILED", False, "home_assistant_error"),
+            ("not_sent", "CONNECTION_FAILED", False, "absent"),
+            ("dropped", "CONNECTION_FAILED", True, "absent"),
         ],
     )
     async def test_a_failed_bulk_exposure_still_reports_the_registry_write(
@@ -837,13 +829,15 @@ class TestEntityWriteFailure:
         core_client: HomeAssistantClient,
         tools: EntityTools,
         fault: str,
-        error: str,
+        code: str,
+        outcome_unknown: bool,
         ha_error_code: str,
     ) -> None:
         """Each entity was enabled and hidden before the exposure failed: a reply
         hiding that, or Core's restart notice for an entry without a config
-        entry, makes an agent retry or misreport. A refusal keeps Core's code, as
-        a single-entity reply does; a write never sent or never answered has none."""
+        entry, makes an agent retry or misreport. Each row has the code a
+        single-entity reply gives, Core's code only for a refusal, and says when
+        the exposure was sent without an answer and may have landed."""
         registry = er.async_get(hass)
         ids = [
             registry.async_get_or_create(
@@ -869,7 +863,8 @@ class TestEntityWriteFailure:
         assert (result["success"], result["partial"]) == (False, True)
         assert [row["entity_id"] for row in result["failed"]] == ids
         for row in result["failed"]:
-            assert row["error"].startswith(error)
+            assert row["code"] == code
+            assert row.get("write_outcome_unknown", False) is outcome_unknown
             assert row.get("ha_error_code", "absent") == ha_error_code
             assert row["partial"] is True
             assert row["updates"] == ["enabled", "hidden"]
@@ -880,21 +875,11 @@ class TestEntityWriteFailure:
             assert entry.hidden_by is er.RegistryEntryHider.USER
 
     @pytest.mark.parametrize(
-        ("fault", "code", "error", "ha_error_code"),
+        ("fault", "code", "outcome_unknown", "ha_error_code"),
         [
-            (
-                "refused",
-                "SERVICE_CALL_FAILED",
-                "Exposure failed: Command failed",
-                "home_assistant_error",
-            ),
-            ("not_sent", "CONNECTION_FAILED", "Exposure failed: not sent", "absent"),
-            (
-                "dropped",
-                "CONNECTION_FAILED",
-                "Exposure outcome unknown: Home",
-                "absent",
-            ),
+            ("refused", "SERVICE_CALL_FAILED", False, "home_assistant_error"),
+            ("not_sent", "CONNECTION_FAILED", False, "absent"),
+            ("dropped", "CONNECTION_FAILED", True, "absent"),
         ],
     )
     async def test_a_failed_single_exposure_still_reports_the_registry_write(
@@ -905,13 +890,13 @@ class TestEntityWriteFailure:
         tools: EntityTools,
         fault: str,
         code: str,
-        error: str,
+        outcome_unknown: bool,
         ha_error_code: str,
     ) -> None:
         """The single-entity reply says what landed, as a bulk row does, and
         leaves out the entry it was asked to leave out; a refusal keeps Core's
         code, and a write without an answer is a connection failure, not a call
-        to fix."""
+        to fix, that says whether it may have landed."""
         registry = er.async_get(hass)
         registry.async_update_entity(
             "light.kitchen", disabled_by=er.RegistryEntryDisabler.USER
@@ -928,7 +913,7 @@ class TestEntityWriteFailure:
         body = _body(exc_info)
         assert "entity_entry" not in body
         assert body["error"]["code"] == code
-        assert body["error"]["message"].startswith(error)
+        assert body.get("write_outcome_unknown", False) is outcome_unknown
         assert body.get("ha_error_code", "absent") == ha_error_code
         assert (body["partial"], body["updates"]) == (True, ["enabled"])
         assert body["require_restart"] is True

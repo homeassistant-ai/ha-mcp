@@ -2,17 +2,21 @@
 ``hass``: the registries and every write's answer are Core's.
 """
 
+import contextlib
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import label_registry as lr
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandNotSent
 from ha_mcp.tools.tools_entities import EntityTools
 
+from ._command_faults import dropped_on, pooled_socket
 from ._entity_registry_core import sent_types
 from ._entity_tools_core import labels as labels
 from ._entity_tools_core import registry_entity, stored_entry
@@ -20,6 +24,8 @@ from ._entity_tools_core import tools as tools
 from ._tool_errors import error_of
 
 _LABELS = "config/label_registry/list"
+_UPDATE = "config/entity_registry/update"
+_GET = "config/entity_registry/get"
 
 
 class TestBulk:
@@ -221,19 +227,22 @@ class TestBulk:
         for entity_id in ids:
             assert stored_entry(entity_registry, entity_id).labels == {"outdoor"}
 
+    @pytest.mark.parametrize("repeat", ["light.a", "LIGHT.A"])
     async def test_a_repeated_id_is_updated_and_reported_once(
         self,
         tools: EntityTools,
         entity_registry: er.EntityRegistry,
         labels: list[str],
         sent: AsyncMock,
+        repeat: str,
     ) -> None:
-        """One write and one outcome per entity."""
+        """One write and one outcome per entity, whatever the case of the
+        repeat: Core lowercases an entity_id."""
         for entity_id in ("light.a", "light.b"):
             registry_entity(entity_registry, entity_id)
 
         result = await tools.ha_set_entity(
-            entity_id=["light.a", "light.b", "light.a"], labels=["outdoor"]
+            entity_id=["light.a", "light.b", repeat], labels=["outdoor"]
         )
 
         assert (result["total"], result["succeeded_count"]) == (2, 2)
@@ -242,6 +251,52 @@ class TestBulk:
             "light.b",
         ]
         assert sent_types(sent).count("config/entity_registry/update") == 2
+
+    @pytest.mark.parametrize(
+        ("fault", "change", "may_have_landed"),
+        [
+            ("update_dropped", {"hidden": True}, True),
+            ("update_not_sent", {"hidden": True}, False),
+            ("read_dropped", {"labels": ["outdoor"], "label_operation": "add"}, False),
+        ],
+    )
+    async def test_a_lost_connection_says_which_updates_may_have_landed(
+        self,
+        hass: HomeAssistant,
+        tools: EntityTools,
+        core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+        labels: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+        fault: str,
+        change: dict[str, Any],
+        may_have_landed: bool,
+    ) -> None:
+        """A lost connection fails each row with the transport's code, as it
+        fails a single call; only an update sent without an answer may have
+        been written, and only its row says so. A hidden change sends the
+        update first; a label add reads the labels before it."""
+        ids = ["light.a", "light.b"]
+        for entity_id in ids:
+            registry_entity(entity_registry, entity_id)
+        lost: contextlib.AbstractContextManager[None] = contextlib.nullcontext()
+        if fault == "update_not_sent":
+            monkeypatch.setattr(
+                core_client,
+                "send_websocket_message",
+                AsyncMock(side_effect=HomeAssistantCommandNotSent("not sent")),
+            )
+        else:
+            command = _UPDATE if fault == "update_dropped" else _GET
+            lost = dropped_on(hass, command, await pooled_socket(core_client))
+
+        with lost:
+            result = await tools.ha_set_entity(entity_id=ids, **change)
+
+        assert result["failed"]
+        for row in result["failed"]:
+            assert row["code"] == "CONNECTION_FAILED"
+            assert row.get("write_outcome_unknown", False) is may_have_landed
 
     async def test_disabling_a_script_in_a_list_is_refused(
         self, tools: EntityTools, sent: AsyncMock

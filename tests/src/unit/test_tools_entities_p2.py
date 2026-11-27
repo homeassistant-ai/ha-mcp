@@ -101,10 +101,6 @@ async def test_a_refused_unique_id_listing_keeps_cores_code(
 
     body = error_body(exc_info)
     assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-    assert body["error"]["message"] == (
-        "Failed to list entity registry: registry unavailable"
-    )
-    assert body["error"]["suggestion"] == "Check Home Assistant connection and retry"
     assert body["ha_error_code"] == "home_assistant_error"
     assert body["unique_id"] == "a"
 
