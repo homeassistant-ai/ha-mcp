@@ -102,6 +102,7 @@ def test_read_only_write_never_cold_imports_the_server_package(
         return real_import(name, globals_, locals_, fromlist, level)
 
     with monkeypatch.context() as import_guard:
+        import_guard.delitem(sys.modules, "ha_mcp.runtime_config", raising=False)
         import_guard.setattr(builtins, "__import__", reject_server_import)
         set_read_only_mode(tmp_path, True)
     assert json.loads((tmp_path / "feature_flags.json").read_text()) == {

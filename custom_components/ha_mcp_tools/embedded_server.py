@@ -1782,16 +1782,15 @@ def _prune_and_check_importing_workers() -> bool:
 # anything. Process-global for the same reason as _IMPORTING_WORKERS: a
 # manager is recreated on every bring-up.
 #
-# Single slot BY DESIGN: at most one tracked job can exist at a time — the
-# server entry is single-instance, an entry reload cancels-and-awaits the
-# previous bring-up before setting up, and every dispatch site sits behind
-# _async_wait_for_pending_package_job. A second concurrent dispatcher would
-# overwrite the slot and silently lose the older live job — keep any new
-# package-touching call site behind the wait gate. The slot tracking wraps
-# the runtime preload and DIRECT-pip sites; the requirements fast path goes
-# through HA's requirements manager, which is behind the gate but untracked —
-# it only dispatches pip when the package is missing outright, which cannot
-# co-occur with a live orphaned job worth waiting on.
+# Single slot BY DESIGN: at most one tracked job can exist at a time. Managed
+# package dispatches sit behind _async_wait_for_pending_package_job; the
+# externally managed skip_pip validation path is read-only and does not wait
+# on that gate. The server entry is single-instance, and an entry reload
+# cancels-and-awaits the previous bring-up before setting up. A second
+# concurrent dispatcher would overwrite the slot and silently lose the older
+# live job, so keep new mutating call sites behind the wait gate. The slot
+# tracks runtime preloads and direct-pip sites; the requirements fast path is
+# gated but untracked and only dispatches pip when the package is missing.
 _PENDING_PACKAGE_JOB_LOCK = threading.Lock()
 _PENDING_PACKAGE_JOB_DONE: threading.Event | None = None
 
@@ -1869,11 +1868,12 @@ def purge_ha_mcp_modules() -> None:
     Python resolves imports from the process-wide ``sys.modules`` cache — so
     after a pip install the next worker would silently reuse the OLD code
     unless the cache is purged first. Safe here because ``ha_mcp`` is pure
-    Python and is only ever imported inside worker threads, and the caller's
-    gate guarantees no registered worker is mid-import when this runs (a
-    worker past its imports keeps its already-bound modules regardless);
-    third-party dependencies are NOT purged (Home Assistant shares them), so
-    a dependency-version change still needs an HA core restart.
+    Python: the full package is imported by worker threads, while the
+    dependency-light ``runtime_config`` module is loaded on an executor
+    thread. Callers must account for both kinds of importer before purging (a
+    worker past its imports keeps its already-bound modules regardless).
+    Third-party dependencies are NOT purged (Home Assistant shares them), so a
+    dependency-version change still needs an HA core restart.
     """
     global _CACHED_IMPORT_VERSION
     _CACHED_IMPORT_VERSION = None

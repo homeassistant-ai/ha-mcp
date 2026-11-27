@@ -11,9 +11,10 @@ An embedded server reload can start a new worker loop in the same process,
 so each running loop has its own asyncio lock. The file lock serializes
 writers across loops, threads and processes.
 
-Leaf at import time (stdlib-only at module scope; ``data_paths`` is imported
-lazily inside ``config_file_lock`` — keep it that way) so settings_ui, policy,
-and tools can all depend on it without an import cycle.
+Leaf at import time apart from the dependency-light ``runtime_config`` module;
+``data_paths`` is imported lazily inside ``config_file_lock``. Keep those
+dependencies free of settings and tool modules so their callers do not form an
+import cycle.
 """
 
 from __future__ import annotations

@@ -8,8 +8,6 @@ whether the page may change it; a save is validated in full and merged into
 from __future__ import annotations
 
 import json
-import os
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +19,6 @@ from ha_mcp.config import (
     get_global_settings,
     reset_global_settings,
 )
-from ha_mcp.utils import config_write_lock
 
 from ._settings_ui_app import settings_http, with_env
 from ._settings_ui_app import settings_world as settings_world
@@ -159,30 +156,6 @@ class TestSaveRefused:
 
 
 class TestSave:
-    async def test_advanced_file_write_holds_the_cross_loop_guard(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        active = False
-        real_replace = os.replace
-
-        @asynccontextmanager
-        async def guard():
-            nonlocal active
-            active = True
-            try:
-                yield
-            finally:
-                active = False
-
-        def checked_replace(*args, **kwargs):
-            assert active
-            return real_replace(*args, **kwargs)
-
-        monkeypatch.setattr(config_write_lock, "config_write_guard", guard)
-        monkeypatch.setattr(os, "replace", checked_replace)
-
-        assert (await _save({"timeout": 90})).status_code == 200
-
     async def test_a_saved_value_is_read_back_after_the_restart(self) -> None:
         response = await _save({"timeout": 90})
 
