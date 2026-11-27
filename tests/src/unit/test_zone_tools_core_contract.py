@@ -459,6 +459,58 @@ class TestHomeZone:
 
         assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
 
+    async def test_a_radius_core_rounds_is_read_back_as_core_stored_it(
+        self, hass: HomeAssistant, office_client: HomeAssistantClient
+    ) -> None:
+        """Core stores a whole radius; the readback must not wait for 80.5."""
+        result = await ZoneTools(office_client).ha_set_zone(
+            zone_id="zone.home", radius=80.5
+        )
+
+        assert hass.config.radius == 80
+        assert result["zone_data"]["radius"] == 80
+        assert "warnings" not in result
+
+    async def test_a_lost_readback_does_not_report_the_write_as_failed(
+        self,
+        hass: HomeAssistant,
+        office_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An error after Core took the write would invite the same write again."""
+        with on_receipt(
+            hass,
+            "config/core/update",
+            lambda msg: lose_state_reads(office_client, monkeypatch),
+        ):
+            result = await ZoneTools(office_client).ha_set_zone(
+                zone_id="zone.home", radius=90, wait=False
+            )
+
+        assert hass.config.radius == 90
+        assert result["success"] is True
+        assert any("not read back" in warning for warning in result["warnings"])
+
+    async def test_a_yaml_zone_named_home_is_not_the_settings_home_zone(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """A YAML zone called Home takes zone.home in the home zone's place:
+        moving it must not move the home of the general settings."""
+        yaml_home = {"name": "Home", "latitude": 1.0, "longitude": 2.0}
+        assert await async_setup_component(hass, "zone", {"zone": [yaml_home]})
+        client = await with_config_component(hass, core_client)
+        latitude = hass.config.latitude
+
+        with sent_messages(client) as spy, pytest.raises(ToolError) as exc_info:
+            await ZoneTools(client).ha_set_zone(zone_id="zone.home", latitude=48.1)
+
+        assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
+        assert _sent(spy, "config/core/update") == []
+        assert hass.config.latitude == latitude
+        listed = await ZoneTools(client).ha_get_zone()
+        (home,) = [z for z in listed["zones"] if z["entity_id"] == "zone.home"]
+        assert home["source"] == "yaml"
+
 
 class TestListing:
     async def test_without_component_lists_the_home_zone_and_entity_ids(

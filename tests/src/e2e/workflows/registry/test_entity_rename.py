@@ -190,25 +190,26 @@ class TestEntityRename:
         """new_entity_id='auto' with a new name: Core 2026.12 generates the id
         from that name; an older Core from the stored one, as before."""
         suffix = uuid.uuid4().hex[:8]
-        original_entity_id = f"input_boolean.auto_rename_{suffix}"
+        original_entity_id = final_entity_id = f"input_boolean.auto_rename_{suffix}"
         async with MCPAssertions(mcp_client) as mcp:
             await mcp.call_tool_success(
                 "ha_config_set_helper",
                 {"helper_type": "input_boolean", "name": f"auto rename {suffix}"},
             )
-            assert await wait_for_entity_registration(mcp_client, original_entity_id)
-
-            result = await mcp.call_tool_success(
-                "ha_set_entity",
-                {
-                    "entity_id": original_entity_id,
-                    "name": f"Reading Lamp {suffix}",
-                    "new_entity_id": "auto",
-                },
-            )
-        final_entity_id = result["entity_id"]
-        cleanup_tracker.track("input_boolean", final_entity_id)
+        cleanup_tracker.track("input_boolean", original_entity_id)
         try:
+            assert await wait_for_entity_registration(mcp_client, original_entity_id)
+            async with MCPAssertions(mcp_client) as mcp:
+                result = await mcp.call_tool_success(
+                    "ha_set_entity",
+                    {
+                        "entity_id": original_entity_id,
+                        "name": f"Reading Lamp {suffix}",
+                        "new_entity_id": "auto",
+                    },
+                )
+            final_entity_id = result["entity_id"]
+            cleanup_tracker.track("input_boolean", final_entity_id)
             if await core_at_least(ha_client, (2026, 12)):
                 assert final_entity_id == f"input_boolean.reading_lamp_{suffix}"
             else:

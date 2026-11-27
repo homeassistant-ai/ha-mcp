@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 HEALTH_DEADLINE_SECONDS = 15.0
 MATTER_TOPOLOGY_LIMIT = 50
 DATABASE_USAGE_LIMIT = 50
+# Past the default 30 s for a large database, under a client's own tool timeout.
+DATABASE_REFRESH_TIMEOUT_SECONDS = 180.0
 SUPERVISOR_ENDPOINTS = {
     "resolution": "/resolution/info",
     "core_stats": "/core/stats",
@@ -281,7 +283,12 @@ async def add_database_usage(
     if "database_usage" not in includes or ws_client is None:
         return
     try:
-        reply = await ws_client.send_command("recorder/database_usage", refresh=refresh)
+        reply = await ws_client.send_command(
+            "recorder/database_usage",
+            refresh=refresh,
+            # Core answers a refresh only once it has analyzed the database.
+            **({"_wait_timeout": DATABASE_REFRESH_TIMEOUT_SECONDS} if refresh else {}),
+        )
     except HomeAssistantCommandError as exc:
         if is_unknown_command(exc):
             result.setdefault("warnings", []).append(
@@ -292,6 +299,12 @@ async def add_database_usage(
         return
     except HomeAssistantCommandTimeout as exc:
         result["database_usage"] = {"error": f"No database usage report: {exc}"}
+        if refresh:
+            # This side stopped waiting; Core's analysis goes on and is cached.
+            result.setdefault("warnings", []).append(
+                "Home Assistant is still analyzing the database; read "
+                "database_usage again without refresh_database_usage for its report"
+            )
         return
     usage = reply.get("result")
     if usage is None:

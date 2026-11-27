@@ -416,8 +416,9 @@ async def validate_registry_write_ids(
 ) -> None:
     """``validate_registry_ids`` (fail closed) for an entity or device registry
     write. Where Core checks the area itself, the area is left to it and
-    Core's refusal reaches the caller."""
-    if await _core_checks_area(client):
+    Core's refusal reaches the caller; Core's version is read only for a
+    write that sets an area."""
+    if area_id and await _core_checks_area(client):
         area_id = None
     await validate_registry_ids(client, area_id, labels, categories, fail_closed=True)
 

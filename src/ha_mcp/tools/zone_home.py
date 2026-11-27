@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ..errors import create_validation_error
 from .helpers import raise_core_refusal, raise_tool_error
 from .ws_waiters import wait_for_state_attributes
@@ -51,24 +52,34 @@ async def set_home_zone(
         raise_core_refusal(
             "Failed to update the home zone", result, {"zone_id": zone_id}
         )
-    moved = (
-        await wait_for_state_attributes(
-            client, HOME_ZONE, given, timeout=READBACK_TIMEOUT_S
-        )
-        if wait
-        else None
-    )
-    state = moved or await client.get_entity_state(HOME_ZONE)
     response: dict[str, Any] = {
         "success": True,
-        "zone_data": state.get("attributes") or {},
         "zone_id": "home",
         "entity_id": HOME_ZONE,
         "message": "Successfully updated the home zone",
         "updated_fields": sorted(given),
     }
-    attributes = response["zone_data"]
-    if any(attributes.get(key) != value for key, value in given.items()):
+    # The write is done: a readback that fails is a warning, never an error
+    # that invites the same write again.
+    try:
+        # What Core stored, after its own coercion (a radius becomes an int).
+        config = await client.get_config()
+        stored = {key: config.get(key) for key in given}
+        moved = (
+            await wait_for_state_attributes(
+                client, HOME_ZONE, stored, timeout=READBACK_TIMEOUT_S
+            )
+            if wait
+            else None
+        )
+        state = moved or await client.get_entity_state(HOME_ZONE)
+    except (HomeAssistantAPIError, HomeAssistantConnectionError) as exc:
+        response["warnings"] = [
+            f"Home Assistant took the new location, but it was not read back: {exc}"
+        ]
+        return response
+    attributes = response["zone_data"] = state.get("attributes") or {}
+    if any(attributes.get(key) != value for key, value in stored.items()):
         response["warnings"] = [
             "Home Assistant took the new location, but zone.home did not show "
             "it yet when read back"

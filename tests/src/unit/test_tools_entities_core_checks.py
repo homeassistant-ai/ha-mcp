@@ -4,7 +4,7 @@ Core converts a sensor to. Everything runs on a real ``hass``.
 """
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
@@ -101,3 +101,37 @@ async def test_a_unit_core_does_not_list_for_the_device_class_is_refused(
     assert body["convertible_units"] and unit not in body["convertible_units"]
     assert body["device_class"] == "temperature"
     assert "sensor" not in _options(entity_registry, entry.entity_id)
+
+
+async def test_a_unit_core_gave_no_list_for_is_written_with_a_warning(
+    core_client: HomeAssistantClient, entity_registry: er.EntityRegistry
+) -> None:
+    """A unit that was never checked is not reported as a plain success."""
+    # No ``sensor`` integration, so Core does not know the units command.
+    entry = entity_registry.async_get_or_create(
+        "sensor", "demo", "temp", original_device_class="temperature"
+    )
+    options = {"sensor": {"unit_of_measurement": "kWh"}}
+
+    result = await EntityTools(core_client).ha_set_entity(
+        entity_id=entry.entity_id, options=options
+    )
+
+    assert any("not checked" in warning for warning in result["warnings"])
+    assert _options(entity_registry, entry.entity_id)["sensor"] == options["sensor"]
+
+
+async def test_a_write_that_sets_no_area_does_not_read_cores_version(
+    core_client: HomeAssistantClient, entity_registry: er.EntityRegistry
+) -> None:
+    """Core's version decides only who checks an area, so a rename asks nothing."""
+    entry = entity_registry.async_get_or_create("light", "demo", "test")
+
+    with patch.object(
+        core_client, "get_config", wraps=core_client.get_config
+    ) as get_config:
+        await EntityTools(core_client).ha_set_entity(
+            entity_id=entry.entity_id, name="Renamed"
+        )
+
+    get_config.assert_not_awaited()

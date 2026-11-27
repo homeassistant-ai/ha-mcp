@@ -132,14 +132,34 @@ def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
     out["id"] = storage_id if storage_id is not None else rec.get("object_id")
     out["entity_id"] = rec.get("entity_id")
     out["editable"] = not is_yaml
-    out["source"] = _outside_storage(out["entity_id"]) if is_yaml else "storage"
+    # A zone.home row becomes "home" once its state is read (_with_home_source).
+    out["source"] = "yaml" if is_yaml else "storage"
     return out
 
 
-def _outside_storage(entity_id: str | None) -> str:
-    """The ``source`` of a zone outside the storage: the home zone, from the
-    general settings, or a YAML zone."""
-    return "home" if entity_id == HOME_ZONE else "yaml"
+def _is_settings_home(state: Any) -> bool:
+    """Whether a state is the home zone of the general settings. A YAML zone
+    named Home takes the entity_id zone.home in its place; Core's ``editable``
+    attribute is false for a YAML zone and true for its own home zone."""
+    return (
+        isinstance(state, dict)
+        and state.get("entity_id") == HOME_ZONE
+        and (state.get("attributes") or {}).get("editable") is True
+    )
+
+
+def _with_home_source(
+    rows: list[dict[str, Any]], states: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Mark the settings' home zone among the rows outside the storage."""
+    if not any(_is_settings_home(state) for state in states):
+        return rows
+    return [
+        {**row, "source": "home"}
+        if row.get("entity_id") == HOME_ZONE and row.get("source") == "yaml"
+        else row
+        for row in rows
+    ]
 
 
 def _with_registry_icons(
@@ -328,7 +348,7 @@ class ZoneTools:
         # The listing is complete without the registry and the states; only
         # their icons and persons are missing.
         rows = _with_occupancy(_with_registry_icons(rows, entries), states)
-        response = _build_zone_result(rows, zone_id)
+        response = _build_zone_result(_with_home_source(rows, states), zone_id)
         if registry_error:
             response.setdefault("warnings", []).append(
                 f"Icons set in the entity registry are missing: {registry_error}"
@@ -450,7 +470,7 @@ class ZoneTools:
                     "id": object_id,
                     "entity_id": entity_id,
                     "editable": False,
-                    "source": _outside_storage(entity_id),
+                    "source": "home" if _is_settings_home(state) else "yaml",
                 }
             )
         return rows, []
@@ -533,24 +553,27 @@ class ZoneTools:
         # A registry entry links a stored zone, so only a state without one is
         # a YAML or the home zone.
         linked = any(entry.get("entity_id") == entity_id for entry in entries)
-        if allow_home and not linked and entity_id == HOME_ZONE:
+        state = None if linked else await self._zone_state(entity_id)
+        if allow_home and _is_settings_home(state):
             return entity_id, None
-        if not linked and await self._zone_state(entity_id) is not None:
+        if _is_settings_home(state):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
-                    f"Zone {entity_id} is not a stored zone: it is defined in YAML "
-                    "or, for the default zone.home, by the home location in the "
-                    "general settings, so the zone tools cannot remove it or, "
-                    "but for the home zone's location and radius, change it.",
+                    f"Zone {entity_id} is the home zone of the general settings, "
+                    "not a stored zone, so it cannot be removed; ha_set_zone "
+                    "changes only its latitude, longitude and radius.",
                     context={"zone_id": zone_id, "entity_id": entity_id},
-                    suggestions=[
-                        "Edit a YAML zone in configuration.yaml",
-                        (
-                            "Move the home zone with ha_set_zone(zone_id="
-                            "'zone.home', latitude=..., longitude=..., radius=...)"
-                        ),
-                    ],
+                )
+            )
+        if state is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Zone {entity_id} is not a stored zone: it is defined in "
+                    "YAML, so the zone tools cannot change or remove it.",
+                    context={"zone_id": zone_id, "entity_id": entity_id},
+                    suggestions=["Edit a YAML zone in configuration.yaml"],
                 )
             )
         raise_tool_error(

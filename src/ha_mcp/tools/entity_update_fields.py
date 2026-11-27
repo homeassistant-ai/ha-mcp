@@ -55,21 +55,22 @@ async def reject_unconvertible_unit(
     entity_id: str,
     options: dict[str, dict[str, Any]] | None,
     fetch_entity: Callable[[str], Awaitable[dict[str, Any]]],
-) -> None:
+) -> str | None:
     """Refuse a sensor unit Core does not list for the sensor's device class.
 
     The units come from ``sensor/device_class_convertible_units``, the list
     the entity settings dialog offers. The device class is the integration's
     (``original_device_class``): the sensor converts with its own device
-    class, not one set in the registry.
+    class, not one set in the registry. Returns a warning when Core did not
+    answer with its list, so the unit goes to Core unchecked.
     """
     unit = ((options or {}).get("sensor") or {}).get("unit_of_measurement")
     if unit is None or not entity_id.lower().startswith("sensor."):
-        return
+        return None
     try:
         entry = await fetch_entity(entity_id)
     except NotInRegistry:
-        return  # Core refuses options for an entity it does not register
+        return None  # Core refuses options for an entity it does not register
     device_class = entry.get("original_device_class")
     units: list[str] = []
     if device_class:
@@ -77,10 +78,14 @@ async def reject_unconvertible_unit(
             {"type": CONVERTIBLE_UNITS, "device_class": device_class}
         )
         if not reply.get("success"):
-            return  # unchecked: Core stores the unit as before
+            return (
+                f"The unit {unit!r} was not checked against the units Home "
+                f"Assistant lists for device class {device_class}: "
+                f"{CONVERTIBLE_UNITS} answered {reply.get('error')!r}"
+            )
         units = (reply.get("result") or {}).get("units") or []
     if unit in units:
-        return
+        return None
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,

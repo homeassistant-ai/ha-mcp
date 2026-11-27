@@ -870,7 +870,7 @@ class EntityTools:
             # Save original entity_id before potential rename
             original_entity_id = entity_id
 
-            await reject_unconvertible_unit(
+            unit_warning = await reject_unconvertible_unit(
                 self._client, entity_id, parsed_options, self._fetch_entity
             )
             # Issue #2159: validate cross-registry references immediately before
@@ -938,7 +938,7 @@ class EntityTools:
             new_entity_id,
             exposure_result,
             device_rename_result,
-            [w for w in (device_name_warning, exposure_warning) if w],
+            [w for w in (unit_warning, device_name_warning, exposure_warning) if w],
             core_result,
         )
 

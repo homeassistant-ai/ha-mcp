@@ -33,15 +33,20 @@ async def matching_statistics(
         )
     except HomeAssistantConnectionError:
         reply = None  # a failed component read counts as no component
+    aliases = (reply or {}).get("aliases")
     warnings: list[str] = []
-    if reply is None:
+    # A malformed answer counts as no component too.
+    if not (
+        isinstance(aliases, dict)
+        and all(isinstance(names, list) for names in aliases.values())
+    ):
+        aliases = {}
         warnings.append(
             component_unusable_warning(
                 await get_component_caps(client),
                 "the query did not search the entities' aliases",
             )
         )
-    aliases: dict[str, list[str]] = (reply or {}).get("aliases") or {}
     matches = [
         row
         for row in rows

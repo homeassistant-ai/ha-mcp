@@ -112,23 +112,25 @@ async def _core_release_notes(
     """Core's reply, and a warning when Core refused ``language`` as a field
     it does not know (before 2026.12) and answered again without it."""
     message = {"type": "update/release_notes", "entity_id": entity_id}
+    warnings: list[str] = []
     try:
         reply: dict[str, Any] = await client.send_websocket_message(
             message if language is None else {**message, "language": language},
             expected_error_codes=_ANSWERED_CODES | {"invalid_format"},
         )
-        if language is None or reply.get("error_code") != "invalid_format":
-            return reply, []
-        reply = await client.send_websocket_message(
-            message, expected_error_codes=_ANSWERED_CODES
-        )
+        if language is not None and reply.get("error_code") == "invalid_format":
+            # Known from here on, also when the second call gets no answer.
+            warnings.append(
+                "This Home Assistant takes no language for release notes "
+                "(2026.12+), so they come in its configured language"
+            )
+            reply = await client.send_websocket_message(
+                message, expected_error_codes=_ANSWERED_CODES
+            )
     except HomeAssistantConnectionError as e:
         logger.debug(f"update/release_notes unanswered for {entity_id}: {e}")
-        return None, []
-    return reply, [
-        "This Home Assistant takes no language for release notes (2026.12+), "
-        "so they come in its configured language"
-    ]
+        return None, warnings
+    return reply, warnings
 
 
 def _hint(release_url: str | None, problems: list[str]) -> str:

@@ -658,7 +658,9 @@ class TestSetEntityNegativeInputs:
         Core refuses it itself from 2026.12, HA-MCP before."""
         async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_failure(
-                "ha_set_entity", {"entity_id": "sun.sun", "area_id": "unknown_area_id"}
+                "ha_set_entity",
+                # Registered: Core checks the registry entry before the area.
+                {"entity_id": "light.bed_light", "area_id": "unknown_area_id"},
             )
 
         assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
