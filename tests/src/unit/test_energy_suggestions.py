@@ -15,6 +15,7 @@ from homeassistant.components.recorder import Recorder
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_energy import EnergyTools
 
@@ -99,3 +100,40 @@ async def test_suggestions_without_the_component_say_it_is_needed(
     assert result["config"]["device_consumption"]
     assert result["energy_suggestions"]["status"] == "unavailable"
     assert any("HA-MCP component" in w for w in result["warnings"])
+
+
+@pytest.mark.usefixtures("fresh_card_state")
+async def test_a_dismissed_meter_stays_hidden_until_restored(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Dismiss and restore go through the frontend's own steps and are saved
+    where Settings > Energy reads them; a frontend without suggestions refuses
+    and saves nothing."""
+    await _meters(hass, hass_storage)
+    tool = EnergyTools(component_core_client)
+
+    if not _frontend_suggests_meters():
+        with pytest.raises(ToolError, match="suggests no energy meters"):
+            await tool.ha_manage_energy_prefs(
+                mode="dismiss_suggestions", statistic_ids=["sensor.oven_energy"]
+            )
+        return
+    dismissed = await tool.ha_manage_energy_prefs(
+        mode="dismiss_suggestions", statistic_ids=["sensor.oven_energy"]
+    )
+    read = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
+    restored = await tool.ha_manage_energy_prefs(
+        mode="restore_suggestions", statistic_ids=["sensor.oven_energy"]
+    )
+
+    assert dismissed["energy_suggestions"]["dismissed"] == ["sensor.oven_energy"]
+    ids = [s["statisticId"] for s in read["energy_suggestions"]["suggestions"]]
+    assert "sensor.oven_energy" not in ids
+    assert read["energy_suggestions"]["dismissed"] == ["sensor.oven_energy"]
+    assert restored["energy_suggestions"]["dismissed"] == []
+    assert "sensor.oven_energy" in [
+        s["statisticId"] for s in restored["energy_suggestions"]["suggestions"]
+    ]

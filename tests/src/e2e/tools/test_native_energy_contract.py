@@ -205,7 +205,19 @@ async def test_energy_suggestions_come_from_the_frontend_through_the_component(
         assert suggestions["status"] == "unavailable"
         assert "HA-MCP component" in suggestions["reason"]
     elif suggestions["status"] == "available":
-        assert isinstance(suggestions["suggestions"], list)
         assert suggestions["editors"]["device"]["stat"] == "stat_consumption"
+        if suggestions["suggestions"]:
+            meter = suggestions["suggestions"][0]["statisticId"]
+            async with MCPAssertions(mcp_client) as mcp:
+                hidden = await mcp.call_tool_success(
+                    "ha_manage_energy_prefs",
+                    {"mode": "dismiss_suggestions", "statistic_ids": [meter]},
+                )
+                restored = await mcp.call_tool_success(
+                    "ha_manage_energy_prefs",
+                    {"mode": "restore_suggestions", "statistic_ids": [meter]},
+                )
+            assert meter in hidden["energy_suggestions"]["dismissed"]
+            assert meter not in restored["energy_suggestions"]["dismissed"]
     else:
         assert "frontend suggests no energy meters" in suggestions["reason"]
