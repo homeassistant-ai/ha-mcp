@@ -1,0 +1,256 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "HA-MCP — Home Assistant'ı Yapay Zeka ile Yönetin",
+                "description": "Ne eklemek istediğinizi seçin. **HA-MCP Sunucusu**, tam ha-mcp sunucusunu Home Assistant içinde çalıştırır ve bir Home Assistant webhook'u üzerinden erişime açar; çoğu kullanıcının istediği kurulum budur. Bağımsız bir sunucudur ve diğer tüm kurulum yöntemlerinin (Uygulama/eklenti, Docker, uvx/PyPI, stdio) tam karşılığıdır; bunu çalıştırıyorsanız diğerlerinden birini aynı anda çalıştırmayın. **HA-MCP Dosya ve YAML Araçları** iki role sahiptir: ha-mcp sunucunuz Home Assistant dışında çalışıyorsa (eklenti, Docker, uvx/PyPI, stdio), bu kayıt sunucuya dışarıdan erişemediği süreç içi bileşen yeteneklerini (hızlı süreç içi arama, yapılandırma kaydı meta verileri, kayıt defteri destekli okumalar) kazandırır ve isteğe bağlı dosya/YAML araçlarının kullandığı ayrıcalıklı dosya ve YAML düzenleme servislerini yetkilendirir. Bunun yerine HA-MCP Sunucusu kaydını eklerseniz bu paylaşılan yetenekler zaten gelir; dolayısıyla bu ikinci kayıt yalnızca isteğe bağlı dosya/YAML araçları için yetkilendirme kapısı olarak gerekir. Tüm sunucu türleriyle çalışır ve istediğiniz zaman sonradan eklenebilir.",
+                "menu_options": {
+                    "server": "HA-MCP Sunucusu (önerilen)",
+                    "tools": "HA-MCP Dosya ve YAML Araçları (isteğe bağlı)"
+                }
+            },
+            "tools": {
+                "title": "HA-MCP Dosya ve YAML Araçları",
+                "description": "ha-mcp'nin isteğe bağlı dosya/YAML düzenleme araçlarının (varsayılan olarak kapalı özellik bayrakları) arkasında korunan ayrıcalıklı dosya ve YAML yapılandırma servislerini kurar; bu durum süreç içi HA-MCP Sunucusu dahil tüm sunucu türleri için geçerlidir. ha-mcp sunucunuz Home Assistant dışında çalışıyorsa bu kayıt ona dışarıdan erişemediği süreç içi bileşen yeteneklerini (hızlı süreç içi arama, yapılandırma kaydı meta verileri, kayıt defteri destekli okumalar) de kazandırır. Bu kaydı istediğiniz zaman ekleyebilir veya kaldırabilirsiniz."
+            },
+            "server": {
+                "title": "HA-MCP Sunucusu",
+                "description": "Tam ha-mcp sunucusunu Home Assistant içinde çalıştırır. Bağımsız bir sunucudur ve eklenti, Docker, uvx/PyPI ve stdio kurulum yöntemlerinin tam karşılığıdır; başka bir ha-mcp sunucusuyla birlikte çalıştırmayın.\n\nVarsayılan olarak bu Home Assistant makinesi dışından hiçbir şey sunucuya erişemez: kenar çubuğu paneli ve Home Assistant'ın kendi konuşma ajanları çalışır, ancak diğer cihazlardaki MCP istemcileri aşağıdan bir uzaktan erişim modu veya yerel ağ erişimi seçene kadar bağlanamaz. İkisini de daha sonra entegrasyon seçeneklerinden değiştirebilirsiniz.",
+                "data": {
+                    "remote_access": "Home Assistant üzerinden uzaktan erişim",
+                    "bind_host": "Ağ erişimi",
+                    "admin_token": "Yönetici erişim belirteci",
+                    "admin_username": "Veya: yalnızca HA-MCP için oluşturulan yerel hesabın kullanıcı adı",
+                    "admin_password": "Bu hesabın parolası"
+                },
+                "data_description": {
+                    "remote_access": "MCP istemcilerinin Home Assistant'ın erişilebilir olduğu her yerden (Nabu Casa dahil) bir Home Assistant webhook'u üzerinden bağlanmasını sağlar. Home Assistant oturum açma: claude.ai gibi istemciler bir Home Assistant yönetici hesabıyla giriş yapar. Eski OAuth: bunu gerektiren istemcilere yapıştırılacak Client ID ve Secret üretir. Gizli URL: webhook bağlantısının kendisi tek kimlik bilgisidir; bağlantıya sahip olan herkes tüm araçları kullanabilir.",
+                    "bind_host": "Sunucunun kendi portuna doğrudan kimlerin bağlanabileceğini belirler. Yalnızca bu makine güvenli varsayılandır. Yerel ağ seçeneği, ağınızdaki diğer cihazların Yapılandır ekranında gösterilen gizli doğrudan erişim URL'si ile bağlanmasına izin verir.",
+                    "admin_token": "Bir yönetici hesabının uzun ömürlü erişim belirteci. Kendi belirteciniz de çalışır: profilinizi açın (kenar çubuğunun altındaki adınız), Güvenlik sekmesini seçin ve Uzun ömürlü erişim belirteçleri altında Belirteç oluştur'a tıklayın. Sızması durumunda kendi belirteciniz ev ağınızın dışından da çalışır ve Home Assistant sunucu değişikliklerini sizin adınıza kaydeder. Daha güvenli yol: yalnızca HA-MCP için oluşturulmuş, Yalnızca yerel erişim açık bir hesap kullanmaktır (aşağıdaki alanlara bakın).",
+                    "admin_username": "Yalnızca Ayarlar → Kişiler → Kişi ekle altında Oturum açmaya izin ver, Yalnızca yerel erişim ve Yönetici seçenekleri açık olarak HA-MCP için oluşturduğunuz hesap içindir. Buraya asla kendi kullanıcı adınızı girmeyin: kendi hesabınızı kullanmak için yukarıya belirtecini yapıştırın. HA-MCP bu hesabın belirtecini (HA-MCP Server adıyla) oluşturur ve parolayı saklamaz. Belirteç yalnızca yerel ağınızdan çalışır ve değişiklikler bu hesap altında kaydedilir.",
+                    "admin_password": "Belirteci oluşturmak için yalnızca bir kez kullanılır. Asla kendi parolanızı girmeyin."
+                }
+            }
+        },
+        "abort": {
+            "already_configured": "Bu kayıt zaten yapılandırılmış.",
+            "unsupported_home_assistant": "Süreç içi HA-MCP Sunucusu Home Assistant {required} veya daha yeni bir sürüm gerektirir; bu kurulumda {installed} çalışıyor. Eklenti veya Docker konteyneri olarak çalışan harici bir ha-mcp sunucusuyla bu bileşenin HA-MCP Dosya ve YAML Araçları kaydını yine de kullanabilirsiniz."
+        },
+        "error": {
+            "invalid_token": "Home Assistant bu belirteci tanımıyor. Belirtecin tamamını kopyalayın veya yeni bir belirteç oluşturun.",
+            "token_not_long_lived": "Bu geçici bir oturum açma belirtecidir ve süresi dolar. Bunun yerine uzun ömürlü bir erişim belirteci oluşturun.",
+            "token_not_admin": "Bu belirteç etkin bir yönetici olmayan bir hesaba ait.",
+            "invalid_login": "HA-MCP için oluşturulmuş yalnızca yerel erişimli bir yönetici hesabının kullanıcı adını ve parolasını girin.",
+            "credentials_needed": "Bir yönetici hesabının kullanıcı adını ve parolasını girin ya da bir erişim belirteci yapıştırın."
+        }
+    },
+    "options": {
+        "error": {
+            "invalid_connect_path": "#, ?, % veya boşluk karakteri içeremez.",
+            "invalid_webhook_id": "Webhook kimlikleri eğik çizgi (/) içeremez.",
+            "invalid_oauth_callback": "Her geri çağırma URL'si kullanıcı adı, parola veya #fragment içermeyen ve en fazla 2048 karakter uzunluğunda bir https:// URL'si ya da 127.0.0.1, [::1] veya localhost üzerinde bir http:// URL'si olmalıdır. Düzeltin: {invalid_callbacks}",
+            "too_many_oauth_callbacks": "En fazla {max_callbacks} geri çağırma URL'si listeleyin.",
+            "invalid_token": "Home Assistant bu belirteci tanımıyor. Belirtecin tamamını kopyalayın veya yeni bir belirteç oluşturun.",
+            "token_not_long_lived": "Bu geçici bir oturum açma belirtecidir ve süresi dolar. Bunun yerine uzun ömürlü bir erişim belirteci oluşturun.",
+            "token_not_admin": "Bu belirteç etkin bir yönetici olmayan bir hesaba ait.",
+            "invalid_login": "HA-MCP için oluşturulmuş yalnızca yerel erişimli bir yönetici hesabının kullanıcı adını ve parolasını girin.",
+            "credentials_needed": "Bir yönetici hesabının kullanıcı adını ve parolasını girin ya da bir erişim belirteci yapıştırın."
+        },
+        "step": {
+            "tools_info": {
+                "title": "HA-MCP Dosya ve YAML Araçları",
+                "description": "ha-mcp'nin isteğe bağlı dosya/YAML araçlarının kullandığı ayrıcalıklı dosya ve YAML düzenleme servislerini yapılandırın. Bu ayarlar ha-mcp sunucusunun kendi ayar arayüzünde de görünür ve yeniden başlatma gerektirmeden anında uygulanır. Geçersiz kılınamayan bir engelleme katmanı hassas yolları (ör. .storage) ve güven sınırı anahtarlarını (homeassistant, http, frontend, lovelace) engellemeye devam eder.",
+                "data": {
+                    "allowed_dirs": "Ek dosya yolları",
+                    "extra_yaml_keys": "Ek YAML yazma anahtarları"
+                },
+                "data_description": {
+                    "allowed_dirs": "Yapılandırma dizinine göre yollar (sensor.yaml gibi tam dosya adları dahil) veya /share, /media ve /ssl altındaki yollar (HAOS ve Supervised kurulumlarında salt okunur). Her kayıt o yol ve altındakiler için okuma/yazma izni verir; her yolu ayrı bir liste öğesi olarak girin. Kayıtlar birebir eşleştirilir; * gibi joker karakterler desteklenmez. Dizin dışına çıkma (traversal) ve izin verilmeyen yollar yok sayılır.",
+                    "extra_yaml_keys": "Bu kurulumdaki YAML tabanlı entegrasyonlar için (ör. alert2) ha_config_set_yaml aracının yerleşik olanlara ek olarak yazabileceği üst düzey anahtarlar. Güven sınırı anahtarları yok sayılır."
+                }
+            },
+            "init": {
+                "title": "HA-MCP Sunucusu",
+                "description": "HA-MCP sunucusunu yapılandırın. {panel_hint}Buradaki değişiklikler kaydedildiğinde uygulanır.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+                "data": {
+                    "server_port": "MCP sunucusu dinleme portu",
+                    "bind_host": "Ağ erişimi",
+                    "webhook_auth": "Kimlik doğrulama modu",
+                    "oauth_client_id_override": "Eski OAuth: özel Client ID (isteğe bağlı)",
+                    "oauth_client_secret_override": "Eski OAuth: özel Client Secret (isteğe bağlı)",
+                    "oauth_regenerate": "Eski OAuth: Client ID/Secret şimdi yenile",
+                    "pip_spec": "Geliştirici: ha-mcp paket geçersiz kılma",
+                    "server_url": "Home Assistant URL'si (gelişmiş)",
+                    "external_url": "Harici URL (isteğe bağlı)",
+                    "webhook_id_override": "Özel webhook gizli anahtarı (isteğe bağlı)",
+                    "secret_path_override": "Özel doğrudan erişim yolu (isteğe bağlı)",
+                    "regenerate_secrets": "Bağlantı gizli anahtarlarını şimdi yenile",
+                    "enable_webhook": "Webhook üzerinden uzaktan erişim",
+                    "enable_llm_api": "Konuşma ajanı LLM API",
+                    "llm_api_exposure": "Konuşma ajanı araç kapsamı",
+                    "enable_startup_notification": "Başlangıç bildirimi",
+                    "enable_sidebar_panel": "Kenar çubuğu ayar paneli",
+                    "access_off_after_restart": "Yeniden başlatma sonrasında erişimi kapat",
+                    "oauth_redirect_allowlist": "İzin verilen OAuth geri çağırma URL'leri",
+                    "admin_token_replacement": "Yönetici erişim belirtecini değiştir (isteğe bağlı)",
+                    "admin_username": "Veya HA-MCP için yerel hesaba geç: kullanıcı adı (isteğe bağlı)",
+                    "admin_password": "Bu hesabın parolası",
+                    "oauth_allow_any_callback": "Herhangi bir OAuth geri çağırma URL'sine izin ver (yukarıdaki listeyi kapatır)"
+                },
+                "data_description": {
+                    "server_port": "Bu sunucunun dinlediği port. ha-mcp eklentisi 9583 portunu kullandığı için ikisinin yan yana çalışabilmesi adına varsayılan değer 9584'tür; eklentiyi kullanmıyorsanız boş herhangi bir port çalışır.",
+                    "bind_host": "MCP sunucu portuna doğrudan kimlerin bağlanabileceğini belirler. Yerel ağ seçeneği, eklentideki gibi gizli yol kimlik bilgisiyle yerel ağınızdan erişime açar. Yalnızca bu makine seçeneği yalnızca Home Assistant makinesinden gelen bağlantılara izin verir; webhook URL'si ve kenar çubuğu paneli her iki durumda da çalışır.",
+                    "webhook_auth": "MCP istemcilerinin webhook URL'sinde kendilerini nasıl doğrulayacağını belirler. Gizli URL ile bağlantının kendisi tek kimlik bilgisidir; OAuth kullanan istemciler için izin verilen geri çağırma URL'sine dönen oturumlar otomatik onaylanır. Home Assistant ile oturum açma modunda claude.ai gibi istemciler bir Home Assistant yönetici hesabıyla (OAuth) giriş yapar. Eski OAuth modunda bu entegrasyon kendi oturum açma servisini çalıştırır ve Client ID/Secret üretir; tam olarak açıp kapatmak için Home Assistant'ı yeniden başlatmak gerekebilir.",
+                    "oauth_client_id_override": "Otomatik üretilen eski OAuth Client ID değerini değiştirir. Mevcut değeri korumak için boş bırakın. Yalnızca kimlik doğrulama modu Eski OAuth iken kullanılır.",
+                    "oauth_client_secret_override": "Otomatik üretilen eski OAuth Client Secret değerini değiştirir. Mevcut değeri korumak için boş bırakın. Yalnızca kimlik doğrulama modu Eski OAuth iken kullanılır.",
+                    "oauth_regenerate": "Tek seferlik işlem: Eski OAuth modu için yeni bir Client ID ve Secret üretir. Yalnızca onarım isteminin istediği Home Assistant yeniden başlatmasından sonra etkinleşir; ayrıca yukarıdaki iki geçersiz kılma alanını temizler.",
+                    "pip_spec": "Bu bileşen sürümünün kurduğu ha-mcp sunucusunu çalıştırmak için boş bırakın. Yalnızca belirli bir ha-mcp derlemesini test etmek içindir (sürüm sabitleme, PR arşivi veya wheel URL'si); Home Assistant'ı yeniden başlatmadan sunucuyu yeniden yükleyerek uygulanır.",
+                    "server_url": "Süreç içi sunucunun Home Assistant'a ulaşmak için kullandığı URL. Bu kurulumun port ve SSL ayarlarından otomatik türetmek için boş bırakın; yalnızca farklı bir yol gerektiğinde değer girin.",
+                    "external_url": "Birincil bağlantı URL'si olarak gösterilir; Home Assistant kendi alan adınızın veya ters proxy'nizin arkasındaysa bunu kullanın. Şemayı içeren tam temel adresi girin ve :8123 gibi port numarası eklemeyin; aksi halde uzak MCP istemcileri erişemez. Nabu Casa veya yerel adresi otomatik kullanmak için boş bırakın.",
+                    "webhook_id_override": "Bağlantı URL'sindeki (/api/webhook/...) rastgele webhook gizli anahtarını değiştirir. URL'nin kendisi kimlik bilgisidir; uzun ve tahmin edilmesi zor bir değer kullanın. Mevcut değeri korumak için boş bırakın.",
+                    "secret_path_override": "Sunucu portunda doğrudan erişim için kullanılan rastgele yolu değiştirir. Aynı kural geçerlidir: yolun kendisi kimlik bilgisidir. Mevcut değeri korumak için boş bırakın.",
+                    "regenerate_secrets": "Tek seferlik işlem: yeni rastgele webhook gizli anahtarı ve doğrudan erişim yolu üretir; eski bağlantı URL'leri anında geçersiz olur ve yukarıdaki iki geçersiz kılma alanı temizlenir.",
+                    "enable_webhook": "Yalnızca yerel mod için kapatın: Home Assistant webhook'u hiç kaydedilmez, böylece Nabu Casa dahil hiçbir şey Home Assistant üzerinden sunucuya erişemez. Doğrudan sunucu portu ve kenar çubuğu paneli çalışmaya devam eder.",
+                    "enable_llm_api": "Tüm araç setini Home Assistant konuşma ajanlarına (OpenAI, Google, Ollama, ...) sunar: etkinken ajanlar Home Assistant'ı Kontrol Et altında 'HA-MCP Server' seçeneğini seçip Assist sohbeti ve sesli komutlardan araçları çalıştırabilir. Etkinleştirmek yalnızca seçilebilir hale getirir; bir ajanda seçene kadar hiçbir şey açılmaz. Kullanım kılavuzu: {llm_api_docs_url}",
+                    "llm_api_exposure": "Konuşma ajanlarına sunulan araç setinin biçimi. Araç arama (varsayılan) ajanın bağlamını küçük tutar: sabitlenmiş araçlar artı arama/çalıştırma meta araçlarıyla kompakt bir API sunar. Tam katalog açılan tüm araçları doğrudan listeler; büyük bağlamlı modeller için daha uygundur. İkisi birden seçeneği ikisini yan yana kaydeder. Araç bazlı erişim HA-MCP ayar panelinden yönetilir; ayrıntılar: {llm_api_docs_url}",
+                    "enable_startup_notification": "Home Assistant sunucuyu her başlattığında yalnızca yöneticilere açık ayar sayfalarına yönlendiren bir bildirim gösterir. Sessiz başlatmak için kapatın; bağlantı URL'leri bu ekranda kalır.",
+                    "enable_sidebar_panel": "Kenar çubuğunda HA-MCP ayar panelini gösterir (yalnızca yöneticiler). Kenar çubuğu girişini kaldırmak için kapatın; sunucu seçenekleri bu ekranda kalır.",
+                    "access_off_after_restart": "Sunucunun Erişim anahtarı normalde Home Assistant yeniden başlatıldığında son durumunu korur. Her yeniden başlatmadan sonra erişimin kapalı başlaması için bunu açın. Önce anahtarı etkinleştirin (varsayılan olarak devre dışıdır).",
+                    "oauth_redirect_allowlist": "Yalnızca kimlik doğrulama modu Gizli webhook URL'si iken kullanılır. Bir istemci OAuth ile giriş yaptığında HA-MCP oturumu yalnızca bu listedeki bir geri çağırma URL'sine döndürür. Her URL'yi istemcinin gönderdiği şekilde girin. http:// loopback geri çağırmaları (127.0.0.1, [::1] veya localhost) herhangi bir portta eşleşir. Yeniden başlatma olmadan uygulanır.",
+                    "admin_token_replacement": "Mevcut erişimi korumak için boş bırakın; değiştirdiğinizde sunucu yeniden başlar. Bir yönetici hesabının uzun ömürlü erişim belirtecidir. Daha güvenli yol: yalnızca HA-MCP için oluşturulmuş, Yalnızca yerel erişim açık bir hesap kullanmaktır (aşağıdaki alanlara bakın).",
+                    "admin_username": "Yalnızca Ayarlar → Kişiler → Kişi ekle altında Oturum açmaya izin ver, Yalnızca yerel erişim ve Yönetici seçenekleri açık olarak HA-MCP için oluşturduğunuz hesap içindir. Buraya asla kendi kullanıcı adınızı girmeyin; kendi hesabınız için yukarıya belirtecini yapıştırın. HA-MCP bu hesabın belirtecini (HA-MCP Server adıyla) oluşturur ve parolayı saklamaz.",
+                    "admin_password": "Belirteci oluşturmak için yalnızca bir kez kullanılır. Asla kendi parolanızı girmeyin.",
+                    "oauth_allow_any_callback": "Yalnızca kimlik doğrulama modu Gizli webhook URL'si iken kullanılır. Yukarıdaki liste yerine herhangi bir https:// veya 127.0.0.1, [::1], localhost üzerindeki http:// geri çağırmasını kabul eder. Bedeli: Home Assistant adresiniz hazırlanmış bir oturum açma bağlantısını herhangi bir web sitesine yönlendirebilir ve kimlik avı (phishing) için kötüye kullanılabilir. Yeniden başlatma olmadan uygulanır."
+                }
+            }
+        }
+    },
+    "issues": {
+        "server_start_failed": {
+            "title": "HA-MCP süreç içi sunucusu başlatılamadı",
+            "description": "HA-MCP süreç içi sunucusu Home Assistant içinde başlatılamadı:\n\n{detail}\n\nHome Assistant günlüklerini kontrol edin, ardından yeniden denemek için entegrasyonu yeniden yükleyin."
+        },
+        "server_package_install_failed": {
+            "title": "HA-MCP süreç içi sunucu paketi kurulamadı",
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "HA-MCP sunucusunu yeniden kur",
+                        "description": "HA-MCP süreç içi sunucusu kurulamadı veya başlatılamadı:\n\n{detail}\n\nHome Assistant'ı yeniden başlatmak için gönderin; sunucu başlamadan önce sunucu paketi ve uyumsuz bağımlılıkları yeniden kurulur. Yukarıdaki mesaj bu paketlerden birini değiştiren başka bir entegrasyon adı veriyorsa önce o entegrasyonu güncelleyin veya kaldırın. HA-MCP Sunucusu seçeneklerinde **ha-mcp package (advanced)** ayarını belirlediyseniz önce o değeri kontrol edin."
+                    }
+                },
+                "abort": {
+                    "entry_removed": "HA-MCP Sunucusu kaydı artık mevcut değil.",
+                    "externally_managed": "Home Assistant skip_pip ile başlatıldığı için Python paketleri kurmuyor. ha-mcp paketini sistem paket yöneticinizle yeniden kurup entegrasyonu yeniden yükleyin."
+                }
+            }
+        },
+        "component_outdated": {
+            "title": "HA-MCP entegrasyonunu güncelleyin",
+            "description": "Yüklü ha-mcp sunucusu HA-MCP entegrasyonu {required} veya daha yeni bir sürüm gerektiriyor; sizde {installed} yüklü. Entegrasyonu Ayarlar > Sistem > Güncellemeler bölümünden güncelleyin (henüz güncelleme görünmüyorsa Marketplace içinde HA-MCP entegrasyonunu açıp 'Bilgileri yenile' seçeneğini kullanın) ve Home Assistant'ı yeniden başlatın. Sunucu bu sırada çalışmaya devam eder, ancak bazı yeni özellikler güncelleme yapılana kadar çalışmayabilir."
+        },
+        "legacy_oauth_restart": {
+            "title": "Eski OAuth ayarlarını uygulamak için Home Assistant'ı yeniden başlatın",
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "Home Assistant yeniden başlatılsın mı?",
+                        "description": "Bu formu göndermek Home Assistant'ı yeniden başlatacak ve eski OAuth ayarlarını uygulayacaktır.\n\nŞimdi yeniden başlatmak için **Gönder**'e tıklayın."
+                    }
+                }
+            }
+        },
+        "server_token_needed": {
+            "title": "HA-MCP bir yönetici erişim belirtecine ihtiyaç duyuyor",
+            "fix_flow": {
+                "step": {
+                    "token": {
+                        "title": "Bir yönetici erişim belirteci girin",
+                        "description": "HA-MCP süreç içi sunucusunun kullanabileceği bir Home Assistant belirteci olmadığı için çalışmıyor. Belirteç eksik, iptal edilmiş veya süresi dolmuş olabilir ya da hesabı artık etkin bir yönetici olmayabilir. Yeni bir uzun ömürlü erişim belirteci yapıştırın veya yalnızca HA-MCP için oluşturduğunuz yerel hesabın giriş bilgilerini girin (asla kendi hesabınızı değil).",
+                        "data": {
+                            "admin_token": "Yönetici erişim belirteci",
+                            "admin_username": "Veya: yalnızca HA-MCP için oluşturulan yerel hesabın kullanıcı adı",
+                            "admin_password": "Bu hesabın parolası"
+                        }
+                    }
+                },
+                "error": {
+                    "invalid_token": "Home Assistant bu belirteci tanımıyor. Belirtecin tamamını kopyalayın veya yeni bir belirteç oluşturun.",
+                    "token_not_long_lived": "Bu geçici bir oturum açma belirtecidir ve süresi dolar. Bunun yerine uzun ömürlü bir erişim belirteci oluşturun.",
+                    "token_not_admin": "Bu belirteç etkin bir yönetici olmayan bir hesaba ait.",
+                    "invalid_login": "HA-MCP için oluşturulmuş yalnızca yerel erişimli bir yönetici hesabının kullanıcı adını ve parolasını girin.",
+                    "credentials_needed": "Bir yönetici hesabının kullanıcı adını ve parolasını girin ya da bir erişim belirteci yapıştırın."
+                },
+                "abort": {
+                    "entry_removed": "HA-MCP Sunucusu kaydı artık mevcut değil."
+                }
+            }
+        },
+        "store_records_conflict": {
+            "title": "HA-MCP iki mağaza kaydından birden kurulu görünüyor",
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "HA-MCP tek bir mağaza kaydında tutulsun mu?",
+                        "description": "HA-MCP her iki kayıttan da kurulu olarak işaretlenmiş: {records}. İkisi de aynı entegrasyonu içerir (ikincisi eski kurulumların geldiği dağıtım yansısıdır). Marketplace bir entegrasyonun yalnızca tek bir kayda ait olmasına izin verdiği için ikisi de HA-MCP'yi güncelleyemiyor.\n\nGönder seçeneği özel depo gerektirmeyen varsayılan katalogdaki **{keep}** kaydını korur ve diğerini kurulu değil olarak işaretler. Hiçbir şey silinmez: HA-MCP kayıtlarınız, ayarlarınız ve dosyalarınız aynen kalır ve güncellemeler artık normal şekilde {keep} altında görünür."
+                    }
+                },
+                "abort": {
+                    "already_resolved": "HA-MCP artık tek bir mağaza kaydından kurulu; düzeltilecek bir şey yok.",
+                    "store_unavailable": "Marketplace henüz yüklenmediği için kayıtlar kontrol edilemiyor. Birkaç dakika sonra tekrar deneyin."
+                }
+            }
+        }
+    },
+    "selector": {
+        "server_remote_access": {
+            "options": {
+                "disabled": "Devre dışı (varsayılan)",
+                "ha_auth": "Home Assistant oturum açma",
+                "legacy": "Eski OAuth (Client ID ve Secret)",
+                "none": "Gizli URL (oturum açma yok)"
+            }
+        },
+        "server_webhook_auth": {
+            "options": {
+                "none": "Gizli webhook URL'si",
+                "ha_auth": "Home Assistant ile oturum aç (OAuth)",
+                "legacy": "Eski OAuth (bu entegrasyon yapıştırılacak bir Client ID/Secret üretir)"
+            }
+        },
+        "llm_api_exposure": {
+            "options": {
+                "tool_search": "Araç arama (kompakt, varsayılan)",
+                "full": "Tam katalog",
+                "both": "İkisi birden (ajan başına seç)"
+            }
+        }
+    },
+    "common": {
+        "connect_direct_access": "Home Assistant makinesinden doğrudan erişim: {url}",
+        "connect_local_lan": "Yerel/LAN (Ağ erişimi \"Yerel ağ\" olduğunda): {url}",
+        "connect_remote_url": "Uzaktan bağlantı URL'si: {url}",
+        "connect_urls_label": "Bağlantı URL'leri:",
+        "connect_urls_pending": "Sunucu başladıktan sonra bağlantı URL'leri burada görünür.",
+        "connect_webhook_disabled": "Webhook üzerinden uzaktan erişim devre dışı (yalnızca yerel mod).",
+        "oauth_creds_pending": "Sunucu başladıktan sonra Client ID ve Client Secret burada görünür.",
+        "oauth_not_serving": "Eski OAuth bunları henüz sunmuyor; etkinleştirmek için istendiğinde Home Assistant'ı yeniden başlatın.",
+        "oauth_select_legacy_mode": "Modern OAuth desteklemeyen istemciler için kimlik ve gizli anahtar üretmek üzere modu Eski OAuth olarak değiştirin. \"Home Assistant ile oturum aç\" seçiliyken bağlanmakta sorun yaşıyorsanız, Eski OAuth denemeden önce bağlantıyı test etmek için \"Gizli webhook URL'si\" seçeneğine geçmenizi öneririz.",
+        "panel_hint": "Araç yönetimi ve sunucu ayarları için [HA-MCP ayar panelini](/ha-mcp) açın.",
+        "tools_module_installed": "Beta/gelişmiş dosya ve YAML araçları modülü (isteğe bağlı): Kurulu",
+        "tools_module_not_installed": "Beta/gelişmiş dosya ve YAML araçları modülü (isteğe bağlı): Kurulu değil — eklemek için bu entegrasyonun sayfasında \"Kayıt ekle\"ye basıp \"HA-MCP Dosya ve YAML Araçları\"nı seçin",
+        "tools_module_not_loaded": "Beta/gelişmiş dosya ve YAML araçları modülü (isteğe bağlı): Kurulu ancak yüklü değil — bu entegrasyonun sayfasında \"HA-MCP Dosya ve YAML Araçları\" kaydını etkinleştirin veya yeniden yükleyin",
+        "version_line": "Bileşen {component_version} - Sunucu ha-mcp {server_version} ({source})",
+        "server_source_paired": "bu bileşen sürümüyle birlikte kurulu",
+        "server_source_override": "pip paketi geçersiz kılma",
+        "version_not_installed": "henüz kurulu değil",
+        "version_unknown": "bilinmiyor"
+    },
+    "entity": {
+        "switch": {
+            "server_access": {
+                "name": "Erişim"
+            }
+        }
+    }
+}
