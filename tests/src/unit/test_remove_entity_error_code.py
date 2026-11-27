@@ -82,7 +82,9 @@ async def test_failure_mentioning_not_found_is_not_an_absent_entity(
     ):
         await tools.ha_remove_entity(entity_id="sensor.real")
 
-    assert json.loads(str(exc_info.value))["error"]["code"] == "SERVICE_CALL_FAILED"
+    body = json.loads(str(exc_info.value))
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert body["ha_error_code"] == "home_assistant_error"
 
 
 async def test_bulk_failure_mentioning_not_found_is_an_error_not_a_skip(
@@ -96,7 +98,9 @@ async def test_bulk_failure_mentioning_not_found_is_an_error_not_a_skip(
         result = await tools.ha_remove_entity(entity_id=["sensor.a"])
 
     assert result["skipped"] == []
-    assert [e["entity_id"] for e in result["errors"]] == ["sensor.a"]
+    [error] = result["errors"]
+    assert (error["entity_id"], error["code"]) == ("sensor.a", "SERVICE_CALL_FAILED")
+    assert error["ha_error_code"] == "home_assistant_error"
 
 
 # Core closes the socket itself (a revoked or refused token); the client's

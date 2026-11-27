@@ -1,24 +1,14 @@
 """Supervisor's release channel, read and set as the Updates page's Join beta /
 Leave beta does: through Core's ``supervisor/api`` relay."""
 
-import json
 from typing import Any
 
 from .._vendor.fastmcp.exceptions import ToolError
 from ..errors import ErrorCode, create_error_response
 from .component_api import UNKNOWN_COMMAND_CODE
-from .helpers import raise_tool_error
+from .helpers import raise_tool_error, tool_error_ha_code
 
 _INFO = "/supervisor/info"
-
-
-def _core_code(error: ToolError) -> object:
-    """The ``ha_error_code`` Core answered the relayed call with, if any."""
-    try:
-        payload = json.loads(str(error))
-    except ValueError:
-        return None
-    return payload.get("ha_error_code") if isinstance(payload, dict) else None
 
 
 async def _supervisor(
@@ -30,7 +20,7 @@ async def _supervisor(
         reply = await _supervisor_api_call(client, endpoint, method, data)
     except ToolError as e:
         # Core registers supervisor/api only where a Supervisor runs.
-        if _core_code(e) != UNKNOWN_COMMAND_CODE:
+        if tool_error_ha_code(e) != UNKNOWN_COMMAND_CODE:
             raise
         raise_tool_error(
             create_error_response(

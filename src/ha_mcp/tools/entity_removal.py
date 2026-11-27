@@ -9,7 +9,6 @@ item, so it gets no note.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from ..client.rest_client import (
@@ -17,10 +16,14 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
-from ..errors import ErrorCode
 from .config_helpers.listing import listed_items
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
-from .helpers import exception_to_structured_error
+from .helpers import (
+    core_error_message,
+    exception_to_structured_error,
+    ha_error_code_field,
+    ws_failure_code,
+)
 
 
 def _unread(entity_id: str, reason: Any) -> list[str]:
@@ -82,9 +85,7 @@ async def remove_registry_entry(
     return result, notes
 
 
-async def remove_registry_entries(
-    client: Any, entity_ids: list[str], error_text: Callable[[dict[str, Any]], str]
-) -> dict[str, Any]:
+async def remove_registry_entries(client: Any, entity_ids: list[str]) -> dict[str, Any]:
     """Remove each id in turn; each lands in ``removed``, ``skipped`` (Core's
     not_found: already absent) or ``errors``. A lost connection stops the run
     and lists the ids it never sent, which are safe to retry: the ones after the
@@ -120,8 +121,9 @@ async def remove_registry_entries(
             errors.append(
                 {
                     "entity_id": eid,
-                    "code": ErrorCode.SERVICE_CALL_FAILED.value,
-                    "message": error_text(result),
+                    "code": ws_failure_code(result).value,
+                    "message": core_error_message(result.get("error", "Unknown error")),
+                    **ha_error_code_field(result.get("error_code")),
                 }
             )
     response: dict[str, Any] = {

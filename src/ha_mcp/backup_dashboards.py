@@ -72,7 +72,8 @@ async def fetch_dashboard(client: Any, entity_id: str) -> Any:
     """
     from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-    from .tools.dashboard_read_errors import CONFIG_NOT_FOUND_CODE, dashboard_error_code
+    from .tools.dashboard_read_errors import CONFIG_NOT_FOUND_CODE
+    from .tools.helpers import tool_error_ha_code
     from .tools.tools_config_dashboards import (
         _component_dashboard_config,
         _get_dashboard_config_internal,
@@ -107,7 +108,7 @@ async def fetch_dashboard(client: Any, entity_id: str) -> Any:
                 client, fetch_path
             )
         except (ToolError, HomeAssistantCommandError) as err:
-            code = dashboard_error_code(err) if isinstance(err, ToolError) else err.code
+            code = tool_error_ha_code(err) if isinstance(err, ToolError) else err.code
             if code != CONFIG_NOT_FOUND_CODE:
                 raise
             config = None
