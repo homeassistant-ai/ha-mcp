@@ -377,8 +377,7 @@ class TestTraceFetchFailures:
         call: dict[str, Any],
         context: dict[str, Any],
     ) -> None:
-        """Core's error answer to a trace command is a service failure that
-        names what was asked for."""
+        """Keep Core's refusal code alongside the requested trace coordinates."""
         if trace_store:
             await _store(hass)
 
@@ -387,7 +386,12 @@ class TestTraceFetchFailures:
 
         payload = json.loads(str(exc_info.value))
         assert payload["success"] is False
-        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["ha_error_code"] == (
+            "not_found" if trace_store else "unknown_command"
+        )
+        assert payload["error"]["code"] == (
+            "RESOURCE_NOT_FOUND" if trace_store else "SERVICE_CALL_FAILED"
+        )
         assert {key: payload[key] for key in context} == context
 
     @pytest.mark.parametrize(
