@@ -325,7 +325,7 @@ class AutomationConfigTools:
         ],
         hash_only: Annotated[
             bool,
-            Field(description="Return only the automation ID and config hash"),
+            Field(description="Return only the resolved entity_id and config hash"),
         ] = False,
     ) -> dict[str, Any]:
         """
@@ -345,7 +345,13 @@ class AutomationConfigTools:
         integrations. `automation_id` is the resolved entity_id, falling back
         to the input.
 
+        With `hash_only=True`, return only the action, resolved automation_id
+        and config_hash. Use this hash for `python_transform`, which edits the
+        stored body. For a full `config` write, read the full config and base
+        the replacement on it; a hash alone does not prevent lost edits.
+
         EXAMPLES:
+        - Get hash for a transform: ha_config_get_automation("automation.morning_routine", hash_only=True)
         - Get automation: ha_config_get_automation("automation.morning_routine")
         - Get by config id: ha_config_get_automation("1712345678901")
 
@@ -372,6 +378,7 @@ class AutomationConfigTools:
             if hash_only:
                 return {
                     "success": True,
+                    "action": "get",
                     "automation_id": target.entity_id or entity_id,
                     "config_hash": config_hash,
                 }
@@ -1355,7 +1362,7 @@ class AutomationConfigTools:
                     "Omit entity_id and remove config['id'] to create a separate automation.",
                     (
                         "For an intentional rename or replacement, call ha_config_get_automation "
-                        "for this entity_id, inspect its config, and resubmit with its config_hash."
+                        "for this entity_id with hash_only=False, inspect its full config, and resubmit with its config_hash."
                     ),
                 ],
             )
@@ -1373,8 +1380,8 @@ class AutomationConfigTools:
                 ErrorCode.SERVICE_CALL_FAILED,
                 "Automation modified since last read (conflict)",
                 suggestions=[
-                    "Call ha_config_get_automation() again",
-                    "Use the fresh config_hash from that response",
+                    "Call ha_config_get_automation() with hash_only=False to read the full config",
+                    "Rebase the change on that config and use its fresh config_hash",
                 ],
                 context={"action": action, "entity_id": entity_id},
             )

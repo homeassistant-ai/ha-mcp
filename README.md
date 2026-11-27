@@ -233,7 +233,7 @@ If the original entry has been deleted, restore recreates the helper and reports
 | **Apps (add-ons)** | `ha_get_app`, `ha_manage_app` |
 | **Areas & Floors** | `ha_list_floors_areas`, `ha_remove_area_or_floor`, `ha_set_area_or_floor` |
 | **Assist** | `ha_manage_pipeline` |
-| **Automations** | `ha_config_get_automation` (supports hash-only reads for optimistic locking), `ha_config_remove_automation`, `ha_config_set_automation` |
+| **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
 | **Blueprints** | `ha_manage_blueprints` |
 | **Calendar** | `ha_config_get_calendar_events`, `ha_config_remove_calendar_event`, `ha_config_set_calendar_event` |
 | **Camera** | `ha_get_camera_image` |

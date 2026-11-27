@@ -30,6 +30,7 @@ from ha_mcp.tools.best_practice_checker import check_automation_config
 from ha_mcp.tools.tools_config_automations import (
     NOT_VERIFIED_WARNING_PREFIX,
     AutomationConfigTools,
+    registry_details,
 )
 from ha_mcp.utils.config_hash import compute_config_hash
 
@@ -129,20 +130,22 @@ class TestGetAutomation:
         assert result["automation_id"] == ENTITY_ID
         assert "identifier" not in result
 
-    async def test_hash_only_matches_full_read_without_registry_details(
+    async def test_compact_read_avoids_large_registry_details(
         self, tools: AutomationConfigTools
     ) -> None:
         full = await tools.ha_config_get_automation(entity_id=CONFIG_ID)
         with patch(
             "ha_mcp.tools.tools_config_automations.registry_details",
-            side_effect=AssertionError("hash-only read fetched registry details"),
-        ):
+            wraps=registry_details,
+        ) as details_spy:
             compact = await tools.ha_config_get_automation(
                 entity_id=CONFIG_ID, hash_only=True
             )
 
+        details_spy.assert_not_awaited()
         assert compact == {
             "success": True,
+            "action": "get",
             "automation_id": ENTITY_ID,
             "config_hash": full["config_hash"],
         }
