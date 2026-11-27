@@ -262,9 +262,11 @@ def _source(
     )
     # These three/four-branch statements contain a CTE. Rebuilding Core's
     # lambda keeps its current bind values when SQLAlchemy nests it for paging.
-    if processor.entity_ids or processor.device_ids or processor.action_calls:
-        statement = statement.spoil()
-    source: Subquery = statement.order_by(None).subquery()
+    with_context = (
+        processor.entity_ids or processor.device_ids or processor.action_calls
+    )
+    bound = statement.spoil() if with_context else statement
+    source: Subquery = bound.order_by(None).subquery()
     return source
 
 
