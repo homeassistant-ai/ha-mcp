@@ -492,12 +492,12 @@ class LogbookLogSourceMixin:
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     str(response.get("error") or "Invalid logbook request"),
                     context={"error_code": error_code},
-                    suggestions=[
+                    suggestions=["Action calls take a time window and no other filter"]
+                    if command == "logbook/get_action_calls"
+                    else [
                         "Check that 'entity_id' uses 'domain.object_id' form, "
                         + "e.g. 'light.kitchen'"
-                    ]
-                    if "entity id" in str(response.get("error")).lower()
-                    else ["Check the filters against the error text"],
+                    ],
                 )
             )
         if error_code and error_code != "unknown_command":
