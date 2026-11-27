@@ -28,6 +28,11 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
+from .automation_errors import (
+    core_rejection_text,
+    failed_section_from_core,
+    raise_core_rejection,
+)
 from .best_practice_checker import (
     BestPracticeCheckResult,
 )
@@ -360,7 +365,11 @@ class ConfigScriptTools:
         return actual_config, resolved_id
 
     async def _upsert_script(
-        self, config: dict[str, Any], script_id: str, resolved_id: str | None
+        self,
+        config: dict[str, Any],
+        script_id: str,
+        resolved_id: str | None,
+        bp_warnings: BestPracticeCheckResult,
     ) -> dict[str, Any]:
         """Upsert, threading a pre-resolved storage key when available.
 
@@ -370,10 +379,28 @@ class ConfigScriptTools:
         entity-registry lookup (issue #1813 Phase 0); ``None`` lets the REST
         client resolve. Passing the caller id
         separately keeps a renamed script's alias caller-facing (#1935).
+        A 400 Core answered is raised with Core's text and its hints, as for
+        automations.
         """
-        result: dict[str, Any] = await self._client.upsert_script_config(
-            config, script_id, resolved_id=resolved_id
-        )
+        try:
+            result: dict[str, Any] = await self._client.upsert_script_config(
+                config, script_id, resolved_id=resolved_id
+            )
+        except HomeAssistantAPIError as e:
+            core_text = core_rejection_text(e)
+            if core_text is None:
+                raise
+            await raise_core_rejection(
+                self._client,
+                core_text,
+                config,
+                failed_section=await failed_section_from_core(
+                    self._client, config, "script"
+                ),
+                context={"script_id": script_id},
+                bp_warnings=bp_warnings,
+                domain="script",
+            )
         return result
 
     @staticmethod
@@ -720,9 +747,6 @@ class ConfigScriptTools:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
         except Exception as e:  # noqa: BLE001
             suggestions = [
-                "For blueprint scripts, use ha_manage_blueprints(action='list', domain='script') to list available blueprints",
-                "Validate sequence actions syntax for regular scripts",
-                "Check entity_ids exist if using service calls",
                 "Use ha_search(domain_filter='script') to find scripts",
                 "Use ha_get_skill_guide for help",
             ]
@@ -942,8 +966,8 @@ class ConfigScriptTools:
         # carries an alias here, so the default is a no-op, but keep the
         # contract consistent — #1935).
         references = await ref_check(self._client, transformed_config, "script")
-        result = await self._client.upsert_script_config(
-            transformed_config, script_id, resolved_id=resolved_id
+        result = await self._upsert_script(
+            transformed_config, script_id, resolved_id, bp_warnings
         )
 
         # Re-read the written key for the hash (HA may normalize): no registry read
@@ -1005,7 +1029,9 @@ class ConfigScriptTools:
     ) -> dict[str, Any]:
         """Validate references, upsert, finalize wait/category, and build the response."""
         references = await ref_check(self._client, config_dict, "script")
-        result = await self._upsert_script(config_dict, script_id, resolved_key)
+        result = await self._upsert_script(
+            config_dict, script_id, resolved_key, bp_warnings
+        )
 
         await self._finalize_script_write(
             result, script_id, resolved_key, wait, effective_category

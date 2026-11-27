@@ -19,6 +19,7 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 from homeassistant.util.yaml import dump, load_yaml_dict
 
 from ha_mcp.backup_manager import BackupManager
@@ -227,8 +228,72 @@ async def test_config_without_sequence_or_blueprint_gets_cores_refusal(
 
     assert body["error"]["code"] == "VALIDATION_FAILED"
     assert "required key not provided" in body["error"]["message"]
-    assert not any("use_blueprint" in s for s in body["error"]["suggestions"])
+    assert body["failed_section"] == "schema"
+    assert not any("blueprint" in s.lower() for s in body["error"]["suggestions"])
     assert await _stored(hass) == {KEY: BODY}
+
+
+@pytest.mark.parametrize("mode", WRITE_MODES)
+async def test_a_refused_action_names_the_sequence_as_what_failed(
+    hass: HomeAssistant, tools: ConfigScriptTools, mode: str
+) -> None:
+    """Core's 400 names no section; Core's ``validate_config`` on the sequence
+    does, in both write modes."""
+    arguments = (
+        {"config": {"alias": "Morning", "sequence": [{"foo": 1}]}}
+        if mode == "full_config"
+        else {
+            "python_transform": "config['sequence'] = [{'foo': 1}]",
+            "config_hash": (await tools.ha_config_get_script(script_id=KEY))[
+                "config_hash"
+            ],
+        }
+    )
+
+    body = await rejected_call_body(
+        tools.ha_config_set_script(script_id=KEY, **arguments)
+    )
+
+    assert body["error"]["code"] == "VALIDATION_FAILED"
+    assert body["failed_section"] == "sequence"
+    assert await _stored(hass) == {KEY: BODY}
+
+
+async def test_an_unknown_trigger_in_a_script_names_the_closest_registered_ones(
+    hass: HomeAssistant, tools: ConfigScriptTools
+) -> None:
+    """Core's text alone names only the key it refused; the registered keys
+    nearest to it come from the platforms Core describes, as for automations."""
+    assert await async_setup_component(hass, "homeassistant", {})
+    assert await async_setup_component(hass, "schedule", {})
+    await hass.async_block_till_done()
+    config = {
+        "alias": "Wait",
+        "sequence": [{"wait_for_trigger": [{"trigger": "schedule.turned_on"}]}],
+    }
+
+    body = await rejected_call_body(
+        tools.ha_config_set_script(script_id="waiter", config=config)
+    )
+
+    assert "schedule.block_started" in body["closest_matches"]
+    assert await _stored(hass) == {KEY: BODY}
+
+
+async def test_a_missing_blueprint_points_to_the_blueprint_list(
+    hass: HomeAssistant, tools: ConfigScriptTools
+) -> None:
+    config = {"alias": "B", "use_blueprint": {"path": "nope.yaml", "input": {}}}
+
+    body = await rejected_call_body(
+        tools.ha_config_set_script(script_id="from_bp", config=config)
+    )
+
+    assert body["failed_section"] == "blueprint"
+    assert any(
+        "ha_manage_blueprints(action='list', domain='script')" in s
+        for s in body["error"]["suggestions"]
+    )
 
 
 async def test_new_script_with_a_sequence_is_saved(

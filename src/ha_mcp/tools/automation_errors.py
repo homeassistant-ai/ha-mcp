@@ -1,4 +1,4 @@
-"""Errors for an automation Home Assistant rejected.
+"""Errors for an automation or script Home Assistant rejected.
 
 Core's own text leads every rejection, behind one fixed prefix; this module
 only names the section that failed and adds suggestions. Closest matches for
@@ -30,7 +30,12 @@ from .helpers import bp_warnings_suggestion, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
-REJECTION_PREFIX = "Home Assistant rejected the automation: "
+
+def _rejection_prefix(domain: str) -> str:
+    return f"Home Assistant rejected the {domain}: "
+
+
+REJECTION_PREFIX = _rejection_prefix("automation")
 
 # Bounds the wait for a platform subscription's first event, which Core sends
 # right after the subscription result.
@@ -54,21 +59,27 @@ def core_rejection_text(exc: HomeAssistantAPIError) -> str | None:
     return message if isinstance(message, str) and message else None
 
 
-async def failed_section_from_core(client: Any, config: dict[str, Any]) -> str | None:
+async def failed_section_from_core(
+    client: Any, config: dict[str, Any], domain: str = "automation"
+) -> str | None:
     """Name the failed section with Core's ``validate_config``; best effort.
 
-    When every section Core checks is valid, the root schema (or the
-    blueprint) is what failed.
+    A script's ``sequence`` is checked as ``actions``. When every section Core
+    checks is valid, the root schema (or the blueprint) is what failed.
     """
     sections = {}
-    for plural, singular in (
-        ("triggers", "trigger"),
-        ("conditions", "condition"),
-        ("actions", "action"),
-    ):
-        value = config.get(plural, config.get(singular))
-        if value is not None:
-            sections[plural] = value
+    if domain == "script":
+        if config.get("sequence") is not None:
+            sections["actions"] = config["sequence"]
+    else:
+        for plural, singular in (
+            ("triggers", "trigger"),
+            ("conditions", "condition"),
+            ("actions", "action"),
+        ):
+            value = config.get(plural, config.get(singular))
+            if value is not None:
+                sections[plural] = value
     if sections:
         try:
             result = await client.send_websocket_message(
@@ -82,7 +93,7 @@ async def failed_section_from_core(client: Any, config: dict[str, Any]) -> str |
             return None
         for section in sections:
             if (verdicts.get(section) or {}).get("valid") is False:
-                return section
+                return "sequence" if domain == "script" else section
     return "blueprint" if "use_blueprint" in config else "schema"
 
 
@@ -165,6 +176,7 @@ async def raise_core_rejection(
     failed_section: str | None,
     context: dict[str, Any],
     bp_warnings: list[str],
+    domain: str = "automation",
 ) -> NoReturn:
     """Raise VALIDATION_FAILED with Core's text and the hints it supports."""
     error_context: dict[str, Any] = {**context, "failed_section": failed_section}
@@ -185,13 +197,18 @@ async def raise_core_rejection(
                 f"Home Assistant has no {kind} '{key}'. Registered {kind}s "
                 f"closest to it: {', '.join(matches)}.",
             )
-    suggestions.append("Use ha_get_skill_guide for automation examples")
+    if failed_section == "blueprint":
+        suggestions.append(
+            f"Use ha_manage_blueprints(action='list', domain='{domain}') to list "
+            "available blueprints"
+        )
+    suggestions.append(f"Use ha_get_skill_guide for {domain} examples")
     if bp_warnings:
         suggestions.append(bp_warnings_suggestion(bp_warnings))
     raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_FAILED,
-            f"{REJECTION_PREFIX}{core_text}",
+            f"{_rejection_prefix(domain)}{core_text}",
             suggestions=suggestions,
             context=error_context,
         )
