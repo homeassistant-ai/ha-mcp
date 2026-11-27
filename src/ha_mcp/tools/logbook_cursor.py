@@ -67,6 +67,9 @@ async def fill_logbook_page(
         if total is not None and seen >= total and page.get("after"):
             # Rows were recorded after the cursor's count: count on from here.
             total = None
+        elif total is not None and not page.get("after"):
+            # The window ended here, so the matches seen are all of them.
+            total = seen
         if continuation is None:
             entries.extend(page["entries"])
             if (

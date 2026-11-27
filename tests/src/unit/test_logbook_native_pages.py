@@ -173,12 +173,17 @@ async def test_tied_state_and_event_follow_native_order(
 
 
 @pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize(("early", "late_rows"), [(4, 2), (3, 1)])
 async def test_a_cursor_reaches_rows_recorded_after_its_first_page(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    early: int,
+    late_rows: int,
 ) -> None:
     """The recorder commits a few seconds behind: rows fired before the first
     page can reach the database after it."""
-    for name in ("one", "two", "three", "four"):
+    expected = [f"row {index}" for index in range(early + late_rows)]
+    for name in expected[:early]:
         hass.bus.async_fire("logbook_entry", {"name": name, "message": "probe"})
     await async_wait_recording_done(hass)
     late = dt_util.utcnow().timestamp()
@@ -186,9 +191,9 @@ async def test_a_cursor_reaches_rows_recorded_after_its_first_page(
     params = call_kwargs(search="probe", limit=2, order="oldest")
     page = (await tools.get_logs(**params))["data"]
     names = [row["name"] for row in page["entries"]]
-    assert page["total_entries"] == 4
+    assert page["total_entries"] == early
 
-    for name in ("five", "six"):
+    for name in expected[early:]:
         hass.bus.async_fire(
             "logbook_entry", {"name": name, "message": "probe"}, time_fired=late
         )
@@ -199,8 +204,8 @@ async def test_a_cursor_reaches_rows_recorded_after_its_first_page(
         ]
         names += [row["name"] for row in page["entries"]]
 
-    assert names == ["one", "two", "three", "four", "five", "six"]
-    assert page["total_entries"] == 6
+    assert names == expected
+    assert page["total_entries"] == len(expected)
 
 
 @pytest.mark.usefixtures("logbook")
