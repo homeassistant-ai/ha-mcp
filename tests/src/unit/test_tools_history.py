@@ -165,11 +165,11 @@ async def test_no_attributes_leaves_the_attributes_out_of_every_row(
 
 
 @pytest.mark.usefixtures("guardrails")
-async def test_the_workload_budget_doubles_only_for_attributes_on_every_row(
+async def test_the_workload_budget_doubles_when_attributes_are_read(
     recorded: None, core_client: HomeAssistantClient
 ) -> None:
     """Seven entity-days fit the budget once and not doubled."""
-    query = {"entity_ids": "sensor.temp", "minimal_response": False, **_window(7)}
+    query = {"entity_ids": "sensor.temp", **_window(7)}
 
     refusal = await _refusal(core_client, **query)
     result = await _history(core_client, **query, no_attributes=True)
@@ -349,7 +349,10 @@ async def test_raw_history_over_the_entity_hour_budget_is_refused(
     core_client: HomeAssistantClient, sent: AsyncMock
 ) -> None:
     response = await _refusal(
-        core_client, entity_ids=["sensor.one", "sensor.two"], **_window(6)
+        core_client,
+        entity_ids=["sensor.one", "sensor.two"],
+        no_attributes=True,
+        **_window(6),
     )
 
     assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -362,7 +365,9 @@ async def test_relative_window_exactly_at_the_budget_runs(
     core_client: HomeAssistantClient, sent: AsyncMock
 ) -> None:
     """Ten days of one entity is the 240 entity-hour budget, not over it."""
-    result = await _history(core_client, entity_ids="sensor.temp", start_time="10d")
+    result = await _history(
+        core_client, entity_ids="sensor.temp", start_time="10d", no_attributes=True
+    )
 
     assert result["data"]["success"] is True
     assert _recorder_queries(sent) == ["history/history_during_period"]
@@ -380,10 +385,10 @@ async def test_history_refusal_names_the_detail_flags_that_raise_the_cost(
         **_window(2),
     )
 
-    assert response["attributes_on_every_row"] is True
+    assert response["reads_attributes"] is True
     assert response["significant_changes_only"] is False
     suggestions = response["error"]["suggestions"]
-    assert any("minimal_response=true" in item for item in suggestions)
+    assert any("no_attributes=true" in item for item in suggestions)
     assert any("significant_changes_only=true" in item for item in suggestions)
 
 

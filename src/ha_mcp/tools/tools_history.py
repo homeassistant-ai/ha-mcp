@@ -434,9 +434,7 @@ class HistoryTools:
                 entity_ids=entity_id_list,
                 start_dt=start_dt,
                 end_dt=end_dt,
-                attributes_on_every_row=not (
-                    minimal_response or no_attributes or summary
-                ),
+                reads_attributes=not (no_attributes or summary),
                 significant_changes_only=significant_changes_only,
                 period=guard_period,
                 enforce_budget=query_settings.enable_history_query_guardrails,
@@ -721,7 +719,7 @@ def _validate_query_workload(
     entity_ids: list[str],
     start_dt: datetime,
     end_dt: datetime,
-    attributes_on_every_row: bool,
+    reads_attributes: bool,
     significant_changes_only: bool,
     period: str,
     enforce_budget: bool,
@@ -737,7 +735,7 @@ def _validate_query_workload(
             entity_ids,
             start_dt,
             end_dt,
-            attributes_on_every_row,
+            reads_attributes,
             significant_changes_only,
         )
     else:
@@ -766,17 +764,18 @@ def _history_workload_violation(
     entity_ids: list[str],
     start_dt: datetime,
     end_dt: datetime,
-    attributes_on_every_row: bool,
+    reads_attributes: bool,
     significant_changes_only: bool,
 ) -> tuple[dict[str, Any], list[str]] | None:
     """Return raw-history violation details, or None when within budget."""
     # Estimated multipliers account for the larger recorder payload when
-    # filtering is off or every row carries attributes; they are not measured
-    # row counts.
+    # filtering is off or attributes are read; they are not measured row counts.
+    # Core decides per domain which rows keep attributes, so any read of them
+    # counts.
     detail_weight = 1
     if not significant_changes_only:
         detail_weight *= 4
-    if attributes_on_every_row:
+    if reads_attributes:
         detail_weight *= 2
     entity_count = len(entity_ids)
     hours = (end_dt.timestamp() - start_dt.timestamp()) / 3600  # elapsed, DST-safe
@@ -792,16 +791,14 @@ def _history_workload_violation(
         "estimated_entity_hours": round(estimated_entity_hours, 2),
         "max_entity_hours": _MAX_HISTORY_ENTITY_HOURS,
         "detail_weight": detail_weight,
-        "attributes_on_every_row": attributes_on_every_row,
+        "reads_attributes": reads_attributes,
         "significant_changes_only": significant_changes_only,
     }
     suggestions = ["Query fewer entities or use a shorter time range."]
     if not significant_changes_only:
         suggestions.append("Set significant_changes_only=true to reduce recorder work.")
-    if attributes_on_every_row:
-        suggestions.append(
-            "Set minimal_response=true or no_attributes=true to leave attributes off the rows."
-        )
+    if reads_attributes:
+        suggestions.append("Set no_attributes=true to read no state attributes.")
     suggestions.append(
         "Use source='statistics' for long ranges when the entities support long-term statistics."
     )
