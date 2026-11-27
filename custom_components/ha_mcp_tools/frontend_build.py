@@ -138,6 +138,9 @@ function engine(op, p) {
       PURE[p.key] = build(p.src, p.bindings);
       return { value: true };
     }
+    if (op === 'apply') {
+      return { value: plain(PURE[p.key].apply(null, p.args)) };
+    }
     if (op === 'module') {
       // Run the module's own factory; its imports resolve export by export.
       load(String(p.id));
@@ -307,6 +310,7 @@ class FrontendBuild:
         self._module_file: dict[str, Path] = {}
         self._bodies: dict[str, str] = {}  # module id -> source
         self._modules: set[str] = set()
+        self._expressions: set[str] = set()
         self._found: dict[tuple[str, ...], str | None] = {}
         self._index()
         self._engine = quickjs.Function("engine", _ENGINE_JS, own_executor=True)
@@ -366,6 +370,18 @@ class FrontendBuild:
             if (definition := _local_definition(body, local)) is not None
         }
 
+    def run_expression(self, module_id: str, expr: str, *args: Any) -> Any:
+        """Call a pure function expression written in ``module_id``'s source,
+        its imports and module locals bound, with JSON arguments."""
+        key = f"{module_id}:{expr}"
+        if key not in self._expressions:
+            self._evaluate("export", self._module_body(module_id), expr, key)
+            self._expressions.add(key)
+        out = self._js("apply", {"key": key, "args": [*args]})
+        if "error" in out:
+            raise ValueError(out["error"])
+        return out["value"]
+
     def run_export(self, module_id: str, name: str, *args: Any) -> Any:
         """Call the export ``name`` of ``module_id`` with JSON arguments, or read
         an exported value. The module's own factory runs once, so its exports
@@ -392,6 +408,10 @@ class FrontendBuild:
         # Home Assistant's heap that stalls the event loop (#2744). QuickJS still
         # runs JS_RunGC() itself when its allocations pass the GC threshold.
         return self._engine(op, payload, run_gc=False)
+
+    def module_body(self, module_id: str) -> str:
+        """A module's source as the engine parsed it."""
+        return self._module_body(module_id)
 
     def _module_body(self, module_id: str) -> str:
         if module_id not in self._bodies:

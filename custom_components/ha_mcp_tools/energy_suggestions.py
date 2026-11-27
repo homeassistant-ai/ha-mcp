@@ -14,6 +14,7 @@ source or device each suggested slot fills.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.energy.data import EnergyManager, async_get_manager
@@ -24,6 +25,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.json import json_loads
 
 from . import card_definitions as cd
+from .frontend_build import _balanced_end
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -37,6 +39,10 @@ CAPABILITY = "energy_suggestions"
 _MARKERS = ('tab:"electricity"', ".has_sum")
 _USER_DATA_KEY = "energy"
 _LOCKS = "ha_mcp_tools_energy_suggestion_locks"
+# The suggestion panel subscribes to the states of the statistics this filter
+# keeps; other energy panels set the same field.
+_PANEL_MARKERS = ("this._statisticIds=", "dismissed_suggestions")
+_PANEL_FILTER_RE = re.compile(r"this\._statisticIds=[\w$]+\.filter\(")
 
 
 def _exports(build: FrontendBuild) -> tuple[str, dict[str, str]] | None:
@@ -68,6 +74,22 @@ def _exports(build: FrontendBuild) -> tuple[str, dict[str, str]] | None:
             "The installed frontend's energy meter suggestions were not found"
         )
     return module_id, {role: names[0] for role, names in found.items()}
+
+
+def _panel_states(build: FrontendBuild, data: dict[str, Any]) -> dict[str, Any]:
+    """The states Settings > Energy hands the function: those of the statistics
+    its panel keeps, chosen by the panel's own filter."""
+    module_id = build.module_containing(*_PANEL_MARKERS)
+    body = build.module_body(module_id) if module_id else ""
+    found = _PANEL_FILTER_RE.search(body)
+    if module_id is None or found is None:
+        raise HomeAssistantError(
+            "The installed frontend's energy meter suggestions were not found"
+        )
+    keep = body[found.end() : _balanced_end(body, found.end() - 1) - 1]
+    kept = build.run_expression(module_id, f"s=>s.filter({keep})", data["statistics"])
+    ids = {meta["statistic_id"] for meta in kept}
+    return {k: v for k, v in data["states"].items() if k in ids}
 
 
 def _dismissed_after(
@@ -116,6 +138,7 @@ def _suggest(
             raise HomeAssistantError(reason)
         return {"status": "unavailable", "reason": reason}
     module_id, names = located
+    data = {**data, "states": _panel_states(build, data)}
     result: dict[str, Any] = {
         "status": "available",
         "suggestions": build.run_export(module_id, names["compute"], data),

@@ -213,3 +213,47 @@ async def test_parallel_dismisses_all_stay_dismissed(
         "sensor.boiler_energy",
         "sensor.oven_energy",
     ]
+
+
+@_NEEDS_SUGGESTIONS
+@pytest.mark.usefixtures("fresh_card_state")
+async def test_a_power_sensor_built_from_a_meter_does_not_hide_it(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """A configured device power sensor whose state names a meter as its
+    source (a derivative helper) leaves that meter suggested, as Settings >
+    Energy shows it: the panel hands the frontend only its meters' states."""
+    hass_storage["energy"] = {
+        "version": 1,
+        "minor_version": 3,
+        "key": "energy",
+        "data": {
+            "energy_sources": [],
+            "device_consumption": [
+                {
+                    "stat_consumption": "sensor.fridge_energy",
+                    "stat_rate": "sensor.oven_power",
+                }
+            ],
+            "device_consumption_water": [],
+        },
+    }
+    await _meters(hass, hass_storage, configured=False)
+    hass.states.async_set(
+        "sensor.oven_power",
+        "1",
+        {
+            "device_class": "power",
+            "unit_of_measurement": "kW",
+            "source": "sensor.oven_energy",
+        },
+    )
+
+    result = await EnergyTools(component_core_client).ha_manage_energy_prefs(
+        mode="get", include_suggestions=True
+    )
+
+    assert "sensor.oven_energy" in _suggested(result)
