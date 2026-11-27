@@ -729,7 +729,8 @@ class TestSessionCleanup:
             async with held_auth(monkeypatch):
                 with pytest.raises(TimeoutError):
                     await read_engine_theme(engine.credential)
-                # Core has not answered the close yet, and nothing still waits.
-                assert sessions.closed == 0
+                # Core is still held in the sign-in (it may already have
+                # dropped the abandoned connection), and nothing still waits.
+                assert sessions.opened == 0
                 assert closes_running() == []
             await until(lambda: sessions.closed == 1)

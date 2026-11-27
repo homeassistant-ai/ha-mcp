@@ -84,27 +84,27 @@ async def reject_unconvertible_unit(
                 f"{CONVERTIBLE_UNITS} answered {reply.get('error')!r}"
             )
         units = (reply.get("result") or {}).get("units") or []
-    if unit in units:
-        return None
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
-            f"{unit!r} is not among the units Home Assistant lists for "
-            f"{entity_id}'s device class ({device_class or 'none'})",
-            context={
-                "entity_id": entity_id,
-                "unit_of_measurement": unit,
-                "device_class": device_class,
-                "convertible_units": units,
-                "checked_with": CONVERTIBLE_UNITS,
-            },
-            suggestions=[
-                f"Use one of: {', '.join(units)}"
-                if units
-                else "Home Assistant lists no units this sensor converts to"
-            ],
+    if unit not in units:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"{unit!r} is not among the units Home Assistant lists for "
+                f"{entity_id}'s device class ({device_class or 'none'})",
+                context={
+                    "entity_id": entity_id,
+                    "unit_of_measurement": unit,
+                    "device_class": device_class,
+                    "convertible_units": units,
+                    "checked_with": CONVERTIBLE_UNITS,
+                },
+                suggestions=[
+                    f"Use one of: {', '.join(units)}"
+                    if units
+                    else "Home Assistant lists no units this sensor converts to"
+                ],
+            )
         )
-    )
+    return None
 
 
 def reject_name_with_use_device_name(
