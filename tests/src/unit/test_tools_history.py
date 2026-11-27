@@ -165,19 +165,16 @@ async def test_no_attributes_leaves_the_attributes_out_of_every_row(
 
 
 @pytest.mark.usefixtures("guardrails")
-async def test_the_workload_budget_counts_attributes_by_no_attributes(
+async def test_the_workload_budget_doubles_only_for_attributes_on_every_row(
     recorded: None, core_client: HomeAssistantClient
 ) -> None:
     """Seven entity-days fit the budget once and not doubled."""
-    query = {"entity_ids": "sensor.temp", **_window(7)}
+    query = {"entity_ids": "sensor.temp", "minimal_response": False, **_window(7)}
 
     refusal = await _refusal(core_client, **query)
     result = await _history(core_client, **query, no_attributes=True)
 
-    assert (
-        "Set no_attributes=true to read no state attributes."
-        in (refusal["error"]["suggestions"])
-    )
+    assert any("no_attributes=true" in hint for hint in refusal["error"]["suggestions"])
     assert result["data"]["success"] is True
 
 
@@ -383,7 +380,7 @@ async def test_history_refusal_names_the_detail_flags_that_raise_the_cost(
         **_window(2),
     )
 
-    assert response["minimal_response"] is False
+    assert response["attributes_on_every_row"] is True
     assert response["significant_changes_only"] is False
     suggestions = response["error"]["suggestions"]
     assert any("minimal_response=true" in item for item in suggestions)
