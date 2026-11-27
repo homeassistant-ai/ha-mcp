@@ -306,7 +306,7 @@ class TestCapture:
                 capture_entities=["input_boolean.tv"],
             )
 
-        assert body["error"]["code"] != "ENTITY_NOT_FOUND"
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert body["entity_id"] == "input_boolean.tv"
         assert body["action"] == "capture"
         upsert.assert_not_awaited()
@@ -326,7 +326,7 @@ class TestCapture:
             capture_entities=["light.nope/../input_boolean.tv"],
         )
 
-        assert body["error"]["code"] != "ENTITY_NOT_FOUND"
+        assert body["error"]["code"] == "VALIDATION_FAILED"
         assert await stored_scenes(hass) == before
 
     async def test_a_lost_connection_names_the_entity_unwritten(
