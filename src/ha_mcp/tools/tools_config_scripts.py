@@ -966,13 +966,13 @@ class ConfigScriptTools:
         effective_category: str | None = None,
     ) -> dict[str, Any]:
         """Validate references, upsert, finalize (hash, wait, category), and build the response."""
+        references = await ref_check(self._client, transformed_config, "script")
         # Save transformed config. ``_fetch_and_verify_hash`` already
         # resolved the storage key; pass it as the write target so the
         # upsert skips the redundant re-resolve (issue #1813 Phase 0).
         # ``script_id`` stays the caller id (the fetched config already
         # carries an alias here, so the default is a no-op, but keep the
         # contract consistent — #1935).
-        references = await ref_check(self._client, transformed_config, "script")
         result = await self._upsert_script(
             transformed_config, script_id, resolved_id, bp_warnings
         )

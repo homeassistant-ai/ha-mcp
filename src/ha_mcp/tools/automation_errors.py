@@ -110,15 +110,23 @@ async def raise_if_core_rejected(
     if core_text is None:
         return
     if config_key_malformed(core_text):
-        # Core refused the key before it judged the config.
-        failed_section: str | None = "id"
-    else:
-        failed_section = await failed_section_from_core(client, config, domain)
+        # Core refused the key before it judged the config: no config hint applies.
+        suggestions = [f"Use the {domain} id Core suggests in its message"]
+        if bp_warnings:
+            suggestions.append(bp_warnings_suggestion(bp_warnings))
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                f"Home Assistant rejected the {domain}'s id: {core_text}",
+                suggestions=suggestions,
+                context={**context, "failed_section": "id"},
+            )
+        )
     await raise_core_rejection(
         client,
         core_text,
         config,
-        failed_section=failed_section,
+        failed_section=await failed_section_from_core(client, config, domain),
         context=context,
         bp_warnings=bp_warnings,
         domain=domain,
@@ -208,16 +216,6 @@ async def raise_core_rejection(
 ) -> NoReturn:
     """Raise VALIDATION_FAILED with Core's text and the hints it supports."""
     error_context: dict[str, Any] = {**context, "failed_section": failed_section}
-    if failed_section == "id":
-        # Nothing in the config is at fault, so no config hint applies.
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                f"Home Assistant rejected the {domain}'s id: {core_text}",
-                suggestions=[f"Use the {domain} id Core suggests in its message"],
-                context=error_context,
-            )
-        )
     suggestions = text_suggestions(core_text, config)
     match = invalid_platform_key(core_text)
     if match:

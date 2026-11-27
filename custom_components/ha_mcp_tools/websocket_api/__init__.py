@@ -153,6 +153,9 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/scene_ignored_domains`` — the domains the scene editor leaves
   out of a picked device's entities, read from the installed frontend build,
   the only place the list exists. See ``scene_editor.py``.
+* ``ha_mcp_tools/script_config_keys`` — the top-level keys a script config
+  takes, read from Core's script schema and blueprint instance fields. See
+  ``script_config_keys.py``.
 * ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set
@@ -384,6 +387,7 @@ from .. import (
     helper_collections,
     recorder_status,
     scene_editor,
+    script_config_keys,
     todo_items,
     update_entities,
 )
@@ -574,6 +578,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *flow_record.command_specs(vol),
         *flow_outline.command_specs(vol),
         *scene_editor.command_specs(vol),
+        *script_config_keys.command_specs(vol),
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
         *config_file_items.command_specs(vol),

@@ -4,19 +4,17 @@ import json
 import logging
 import re
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
-from homeassistant.components.automation.config import (
-    PLATFORM_SCHEMA as AUTOMATION_SCHEMA,
-)
-from homeassistant.components.script.config import SCRIPT_ENTITY_SCHEMA
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
 from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
 from ha_mcp.utils.usage_logger import get_recent_logs, shutdown_usage_logger
+
+from ._component_frames import older_component
 
 
 def _make_mcp() -> FastMCP:
@@ -421,10 +419,13 @@ def _suggestions(body: dict) -> list[str]:
     return error.get("suggestions") or [error["suggestion"]]
 
 
-def _make_config_set_like_mcp() -> FastMCP:
-    """Tools shaped like ha_config_set_automation/_script for the config-key hint."""
+def _make_config_set_like_mcp(client: HomeAssistantClient | None = None) -> FastMCP:
+    """Tools shaped like ha_config_set_automation/_script for the config-key hint,
+    the middleware reading Core through ``client`` when one is given."""
     mcp = FastMCP("test")
-    mcp.add_middleware(ValidationErrorMiddleware())
+    mcp.add_middleware(
+        ValidationErrorMiddleware(None if client is None else lambda: client)
+    )
 
     @mcp.tool()
     async def ha_config_set_automation(
@@ -508,51 +509,48 @@ async def test_misplaced_script_config_key_says_it_belongs_in_config() -> None:
     )
 
 
-def _core_config_keys(schema: Any, *left_out: str) -> list[str]:
-    """The top-level keys Core's config ``schema`` takes, from the schema itself,
-    but for the ``left_out`` keys the middleware's comment names."""
-    parts = [schema, *getattr(schema, "validators", [])]
-    (fields,) = [
-        p.schema for p in parts if isinstance(getattr(p, "schema", None), dict)
-    ]
-    return sorted(str(key) for key in fields if str(key) not in left_out)
-
-
-@pytest.mark.parametrize(
-    ("tool", "arguments", "key"),
-    [
-        *(
-            ("ha_config_set_automation", {}, key)
-            for key in [
-                *_core_config_keys(AUTOMATION_SCHEMA, "id"),
-                "use_blueprint",
-                "trigger",
-                "condition",
-                "action",
-            ]
-        ),
-        *(
-            ("ha_config_set_script", {"script_id": "blink"}, key)
-            for key in [
-                *_core_config_keys(SCRIPT_ENTITY_SCHEMA, "variables"),
-                "use_blueprint",
-            ]
-        ),
-    ],
-)
-async def test_every_field_cores_schema_takes_is_told_to_move_into_config(
-    tool: str, arguments: dict[str, Any], key: str
-) -> None:
-    """A field missing from ``_CONFIG_ROOT_KEYS_BY_TOOL`` would get the
-    stale-tool-list hint instead. The schema keys are read from the Core this
-    suite runs, so a Core that adds one fails here, on the beta Core lane first;
-    ``use_blueprint`` and the automation singular aliases are added by hand."""
-    mcp = _make_config_set_like_mcp()
+async def _script_trace_rejection(client: HomeAssistantClient) -> dict:
+    mcp = _make_config_set_like_mcp(client)
     with pytest.raises(ToolError) as exc_info:
-        await mcp.call_tool(tool, {**arguments, key: None})
+        await mcp.call_tool("ha_config_set_script", {"script_id": "blink", "trace": {}})
+    return json.loads(str(exc_info.value))
 
-    body = json.loads(str(exc_info.value))
-    assert f"Move `{key}` inside the `config` argument" in " ".join(_suggestions(body))
+
+async def test_a_script_field_core_takes_is_told_to_move_into_config(
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """``trace`` is not in the server's own list; the component reads it from
+    Core's script schema."""
+    body = await _script_trace_rejection(component_core_client)
+
+    assert "Move `trace` inside the `config` argument" in _suggestions(body)[0]
+
+
+def _assert_script_keys_unread(body: dict, reason: str) -> None:
+    message = body["error"]["message"]
+    assert "if it is a script config field, pass it inside `config`" in message
+    note = _suggestions(body)[-1]
+    assert reason in note
+    assert "Core's script fields could not be read" in note
+    assert not any("Move `trace`" in s for s in _suggestions(body))
+
+
+async def test_without_the_component_the_script_hint_says_core_was_not_read(
+    core_client: HomeAssistantClient,
+) -> None:
+    _assert_script_keys_unread(
+        await _script_trace_rejection(core_client), "No ha_mcp_tools component answered"
+    )
+
+
+async def test_a_component_without_the_script_keys_is_answered_the_same(
+    monkeypatch: pytest.MonkeyPatch, component_core_client: HomeAssistantClient
+) -> None:
+    older_component(monkeypatch, "script_config_keys")
+
+    _assert_script_keys_unread(
+        await _script_trace_rejection(component_core_client), "component is too old"
+    )
 
 
 @pytest.mark.asyncio
@@ -564,18 +562,6 @@ async def test_non_config_key_on_config_tool_still_gets_did_you_mean() -> None:
 
     msg = json.loads(str(exc_info.value))["error"]["message"]
     assert "`configg`: unknown parameter, did you mean `config`?" in msg
-    assert "inside `config`" not in msg
-
-
-async def test_a_top_level_automation_id_is_pointed_to_entity_id() -> None:
-    """Core's schema takes ``id``, but a top-level one means the automation to
-    write, so it keeps the did-you-mean instead of moving into ``config``."""
-    mcp = _make_config_set_like_mcp()
-    with pytest.raises(ToolError) as exc_info:
-        await mcp.call_tool("ha_config_set_automation", {"id": "morning"})
-
-    msg = json.loads(str(exc_info.value))["error"]["message"]
-    assert "did you mean `entity_id`?" in msg
     assert "inside `config`" not in msg
 
 

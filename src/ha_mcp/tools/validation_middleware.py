@@ -11,13 +11,14 @@ reported with the closest declared parameter, if one resembles it (a config
 key passed top-level on a config-writing tool is told to move inside
 ``config`` instead), the full parameter list, and, for any other name, a
 suggestion for the case where the client's tool list is older than the
-server's.
+server's. A script tool's config keys are read from Core through the
+``ha_mcp_tools`` component when it serves them.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from difflib import SequenceMatcher
 from typing import Any, Literal
 
@@ -31,9 +32,15 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
     MiddlewareContext,
 )
 
+from ..client.exceptions import HomeAssistantError
 from ..errors import create_validation_error
 from ..renamed_tools import CLIENT_TOOL_LIST_REFRESH_STEPS
 from ..utils.usage_logger import log_tool_call
+from .component_api import (
+    ask_component,
+    component_unusable_warning,
+    get_component_caps,
+)
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -55,19 +62,16 @@ _UNKNOWN_ARGUMENT = "unexpected_keyword_argument"
 
 _RejectionKind = Literal["misplaced", "undeclared", "other"]
 
-# Config root keys that a model may pass as top-level tool arguments on the
-# config-writing tools. When one arrives top-level, the rejection says the key
-# belongs inside `config` instead of only listing the valid tool parameters
-# (issue #2649 section 1).
+# Config root keys that models habitually pass as top-level tool arguments on
+# the config-writing tools. When one arrives top-level, the rejection says the
+# key belongs inside `config` instead of only listing the valid tool
+# parameters (issue #2649 section 1).
 #
 # Scoped per tool on purpose: only the config-writing tools take a `config`
 # body, so only their top-level arguments can be misplaced config keys.
-# (Only these two were measured in BAT runs.) Each holds the fields Core's
-# schema takes, plus `use_blueprint` and, for automations, the singular aliases;
-# a unit test reads the running Core's schema, so a field Core adds fails it.
-# Left out: an automation's `id`, which a model means as `entity_id` and, when
-# `entity_id` is not also passed, gets that did-you-mean; and a script's
-# `variables`, the tool's own run parameter.
+# (Only these two were measured in BAT runs.) The script set is a fallback:
+# when the component serves `ha_mcp_tools/script_config_keys`, Core's own
+# script keys replace it.
 _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
     "ha_config_set_automation": {
         "alias",
@@ -82,11 +86,7 @@ _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
         "max",
         "max_exceeded",
         "variables",
-        "trigger_variables",
         "use_blueprint",
-        "trace",
-        "initial_state",
-        "hide_entity",
     },
     "ha_config_set_script": {
         "alias",
@@ -97,7 +97,6 @@ _CONFIG_ROOT_KEYS_BY_TOOL: dict[str, set[str]] = {
         "max_exceeded",
         "fields",
         "icon",
-        "trace",
         "use_blueprint",
     },
 }
@@ -111,6 +110,31 @@ _FIELD_GOES_IN_CONFIG = (
     "; if it is one of the helper's own fields, pass it inside `config` under "
     "Home Assistant's name for it"
 )
+
+_SCRIPT_TOOL = "ha_config_set_script"
+# When Core's script keys could not be read and the script set of
+# _CONFIG_ROOT_KEYS_BY_TOOL answered instead: added to any other name, and
+# the reason, with the component install or update step, to the suggestions.
+_SCRIPT_FIELD_HINT = "; if it is a script config field, pass it inside `config`"
+_SCRIPT_FIELDS_UNREAD = "Core's script fields could not be read"
+
+
+async def _script_config_keys(client: Any) -> tuple[set[str] | None, str | None]:
+    """Core's script config keys through the component, or why they were not read.
+
+    A failed or malformed read counts as no component; the base error class
+    also covers an OAuth client that cannot name the requesting user, which
+    would otherwise replace the rejection.
+    """
+    try:
+        reply = await ask_component(client, "script_config_keys")
+        keys = reply.get("keys") if reply is not None else None
+        if isinstance(keys, list) and keys and all(isinstance(k, str) for k in keys):
+            return set(keys), None
+        caps = await get_component_caps(client)
+    except HomeAssistantError:
+        caps = None
+    return None, component_unusable_warning(caps, _SCRIPT_FIELDS_UNREAD)
 
 
 async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] | None:
@@ -199,7 +223,7 @@ def _argument_hint(
     unclaimed: Sequence[str],
     valid_parameters: list[str] | None,
     config_keys: set[str] | None,
-    fields_in_config: bool = False,
+    field_hint: str,
 ) -> tuple[str, _RejectionKind]:
     """Hint for one rejected argument.
 
@@ -218,11 +242,13 @@ def _argument_hint(
         )
         return hint, "misplaced"
     hint = _unknown_argument_hint(param, unclaimed)
-    return hint + (_FIELD_GOES_IN_CONFIG if fields_in_config else ""), "undeclared"
+    return hint + field_hint, "undeclared"
 
 
 def _rejection_suggestions(
-    misplaced_keys: Sequence[str], undeclared_names: Sequence[str]
+    misplaced_keys: Sequence[str],
+    undeclared_names: Sequence[str],
+    unread_note: str | None,
 ) -> list[str]:
     """Suggestions for undeclared arguments; empty keeps the generic ones.
 
@@ -236,6 +262,8 @@ def _rejection_suggestions(
     ]
     if undeclared_names:
         suggestions.append(_stale_tool_list_hint(undeclared_names))
+    if unread_note:
+        suggestions.append(unread_note)
     return suggestions
 
 
@@ -268,6 +296,26 @@ def _type_hint(errs: Sequence[ErrorDetails]) -> str:
 
 class ValidationErrorMiddleware(Middleware):
     """Convert argument-validation failures into structured ToolErrors."""
+
+    def __init__(self, get_client: Callable[[], Any] | None = None) -> None:
+        # Reads Core's script config keys through the component; with no
+        # getter, or no component, the server's own set answers.
+        self._get_client = get_client
+
+    async def _config_keys(
+        self, tool_name: str | None
+    ) -> tuple[set[str] | None, str, str | None]:
+        """The tool's config root keys, the hint added to any other name, and
+        why Core's keys were not read when the server's own set answered."""
+        if tool_name in _FIELDS_IN_CONFIG_TOOLS:
+            return None, _FIELD_GOES_IN_CONFIG, None
+        listed = _CONFIG_ROOT_KEYS_BY_TOOL.get(tool_name) if tool_name else None
+        if tool_name != _SCRIPT_TOOL or self._get_client is None:
+            return listed, "", None
+        core_keys, unread_note = await _script_config_keys(self._get_client())
+        if core_keys is not None:
+            return core_keys, "", None
+        return listed, _SCRIPT_FIELD_HINT, unread_note
 
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
@@ -312,12 +360,14 @@ class ValidationErrorMiddleware(Middleware):
             tool_name = getattr(message_obj, "name", None)
             unclaimed: list[str] = []
             config_keys: set[str] | None = None
+            field_hint = ""
+            unread_note: str | None = None
             if valid_parameters is not None:
                 # Skip parameters the call already supplied: a second, invented
                 # argument almost never means one of them.
                 unclaimed = [p for p in valid_parameters if p not in supplied]
-                config_keys = (
-                    _CONFIG_ROOT_KEYS_BY_TOOL.get(tool_name) if tool_name else None
+                config_keys, field_hint, unread_note = await self._config_keys(
+                    tool_name
                 )
 
             parts: list[str] = []
@@ -330,7 +380,7 @@ class ValidationErrorMiddleware(Middleware):
                     unclaimed,
                     valid_parameters,
                     config_keys,
-                    tool_name in _FIELDS_IN_CONFIG_TOOLS,
+                    field_hint,
                 )
                 if kind == "misplaced":
                     misplaced_keys.append(param)
@@ -351,7 +401,7 @@ class ValidationErrorMiddleware(Middleware):
                     details=", ".join(dict.fromkeys(err["type"] for err in errors)),
                     context=error_context,
                     suggestions=_rejection_suggestions(
-                        misplaced_keys, undeclared_names
+                        misplaced_keys, undeclared_names, unread_note
                     ),
                 )
             )

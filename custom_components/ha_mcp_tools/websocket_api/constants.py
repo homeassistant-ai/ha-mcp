@@ -18,6 +18,7 @@ from .. import (
     helper_collections,
     recorder_status,
     scene_editor,
+    script_config_keys,
     todo_items,
     update_entities,
 )
@@ -253,6 +254,7 @@ CAPABILITIES: list[str] = [
     flow_record.REPAIRS_CAPABILITY,
     flow_outline.CAPABILITY,
     scene_editor.CAPABILITY,
+    script_config_keys.CAPABILITY,
     automation_config.CAPABILITY,
     config_references.CAPABILITY,
     config_file_items.CAPABILITY,
