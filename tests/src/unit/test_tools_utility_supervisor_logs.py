@@ -210,21 +210,21 @@ class TestTheRoute:
 
 
 class TestTheSlugParameter:
-    async def test_a_service_outside_the_allowed_set_is_refused_before_asking(
-        self, app_route: Route
-    ):
+    async def test_unknown_service_reaches_supervisor(self, app_route: Route):
+        app_route.supervisor.reply("No such log route", status=404)
         with pytest.raises(ToolError) as refused:
             await ask(
                 app_route.client,
                 Target("system_service", "not_a_real_service", ""),
             )
 
-        error = error_body(refused)["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        # The caller sees what is allowed.
-        listed = error["message"] + " ".join(error.get("suggestions", []))
-        assert all(service in listed for service in SERVICES)
-        assert app_route.supervisor.requests == []
+        body = error_body(refused)
+        assert body["status"] == 404
+        error = body["error"]
+        assert error["code"] == "RESOURCE_NOT_FOUND"
+        assert [r.path for r in app_route.supervisor.requests] == [
+            "/not_a_real_service/logs"
+        ]
 
     @pytest.mark.parametrize("slug", ["x/../../../states?", "a/b", ".", ".."])
     async def test_an_app_slug_that_could_leave_its_path_is_refused_before_asking(
@@ -310,6 +310,17 @@ class TestTheCredentialToFix:
             # Docker and uvx callers have no Supervisor token to look for.
             assert any("Long-Lived Access Token" in s for s in suggestions)
             assert not any("SUPERVISOR_TOKEN" in s for s in suggestions)
+
+    async def test_a_service_cores_proxy_does_not_serve_is_not_found(
+        self, core_route: Route
+    ):
+        """Core's proxy answers 401 for a path outside its list, as for a bad token."""
+        with pytest.raises(ToolError) as refused:
+            await ask(
+                core_route.client, Target("system_service", "not_a_real_service", "")
+            )
+
+        assert error_body(refused)["error"]["code"] == "RESOURCE_NOT_FOUND"
 
     async def test_a_403_inside_the_app_names_every_authorization_boundary(
         self, app_route: Route, target: Target, caplog: pytest.LogCaptureFixture

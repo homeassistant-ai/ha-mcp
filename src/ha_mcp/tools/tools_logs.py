@@ -17,9 +17,10 @@ from pydantic import Field
 from .._vendor.fastmcp.exceptions import ToolError
 from ..client.error_log_journald import is_cursor_token, parse_cursor_token
 from ..client.journal_window import parse_window_token
-from ..errors import TOOL_ERROR_LOG_LEVEL
+from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
+from .coercion import JSON_STRING_COERCION
 from .error_log_parsing import _DEFAULT_TOP_N
-from .helpers import log_tool_usage
+from .helpers import log_tool_usage, raise_tool_error
 from .log_common import (
     MAX_LIMIT,
     _collect_log_warnings,
@@ -31,6 +32,7 @@ from .log_sources_fault import FaultLogSourceMixin
 from .log_sources_logbook import LogbookLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
 from .logbook_cursor import LOGBOOK_CURSOR_PREFIX, LogbookCursor
+from .supervisor_log_reader import exact_log_window, selected_journal
 from .tool_hints import read_only_hints
 
 
@@ -92,6 +94,22 @@ def _validate_log_offset(source: str, offset: int | str) -> int | str:
     return offset
 
 
+def _with_warnings(result: dict[str, Any], *groups: list[str]) -> dict[str, Any]:
+    """Put ``groups`` of warnings ahead of the ones ``result`` already carries."""
+    warnings = [warning for group in groups for warning in group]
+    if warnings:
+        result["warnings"] = warnings + result.get("warnings", [])
+    return result
+
+
+def _unused(**given: object) -> list[str]:
+    """A warning naming the parameters given that this read does not use."""
+    names = [name for name, value in given.items() if value]
+    if not names:
+        return []
+    return [f"Parameters {', '.join(names)} do not apply to this read; ignored."]
+
+
 class LogTools(
     LogbookLogSourceMixin,
     CoreLogSourcesMixin,
@@ -121,6 +139,7 @@ class LogTools(
         structured: bool = False,
         top_n: int | None = None,
         action_calls: bool = False,
+        integration: str | None = None,
     ) -> dict[str, Any]:
         # Only a supervisor/system_service page read can take its order from a
         # token, so only those two are given ``order`` as it came.
@@ -142,7 +161,12 @@ class LogTools(
             )
         if source == "system":
             return await self._get_system_log(
-                limit=limit, search=search, level=level, order=chosen, compact=compact
+                limit=limit,
+                search=search,
+                level=level,
+                order=chosen,
+                compact=compact,
+                integration=integration,
             )
         if source == "error_log":
             return await self._get_error_log(
@@ -153,6 +177,7 @@ class LogTools(
                 offset=offset,
                 structured=structured,
                 top_n=top_n,
+                integration=integration,
             )
         if source == "logger":
             # logger reports per-integration levels, not time-ordered events;
@@ -200,9 +225,82 @@ class LogTools(
         structured: bool = False,
         top_n: int | None = None,
         action_calls: bool = False,
+        integration: str | None = None,
+        boot: int | str | None = None,
+        identifier: str | None = None,
+        latest: bool = False,
+        listing: str | None = None,
+        start_time: str | None = None,
+        sources: list[str] | None = None,
     ) -> dict[str, Any]:
         level = _validate_log_level(level)
         offset = _validate_log_offset(source, offset)
+        logbook_only = {
+            "entity_id": entity_id,
+            "device_id": device_id,
+            "context_id": context_id,
+            "action_calls": action_calls,
+            "top_n": top_n,
+        }
+        if start_time is not None or sources is not None:
+            if any(
+                (
+                    hours_back,
+                    level,
+                    structured,
+                    integration,
+                    boot is not None,
+                    identifier,
+                    latest,
+                    listing,
+                )
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "An exact window takes start_time, end_time, search and limit, "
+                        "with sources for a timeline or offset for one raw source.",
+                    )
+                )
+            return _with_warnings(
+                await exact_log_window(
+                    self._client,
+                    source,
+                    slug,
+                    sources,
+                    start_time,
+                    end_time,
+                    limit,
+                    offset,
+                    search,
+                    order,
+                ),
+                _unused(**logbook_only, slug=sources is not None and slug),
+            )
+        if boot is not None or identifier or latest or listing:
+            if hours_back or offset or integration or level or structured:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "A journal selection (boot, latest, identifier, listing) "
+                        "takes limit, search and order.",
+                    )
+                )
+            return _with_warnings(
+                await selected_journal(
+                    self._client,
+                    source,
+                    slug,
+                    boot=boot,
+                    identifier=identifier,
+                    latest=latest,
+                    listing=listing,
+                    limit=limit,
+                    search=search,
+                    order=order,
+                ),
+                _unused(**logbook_only, end_time=end_time),
+            )
         warnings = _collect_log_warnings(
             source,
             level,
@@ -237,6 +335,10 @@ class LogTools(
                 f"structured=True; {reason}"
             )
         _validate_log_slug(source, slug)
+        if integration and source not in {"error_log", "system"}:
+            warnings.append(
+                f"Parameter 'integration' applies to system and error_log; ignored for source='{source}'."
+            )
         result = await self._fetch_log_source(
             source,
             limit,
@@ -254,13 +356,12 @@ class LogTools(
             structured=structured_error_log,
             top_n=top_n,
             action_calls=action_calls,
+            integration=integration,
         )
-        if warnings:
-            # Prepend, don't overwrite: the structured error_log path emits its
-            # own warnings (format drift, ignored limit/order) and clobbering
-            # them would drop the "this is NOT an all-clear" notice.
-            result["warnings"] = warnings + result.get("warnings", [])
-        return result
+        # Prepended, not overwritten: the structured error_log path emits its
+        # own warnings (format drift, ignored limit/order) and clobbering
+        # them would drop the "this is NOT an all-clear" notice.
+        return _with_warnings(result, warnings)
 
 
 def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -305,7 +406,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "never reaches journald or error_log; empty on a healthy "
                     "install (crash_recorded=False); whole crash blocks are "
                     "ordered with each block's lines kept in place; reads "
-                    "through the 'HA-MCP File & YAML Tools' entry."
+                    "through either HA-MCP component entry."
                 )
             ),
         ] = "logbook",
@@ -321,7 +422,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "lines were cut. Does not apply to source='error_log' with "
                     "structured=True. On a supervisor/system_service page read "
                     "(see offset) it counts journal entries, and an entry can "
-                    "print several lines."
+                    "print several lines. A timeline (sources) counts records and "
+                    "keeps the records of one instant together, so it can return "
+                    "a few more."
                 )
             ),
         ] = None,
@@ -352,7 +455,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "direction of the newest lines read. A supervisor/"
                     "system_service page read (hours_back, no search) is "
                     "always oldest-first, so this may be omitted there; "
-                    "'newest' is answered oldest-first with a warning. "
+                    "'newest' is answered oldest-first with a warning, as is an "
+                    "exact window or timeline (start_time). "
                     "Default 'newest'. "
                     "fault_log orders whole crash blocks; error_log orders "
                     "whole records and keeps each record's lines in place. Ignored "
@@ -411,7 +515,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         end_time: Annotated[
             str | None,
-            Field(description="Logbook only: end of the window (ISO datetime)."),
+            Field(
+                description=(
+                    "End of the window, ISO 8601 with offset. Logbook: the "
+                    "window's end, with hours_back. Required with start_time."
+                )
+            ),
         ] = None,
         offset: Annotated[
             int | str,
@@ -429,10 +538,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "(hours_back may be omitted). An integer skips that many "
                     "entries from the window's first. A page's total_lines is its line count. On error_log it "
                     "counts raw log lines back from the newest entry, or is the "
-                    "opaque token a previous page returned in 'next_offset' on "
-                    "Supervisor/journald installs, which keeps paging exact "
+                    "opaque token a previous page returned in 'next_offset', "
+                    "which keeps paging exact "
                     "while new log lines arrive (`structured=True` accepts and "
-                    "returns that token too); on fault_log it counts lines "
+                    "returns that token too); with integration, and in an exact "
+                    "raw window (start_time), it is an integer; on fault_log it "
+                    "counts lines "
                     "from the start of the assembled crash text. Pass the "
                     "response's 'next_offset' to continue while 'has_more' is "
                     "true."
@@ -459,6 +570,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = False,
         # System/error_log-specific
+        integration: Annotated[
+            str | None,
+            Field(
+                description="Filter system entries or the raw Core log by integration domain, including its library loggers."
+            ),
+        ] = None,
         level: Annotated[
             str | None,
             Field(
@@ -475,9 +592,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             bool,
             Field(
                 description=(
-                    "source='error_log' only. When True, return a deduplicated, "
-                    "component-grouped summary of the log (counted issues sorted by "
-                    "frequency) instead of raw text. Ignored for other sources."
+                    "source='error_log' only. When True, return a deduplicated "
+                    "summary of the log grouped by integration (counted issues "
+                    "sorted by frequency) instead of raw text. Ignored for other "
+                    "sources."
                 )
             ),
         ] = False,
@@ -491,15 +609,71 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
-        # Supervisor + system_service-specific (different namespaces)
+        # Exact windows and journal selections
+        start_time: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Start of an exact window, ISO 8601 with offset, for "
+                    "error_log, supervisor, system_service or sources."
+                )
+            ),
+        ] = None,
+        sources: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Up to twelve timeline sources: core, supervisor, host, a "
+                    "plugin name or app:<slug>. The journal ones need a "
+                    "Supervisor install."
+                )
+            ),
+        ] = None,
+        boot: Annotated[
+            int | str | None,
+            Field(
+                description=(
+                    "Journal boot for error_log, supervisor or system_service: "
+                    "an offset (0 current, -1 previous) or a boot ID from "
+                    "listing='boots'."
+                )
+            ),
+        ] = None,
+        identifier: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Syslog identifier in the host journal (source="
+                    "'system_service', slug='host'), from listing='identifiers'."
+                )
+            ),
+        ] = None,
+        latest: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Read since the app or service container last started "
+                    "(error_log, supervisor, system_service; not the host)."
+                )
+            ),
+        ] = False,
+        listing: Annotated[
+            Literal["boots", "identifiers"] | None,
+            Field(
+                description=(
+                    "List the host journal's boots or syslog identifiers "
+                    "instead of reading lines (Supervisor installs)."
+                )
+            ),
+        ] = None,
         slug: Annotated[
             str | None,
             Field(
                 description=(
                     "source='supervisor': app slug, e.g. 'core_mosquitto' (use "
                     "ha_get_app() to list installed slugs). "
-                    "source='system_service': service name, one of supervisor, "
-                    "host, core, dns, audio, multicast — here "
+                    "source='system_service': a Supervisor service name, e.g. host or core. Here "
                     "'supervisor' is the Supervisor service's own logs, not an "
                     "app with that name."
                 )
@@ -527,6 +701,19 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         pagination_hint; error_log, fault_log and supervisor/system_service
         page reads carry has_more with a next_offset to pass back while it
         stays true.
+
+        Exact windows: start_time and end_time with source error_log,
+        supervisor or system_service return that source's lines in the window,
+        oldest-first, paged by integer offset. With sources they return one
+        merged timeline of records instead; pass next_start_time back as
+        start_time to continue. boot, latest, identifier and listing select
+        from the journal on Supervisor installs and take only limit, search
+        and order. integration narrows system and error_log to one integration.
+
+        EXAMPLES:
+        - Timeline: ha_get_logs(sources=["core", "supervisor"],
+          start_time="2026-01-05T10:00:00+00:00", end_time="2026-01-05T10:05:00+00:00")
+        - Core log of the previous boot: ha_get_logs(source="error_log", boot=-1)
         """
         return await tools.get_logs(
             source=source,
@@ -545,4 +732,11 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             structured=structured,
             top_n=top_n,
             action_calls=action_calls,
+            integration=integration,
+            boot=boot,
+            identifier=identifier,
+            latest=latest,
+            listing=listing,
+            start_time=start_time,
+            sources=sources,
         )

@@ -487,7 +487,7 @@ class TestSearchedWindow:
             out = await ask(in_app_client, search="m", hours_back=24)
         assert out["window_complete"] is False
         assert out["has_more"] is True
-        assert "more than 100 entries" in out["warnings"][0]
+        assert any("more than 100 entries" in warning for warning in out["warnings"])
         hint = out["pagination_hint"]
         assert "cannot be searched" in hint
         assert "smaller hours_back" not in hint
@@ -589,7 +589,8 @@ class TestGetLogsPassesTheWindowOn:
         )
         assert gatewayd.ranges[0] == "realtime=0::0:1"
         assert out["log"].splitlines()[0] == "m99"
-        assert "warnings" not in out
+        assert len(out["warnings"]) == 1
+        assert "component" in out["warnings"][0]
         assert gatewayd.requests[0].path.endswith(f"/{path}/logs")
 
 

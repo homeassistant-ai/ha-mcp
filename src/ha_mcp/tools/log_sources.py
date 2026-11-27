@@ -16,13 +16,19 @@ from typing import Any, Literal
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..client.error_log_journald import log_lines
 from ..client.rest_client import (
-    ErrorLogPage,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
+from .component_api import (
+    ask_component,
+    component_unusable_warning,
+    get_component_caps,
+)
+from .core_log_reader import CoreLogWindow, core_log_window
 from .error_log_parsing import (
     _DEFAULT_TOP_N,
     _EMPTY_FETCH_WARNING,
@@ -210,6 +216,16 @@ def _cap_system_log_messages(entries: list[Any]) -> int:
     return capped
 
 
+def _integration_counts(entries: list[Any]) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for entry in entries:
+        for domain in entry["integrations"]:
+            count = counts.setdefault(domain, {"rows": 0, "occurrences": 0})
+            count["rows"] += 1
+            count["occurrences"] += entry["count"]
+    return counts
+
+
 class CoreLogSourcesMixin:
     """The log sources HA Core serves directly.
 
@@ -218,6 +234,36 @@ class CoreLogSourcesMixin:
     """
 
     _client: Any
+
+    async def _system_entries(
+        self, integration: str | None
+    ) -> tuple[list[Any], str | None]:
+        params = {"integration": integration} if integration else {}
+        reply = await ask_component(self._client, "system_log_entries", **params)
+        if reply is not None:
+            if "error" in reply:
+                raise_tool_error(
+                    create_error_response(ErrorCode.RESOURCE_NOT_FOUND, reply["error"])
+                )
+            return reply["entries"], None
+        warning = component_unusable_warning(
+            await get_component_caps(self._client),
+            "system log integration attribution is unavailable",
+        )
+        if integration:
+            raise_tool_error(
+                create_error_response(ErrorCode.COMPONENT_NOT_INSTALLED, warning)
+            )
+        result = await self._client.send_websocket_message({"type": "system_log/list"})
+        if not result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    result.get("error", "Failed to retrieve system log"),
+                    suggestions=[warning],
+                )
+            )
+        return result["result"], warning
 
     @staticmethod
     def _system_log_sort_key(entry: Any) -> float:
@@ -242,29 +288,20 @@ class CoreLogSourcesMixin:
         level: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
         compact: bool = True,
+        integration: str | None = None,
     ) -> dict[str, Any]:
-        """Fetch structured system log entries via system_log/list."""
+        """Fetch system log entries with the component's integration attribution.
+
+        Without the component they come from ``system_log/list``, unattributed.
+        """
         effective_limit = _coerce_limit(limit)
 
         try:
-            result = await self._client.send_websocket_message(
-                {"type": "system_log/list"}
-            )
-
-            if not result.get("success"):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        result.get("error", "Failed to retrieve system log"),
-                        suggestions=["Check Home Assistant connection"],
-                    )
-                )
-
-            entries = result.get("result", [])
-            if not isinstance(entries, list):
-                entries = []
+            entries, warning = await self._system_entries(integration)
 
             filters_applied: dict[str, str] = {}
+            if integration:
+                filters_applied["integration"] = integration
 
             # The isinstance guards keep a malformed non-dict record from
             # raising AttributeError out of this method's narrow except
@@ -306,6 +343,7 @@ class CoreLogSourcesMixin:
             )
 
             total_entries = len(entries)
+            counts = _integration_counts(entries) if not warning else {}
             entries = entries[:effective_limit]
             truncated_messages = _cap_system_log_messages(entries) if compact else 0
 
@@ -320,6 +358,10 @@ class CoreLogSourcesMixin:
             }
             if filters_applied:
                 data["filters_applied"] = filters_applied
+            if warning:
+                data["warnings"] = [warning]
+            else:
+                data["integration_counts"] = counts
             if truncated_messages:
                 data["truncated_messages"] = truncated_messages
 
@@ -346,6 +388,7 @@ class CoreLogSourcesMixin:
     def _build_structured_error_log(
         self,
         raw_log: str,
+        headers: dict[str, dict[str, Any]],
         search: str | None,
         level: str | None,
         top_n: int | None,
@@ -361,6 +404,7 @@ class CoreLogSourcesMixin:
         )
         result = _parse_error_log_structured(
             raw_log,
+            headers,
             search=search,
             level=level,
             top_n=effective_top_n,
@@ -398,8 +442,9 @@ class CoreLogSourcesMixin:
         fetch_lines: int,
         offset: int | str,
         raw_text: str,
-        page: ErrorLogPage,
-    ) -> tuple[int, ErrorLogPage, str, bool]:
+        page: CoreLogWindow,
+        integration: str | None = None,
+    ) -> tuple[int, CoreLogWindow, str, bool]:
         """Re-fetch once when the fetched window opens inside a record.
 
         ``offset`` addresses the newest edge, so increasing ``lines`` extends
@@ -409,16 +454,15 @@ class CoreLogSourcesMixin:
         read.
 
         Skipped when the page already reaches the start of history: there is
-        nothing older to fetch, and on container installs each call downloads
-        the whole log file.
+        nothing older to fetch.
 
         Returns the fourth element ``refetch_failed`` so the caller can say
         that a header was left out by a failed read rather than because the
         history ends.
         """
-        if not page.has_more:
+        if not page.has_more or page.headers is None:
             return fetch_lines, page, raw_text, False
-        records = _split_log_records(raw_text.splitlines())
+        records = _split_log_records(log_lines(raw_text), page.headers)
         if not records or records[0].header is not None:
             return fetch_lines, page, raw_text, False
         leading = records[0].line_count
@@ -429,7 +473,13 @@ class CoreLogSourcesMixin:
         if wider <= fetch_lines:
             return fetch_lines, page, raw_text, False
         try:
-            wider_page = await self._client.get_error_log(lines=wider, offset=offset)
+            wider_page = await core_log_window(
+                self._client,
+                lines=wider,
+                offset=offset,
+                integration=integration,
+                records=True,
+            )
         except (
             HomeAssistantConnectionError,
             HomeAssistantAPIError,
@@ -445,11 +495,17 @@ class CoreLogSourcesMixin:
                 e,
             )
             return fetch_lines, page, raw_text, True
-        return wider, wider_page, wider_page.text or "", False
+        return (
+            wider_page.requested_lines or wider,
+            wider_page,
+            wider_page.text or "",
+            False,
+        )
 
     def _build_raw_error_log(
         self,
         raw_log: str,
+        headers: dict[str, dict[str, Any]] | None,
         search: str | None,
         level: str | None,
         effective_limit: int,
@@ -482,8 +538,12 @@ class CoreLogSourcesMixin:
         back and both anchors re-open the next page at the record's last line,
         so the record arrives whole with its header instead of split in two.
         """
-        records = _split_log_records(raw_log.splitlines())
-        leading_record = records[0] if records and records[0].header is None else None
+        records = _split_log_records(log_lines(raw_log), headers)
+        leading_record = (
+            records[0]
+            if headers is not None and records and records[0].header is None
+            else None
+        )
         matches, filters_applied = _filter_log_records(records, search, level)
         page = _select_error_log_page(matches, effective_limit, order)
         step = _next_page_step(window, page.oldest_index)
@@ -558,7 +618,11 @@ class CoreLogSourcesMixin:
 
     @staticmethod
     def _apply_empty_window_warning(
-        data: dict[str, Any], raw_text: str, offset: int | str, structured: bool
+        data: dict[str, Any],
+        raw_text: str,
+        offset: int | str,
+        structured: bool,
+        integration: str | None = None,
     ) -> None:
         """Tell an empty terminal page apart from an empty fetch.
 
@@ -568,17 +632,20 @@ class CoreLogSourcesMixin:
         in the log". Deeper into history an empty window is just the end of the
         record, and ``_EMPTY_FETCH_WARNING`` would send the caller after an
         outage that is not happening; the structured parser emits it
-        unconditionally, so it is replaced there rather than contradicted.
+        unconditionally, so it is replaced there rather than contradicted. An
+        integration that has logged nothing is no outage either.
         """
         if raw_text.strip():
             return
-        if offset:
+        if offset or integration:
             kept = [
                 w for w in data.get("warnings", []) if _EMPTY_FETCH_WARNING not in w
             ]
             data["warnings"] = kept + [
                 f"No log content at offset={offset}: the recorded history ends "
                 "before this window. Lower 'offset' to reach the entries that exist."
+                if offset
+                else f"Core's log backlog holds no lines from '{integration}'."
             ]
         elif not structured:
             # The structured path's parser emits its own version of this.
@@ -595,25 +662,50 @@ class CoreLogSourcesMixin:
         offset: int | str = 0,
         structured: bool = False,
         top_n: int | None = None,
+        integration: str | None = None,
     ) -> dict[str, Any]:
         """Fetch a bounded window of error log text (home-assistant.log, or journald).
 
         Container/pip installs read the plain ``home-assistant.log`` file;
         Supervisor-backed installs read HA Core's journald stream instead.
         Either way only the requested window is fetched, and ``offset`` pages
-        deeper into the history (#2279): in file lines on container installs,
-        and either an integer entry offset or the opaque cursor token a
-        previous journald page returned on Supervisor-backed ones.
+        deeper into the history (#2279): an integer count back from the newest
+        line or entry, or the opaque cursor token a previous page returned.
 
-        With ``structured=True`` the raw text is collapsed into a counted,
-        component-grouped summary instead (see ``_parse_error_log_structured``);
+        With ``structured=True`` the raw text is collapsed into a counted
+        summary grouped by integration (see ``_parse_error_log_structured``);
         ``limit``/``order`` do not apply in that mode (the summary ranks the
         whole fetched window by occurrence count rather than returning a
         positional slice of it), and ``top_n`` bounds it instead.
         """
         try:
             fetch_lines = _error_log_window_lines(limit, search, level, structured)
-            page = await self._client.get_error_log(lines=fetch_lines, offset=offset)
+            page = await core_log_window(
+                self._client,
+                fetch_lines,
+                offset,
+                integration,
+                records=True,
+                plain_lines=None
+                if search or level or structured
+                else min(limit or DEFAULT_LOG_LIMIT, MAX_LIMIT),
+                require_records=bool(structured or level),
+            )
+            fetch_lines = page.requested_lines or fetch_lines
+            if (
+                page.headers is None
+                and (structured or level)
+                and not page.disabled_reason
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.COMPONENT_NOT_INSTALLED,
+                        component_unusable_warning(
+                            await get_component_caps(self._client),
+                            "structured and level-filtered reads require Core log records",
+                        ),
+                    )
+                )
             raw_text = page.text or ""
             refetch_failed = False
             if not structured:
@@ -623,12 +715,12 @@ class CoreLogSourcesMixin:
                     raw_text,
                     refetch_failed,
                 ) = await self._widen_error_log_for_record_header(
-                    fetch_lines, offset, raw_text, page
+                    fetch_lines, offset, raw_text, page, integration
                 )
             window = _ErrorLogWindow(
                 offset=offset,
                 fetch_lines=fetch_lines,
-                raw_line_count=len(raw_text.splitlines()),
+                raw_line_count=len(log_lines(raw_text)),
                 has_more=page.has_more,
                 first_cursor=page.first_cursor,
             )
@@ -636,13 +728,14 @@ class CoreLogSourcesMixin:
             data: dict[str, Any]
             # The structured summary consumes its whole window, so its token
             # resumes strictly behind the window's oldest entry; the raw path
-            # sets the skip from the records it returned. Container installs
-            # have no cursor, so both fall back to the integer line step.
+            # sets the skip from the records it returned. A page without a
+            # cursor falls back to the integer line step.
             cursor_skip: int | None = None
             older_matches_remain = False
             if structured:
                 data = self._build_structured_error_log(
                     raw_text,
+                    page.headers or {},
                     search=search,
                     level=level,
                     top_n=top_n,
@@ -662,6 +755,7 @@ class CoreLogSourcesMixin:
                 data, step, cursor_skip, older_matches_remain = (
                     self._build_raw_error_log(
                         raw_text,
+                        page.headers,
                         search=search,
                         level=level,
                         effective_limit=effective_limit,
@@ -670,7 +764,15 @@ class CoreLogSourcesMixin:
                         refetch_failed=refetch_failed,
                     )
                 )
-            self._apply_empty_window_warning(data, raw_text, offset, structured)
+            self._apply_empty_window_warning(
+                data, raw_text, offset, structured, integration
+            )
+            if integration:
+                data.setdefault("filters_applied", {})["integration"] = integration
+            if page.warning:
+                data.setdefault("warnings", []).append(page.warning)
+            if page.disabled_reason:
+                data["log_file_disabled_reason"] = page.disabled_reason
             _attach_error_log_pagination(
                 data,
                 window,
@@ -688,6 +790,7 @@ class CoreLogSourcesMixin:
                 ),
                 cursor_skip=cursor_skip,
                 older_matches_remain=(False if structured else older_matches_remain),
+                integration=integration,
             )
             return data
 

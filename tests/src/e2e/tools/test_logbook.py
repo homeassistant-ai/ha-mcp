@@ -4,6 +4,7 @@ Tests for ha_get_logs tool - log access with multiple sources and pagination.
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -349,9 +350,9 @@ async def test_logbook_empty_result(mcp_client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.requires_tools_entry
+@pytest.mark.requires_component_surface
 async def test_logs_fault_log_source_reads_seeded_crash(mcp_client):
-    """source='fault_log' reads faulthandler's dump via the tools entry (#2373).
+    """Read faulthandler's dump with either component entry.
 
     ``tests/initial_test_state/home-assistant.log.fault`` ships two fake
     faulthandler blocks (a segfault, then an abort). HA Core opens the file in
@@ -361,6 +362,7 @@ async def test_logs_fault_log_source_reads_seeded_crash(mcp_client):
     """
     async with MCPAssertions(mcp_client) as mcp:
         raw_data = await mcp.call_tool_success("ha_get_logs", {"source": "fault_log"})
+    assert_component_path(raw_data)
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -425,6 +427,7 @@ async def test_logs_system_source(mcp_client):
 
     async with MCPAssertions(mcp_client) as mcp:
         raw_data = await mcp.call_tool_success("ha_get_logs", {"source": "system"})
+    assert_component_path(raw_data)
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -764,6 +767,49 @@ async def test_logs_logbook_with_search(mcp_client):
     assert "entries" in data
 
     logger.info(f"Logbook search returned {data.get('returned_entries', 0)} entries")
+
+
+@pytest.mark.asyncio
+@pytest.mark.container_only
+async def test_file_log_tail_pages_through_the_component(mcp_client):
+    """The component reads the newest line of Core's log file and the one before."""
+    async with MCPAssertions(mcp_client) as mcp:
+        data = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "error_log", "limit": 1}
+        )
+        assert_component_path(data)
+        assert data["returned_records"] == 1
+        if data["has_more"]:
+            older = await mcp.call_tool_success(
+                "ha_get_logs",
+                {"source": "error_log", "limit": 1, "offset": data["next_offset"]},
+            )
+            assert_component_path(older)
+            assert older["returned_records"] == 1
+            assert older["log"] != data["log"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.container_only
+async def test_core_timeline_and_exact_window_read_the_log_file(mcp_client):
+    """A time window of Core's log file, as records and as raw lines."""
+    end = datetime.now(UTC) + timedelta(minutes=1)
+    window = {
+        "start_time": (end - timedelta(hours=6)).isoformat(),
+        "end_time": end.isoformat(),
+    }
+    async with MCPAssertions(mcp_client) as mcp:
+        timeline = await mcp.call_tool_success(
+            "ha_get_logs", {"sources": ["core"], "limit": 5, **window}
+        )
+        raw = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "error_log", "limit": 2, **window}
+        )
+    assert_component_path(timeline)
+    assert timeline["source"] == "timeline"
+    assert {row["source"] for row in timeline["records"]} == {"core"}
+    assert_component_path(raw)
+    assert raw["returned_lines"] >= 1
 
 
 # -------------------- source="logger" (logger/log_info) --------------------

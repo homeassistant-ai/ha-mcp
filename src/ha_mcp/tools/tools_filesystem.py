@@ -58,8 +58,8 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 EDIT_FILE_SERVICE = "edit_file"
 
 # The ha_mcp_tools component version every call to the File & YAML Tools
-# entry's services needs (the file and YAML tools, their backups, the fault
-# log read, the settings UI's file handlers): this release's own. The
+# entry's services needs (the file and YAML tools, their backups, the
+# settings UI's file handlers): this release's own. The
 # component and the server ship in lockstep, so semantic-release stamps this
 # with each release (``version_variables`` in ``pyproject.toml``), beside the
 # component's own version. An older component (a lower version, or no

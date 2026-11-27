@@ -14,35 +14,18 @@ is only readable in its original line order, so unlike the line-oriented
 raw-text sources this one orders whole blocks and pages through the result
 with ``offset`` instead of reversing lines.
 
-The read goes through the File & YAML Tools entry's privileged ``read_file``
-service (the same route as ``ha_read_file``). Split out of ``log_sources``
-under `.gemini/styleguide.md`
-§ Tool Consolidation and Module Size.
 """
 
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-from ..backup_files import file_read_error_code
-from ..client.rest_client import (
-    HomeAssistantAPIError,
-    HomeAssistantAuthError,
-    HomeAssistantConnectionError,
-)
 from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, raise_tool_error
+from .component_api import ask_component, component_unusable_warning, get_component_caps
+from .helpers import raise_tool_error
 from .log_common import (
     DEFAULT_LOG_LIMIT,
     SUPERVISOR_SEARCH_WINDOW_LINES,
     _coerce_limit,
 )
-from .tools_filesystem import _assert_mcp_tools_available, call_mcp_tools_service
-from .util_helpers import unwrap_service_response
-
-# Config-relative path HA Core hands to ``faulthandler.enable`` (``FAULT_LOG_FILENAME``
-# in ``homeassistant/__main__.py``).
-FAULT_LOG_PATH = "home-assistant.log.fault"
 
 # Lines tailed from the file per call, independent of ``limit``. A single dump
 # lists every thread, so it routinely runs past a 100-line ``limit``; tailing
@@ -71,31 +54,6 @@ def _no_crash(data: dict[str, Any], total_lines: int) -> dict[str, Any]:
         message=_NO_CRASH_MESSAGE,
     )
     return data
-
-
-def _raise_read_failure(error: str) -> NoReturn:
-    """Report a ``read_file`` refusal verbatim, as a structured error."""
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"read_file failed for {FAULT_LOG_PATH}: {error or 'unknown error'}",
-            # Parenthesised so each reads as one suggestion rather than a
-            # list entry with a missing comma (py/implicit-string-
-            # concatenation-in-list).
-            suggestions=[
-                (
-                    f"Check that {FAULT_LOG_PATH} in the Home Assistant config "
-                    "directory is readable by Home Assistant"
-                ),
-                "Check Home Assistant logs for the ha_mcp_tools read error",
-                (
-                    "Retry after the file is readable; an absent or empty file "
-                    "is reported as no crash, not as an error"
-                ),
-            ],
-            context={"source": "fault_log"},
-        )
-    )
 
 
 def _split_blocks(lines: list[str]) -> list[list[str]]:
@@ -176,34 +134,6 @@ class FaultLogSourceMixin:
 
     _client: Any
 
-    async def _read_fault_file(self) -> dict[str, Any]:
-        """One gated ``read_file`` call, unwrapped; transport errors become ToolErrors.
-
-        The live tools-entry probe runs first, as the file and YAML tools do,
-        so an entry removed after this client cached its caller token surfaces
-        the actionable "add the entry" error rather than HA's 400 for a
-        service that no longer exists. That gate and the caller-token gate
-        raise their own ToolErrors, which pass through untouched.
-        """
-        try:
-            await _assert_mcp_tools_available(self._client)
-            raw = await call_mcp_tools_service(
-                self._client,
-                "read_file",
-                {"path": FAULT_LOG_PATH, "tail_lines": FAULT_LOG_WINDOW_LINES},
-            )
-        except ToolError:
-            raise
-        except (HomeAssistantAuthError, HomeAssistantAPIError) as e:
-            exception_to_structured_error(e, context={"source": "fault_log"})
-        except (HomeAssistantConnectionError, TimeoutError, OSError) as e:
-            exception_to_structured_error(
-                e,
-                context={"source": "fault_log"},
-                suggestions=["Check Home Assistant connection"],
-            )
-        return unwrap_service_response(raw) if isinstance(raw, dict) else {}
-
     async def _get_fault_log(
         self,
         limit: int | None = None,
@@ -211,7 +141,7 @@ class FaultLogSourceMixin:
         offset: int = 0,
         order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
-        """Read ``home-assistant.log.fault`` through the component's read_file.
+        """Read ``home-assistant.log.fault`` through the component.
 
         Always tails :data:`FAULT_LOG_WINDOW_LINES` from the file; ``order``
         arranges whole crash blocks, ``search`` keeps the blocks that mention
@@ -222,36 +152,41 @@ class FaultLogSourceMixin:
         effective_limit = _coerce_limit(
             limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
         )
-        result = await self._read_fault_file()
+        result = await ask_component(
+            self._client, "fault_log", lines=FAULT_LOG_WINDOW_LINES
+        )
+        if result is None:
+            warning = component_unusable_warning(
+                await get_component_caps(self._client),
+                "the fault log could not be read",
+            )
+            raise_tool_error(
+                create_error_response(ErrorCode.COMPONENT_NOT_INSTALLED, warning)
+            )
+        if "error" in result:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(result["error"]),
+                    suggestions=[
+                        f"Check that {result['path']} is readable by Home Assistant"
+                    ],
+                )
+            )
 
         data: dict[str, Any] = {
             "success": True,
             "source": "fault_log",
-            "path": FAULT_LOG_PATH,
+            "path": result["path"],
             "limit": effective_limit,
             "offset": offset,
             "order": order,
             "window_lines": FAULT_LOG_WINDOW_LINES,
         }
-        if not result.get("success", False):
-            error = str(result.get("error", ""))
-            if file_read_error_code(result) in {
-                "not_found",
-                "not_a_file",
-            }:
-                # HA opens the file at every start, so a missing file means
-                # this config dir has not been started by HA's __main__ (or
-                # someone removed it). Either way: nothing to show.
-                return _no_crash(data, total_lines=0)
-            _raise_read_failure(error)
-
         content = result.get("content")
         lines = content.splitlines() if isinstance(content, str) else []
-        # The component reports the untailed line count; fall back to what we
-        # got when an older shape omits it.
-        total_lines = result.get("total_lines")
-        if not isinstance(total_lines, int):
-            total_lines = len(lines)
+        # The component's count of the file's lines, before it took the tail.
+        total_lines = result["total_lines"]
         if isinstance(result.get("modified"), str):
             data["modified"] = result["modified"]
 

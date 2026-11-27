@@ -49,6 +49,7 @@ from .exceptions import (
     HomeAssistantError as HomeAssistantError,
 )
 from .exceptions import SceneIdNotAnEntityError, websocket_close_error_type
+from .file_log_backlog import backlog_page
 from .models import ErrorLogPage
 from .service_identifiers import service_rest_path
 from .supervisor_client import make_supervisor_httpx_client
@@ -849,7 +850,8 @@ class HomeAssistantClient:
           ``APIErrorLog`` view (``api/__init__.py:89-90``) never registers.
           The hassio proxy reaches the same underlying log stream.
         - **External client → Container/pip HA** (neither of the above):
-          keep the historical ``/api/error_log`` proxy path.
+          Core's ``system_log/subscribe_raw`` backlog when it covers the
+          window, else the whole-file ``/api/error_log``.
 
         The two Supervisor-backed branches express the window as a journald
         ``Range`` header, either anchored on the newest entry (integer
@@ -893,16 +895,13 @@ class HomeAssistantClient:
                     )
                     return await journald_page(window, offset, self._proxied_core_logs)
 
-                if isinstance(offset, str):
-                    raise HomeAssistantAPIError(
-                        "Cursor-token paging needs a Supervisor-backed install; "
-                        "the container /api/error_log endpoint has no cursor"
-                    )
-                logger.debug("Fetching error log via HA Core proxy (Container/pip)")
-                raw_response = await self._raw_request(
+                if page := await backlog_page(self, window, offset):
+                    return page
+                assert isinstance(offset, int)
+                response = await self._raw_request(
                     "GET", "/error_log", headers={"Accept": "text/plain"}
                 )
-                return container_page(raw_response.text, window, offset)
+                return container_page(response.text, window, offset)
         except TimeoutError as e:
             raise HomeAssistantConnectionError(
                 f"Timeout fetching the error log after {self.timeout}s: "
@@ -1214,11 +1213,9 @@ class HomeAssistantClient:
     ) -> str:
         """Fetch HA system-service logs.
 
-        ``service`` must be one of the six Supervisor-managed services:
-        ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``multicast``.
-        Caller is responsible for validating ``service``; this helper performs
-        no validation, and unsupported paths are rejected by the selected
-        direct-Supervisor or Core-proxy route.
+        ``service`` is a Supervisor-managed service, such as ``supervisor``,
+        ``host`` or ``core``. This helper performs no validation: the selected
+        direct-Supervisor or Core-proxy route rejects a name it does not serve.
 
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
         inside the app (add-on) container goes directly to Supervisor at
@@ -1229,8 +1226,7 @@ class HomeAssistantClient:
         falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
 
         HA Core's hassio proxy accepts ``/cli`` and ``/observer`` too, but
-        Supervisor serves no log route for either, so those always 404; the
-        six slugs here are the ones with a real ``/<slug>/logs`` route.
+        Supervisor serves no log route for either, so those always 404.
         """
         if is_running_in_addon():
             return await self._supervisor_logs_get(service, lines=lines)

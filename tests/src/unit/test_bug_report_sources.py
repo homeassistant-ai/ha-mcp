@@ -355,6 +355,35 @@ class TestReport:
         assert info["python_version"] in body
         assert "warnings" not in result
 
+    async def test_report_reads_the_core_log_through_the_component(
+        self,
+        hass: HomeAssistant,
+        log_file: Path,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        await _set_up_reporting_core(hass)
+        with patch.object(
+            component_core_client,
+            "get_error_log",
+            AsyncMock(wraps=component_core_client.get_error_log),
+        ) as rest:
+            result = await BugReportTools(component_core_client).ha_report_issue(
+                report_type="runtime_bug"
+            )
+        assert result["core_error_log"].startswith("2026-10-30 ERROR")
+        rest.assert_not_awaited()
+
+    async def test_report_without_the_component_names_its_core_log_reader(
+        self, hass: HomeAssistant, log_file: Path, core_client: HomeAssistantClient
+    ) -> None:
+        await _set_up_reporting_core(hass)
+        result = await BugReportTools(core_client).ha_report_issue(
+            report_type="runtime_bug"
+        )
+        notice, _, log = result["core_error_log"].partition("\n")
+        assert notice.startswith("[") and notice.endswith("]")
+        assert "Lost [IP] link" in log
+
     async def test_install_without_container_arch(
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:

@@ -13,10 +13,11 @@ class ErrorLogPage:
     window that comes back full may or may not have anything behind it, and
     only the fetching route knows which.
 
-    ``first_cursor`` is Supervisor's ``X-First-Cursor`` for the block -- the
-    oldest entry this window served -- and is ``None`` on installs that read a
-    whole log file. The tool layer turns it into the ``next_offset`` token, so
-    the cursor travels as data instead of being re-derived from the text.
+    ``first_cursor`` names the oldest line this window served: Supervisor's
+    ``X-First-Cursor`` for a journal block, or the component's position in the
+    log file. It is ``None`` when the whole file was read without the
+    component. The tool layer turns it into the ``next_offset`` token, so the
+    cursor travels as data instead of being re-derived from the text.
     """
 
     text: str

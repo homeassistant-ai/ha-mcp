@@ -14,22 +14,56 @@ import logging
 import re
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
+from aiohttp import web
 from homeassistant.core import HomeAssistant
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.error_log_journald import parse_cursor_token
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools import core_log_reader
 from ha_mcp.tools.log_common import MAX_LIMIT, SUPERVISOR_SEARCH_WINDOW_LINES
 
-from ._error_log_core import call_logs, error_log, numbered_log, serve_log
+from ._error_log_core import (
+    assert_cursor_resumes_at,
+    call_logs,
+    error_log,
+    numbered_log,
+    serve_log,
+)
 from ._error_log_core import log_file as log_file
-from ._error_log_routes_core import error_log_reads, load_lines
+from ._error_log_routes_core import load_lines
+from ._hassio_core import set_up_hassio
 from ._journal_gatewayd import FakeGatewayd
 from ._journal_gatewayd import gatewayd as gatewayd
 from ._journal_gatewayd import in_app_client as in_app_client
 from ._log_tool_calls import set_up_core_logs
+from ._tools_addons_core import Supervisor, TargetApp
+
+
+@pytest.fixture
+async def journal_client(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    in_app_client: HomeAssistantClient,
+    gatewayd: FakeGatewayd,
+    aiohttp_client: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> HomeAssistantClient:
+    """Core 2026.12 reads the journal over its own Supervisor client, the app
+    directly: both reach the same fake journal."""
+    supervisor = Supervisor(TargetApp())
+    app = web.Application()
+    app.router.add_get("/{path:.+}/logs", gatewayd.handle)
+    app.router.add_route("*", "/{path:.*}", supervisor.serve)
+    server = await aiohttp_client(app)
+    supervisor.url = f"127.0.0.1:{server.port}"
+    with monkeypatch.context() as setup_env:
+        await set_up_hassio(hass, supervisor, setup_env)
+    return in_app_client
+
 
 _HEADER = (
     "2026-05-27 10:00:01.123 ERROR (MainThread) "
@@ -80,36 +114,36 @@ class TestRecordGrouping:
     """A record is a header line and every line up to the next header."""
 
     async def test_traceback_frames_belong_to_the_header(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
-        result = await error_log(log_file, core_client, _ERROR_RECORD)
+        result = await error_log(log_file, component_core_client, _ERROR_RECORD)
         assert result["total_records"] == 1
         assert result["total_lines"] == 5
         assert result["log"].splitlines()[0] == _HEADER
 
     async def test_blank_lines_stay_inside_a_chained_exception(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
-        result = await error_log(log_file, core_client, _CHAINED_RECORD)
+        result = await error_log(log_file, component_core_client, _CHAINED_RECORD)
         assert result["total_records"] == 1
         lines = result["log"].splitlines()
         assert any(not line.strip() for line in lines)
         assert "RuntimeError: retry exhausted" in lines
 
     async def test_two_headers_split_records(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         result = await error_log(
-            log_file, core_client, f"{_ERROR_RECORD}\n{_WARNING_RECORD}"
+            log_file, component_core_client, f"{_ERROR_RECORD}\n{_WARNING_RECORD}"
         )
         assert result["total_records"] == 2
 
     async def test_core_2026_11_utc_offset_stamps_start_records(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         result = await error_log(
             log_file,
-            core_client,
+            component_core_client,
             "2026-10-28 14:45:10.501-04:00 ERROR (MainThread) [a.b] boom\n"
             "  frame\n"
             "2026-10-28 18:45:11.002+00:00 WARNING (Recorder) [c.d] careful\n",
@@ -117,7 +151,7 @@ class TestRecordGrouping:
         assert result["total_records"] == 2
 
     async def test_lines_that_are_not_ha_log_lines_join_the_preceding_record(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """s6-overlay restart banners have no HA header, so they attach.
 
@@ -130,7 +164,7 @@ class TestRecordGrouping:
             "[12:00:00] INFO: Home Assistant Core finish process exit code 0",
         ]
         result = await error_log(
-            log_file, core_client, _text(_ERROR_RECORD.splitlines() + banner)
+            log_file, component_core_client, _text(_ERROR_RECORD.splitlines() + banner)
         )
         assert result["total_records"] == 1
         assert result["log"].splitlines()[-2:] == banner
@@ -138,10 +172,10 @@ class TestRecordGrouping:
 
 class TestRecordFiltering:
     async def test_header_search_returns_the_frames(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         result = await error_log(
-            log_file, core_client, _ERROR_RECORD, search="Update failed"
+            log_file, component_core_client, _ERROR_RECORD, search="Update failed"
         )
         assert result["total_records"] == 1
         assert result["returned_records"] == 1
@@ -149,11 +183,11 @@ class TestRecordFiltering:
         assert result["log"].splitlines()[0] == _HEADER
 
     async def test_oldest_keeps_each_records_lines_in_order(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         result = await error_log(
             log_file,
-            core_client,
+            component_core_client,
             f"{_ERROR_RECORD}\n{_WARNING_RECORD}",
             limit=10,
             order="oldest",
@@ -166,10 +200,10 @@ class TestRecordFiltering:
         )
 
     async def test_frame_search_returns_the_header_and_frames(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         result = await error_log(
-            log_file, core_client, _ERROR_RECORD, search="ValueError"
+            log_file, component_core_client, _ERROR_RECORD, search="ValueError"
         )
         assert result["returned_records"] == 1
         lines = result["log"].splitlines()
@@ -177,21 +211,27 @@ class TestRecordFiltering:
         assert lines[-1] == "ValueError: device did not respond"
 
     async def test_level_matches_the_header_only(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """A frame line containing "Error" must not satisfy level=ERROR."""
         result = await error_log(
-            log_file, core_client, f"{_ERROR_RECORD}\n{_WARNING_RECORD}", level="ERROR"
+            log_file,
+            component_core_client,
+            f"{_ERROR_RECORD}\n{_WARNING_RECORD}",
+            level="ERROR",
         )
         assert result["returned_records"] == 1
         assert _WARNING_RECORD.splitlines()[0] not in result["log"]
         assert "ValueError: parse error: bad" not in result["log"]
 
     async def test_newest_keeps_each_records_lines_in_order(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         result = await error_log(
-            log_file, core_client, f"{_ERROR_RECORD}\n{_WARNING_RECORD}", limit=10
+            log_file,
+            component_core_client,
+            f"{_ERROR_RECORD}\n{_WARNING_RECORD}",
+            limit=10,
         )
         assert result["log"].splitlines()[0] == _WARNING_RECORD.splitlines()[0]
         assert result["log"].index("ValueError: parse error: bad") > (
@@ -220,7 +260,7 @@ class TestRecordFiltering:
 
 class TestRecordLimitAndPaging:
     async def test_limit_never_splits_a_record(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         older = (
             "2026-05-27 10:00:00.000 INFO (MainThread) [a.b.c] first\n"
@@ -234,20 +274,25 @@ class TestRecordLimitAndPaging:
         )
         # History behind the window, so the page has a next one.
         result = await error_log(
-            log_file, core_client, f"{numbered_log(300)}{older}\n{newer}\n", limit=3
+            log_file,
+            component_core_client,
+            f"{numbered_log(300)}{older}\n{newer}\n",
+            limit=3,
         )
         assert result["returned_records"] == 1
         assert result["returned_lines"] == 3
         assert result["log"].startswith(newer.splitlines()[0])
         assert "frame two" in result["log"]
         # Resume just before the older record, not inside the newer one.
-        assert result["next_offset"] == 3
+        await assert_cursor_resumes_at(component_core_client, result, 3)
 
     async def test_over_long_record_is_cut_with_a_larger_limit_hint(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         frames = "\n".join(f"  frame {i}" for i in range(8)) + "\nValueError: NEEDLE"
-        result = await error_log(log_file, core_client, f"{_HEADER}\n{frames}", limit=3)
+        result = await error_log(
+            log_file, component_core_client, f"{_HEADER}\n{frames}", limit=3
+        )
         assert result["returned_lines"] == 3
         assert result["returned_records"] == 1
         # The header names the logger and message; the exception line is the
@@ -261,11 +306,11 @@ class TestRecordLimitAndPaging:
         assert "limit=10" in warning
 
     async def test_over_long_record_at_max_limit_names_the_per_call_cap(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         frames = "\n".join(f"  frame {i}" for i in range(MAX_LIMIT + 99))
         result = await error_log(
-            log_file, core_client, f"{_HEADER}\n{frames}", limit=MAX_LIMIT
+            log_file, component_core_client, f"{_HEADER}\n{frames}", limit=MAX_LIMIT
         )
         assert result["returned_lines"] == MAX_LIMIT
         warning = next(w for w in result["warnings"] if "newest record" in w)
@@ -273,15 +318,17 @@ class TestRecordLimitAndPaging:
         assert "100 lines were cut" in warning
 
     async def test_cut_record_with_limit_one_keeps_only_the_header(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         frames = "\n".join(f"  frame {i}" for i in range(4))
-        result = await error_log(log_file, core_client, f"{_HEADER}\n{frames}", limit=1)
+        result = await error_log(
+            log_file, component_core_client, f"{_HEADER}\n{frames}", limit=1
+        )
         assert result["returned_lines"] == 1
         assert result["log"] == _HEADER
 
     async def test_a_record_longer_than_the_window_returns_as_a_partial(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """A tail whose header is more than a window away must not be withheld.
 
@@ -295,7 +342,7 @@ class TestRecordLimitAndPaging:
         )
         result = await error_log(
             log_file,
-            core_client,
+            component_core_client,
             f"{_HEADER}\n{frames}\nValueError: NEEDLE\n",
             limit=100,
             search="NEEDLE",
@@ -305,14 +352,16 @@ class TestRecordLimitAndPaging:
         assert result["total_records"] == 1
         assert result["total_lines"] >= result["returned_lines"] > 0
         assert result["has_more"] is True
-        assert result["next_offset"] == SUPERVISOR_SEARCH_WINDOW_LINES
+        await assert_cursor_resumes_at(
+            component_core_client, result, SUPERVISOR_SEARCH_WINDOW_LINES
+        )
         assert any(
             "longer than one fetch window" in warning for warning in result["warnings"]
         )
         assert any("partial record" in warning for warning in result["warnings"])
 
     async def test_a_level_read_held_back_does_not_claim_a_match(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """A level read cannot know the withheld tail matches, so say so.
 
@@ -324,7 +373,7 @@ class TestRecordLimitAndPaging:
         lines = filler[:1985] + record + filler[1985:]
 
         result = await error_log(
-            log_file, core_client, _text(lines), limit=20, level="ERROR"
+            log_file, component_core_client, _text(lines), limit=20, level="ERROR"
         )
 
         warning = next(w for w in result["warnings"] if "held back" in w)
@@ -332,7 +381,7 @@ class TestRecordLimitAndPaging:
         assert "matching" not in warning
 
     async def test_a_cut_leading_partial_is_held_back_with_consistent_counts(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """A held-back tail must not be returned cut while counts drop it.
 
@@ -347,7 +396,7 @@ class TestRecordLimitAndPaging:
         )
         await serve_log(log_file, _text(filler[:1985] + record + filler[1985:]))
 
-        first = await _read(core_client, limit=5, search="NEEDLE")
+        first = await _read(component_core_client, limit=5, search="NEEDLE")
 
         assert first["returned_records"] == first["returned_lines"] == 0
         assert first["total_records"] == first["total_lines"] == 0
@@ -355,13 +404,13 @@ class TestRecordLimitAndPaging:
         assert first["has_more"] is True
 
         second = await _read(
-            core_client, limit=5, search="NEEDLE", offset=first["next_offset"]
+            component_core_client, limit=5, search="NEEDLE", offset=first["next_offset"]
         )
         assert second["returned_records"] == 1
         assert second["log"].splitlines()[0] == _HEADER
 
     async def test_a_journald_page_token_resumes_behind_its_oldest_returned_line(
-        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
+        self, gatewayd: FakeGatewayd, journal_client: HomeAssistantClient
     ) -> None:
         """A page that left part of its window behind must not jump to the top.
 
@@ -371,17 +420,17 @@ class TestRecordLimitAndPaging:
         """
         load_lines(gatewayd, numbered_log(300).splitlines())
 
-        first = await _read(in_app_client, limit=5)
+        first = await _read(journal_client, limit=5)
         token = first["next_offset"]
         assert isinstance(token, str)
         assert f"offset='{token}'" in first["pagination_hint"]
-        second = await _read(in_app_client, limit=5, offset=token)
+        second = await _read(journal_client, limit=5, offset=token)
 
         assert _issues(first["log"]) == [299, 298, 297, 296, 295]
         assert _issues(second["log"]) == [294, 293, 292, 291, 290]
 
     async def test_a_held_back_tail_is_reached_by_the_journald_token(
-        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
+        self, gatewayd: FakeGatewayd, journal_client: HomeAssistantClient
     ) -> None:
         """A held-back tail must be the next page's newest edge, not skipped.
 
@@ -398,7 +447,7 @@ class TestRecordLimitAndPaging:
         # not clamped to the journal's start.
         load_lines(gatewayd, filler[:1999] + record + filler[2029:])
 
-        first = await _read(in_app_client, limit=5, search="NEEDLE")
+        first = await _read(journal_client, limit=5, search="NEEDLE")
 
         assert first["returned_records"] == first["returned_lines"] == 0
         assert any("held back" in warning for warning in first["warnings"])
@@ -406,15 +455,30 @@ class TestRecordLimitAndPaging:
         assert isinstance(first["next_offset"], str)
 
         second = await _read(
-            in_app_client, limit=5, search="NEEDLE", offset=first["next_offset"]
+            journal_client, limit=5, search="NEEDLE", offset=first["next_offset"]
         )
 
         assert second["returned_records"] == 1
         assert second["log"].splitlines()[0] == _HEADER
         assert "ValueError: NEEDLE" in second["log"]
 
+    async def test_a_window_longer_than_one_records_call_is_grouped_whole(
+        self,
+        gatewayd: FakeGatewayd,
+        journal_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The component parses record headers from text of a bounded length."""
+        entries = numbered_log(300).splitlines()
+        load_lines(gatewayd, entries)
+        monkeypatch.setattr(core_log_reader, "RECORDS_CHARS", 500)
+
+        summary = (await _read(journal_client, structured=True))["summary"]
+
+        assert summary["parsed_entries"] == summary["unique_issues"] == len(entries)
+
     async def test_a_structured_journald_read_round_trips_its_token(
-        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
+        self, gatewayd: FakeGatewayd, journal_client: HomeAssistantClient
     ) -> None:
         """The summary consumes its whole window, so its token resumes behind it.
 
@@ -425,13 +489,13 @@ class TestRecordLimitAndPaging:
         entries = numbered_log(2510).splitlines()
         load_lines(gatewayd, entries)
 
-        first = await _read(in_app_client, structured=True)
+        first = await _read(journal_client, structured=True)
         assert first["has_more"] is True
         token = first["next_offset"]
         assert isinstance(token, str), "a journald summary must hand out a token"
         assert parse_cursor_token(token)[1] == 0
 
-        second = await _read(in_app_client, structured=True, offset=token)
+        second = await _read(journal_client, structured=True, offset=token)
 
         # The two windows partition the journal: the integer step overlapped
         # them, so their line counts also double-counted at the boundary.
@@ -441,7 +505,7 @@ class TestRecordLimitAndPaging:
         ] == len(entries)
 
     async def test_a_journald_walk_through_partial_pages_is_contiguous(
-        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
+        self, gatewayd: FakeGatewayd, journal_client: HomeAssistantClient
     ) -> None:
         """A token walk returns every entry exactly once, head edge included.
 
@@ -457,7 +521,7 @@ class TestRecordLimitAndPaging:
         pages = 0
         partial_pages = 0
         for _ in range(20):
-            page = await _read(in_app_client, limit=300, offset=offset)
+            page = await _read(journal_client, limit=300, offset=offset)
             pages += 1
             seen.extend(_issues(page["log"]))
             if not page["has_more"]:
@@ -476,7 +540,7 @@ class TestRecordLimitAndPaging:
         )
 
     async def test_a_filtered_head_window_with_more_matches_than_the_cap_is_exhaustive(
-        self, gatewayd: FakeGatewayd, in_app_client: HomeAssistantClient
+        self, gatewayd: FakeGatewayd, journal_client: HomeAssistantClient
     ) -> None:
         """Matches behind a token page at the head must stay pageable.
 
@@ -491,7 +555,7 @@ class TestRecordLimitAndPaging:
         offset: int | str = 0
         pages = 0
         for _ in range(30):
-            page = await _read(in_app_client, limit=300, search="issue", offset=offset)
+            page = await _read(journal_client, limit=300, search="issue", offset=offset)
             pages += 1
             seen.extend(_issues(page["log"]))
             if not page["has_more"]:
@@ -507,13 +571,13 @@ class TestRecordLimitAndPaging:
         )
 
     async def test_numeric_string_offsets_keep_working(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """The offset union admits strings; a stringified integer still pages."""
         await serve_log(log_file, numbered_log(100))
 
-        seven = await _read(core_client, limit=1, offset="7")
-        blank = await _read(core_client, limit=1, offset="")
+        seven = await _read(component_core_client, limit=1, offset="7")
+        blank = await _read(component_core_client, limit=1, offset="")
 
         assert _issues(seven["log"]) == [92]
         assert _issues(blank["log"]) == [99]
@@ -528,14 +592,14 @@ class TestRecordLimitAndPaging:
         ],
     )
     async def test_an_offset_that_names_no_page_is_refused(
-        self, log_file: Path, core_client: HomeAssistantClient, offset: str
+        self, log_file: Path, component_core_client: HomeAssistantClient, offset: str
     ) -> None:
         await serve_log(log_file, _ERROR_RECORD)
         with pytest.raises(ToolError):
-            await _read(core_client, offset=offset)
+            await _read(component_core_client, offset=offset)
 
     async def test_an_unmatched_leading_partial_is_not_held_back(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """Only a matching leading tail may be withheld.
 
@@ -554,7 +618,7 @@ class TestRecordLimitAndPaging:
         lines.insert(2051, "ValueError: TARGET")
 
         result = await error_log(
-            log_file, core_client, _text(lines), limit=5, search="TARGET"
+            log_file, component_core_client, _text(lines), limit=5, search="TARGET"
         )
 
         assert result["returned_records"] == 1
@@ -562,7 +626,7 @@ class TestRecordLimitAndPaging:
         assert "TARGET" in result["log"]
 
     async def test_a_filtered_read_is_exhaustive_through_the_terminal_hint(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """A filtered read must reach every match, not just a page or two.
 
@@ -578,7 +642,7 @@ class TestRecordLimitAndPaging:
         ]
         await serve_log(log_file, "\n".join(records) + "\n")
 
-        first = await _read(core_client, limit=20, search="issue")
+        first = await _read(component_core_client, limit=20, search="issue")
         assert first["has_more"] is False
         first_seen = set(_issues(first["log"]))
         hint = first.get("pagination_hint") or ""
@@ -586,7 +650,7 @@ class TestRecordLimitAndPaging:
         assert match, f"terminal hint must name an actionable limit: {hint}"
 
         final = await _read(
-            core_client, limit=int(match.group(1)), search="issue", offset=0
+            component_core_client, limit=int(match.group(1)), search="issue", offset=0
         )
         final_seen = set(_issues(final["log"]))
 
@@ -594,7 +658,7 @@ class TestRecordLimitAndPaging:
         assert len(final_seen) == len(records)
 
     async def test_walking_a_filtered_read_keeps_matches_in_order(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """A filtered walk must keep cross-page ordering, not just uniqueness.
 
@@ -618,7 +682,9 @@ class TestRecordLimitAndPaging:
         offset = 0
         pages = 0
         for _ in range(200):
-            page = await _read(core_client, limit=20, offset=offset, search="issue")
+            page = await _read(
+                component_core_client, limit=20, offset=offset, search="issue"
+            )
             pages += 1
             if page["returned_lines"]:
                 assert page["log"].splitlines()[0].startswith("2026-")
@@ -637,41 +703,60 @@ class TestRecordLimitAndPaging:
         )
 
     async def test_leading_partial_is_widened_to_reach_its_header(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         log = f"{_ERROR_RECORD}\n" + "\n".join(f"  frame {i}" for i in range(400))
 
-        with error_log_reads(core_client) as reads:
-            result = await error_log(log_file, core_client, log + "\n", limit=5)
+        with patch.object(
+            component_core_client,
+            "send_websocket_message",
+            wraps=component_core_client.send_websocket_message,
+        ) as reads:
+            result = await error_log(
+                log_file, component_core_client, log + "\n", limit=5
+            )
 
-        assert reads.await_count == 2
-        first, second = (call.kwargs["lines"] for call in reads.await_args_list)
+        first, second = (
+            call.args[0]["lines"]
+            for call in reads.await_args_list
+            if call.args[0]["type"] == "ha_mcp_tools/core_log_window"
+        )
         assert second > first
         assert result["log"].splitlines()[0] == _HEADER
 
     async def test_a_window_that_reaches_history_start_is_marked_not_refetched(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """A partial tail with no older history is marked, not widened into.
 
         On a container install every widening downloads the whole file again.
         """
-        with error_log_reads(core_client) as reads:
+        with patch.object(
+            component_core_client,
+            "send_websocket_message",
+            wraps=component_core_client.send_websocket_message,
+        ) as reads:
             result = await error_log(
                 log_file,
-                core_client,
+                component_core_client,
                 "  frame\nValueError: device did not respond\n",
                 limit=5,
             )
 
-        assert reads.await_count == 1
+        assert (
+            sum(
+                call.args[0]["type"] == "ha_mcp_tools/core_log_window"
+                for call in reads.await_args_list
+            )
+            == 1
+        )
         assert any("partial record" in w for w in result["warnings"])
         assert result["log"].splitlines()[0] == "  frame"
 
     async def test_a_failed_widening_keeps_the_first_page(
         self,
         gatewayd: FakeGatewayd,
-        in_app_client: HomeAssistantClient,
+        journal_client: HomeAssistantClient,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         load_lines(gatewayd, [_HEADER] + [f"  frame {i}" for i in range(400)])
@@ -683,7 +768,7 @@ class TestRecordLimitAndPaging:
 
         gatewayd.after_each = refuse_after_the_first_page
         with caplog.at_level("WARNING", logger="ha_mcp.tools.log_sources"):
-            result = await _read(in_app_client, limit=5)
+            result = await _read(journal_client, limit=5)
 
         assert any("partial record" in w for w in result["warnings"])
         assert any("wider read" in w and "failed" in w for w in result["warnings"])
@@ -702,7 +787,7 @@ class TestRecordLimitAndPaging:
     async def test_a_filtered_page_held_back_from_mid_record_returns_it_whole(
         self,
         log_file: Path,
-        core_client: HomeAssistantClient,
+        component_core_client: HomeAssistantClient,
         filter_name: str,
         value: str,
     ) -> None:
@@ -719,7 +804,7 @@ class TestRecordLimitAndPaging:
         )
         await serve_log(log_file, _text(filler[:1990] + long_record + filler[1990:]))
 
-        first = await _read(core_client, limit=20, **{filter_name: value})
+        first = await _read(component_core_client, limit=20, **{filter_name: value})
 
         # The tail is held back, so page 1 cannot present it as a partial.
         assert first["returned_records"] == 0
@@ -727,14 +812,17 @@ class TestRecordLimitAndPaging:
         assert first["has_more"] is True
 
         second = await _read(
-            core_client, limit=20, offset=first["next_offset"], **{filter_name: value}
+            component_core_client,
+            limit=20,
+            offset=first["next_offset"],
+            **{filter_name: value},
         )
         assert second["returned_records"] == 1
         assert second["log"].splitlines()[0] == _HEADER
         assert second["log"].splitlines()[-1] == "ValueError: NEEDLE"
 
     async def test_walking_next_offset_never_repeats_a_record(
-        self, log_file: Path, core_client: HomeAssistantClient
+        self, log_file: Path, component_core_client: HomeAssistantClient
     ) -> None:
         """Following the hint pages backwards without repeats or split records."""
         records = [
@@ -749,7 +837,7 @@ class TestRecordLimitAndPaging:
         offset = 0
         last: dict[str, Any] = {}
         for _ in range(40):
-            last = await _read(core_client, limit=100, offset=offset)
+            last = await _read(component_core_client, limit=100, offset=offset)
             if last["returned_lines"]:
                 assert (
                     last["log"]
@@ -774,7 +862,9 @@ class TestRecordLimitAndPaging:
             hint = last.get("pagination_hint") or ""
             match = re.search(r"limit=(\d+)", hint)
             assert match, f"terminal hint must name an actionable limit: {hint}"
-            final = await _read(core_client, limit=int(match.group(1)), offset=offset)
+            final = await _read(
+                component_core_client, limit=int(match.group(1)), offset=offset
+            )
             final_seen = [int(n) for n in re.findall(r"issue (\d+)", final["log"])]
             assert final["has_more"] is False
             # The hinted request re-reads the terminal window with a wider

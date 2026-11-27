@@ -257,7 +257,7 @@ class TestTheDeadline:
         """The container route transfers the whole file, and is bounded too."""
         # A cursor token is refused once Core says it has no hassio, before the
         # log is read: the install class is known before anything stalls.
-        with pytest.raises(HomeAssistantAPIError, match="Supervisor-backed"):
+        with pytest.raises(HomeAssistantAPIError):
             await gateway_client.get_error_log(lines=5, offset="cursor:c:0")
         monkeypatch.setattr(gateway_client, "timeout", DEADLINE)
 

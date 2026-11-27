@@ -69,7 +69,8 @@ class TestATokenCarriesItsRead:
         second = await ask(in_app_client, limit=50, offset=first["next_offset"])
         assert second["hours_back"] == 2
         assert second["order"] == "oldest"
-        assert "warnings" not in second
+        assert len(second["warnings"]) == 1
+        assert "component" in second["warnings"][0]
         assert second["log"].splitlines()[0] == "m70"
         assert "hours_back=2" in second["pagination_hint"]
 

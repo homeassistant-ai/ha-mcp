@@ -180,7 +180,9 @@ def window_range(since: datetime, skip: int, count: int) -> str:
     return f"realtime={_epoch(since)}::{skip}:{count}"
 
 
-async def _fetch(client: Any, path: str, range_header: str) -> JournaldPage:
+async def fetch_range(
+    client: Any, path: str, range_header: str, log_format: str | None = None
+) -> JournaldPage:
     """One ``/<path>/logs`` read with ``range_header``, direct or via Core's proxy.
 
     ``path`` is ``addons/<slug>`` for an app or a system-service name. Core's
@@ -188,11 +190,14 @@ async def _fetch(client: Any, path: str, range_header: str) -> JournaldPage:
     log paths.
     """
     headers = {"Accept": "text/plain", "Range": range_header}
+    params = dict(_PARAMS)
+    if log_format:
+        params["format"] = log_format
     if is_running_in_addon():
-        response = await client._supervisor_logs_response(path, headers, dict(_PARAMS))
+        response = await client._supervisor_logs_response(path, headers, params)
     else:
         response = await client._raw_request(
-            "GET", f"/hassio/{path}/logs", headers=headers, params=dict(_PARAMS)
+            "GET", f"/hassio/{path}/logs", headers=headers, params=params
         )
     return JournaldPage(str(response.text), first_cursor(response))
 
@@ -216,6 +221,7 @@ async def read_window(
     path: str,
     since: datetime,
     max_entries: int | None = None,
+    fetch: JournaldFetch | None = None,
 ) -> JournalWindow:
     """The entries of ``/<path>/logs`` from ``since`` to the end of the journal.
 
@@ -226,14 +232,15 @@ async def read_window(
     """
     if max_entries is None:
         max_entries = MAX_ENTRIES
-    page = await _fetch(client, path, window_range(since, 0, max_entries))
+    fetch = fetch or _fetcher(client, path)
+    page = await fetch(window_range(since, 0, max_entries))
     lines = page.text.splitlines()
     if len(lines) < max_entries:
         return JournalWindow(lines, True, max_entries)
     first = _cursor_of(page, path)
-    if await _entry_after(_fetcher(client, path), first, max_entries) is None:
+    if await _entry_after(fetch, first, max_entries) is None:
         return JournalWindow(lines, True, max_entries)
-    page = await _fetch(client, path, range_header(max_entries))
+    page = await fetch(range_header(max_entries))
     return JournalWindow(page.text.splitlines(), False, max_entries)
 
 
@@ -245,6 +252,7 @@ async def read_page(
     count: int,
     resume: WindowToken | None = None,
     skip: int = 0,
+    fetch: JournaldFetch | None = None,
 ) -> JournalPage:
     """``count`` entries of the window from ``since``, oldest-first.
 
@@ -258,7 +266,7 @@ async def read_page(
     entry's cursor, so a skip past the window's end finds nothing rather than
     the journal's last entry.
     """
-    fetch = _fetcher(client, path)
+    fetch = fetch or _fetcher(client, path)
     if resume is not None:
         await _require_entry(fetch, path, resume.cursor)
         page = await fetch(f"entries={resume.cursor}:{resume.skip}:{count}")
@@ -289,7 +297,7 @@ async def read_page(
 
 def _fetcher(client: Any, path: str) -> JournaldFetch:
     def fetch(range_: str) -> Coroutine[Any, Any, JournaldPage]:
-        return _fetch(client, path, range_)
+        return fetch_range(client, path, range_)
 
     return fetch
 
@@ -312,9 +320,13 @@ async def _entry_after(fetch: JournaldFetch, cursor: str, k: int) -> str | None:
     return (await fetch(f"entries={cursor}:{k}:1")).first_cursor
 
 
-async def read_logs_window(client: Any, path: str, since: datetime) -> JournalWindow:
+async def read_logs_window(
+    client: Any, path: str, since: datetime, fetch: JournaldFetch | None = None
+) -> JournalWindow:
     """``read_window`` under one deadline for all of its requests."""
-    return await _within_timeout(client, path, since, read_window(client, path, since))
+    return await _within_timeout(
+        client, path, since, read_window(client, path, since, fetch=fetch)
+    )
 
 
 async def read_logs_page(
@@ -325,13 +337,14 @@ async def read_logs_page(
     count: int,
     resume: WindowToken | None = None,
     skip: int = 0,
+    fetch: JournaldFetch | None = None,
 ) -> JournalPage:
     """``read_page`` under one deadline for all of its requests."""
     return await _within_timeout(
         client,
         path,
         since,
-        read_page(client, path, since, hours_back, count, resume, skip),
+        read_page(client, path, since, hours_back, count, resume, skip, fetch),
     )
 
 

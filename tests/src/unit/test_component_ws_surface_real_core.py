@@ -148,6 +148,12 @@ async def test_every_command_is_registered_and_config_get_is_not(
         scene_editor.WS_SCENE_IGNORED_DOMAINS,
         config_keys.WS_CONFIG_KEYS,
         "ha_mcp_tools/history_page",
+        "ha_mcp_tools/fault_log",
+        "ha_mcp_tools/system_log_entries",
+        "ha_mcp_tools/core_log_window",
+        "ha_mcp_tools/core_log_records",
+        "ha_mcp_tools/supervisor_log",
+        "ha_mcp_tools/log_time_window",
     }
     assert "ha_mcp_tools/config_get" not in registered
 

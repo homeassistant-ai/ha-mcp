@@ -7,22 +7,14 @@ Module Size; per-source fetchers live in ``log_sources`` and
 ``log_sources_supervisor``, and the tool surface in ``tools_logs``.
 """
 
+import logging
+import re
 from typing import Literal
 
 from .._version import is_running_in_addon
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
 from .tools_addons import _is_valid_supervisor_slug
-
-# Supervisor-managed system services exposed via /<slug>/logs. The set is
-# Supervisor's own route list (its ``_register_advanced_logs`` call sites),
-# not HA Core's hassio proxy allowlist: the proxy accepts /cli and /observer
-# but Supervisor serves no log route for either, so they always 404. See
-# #1116 (original seven-service scope, observer included) and #1260 (cli added
-# off the proxy list).
-SYSTEM_SERVICE_SLUGS = frozenset(
-    {"supervisor", "host", "core", "dns", "audio", "multicast"}
-)
 
 DEFAULT_LIMIT = 50
 DEFAULT_LOG_LIMIT = 100
@@ -32,8 +24,8 @@ DEFAULT_LOG_LIMIT = 100
 # behind it than the limit itself.
 SUPERVISOR_SEARCH_WINDOW_LINES = 2000
 MAX_LIMIT = 500
-
-VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG", "CRITICAL")
+# One Supervisor service or app name, as the component's commands accept it.
+SLUG_PATTERN = r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*"
 
 
 def _coerce_limit(
@@ -61,15 +53,17 @@ def _validate_log_level(level: str | None) -> str | None:
     if level is None:
         return None
     level_upper = level.strip().upper()
-    if level_upper not in VALID_LOG_LEVELS:
+    level_names = logging.getLevelNamesMapping()
+    # No record is logged at NOTSET.
+    if level_upper not in level_names or level_upper == "NOTSET":
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid level '{level}'. Must be one of: {', '.join(VALID_LOG_LEVELS)}",
+                f"Invalid level '{level}'. Must be one of: {', '.join(sorted(set(level_names) - {'NOTSET'}))}",
                 suggestions=["Use level='ERROR' to see only errors"],
             )
         )
-    return level_upper
+    return logging.getLevelName(level_names[level_upper])
 
 
 def _collect_log_warnings(
@@ -145,31 +139,25 @@ def _collect_log_warnings(
 
 
 def _validate_log_slug(source: str, slug: str | None) -> None:
-    if source == "system_service":
-        if not slug:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "The 'slug' parameter is required for source='system_service'",
-                    suggestions=[
-                        "Provide a service name, e.g. slug='supervisor' "
-                        f"(allowed: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))})",
-                    ],
-                )
+    if (
+        source in ("supervisor", "system_service")
+        and slug
+        and not re.fullmatch(SLUG_PATTERN, slug)
+    ):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "The slug must be a single service or app name.",
             )
-        if slug not in SYSTEM_SERVICE_SLUGS:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid system_service slug '{slug}'. Must be one of: "
-                    f"{', '.join(sorted(SYSTEM_SERVICE_SLUGS))}",
-                    suggestions=[
-                        "Pick a valid service name (e.g. 'supervisor', 'host')",
-                        "For app (add-on) container logs use source='supervisor' "
-                        + "with the app slug instead",
-                    ],
-                )
+        )
+    if source == "system_service" and not slug:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "The slug parameter is required for system_service.",
+                suggestions=["Provide a service name, e.g. supervisor."],
             )
+        )
     elif source == "supervisor" and not slug:
         raise_tool_error(
             create_error_response(

@@ -267,7 +267,8 @@ class TestRoutes:
         assert out["window_start"] == "2026-11-05T10:00:00+00:00"
         assert out["read_at"] == "2026-11-05T12:00:00+00:00"
         assert "window_complete" not in out
-        assert "warnings" not in out
+        assert len(out["warnings"]) == 1
+        assert "component" in out["warnings"][0]
 
 
 class TestTheDeadline:
