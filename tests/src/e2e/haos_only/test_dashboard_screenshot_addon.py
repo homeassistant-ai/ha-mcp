@@ -569,12 +569,16 @@ async def _engine_outcome_after_restart(mcp_client: Any) -> bytes | None:
     )
 
 
+# Beta lanes only: the app socket and Supervisor's report of an app's TCP use
+# ship in Supervisor 2026.11.1, which the stable channel does not serve yet.
+@pytest.mark.beta_haos_only
 async def test_app_reaches_supervisor_without_its_token_over_tcp(
     mcp_client: Any, ha_client: HomeAssistantClient, screenshot_engine_started: Any
 ) -> None:
-    """Engine discovery and the app tools ask Supervisor over the app's
-    socket, so Supervisor records no deprecated TCP use by this local app (it
-    raises that issue for an app in the local repository)."""
+    """Engine discovery asks Supervisor over the app's socket, so Supervisor
+    records no deprecated TCP use by this local app. Supervisor raises that
+    issue for an app in the local repository, once per app version and boot,
+    so earlier calls in the session count as well."""
     await _screenshot(mcp_client, DEFAULT_DASHBOARD_PATH)
     result = await ha_client.send_websocket_message(
         {"type": "supervisor/api", "endpoint": "/resolution/info", "method": "get"}

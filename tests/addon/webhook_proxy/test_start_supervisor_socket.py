@@ -1,21 +1,19 @@
-"""Supervisor deprecates an app's token over TCP: on Supervisor 2026.11 and
+"""Supervisor deprecates an app's token over TCP: on Supervisor 2026.11.1 and
 later the app asks it over the Unix socket Supervisor mounts for it
 (``SUPERVISOR_SOCKET``), without the token. Each start is the app's
 ``main()``; Supervisor's ``/addons`` list decides whether it refuses."""
 
 from __future__ import annotations
 
-import shutil
-import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import ModuleType
 
 import pytest
-import pytest_socket
-from aiohttp import web
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant.typing import ClientSessionGenerator
+
+from tests.src.unit._tools_addons_core import app_socket
 
 from ._start import App, CoreLink, Supervisor, connect_core, make_app, run_main
 from ._variants import Variant, supervisor_socket_supported
@@ -44,23 +42,9 @@ async def socket_supervisor(
     monkeypatch: pytest.MonkeyPatch, socket_enabled: None
 ) -> AsyncIterator[Supervisor]:
     """A second Supervisor, reached only over the app's Unix socket."""
-    # The plugin's allow list refuses Unix sockets; Core's hassio tests reset it.
-    pytest_socket.socket_allow_hosts(["127.0.0.1"], allow_unix_socket=True)
     found = Supervisor()
-    server = web.Application()
-    server.router.add_route("*", "/{path:.*}", found.serve)
-    runner = web.AppRunner(server)
-    await runner.setup()
-    # Not tmp_path: it can exceed the 104-byte sun_path limit on macOS.
-    socket_dir = tempfile.mkdtemp(dir="/tmp")
-    socket_path = Path(socket_dir, "supervisor.sock")
-    await web.UnixSite(runner, str(socket_path)).start()
-    monkeypatch.setenv("SUPERVISOR_SOCKET", str(socket_path))
-    try:
+    async with app_socket(found.serve, monkeypatch):
         yield found
-    finally:
-        await runner.cleanup()
-        shutil.rmtree(socket_dir)
 
 
 async def test_the_app_asks_supervisor_over_its_socket_without_its_token(

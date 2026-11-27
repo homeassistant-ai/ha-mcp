@@ -1,9 +1,10 @@
 """Send an app's Supervisor API request over its Unix socket when it has one.
 
-Supervisor 2026.11 mounts a socket in every app (``SUPERVISOR_SOCKET``) and
+Supervisor 2026.11.1 mounts a socket in each app (``SUPERVISOR_SOCKET``) and
 deprecates the app's token over TCP. On the socket Supervisor identifies the
 app by the socket itself and reads no token, so the token is not sent there.
-Without the socket (an older Supervisor) the request goes over TCP unchanged.
+Without the socket (an older Supervisor, or a slug too long for a socket path)
+the request goes over TCP unchanged.
 
 The ha-mcp app and the webhook proxy app ship byte-identical copies of this
 file, which ``tests/addon/test_addon_startup.py`` keeps equal.
@@ -20,11 +21,15 @@ from typing import Any
 
 
 def urlopen_supervisor(req: urllib.request.Request, timeout: float) -> Any:
-    """Open ``req`` (an ``http://supervisor`` URL) as ``urlopen`` would."""
+    """Open ``req`` (an ``http://supervisor`` URL) as ``urlopen`` would.
+
+    On the socket the token header is removed from ``req`` itself.
+    """
     socket_path = os.environ.get("SUPERVISOR_SOCKET")
     if not socket_path:
         return urllib.request.urlopen(req, timeout=timeout)
     req.remove_header("Authorization")
+    # No proxies: an http_proxy setting would send the request away from the socket.
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}), _SocketHandler(socket_path)
     )

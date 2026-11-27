@@ -11,7 +11,7 @@ history from before the fork.
 
 ## v3.0.6.dev4 (2026-11-27)
 
-- On Supervisor 2026.11 and later the app calls the Supervisor API over the
+- On Supervisor 2026.11.1 and later the app calls the Supervisor API over the
   Unix socket Supervisor gives it, without its token, since Supervisor
   deprecates an app's token over TCP. Older Supervisors keep the TCP route
   (#3221).

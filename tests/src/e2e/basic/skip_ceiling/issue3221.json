@@ -1,5 +1,5 @@
 {
-  "reason": "#3221 adds an inaddon_only test (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py::test_app_reaches_supervisor_without_its_token_over_tcp): it reads Supervisor's resolution issues for the dev app, so it skips at collection on every lane but the two HAOS inaddon lanes.",
+  "reason": "#3221 adds an inaddon_only, beta_haos_only test (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py::test_app_reaches_supervisor_without_its_token_over_tcp): it reads Supervisor's resolution issues for the dev app, which only Supervisor 2026.11.1 (beta channel) raises, so it runs only on the beta HAOS inaddon lanes and skips at collection everywhere else.",
   "deltas": {
     "container": 1,
     "haos": 1,
@@ -8,6 +8,8 @@
     "haos_embedded": 1,
     "container_no_tools": 1,
     "embedded_no_tools": 1,
-    "haos_embedded_no_tools": 1
+    "haos_embedded_no_tools": 1,
+    "haos_inaddon": 1,
+    "haos_inaddon_no_tools": 1
   }
 }

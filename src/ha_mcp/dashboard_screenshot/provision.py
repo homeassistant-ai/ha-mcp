@@ -9,9 +9,9 @@ startup, never silently installed):
 1. **Explicit** — ``HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL`` is set. Used
    verbatim. This is the Docker / Container path (a docker-compose
    sidecar), and also lets HA OS users override auto-discovery.
-2. **HA OS / Supervised** — ``SUPERVISOR_TOKEN`` is present (the app, or Core
-   around the embedded server). A supported app (slug ``*_puppet`` or
-   ``*_wpe_screenshot_engine``) is verified through the Supervisor API and
+2. **HA OS / Supervised** — ``SUPERVISOR_TOKEN`` is present (set in the app,
+   and in Core's environment, which the embedded server shares). A supported
+   app (slug ``*_puppet`` or ``*_wpe_screenshot_engine``) is verified through the Supervisor API and
    reached on the internal network by its hostname.
    The user must install and start the app themselves — we never auto-install.
 3. **Neither** (stdio / standalone) — a clear :class:`ToolError` explaining

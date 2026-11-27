@@ -977,7 +977,7 @@ class HomeAssistantClient:
         (add-on) container goes directly to the Supervisor
         REST API at ``http://supervisor/addons/{slug}/logs`` (over the app's
         socket when it has one). The HA Core proxy at
-        ``/api/hassio/addons/{slug}/logs`` rejects this token+path combination
+        ``/api/hassio/addons/{slug}/logs`` rejects an app's request for this path
         on current HA Core releases (see #1116) — the direct path bypasses
         HA Core entirely and is the documented Supervisor contract.
 

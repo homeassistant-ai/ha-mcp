@@ -7,12 +7,13 @@ screenshot-engine discovery.
 
 These calls cannot use ``HomeAssistantClient.httpx_client``, which targets
 Home Assistant Core rather than Supervisor. In app mode it reaches Core through
-Supervisor's ``/core`` proxy, so it uses the same transport, but requests use a
-different base URL and authorization surface.
+Supervisor's ``/core`` proxy, always over TCP with the app's token: Supervisor
+does not count those proxy paths as Supervisor API use.
 
-Supervisor 2026.11 gives every app a Unix socket (``SUPERVISOR_SOCKET``) and
-deprecates the app's token over TCP. On the socket Supervisor identifies the
-app by the socket itself and reads no token, so these clients send none there.
+Supervisor 2026.11.1 mounts a Unix socket in each app (``SUPERVISOR_SOCKET``)
+and deprecates the app's token over TCP. On the socket Supervisor identifies
+the app by the socket itself and reads no token, so these clients send none
+there.
 """
 
 from __future__ import annotations
@@ -31,7 +32,10 @@ def supervisor_socket() -> str | None:
     """Return the Unix socket Supervisor mounted for this app, if it has one.
 
     ``None`` on an older Supervisor, or for an app whose slug is too long for a
-    socket path; the app then calls Supervisor over TCP with its token.
+    socket path; the app then calls Supervisor over TCP with its token. Only
+    meaningful under ``is_running_in_addon()``: in Core's own process (the
+    embedded server) Supervisor sets this to Core's socket, on which Supervisor
+    treats the caller as Core.
     """
     return os.environ.get("SUPERVISOR_SOCKET") or None
 
@@ -53,7 +57,7 @@ def make_supervisor_httpx_client(
             honours ``SUPERVISOR_BASE_URL`` env-var overrides that may be
             HTTPS in non-add-on test rigs. The full httpx ``verify`` surface
             (``bool``, CA-bundle path, or :class:`ssl.SSLContext`) is
-            accepted and forwarded verbatim.
+            accepted and forwarded verbatim on TCP; the socket needs none.
 
     Returns:
         A new :class:`httpx.AsyncClient` bound to the Supervisor base URL.

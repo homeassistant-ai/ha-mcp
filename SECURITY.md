@@ -61,16 +61,16 @@ trusted — securing the local network is outside ha-mcp's scope.
 
 On app (add-on) installs, ha-mcp additionally calls the Supervisor REST API.
 When Supervisor mounts the app's Unix socket (`SUPERVISOR_SOCKET`, Supervisor
-2026.11 and later), those calls go over it: Supervisor identifies the app by
+2026.11.1 and later), those calls go over it: Supervisor identifies the app by
 the socket and no token is sent. Otherwise they go to `http://supervisor`
-with the Supervisor-issued token, over plain HTTP on the internal `hassio`
-docker network that is not reachable from the LAN; the isolation of that
-network, enforced by the Home Assistant OS platform, is the boundary
-protecting the token. The app reaches Core through Supervisor's `/core` proxy
-over that network with the same token, which the proxy handler checks itself.
-Supervisor does not count those proxy paths as Supervisor API use. The embedded server makes no
-Supervisor call of its own: it asks Core's `hassio` integration, which reaches
-Supervisor as Core does.
+with the Supervisor-issued token. Either way the app reaches Core through
+Supervisor's `/core` proxy with that token, over plain HTTP on the internal
+`hassio` docker network that is not reachable from the LAN; the proxy handler
+checks the token itself, and Supervisor does not count those proxy paths as
+Supervisor API use. The isolation of that network, enforced by the Home
+Assistant OS platform, is the boundary protecting the token. The embedded
+server makes no Supervisor call of its own: it asks Core's `hassio`
+integration, which reaches Supervisor as Core does.
 
 For internet-facing deployments use the OAuth entrypoint (`ha-mcp-oauth`) or,
 for gating access behind an external identity provider instead of per-user HA
