@@ -10,7 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from homeassistant.components import update as update_component
 from homeassistant.components.update import UpdateEntityFeature
+from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
@@ -22,6 +24,9 @@ from ha_mcp import update_check
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.helpers import core_error_message
 
+from ._client_spies import sent_messages
+from ._command_faults import pooled_socket
+from ._component_frames import dropped
 from ._core_release_pages import (
     BLOG_202611,
     RELEASES,
@@ -89,24 +94,63 @@ async def core_analysis(client: HomeAssistantClient) -> dict[str, Any]:
 class TestReleaseNotes:
     """``get`` returns an update's release notes from the first source that has them."""
 
-    async def test_notes_come_from_the_update_entity_first(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
+    @pytest.mark.parametrize(
+        "notes", ["Faster startup", None], ids=["notes", "no-notes"]
+    )
+    @pytest.mark.parametrize(
+        "has_warning", [False, True], ids=["no-warning", "warning"]
+    )
+    async def test_update_entity_release_notes_and_messages(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        web: Web,
+        notes: str | None,
+        has_warning: bool,
     ) -> None:
-        notes = "## 1.1.0\n- Faster startup"
-        update = SoftwareUpdate(
-            "update.thing",
+        """Core 2026.12 answers an object: its notes must come back as text, and
+        its translated warnings must survive the GitHub fallback for notes."""
+        if has_warning and (MAJOR_VERSION, MINOR_VERSION) < (2026, 12):
+            pytest.skip("Core added update messages in 2026.12")
+
+        class FirmwareUpdate(SoftwareUpdate):
+            @property
+            def release_notes_messages(self) -> tuple[Any, ...]:
+                if not has_warning:
+                    return ()
+                warning = getattr(
+                    update_component, "RELEASE_NOTES_MESSAGE_DO_NOT_INTERRUPT", None
+                )
+                assert warning is not None
+                return (warning,)
+
+        github = "https://api.github.com/repos/owner/repo/releases/tags/v1.0.0"
+        web.serve(github, json={"body": "Published changelog"})
+        entity = FirmwareUpdate(
+            "update.firmware",
             features=UpdateEntityFeature.RELEASE_NOTES,
-            release_url=RELEASE_URL,
             notes=notes,
+            release_url=RELEASE_URL,
         )
-
-        result = await get_update(hass, core_client, update)
-
-        assert (result["release_notes"], result["release_notes_source"]) == (
-            notes,
-            "websocket",
-        )
-        assert web.requested == []
+        result = await get_update(hass, core_client, entity)
+        if notes:
+            assert (result["release_notes"], result["release_notes_source"]) == (
+                notes,
+                "websocket",
+            )
+            assert web.requested == []
+        else:
+            assert (result["release_notes"], result["release_notes_source"]) == (
+                "Published changelog",
+                "github_api",
+            )
+            assert github in web.requested
+        if has_warning:
+            [message] = result["release_notes_messages"]
+            assert message["severity"] == "warning"
+            assert message["message"]
+        else:
+            assert "release_notes_messages" not in result
 
     async def test_an_update_core_has_no_notes_for_gets_its_github_release(
         self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
@@ -126,6 +170,70 @@ class TestReleaseNotes:
             body,
             "github_api",
         )
+
+    async def test_a_language_reaches_core_or_is_dropped_with_a_warning(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Core 2026.12 takes ``language`` for its messages; an older Core
+        refuses the field, so the notes are read again without it and the
+        caller is told the language was not used."""
+        entity = SoftwareUpdate(
+            "update.firmware",
+            features=UpdateEntityFeature.RELEASE_NOTES,
+            notes="Faster startup",
+        )
+        await set_up_updates(hass, entity)
+
+        with sent_messages(core_client) as sent:
+            result = await manage_updates(
+                core_client,
+                action="get",
+                entity_ids=[entity.entity_id],
+                language="de",
+            )
+
+        assert result["release_notes"] == "Faster startup"
+        requests = [
+            c.args[0]
+            for c in sent.call_args_list
+            if c.args[0]["type"] == "update/release_notes"
+        ]
+        assert requests[0]["language"] == "de"
+        dropped = any("takes no language" in w for w in result.get("warnings", []))
+        if (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12):
+            assert (len(requests), dropped) == (1, False)
+        else:
+            assert (len(requests), dropped) == (2, True)
+            assert "language" not in requests[1]
+
+    @pytest.mark.skipif(
+        (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12),
+        reason="Core takes the language since 2026.12",
+    )
+    async def test_a_refused_language_is_reported_when_the_second_read_is_lost(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Core refused the language; losing the read without it must not
+        hide that from the caller."""
+        entity = SoftwareUpdate(
+            "update.firmware",
+            features=UpdateEntityFeature.RELEASE_NOTES,
+            notes="Faster startup",
+        )
+        await set_up_updates(hass, entity)
+
+        # Core refuses the first read by its schema; only the second reaches
+        # the handler, where the client loses its connection.
+        socket = await pooled_socket(core_client)
+        with dropped(hass, "update/release_notes", socket):
+            result = await manage_updates(
+                core_client,
+                action="get",
+                entity_ids=[entity.entity_id],
+                language="de",
+            )
+
+        assert any("takes no language" in w for w in result.get("warnings", []))
 
     async def test_hint_links_the_release_when_no_changelog_file_exists(
         self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web

@@ -250,6 +250,9 @@
     "switch": {
       "server_access": {
         "name": "Приступ"
+      },
+      "server_read_only_mode": {
+        "name": "Режим само за читање"
       }
     }
   }

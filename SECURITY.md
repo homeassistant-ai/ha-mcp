@@ -59,14 +59,18 @@ secrecy and is designed for loopback HTTP or LAN HTTP with a high-entropy
 `MCP_SECRET_PATH`. Any peer that can reach the configured path is treated as
 trusted — securing the local network is outside ha-mcp's scope.
 
-On app (add-on) installs, ha-mcp additionally talks to the Supervisor REST
-API at `http://supervisor` with the Supervisor-issued token. That transport
-is the platform's contract, not a choice this project can harden: Supervisor
-serves its API over plain HTTP only (`web.TCPSite(..., port=80)` in
-`supervisor/api/__init__.py` — no TLS endpoint, no IPC socket), on the
-internal `hassio` docker network that is not reachable from the LAN. The
-isolation of that internal network is the boundary protecting the token, and
-it is enforced by the Home Assistant OS platform, not by ha-mcp.
+On app (add-on) installs, ha-mcp additionally calls the Supervisor REST API.
+When Supervisor mounts the app's Unix socket (`SUPERVISOR_SOCKET`, Supervisor
+2026.11.1 and later), those calls go over it: Supervisor identifies the app by
+the socket and no token is sent. Otherwise they go to `http://supervisor`
+with the Supervisor-issued token. Either way the app reaches Core through
+Supervisor's `/core` proxy with that token, over plain HTTP on the internal
+`hassio` docker network that is not reachable from the LAN; the proxy handler
+checks the token itself, and Supervisor does not count those proxy paths as
+Supervisor API use. The isolation of that network, enforced by the Home
+Assistant OS platform, is the boundary protecting the token. The embedded
+server makes no Supervisor call of its own: it asks Core's `hassio`
+integration, which reaches Supervisor as Core does.
 
 For internet-facing deployments use the OAuth entrypoint (`ha-mcp-oauth`) or,
 for gating access behind an external identity provider instead of per-user HA
@@ -435,6 +439,12 @@ exception is the administrator's settings export: its JSON download carries the
 webhook ID, the secret path and any legacy OAuth credentials, which the panel
 states before the download. The export and import routes accept only
 same-origin requests from that admin session.
+
+One value that does travel in a URL is a pending approval token, when a
+notification link names a card (`/ha-mcp?tab=tool-security-policies&token=…`). It
+is not a credential: without the administrator session the policy endpoints
+answer 401, and the same token is already carried by
+`ha_mcp_approval_requested` and by the `USER_APPROVAL_REQUIRED` error.
 
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)
 

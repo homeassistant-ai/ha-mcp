@@ -28,7 +28,9 @@ If you *do* run the app, you don't also need `uvx` — that would be a second, s
 | Dashboards | No | Full dashboard management |
 | Cameras | No | Screenshot and analysis |
 
-Built-in = operate devices. ha-mcp = administer your system.
+Using Home Assistant’s built-in MCP server (`/api/mcp` or `/api/mcp/<api-id>`) to connect an external client to ha-mcp is unsupported. The ha-mcp tools listed under **Settings → System → AI** are intended for Home Assistant conversation agents, including Assist chat and voice.
+
+If you installed the ha-mcp app, use the MCP server URL from the app logs. For the embedded server, copy the connect URL from the **HA-MCP Server** entry’s **Configure** screen. For Docker and other installations, follow the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
 
 ### How do I open the ha-mcp settings page?
 
@@ -1216,6 +1218,11 @@ automation:
         data:
           title: "Approval needed: {{ trigger.event.data.tool_name }}"
           message: "{{ trigger.event.data.args }}"
+          data:
+            # Opens the panel on the tab and card this request names.
+            # clickAction is Android, url is iOS; the app ignores the other.
+            clickAction: "/ha-mcp?tab=tool-security-policies&token={{ trigger.event.data.token }}"
+            url: "/ha-mcp?tab=tool-security-policies&token={{ trigger.event.data.token }}"
 ```
 
 The event data carries `token`, `tool_name`, `args`, `created_at` and

@@ -63,6 +63,7 @@ __all__ = [
     "WS_DASHBOARD_EDIT",
     "WS_DEVICE_GET",
     "WS_DEVICE_LIST",
+    "WS_ENTITY_ALIASES",
     "WS_ENTITY_ENRICH",
     "WS_ENTITY_LOOKUP",
     "WS_EXPOSURE",
@@ -98,6 +99,7 @@ WS_BLUEPRINT_GET = f"{WS_API_PREFIX}/blueprint_get"
 WS_DEVICE_GET = f"{WS_API_PREFIX}/device_get"
 WS_DEVICE_LIST = f"{WS_API_PREFIX}/device_list"
 WS_ENTITY_ENRICH = f"{WS_API_PREFIX}/entity_enrich"
+WS_ENTITY_ALIASES = f"{WS_API_PREFIX}/entity_aliases"
 WS_EXPOSURE = f"{WS_API_PREFIX}/exposure"
 WS_CONFIG_ENTRIES = f"{WS_API_PREFIX}/config_entries"
 WS_REGISTRY_LOOKUP = f"{WS_API_PREFIX}/registry_lookup"
@@ -133,6 +135,7 @@ CAPABILITIES: list[str] = [
     "search",
     # Location/state filters precede pagination; search accepts any result window.
     "search_unified",
+    "search_editor_bodies",
     # A flag on search: gates its additive result_fields request and generic
     # is_group/member_entity_ids response fields.
     "search_entity_membership",
@@ -162,6 +165,7 @@ CAPABILITIES: list[str] = [
     # unless this flag accompanies the individual command capability.
     "device_registry_child_semantics",
     "entity_enrich",
+    "entity_aliases",
     # A flag on entity_enrich: each entity carries ``full_name``, the name Core
     # composes, as the overview's ``full_name``.
     "entity_enrich_full_name",
@@ -219,6 +223,9 @@ CAPABILITIES: list[str] = [
     # hidden entity. The server sends an enforcing search here only with it.
     "search_visibility_enforce",
     "server_entry",
+    # A flag on server_entry: gates its ``install_pending`` field, whether the
+    # configured spec still waits for its install.
+    "server_entry_install_pending",
     # The WRITE counterpart of ``server_entry`` (Phase 3). The server gates its
     # ``ha_dev_manage_server(update_source)`` embedded-mode direct-write on this; an
     # old component that lacks it is never sent the frame and the server stays on its

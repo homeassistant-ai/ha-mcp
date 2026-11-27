@@ -250,6 +250,9 @@
     "switch": {
       "server_access": {
         "name": "Dostęp"
+      },
+      "server_read_only_mode": {
+        "name": "Tryb tylko do odczytu"
       }
     }
   }

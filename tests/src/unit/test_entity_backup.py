@@ -10,8 +10,10 @@ write.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -36,7 +38,8 @@ from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantCommandE
 from ha_mcp.tools.tools_entities import EntityTools
 
 from ._backup_core import backup_settings as backup_settings
-from ._backup_core import place_snapshot
+from ._backup_core import break_backup_dir, manage_backup, place_snapshot
+from ._backup_restore_consumers_core import fill_the_disk
 from ._command_faults import unanswered
 from ._entity_backup_core import (
     AREA_READS,
@@ -55,6 +58,7 @@ from ._entity_backup_core import entity_handler as entity_handler
 from ._entity_backup_core import entity_manager as entity_manager
 from ._entity_backup_core import entity_path as entity_path
 from ._entity_backup_core import lookup_command as lookup_command
+from ._tool_errors import error_of
 
 Edit = Callable[[er.EntityRegistry, Desk], Any]
 
@@ -527,27 +531,252 @@ class TestStateSnapshotFile:
             await entity_manager.snapshot_comparison(legacy)
 
 
-async def test_a_bulk_call_backs_up_no_entity(
+async def test_a_bulk_call_backs_up_every_entity_before_writing(
     entity_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
+    entity_manager: bm.BackupManager,
     backup_settings: config.Settings,
     desk: Desk,
 ) -> None:
-    """Snapshotting the first entity of a list would leave the rest without a
-    backup while looking covered, so a list names no entity. A list of one is
-    a single edit to ha_set_entity."""
+    """Snapshotting only the first entity of a list would leave the rest without
+    a backup while looking covered, so each entity of a list gets its own, and
+    restoring it undoes the call. A list of one is a single edit to
+    ha_set_entity."""
     entity_registry.async_get_or_create(
         "light", "hue", "lamp", suggested_object_id="lamp"
     )
     tools = EntityTools(entity_client)
     directory = backup_dir(backup_settings)
 
-    await tools.ha_set_entity(
-        entity_id=["light.desk", "light.lamp"], labels=[desk.work]
-    )
+    await tools.ha_set_entity(entity_id=["light.desk", "light.lamp"], hidden=True)
     after_bulk = await asyncio.to_thread(backup_files, directory)
     await tools.ha_set_entity(entity_id=["light.desk"], labels=[desk.work])
     after_single = await asyncio.to_thread(backup_files, directory)
 
-    assert after_bulk == []
-    assert [name.split(".20")[0] for name in after_single] == ["entity.light.desk"]
+    assert [name.split(".20")[0] for name in after_bulk] == [
+        "entity.light.desk",
+        "entity.light.lamp",
+    ]
+    assert [
+        name.split(".20")[0] for name in after_single if name not in after_bulk
+    ] == ["entity.light.desk"]
+    await entity_manager.restore_snapshot(after_bulk[0])
+    restored = entity_registry.async_get(desk.entity_id)
+    assert restored is not None
+    assert restored.hidden_by is None
+
+
+@pytest.mark.parametrize(
+    "entity_id",
+    [
+        ["LIGHT.DESK", "light.desk"],
+        ["LIGHT.DESK"],
+        "LIGHT.DESK",
+    ],
+)
+async def test_an_entity_is_backed_up_once_under_cores_id(
+    entity_client: HomeAssistantClient,
+    backup_settings: config.Settings,
+    desk: Desk,
+    entity_id: str | list[str],
+) -> None:
+    """Core lowercases an entity_id, so a repeat in any case is one entity
+    with one backup, filed under the id Core keeps, as a single call files
+    it."""
+    await EntityTools(entity_client).ha_set_entity(entity_id=entity_id, hidden=True)
+
+    files = await asyncio.to_thread(backup_files, backup_dir(backup_settings))
+    assert [name.split(".20")[0] for name in files] == ["entity.light.desk"]
+
+
+async def test_an_on_demand_backup_is_filed_under_cores_id(
+    entity_client: HomeAssistantClient,
+    backup_settings: config.Settings,
+    desk: Desk,
+) -> None:
+    """An explicit capture files an entity under the id Core keeps, as a
+    write's backup does, and an entity filter in either case finds it."""
+    created = await manage_backup(
+        entity_client,
+        scope="edits",
+        action="create",
+        domain="entity",
+        entity_id="LIGHT.DESK",
+    )
+    name = created["data"]["backup_name"]
+
+    assert name.split(".20")[0] == "entity.light.desk"
+    assert created["data"]["entity_id"] == "light.desk"
+    for entity_id in ("LIGHT.DESK", "light.desk"):
+        listed = await manage_backup(
+            entity_client,
+            scope="edits",
+            action="list",
+            domain="entity",
+            entity_id=entity_id,
+        )
+        assert [row["name"] for row in listed["data"]["backups"]] == [name]
+
+
+async def test_a_refused_list_takes_no_backup(
+    entity_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    backup_settings: config.Settings,
+    desk: Desk,
+) -> None:
+    """A call refused before any write leaves nothing to restore, so it files
+    no snapshot either."""
+    entity_registry.async_get_or_create(
+        "light", "hue", "lamp", suggested_object_id="lamp"
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await EntityTools(entity_client).ha_set_entity(
+            entity_id=["light.desk", "light.lamp"]
+        )
+
+    assert error_of(exc_info)["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert await asyncio.to_thread(backup_files, backup_dir(backup_settings)) == []
+
+
+@pytest.mark.parametrize("fault", ["read", "write", "vanished", "directory"])
+async def test_each_backup_a_bulk_call_could_not_take_is_named(
+    hass: HomeAssistant,
+    entity_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    backup_settings: config.Settings,
+    entity_manager: bm.BackupManager,
+    desk: Desk,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fault: str,
+) -> None:
+    """A write goes ahead without the backup it could not take, so the reply
+    has to say which entities have none: one warning each in a list."""
+    entity_registry.async_get_or_create(
+        "light", "hue", "lamp", suggested_object_id="lamp"
+    )
+    tools = EntityTools(entity_client)
+    ids = ["light.desk", "light.lamp"]
+    if fault == "write":
+        fill_the_disk(entity_manager, monkeypatch)
+    elif fault == "vanished":
+        native_is_file = Path.is_file
+
+        def is_file(path: Path) -> bool:
+            if path.parent == backup_dir(backup_settings):
+                return False
+            return native_is_file(path)
+
+        monkeypatch.setattr(Path, "is_file", is_file)
+    elif fault == "directory":
+        break_backup_dir(backup_settings, monkeypatch, tmp_path)
+
+    unreadable = (
+        crashing_on(hass, "config/entity_registry/get", lambda msg: True)
+        if fault == "read"
+        else contextlib.nullcontext()
+    )
+    with unreadable:
+        result = await tools.ha_set_entity(entity_id=ids, hidden=True)
+
+    assert result["succeeded_count"] == 2
+    assert [w.split(" was taken")[0] for w in result["warnings"]] == [
+        f"No pre-write backup of entity:{eid}" for eid in ids
+    ]
+    for eid in ids:
+        entry = entity_registry.async_get(eid)
+        assert entry is not None
+        assert entry.hidden_by is er.RegistryEntryHider.USER
+
+
+async def test_a_single_call_names_the_backup_it_could_not_take(
+    entity_client: HomeAssistantClient,
+    entity_manager: bm.BackupManager,
+    backup_settings: config.Settings,
+    desk: Desk,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The decorator's write goes ahead without its backup, so the reply says
+    the entity has none."""
+    fill_the_disk(entity_manager, monkeypatch)
+
+    result = await EntityTools(entity_client).ha_set_entity(
+        entity_id="light.desk", icon="mdi:lamp"
+    )
+
+    assert any("light.desk" in warning for warning in result["warnings"])
+
+
+@pytest.mark.parametrize(
+    "ids",
+    [
+        ["light.desk", "light.desk"],
+        ["light.desk", "LIGHT.DESK"],
+        ["LIGHT.DESK", "light.desk"],
+    ],
+)
+async def test_a_list_repeating_one_entity_removes_and_backs_it_up_once(
+    entity_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    backup_settings: config.Settings,
+    desk: Desk,
+    ids: list[str],
+) -> None:
+    """A repeat, in any case, is one entity: one removal, one outcome, and its
+    one backup under the id Core keeps, which the decorator does not take for
+    a list of two."""
+    result = await EntityTools(entity_client).ha_remove_entity(entity_id=ids)
+
+    assert (result["total"], result["removed"], result["skipped"]) == (
+        1,
+        ids[:1],
+        [],
+    )
+    files = await asyncio.to_thread(backup_files, backup_dir(backup_settings))
+    assert [name.split(".20")[0] for name in files] == ["entity.light.desk"]
+
+
+async def test_removing_a_list_backs_up_every_entity_once(
+    entity_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+    backup_settings: config.Settings,
+    desk: Desk,
+) -> None:
+    """A removal is what a backup is for: every entity of a list is backed up
+    before it goes, and a list of one, which the decorator already backs up,
+    gets no second."""
+    for object_id in ("lamp", "porch"):
+        entity_registry.async_get_or_create(
+            "light", "hue", object_id, suggested_object_id=object_id
+        )
+    tools = EntityTools(entity_client)
+    directory = backup_dir(backup_settings)
+
+    result = await tools.ha_remove_entity(entity_id=["light.desk", "light.lamp"])
+    after_list = await asyncio.to_thread(backup_files, directory)
+    await tools.ha_remove_entity(entity_id=["light.porch"])
+    after_one = await asyncio.to_thread(backup_files, directory)
+
+    assert result["removed"] == ["light.desk", "light.lamp"]
+    assert [name.split(".20")[0] for name in after_list] == [
+        "entity.light.desk",
+        "entity.light.lamp",
+    ]
+    assert [name.split(".20")[0] for name in after_one if name not in after_list] == [
+        "entity.light.porch"
+    ]
+
+
+async def test_a_backup_a_list_removal_could_not_take_is_named(
+    entity_client: HomeAssistantClient, backup_settings: config.Settings, desk: Desk
+) -> None:
+    """The removal goes ahead without it, so the reply says which entity has none."""
+    tools = EntityTools(entity_client)
+
+    result = await tools.ha_remove_entity(entity_id=["light.desk", "not an entity id"])
+
+    assert result["removed"] == ["light.desk"]
+    assert [w.split(" was taken")[0] for w in result["warnings"]] == [
+        "No pre-write backup of entity:not an entity id"
+    ]

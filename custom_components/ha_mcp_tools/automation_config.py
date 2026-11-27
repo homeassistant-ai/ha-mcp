@@ -16,6 +16,7 @@ A Core without one of these parts, or one that fails unexpectedly, answers
 from __future__ import annotations
 
 import copy
+import importlib
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,18 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
+
+# Core 2026.12's module that lists a failed config's errors with their paths.
+# Resolved once here, when the integration is imported: the handlers run on the
+# event loop, where Core reports an import as a blocking call.
+# Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
+_VALIDATION_ERRORS: Any
+try:
+    _VALIDATION_ERRORS = importlib.import_module(
+        "homeassistant.helpers.validation_errors"
+    )
+except ModuleNotFoundError:
+    _VALIDATION_ERRORS = None
 
 WS_AUTOMATION_CONFIG = "ha_mcp_tools/automation_config"
 # Advertised by websocket_api's info; the server's automation tools use it and
@@ -89,6 +102,21 @@ def core_parts() -> SimpleNamespace:
     )
 
 
+async def _located_errors(
+    hass: HomeAssistant, core: SimpleNamespace, config: Any
+) -> dict[str, Any]:
+    """``{"errors": [...]}``: every error of a failed config with its path, as
+    Core's config view answers them (2026.12, ``validation_errors_as_dicts`` of
+    what the public validator raises); empty on a Core without them."""
+    if _VALIDATION_ERRORS is None or core.validate_or_raise is None:
+        return {}
+    try:
+        await core.validate_or_raise(hass, "", copy.deepcopy(config))
+    except core.invalid as err:
+        return {"errors": _VALIDATION_ERRORS.validation_errors_as_dicts(err)}
+    return {}
+
+
 async def _validate(
     hass: HomeAssistant, core: SimpleNamespace, msg: dict[str, Any]
 ) -> dict[str, Any]:
@@ -106,11 +134,20 @@ async def _validate(
     except core.invalid as err:
         # Raised by the public validator on any failure, and by the private one
         # when even the id/alias/description check fails.
-        return {"status": "failed_schema", "error": str(err)}
+        failed = {"status": "failed_schema", "error": str(err)}
+        if core.validate is None:
+            return failed
+        return {**failed, **await _located_errors(hass, core, msg["config"])}
     status = getattr(checked, "validation_status", None)
     if status is None:
         return _unavailable("Home Assistant's automation validator gave no status")
-    return {"status": str(status), "error": getattr(checked, "validation_error", None)}
+    verdict: dict[str, Any] = {
+        "status": str(status),
+        "error": getattr(checked, "validation_error", None),
+    }
+    if verdict["status"] == "ok":
+        return verdict
+    return {**verdict, **await _located_errors(hass, core, msg["config"])}
 
 
 async def _describe(

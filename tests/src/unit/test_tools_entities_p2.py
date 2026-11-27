@@ -16,8 +16,9 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_entities import EntityTools
 
+from ._command_faults import dropped_on, pooled_socket, registry_lookup_failing
 from ._entity_registry_core import sent_types
-from ._tool_errors import error_of
+from ._tool_errors import error_body, error_of
 
 GET = "config/entity_registry/get"
 GET_ENTRIES = "config/entity_registry/get_entries"
@@ -85,6 +86,34 @@ async def test_a_refused_bulk_read_gives_every_id_cores_refusal(
     for message in errors.values():
         assert "entity_ids" in message
         assert "not found" not in message.lower()
+    assert [e["ha_error_code"] for e in result["errors"]] == ["invalid_format"] * 2
+
+
+async def test_a_refused_unique_id_listing_keeps_cores_code(
+    hass: HomeAssistant, tools: EntityTools
+) -> None:
+    """Core's refusal of the registry listing is the answer, with its code."""
+    with (
+        registry_lookup_failing(hass, "config/entity_registry/list"),
+        pytest.raises(ToolError) as exc_info,
+    ):
+        await tools.ha_get_entity(unique_id="a")
+
+    body = error_body(exc_info)
+    assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert body["ha_error_code"] == "home_assistant_error"
+    assert body["unique_id"] == "a"
+
+
+async def test_a_dropped_bulk_read_gives_each_id_an_error_without_a_code(
+    hass: HomeAssistant, tools: EntityTools, core_client: HomeAssistantClient
+) -> None:
+    """Core never answered, so no row carries Core's code."""
+    with dropped_on(hass, GET_ENTRIES, await pooled_socket(core_client)):
+        result = await tools.ha_get_entity(entity_id=["light.a", "light.b"])
+
+    assert [row["entity_id"] for row in result["errors"]] == ["light.a", "light.b"]
+    assert all("ha_error_code" not in row for row in result["errors"])
 
 
 async def test_a_single_read_reads_the_one_entry(
@@ -113,11 +142,25 @@ async def test_a_bulk_removal_sorts_each_id_by_cores_answer(
     assert result["skipped"] == ["sensor.missing"]
     [error] = result["errors"]
     assert error["entity_id"] == BAD_ID
-    assert error["code"] == "SERVICE_CALL_FAILED"
-    assert "entity_id" in error["message"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error["ha_error_code"] == "invalid_format"
+    # Core's message, as a single-id removal gives it.
+    assert error["message"].startswith("Entity ID not an id is an invalid entity ID")
     assert entity_registry.async_get("sensor.a") is None
     removals = [m.args[0] for m in sent.call_args_list if m.args[0]["type"] == REMOVE]
     assert [r["entity_id"] for r in removals] == ["sensor.a", "sensor.missing", BAD_ID]
+
+
+async def test_a_single_removal_core_refuses_keeps_its_code(
+    tools: EntityTools,
+) -> None:
+    """A malformed id is the caller's to fix, and Core's code says so."""
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_remove_entity(entity_id=BAD_ID)
+
+    body = error_body(exc_info)
+    assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert body["ha_error_code"] == "invalid_format"
 
 
 async def test_a_bulk_removal_of_every_id_succeeds(

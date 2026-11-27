@@ -23,6 +23,7 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
+from ..client_error_responses import core_validation_errors
 from ..errors import (
     ErrorCode,
     create_error_response,
@@ -42,11 +43,10 @@ from .automation_errors import (
     failed_section_from_core,
     raise_core_rejection,
     section_from_status,
+    verdict_errors,
 )
 from .automation_registry_details import core_related, registry_details
-from .best_practice_checker import (
-    BestPracticeCheckResult,
-)
+from .best_practice_checker import BestPracticeCheckResult
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
@@ -777,7 +777,7 @@ class AutomationConfigTools:
             str(verdict.get("error") or status),
             config,
             failed_section=section_from_status(status),
-            context={"entity_id": entity_id},
+            context={"entity_id": entity_id, **verdict_errors(verdict)},
             bp_warnings=bp_warnings,
         )
 
@@ -818,7 +818,7 @@ class AutomationConfigTools:
                     core_text,
                     config,
                     failed_section=await failed_section_from_core(self._client, config),
-                    context={"entity_id": entity_id},
+                    context={"entity_id": entity_id, **core_validation_errors(e)},
                     bp_warnings=bp_warnings,
                 )
             reloaded = await wait_for_reload()

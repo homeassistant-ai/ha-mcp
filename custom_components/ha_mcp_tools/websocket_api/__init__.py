@@ -78,6 +78,9 @@ the info handshake carries no capability entry:
   ``area_id`` / label *ids*, not resolved names) without the caller fanning out
   its own area/floor/label registry reads. Registry-only entities (no state) are
   enriched too — the join keys off the registry, not the state machine.
+* ``ha_mcp_tools/entity_aliases`` — Core's own names for a set of entity_ids
+  (``er.async_get_entity_aliases``), which the statistics listing's query
+  matches.
 * ``ha_mcp_tools/exposure`` — voice-assistant exposure with names/areas attached.
   List mode mirrors core's ``ws_list_exposed_entities`` (``{exposed_entities:
   {id: {assistant: True}}}`` — the same entries as ``homeassistant/expose_entity/
@@ -188,10 +191,15 @@ the info handshake carries no capability entry:
   ``visibility_warnings`` carried by the response so filtering is not silently
   incomplete.
 * ``ha_mcp_tools/server_entry`` — the component locates its OWN server config
-  entry (``entry.data[CONF_ENTRY_TYPE] == server``, the one marker key it reads
-  from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
-  pip_spec from ``entry.options``), so ``ha_dev_manage_server`` need not probe
-  every ``ha_mcp_tools``-domain entry's options-flow schema from the outside.
+  entry (``entry.data[CONF_ENTRY_TYPE] == server``) and returns
+  ``{entry_id, pip_spec, install_pending}`` (pip_spec from ``entry.options``;
+  install_pending, gated by ``server_entry_install_pending``, compares the spec
+  bring-up resolves with the one the component recorded after its last
+  completed, non-deferred package step, ``_server_entry_prep``), so
+  ``ha_dev_manage_server`` need not probe every ``ha_mcp_tools``-domain entry's
+  options-flow schema from the outside. The type marker and that record are
+  the two ``entry.data`` keys this package reads, the data-minimization
+  exception: neither is returned, install_pending is only a boolean or null.
 * ``ha_mcp_tools/server_entry_update`` — the WRITE counterpart of ``server_entry``:
   applies a ``channel`` / ``pip_spec`` delta to the server entry via
   ``hass.config_entries.async_update_entry`` DIRECTLY (what core's finish-flow
@@ -309,7 +317,8 @@ the info handshake carries no capability entry:
 completed reload (no version marker distinguishes a fresh body from a stale one),
 so a get racing a reload returned a pre-edit body. ``ha_config_get_{automation,
 script}`` stay on the legacy REST path (which reads the fresh config file);
-scenes were already legacy-only. A file-reading redesign may return (issue #1813).
+scenes were already legacy-only. YAML source support is planned for the dedicated
+get tools (issue #2632).
 
 Design notes that are load-bearing:
 
@@ -319,12 +328,11 @@ Design notes that are load-bearing:
   manifest version is reported for display only.
 * **Data minimization.** Flow-helper indexing reads ``ConfigEntry.options`` /
   ``title`` only — **never** ``ConfigEntry.data`` (integration credentials).
-* **YAML config bodies are never emitted.** automation/script/scene bodies are
-  indexed for *matching*, but a matched item's ``config`` body is returned only
-  when it is storage/editor-backed AND ``include_config`` is set. YAML-loaded
-  items return identity/metadata only (their ``raw_config`` may carry resolved
-  ``!secret`` plaintext). Body emission for YAML belongs to a future file-based
-  tool.
+* **Search result bodies come from saved editor definitions.** Search matches
+  automations, scripts and scenes against their loaded configuration. When
+  requested, automation and script bodies come from the editor file with YAML
+  tags preserved. A package match directs callers to ``ha_config_get_yaml``
+  for the source. Scenes return metadata only.
 * **Resolved secrets are scrubbed from the match corpus.** Because YAML bodies
   (and flow-helper options) can hold ``!secret`` values resolved to plaintext,
   a body leaf that exactly equals a ``secrets.yaml`` value is dropped before
@@ -403,6 +411,7 @@ from .lookups import (
     _blueprint_get_prep,
     _do_blueprint_get,
     _do_device_list,
+    _do_entity_aliases,
     _do_entity_enrich,
     _do_entity_lookup,
     _do_exposure,
@@ -422,6 +431,7 @@ from .schemas import (
     _dashboards_schema,
     _device_get_schema,
     _device_list_schema,
+    _entity_aliases_schema,
     _entity_enrich_schema,
     _entity_lookup_schema,
     _exposure_schema,
@@ -450,6 +460,7 @@ from .system import (
     _do_server_entry_update,
     _do_system_snapshot,
     _do_template_diagnose,
+    _server_entry_prep,
     _server_entry_update_prep,
     _template_diagnose_prep,
     do_info,
@@ -522,6 +533,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_device_get_schema(), do_device_get, None),
         (_device_list_schema(), _do_device_list, None),
         (_entity_enrich_schema(), _do_entity_enrich, None),
+        (_entity_aliases_schema(), _do_entity_aliases, None),
         (_exposure_schema(), _do_exposure, None),
         (_config_entries_schema(), _do_config_entries, _config_entries_prep),
         (_registry_lookup_schema(), _do_registry_lookup, None),
@@ -540,7 +552,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         # Core's live trace store: one in-process pass matches a run's own
         # context or a triggering parent context across every stored item.
         (_trace_context_schema(), _do_trace_context, _trace_context_prep),
-        (_server_entry_schema(), _do_server_entry, None),
+        (_server_entry_schema(), _do_server_entry, _server_entry_prep),
         # The WRITE counterpart of server_entry: the deferred ``async_update_entry``
         # scheduling is inherently async, so it lives in ``_server_entry_update_prep``
         # and ``_do_server_entry_update`` is a pure formatter (same seam as the

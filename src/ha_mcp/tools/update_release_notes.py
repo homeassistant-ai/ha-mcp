@@ -1,4 +1,5 @@
-"""The release notes ``ha_manage_updates(action="get")`` returns for one update."""
+"""The release notes ``ha_manage_updates(action="get")`` and the Marketplace's
+repository info return for one update."""
 
 import logging
 import re
@@ -45,16 +46,46 @@ def http_problem(what: str, response: httpx.Response) -> str:
     return problem
 
 
-async def release_notes_fields(
-    client: Any, entity_id: str, attributes: dict[str, Any], *, is_core: bool
-) -> dict[str, Any]:
-    """Core's release notes for the entity, else GitHub's, else a hint; Core's
-    refusal (other than having no notes) as ``release_notes_error`` either way."""
-    reply = await _core_release_notes(client, entity_id)
-    if reply and reply.get("success") and reply.get("result"):
-        return {"release_notes": reply["result"], "release_notes_source": "websocket"}
+def entity_release_notes(result: Any) -> dict[str, Any]:
+    """``update/release_notes``'s answer as ``release_notes`` plus its other
+    non-empty fields under a ``release_notes_`` prefix. Core 2026.12+ answers an
+    object (translated ``messages`` beside the notes), earlier Core the notes alone."""
+    if not isinstance(result, dict):
+        return {"release_notes": result}
+    return {
+        "release_notes": result.get("release_notes"),
+        **{
+            f"release_notes_{key}": value
+            for key, value in result.items()
+            if key != "release_notes" and value not in (None, [], {}, "")
+        },
+    }
 
-    fields: dict[str, Any] = {}
+
+async def release_notes_fields(
+    client: Any,
+    entity_id: str,
+    attributes: dict[str, Any],
+    *,
+    is_core: bool,
+    language: str | None = None,
+) -> dict[str, Any]:
+    """Core's release notes for the entity, else GitHub's, else a hint, with
+    the other fields of Core's answer (``release_notes_messages``) either way;
+    Core's refusal (other than having no notes) as ``release_notes_error``.
+    ``warnings`` says when this Core takes no ``language``."""
+    reply, warnings = await _core_release_notes(client, entity_id, language)
+    fields: dict[str, Any] = {"warnings": warnings} if warnings else {}
+    if reply and reply.get("success"):
+        fields.update(entity_release_notes(reply.get("result")))
+        notes = fields.pop("release_notes")
+        if notes:
+            return {
+                **fields,
+                "release_notes": notes,
+                "release_notes_source": "websocket",
+            }
+
     if (
         reply
         and not reply.get("success")
@@ -75,16 +106,32 @@ async def release_notes_fields(
     return fields
 
 
-async def _core_release_notes(client: Any, entity_id: str) -> dict[str, Any] | None:
+async def _core_release_notes(
+    client: Any, entity_id: str, language: str | None
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Core's reply, and a warning when Core refused ``language`` as a field
+    it does not know (before 2026.12) and answered again without it."""
+    message = {"type": "update/release_notes", "entity_id": entity_id}
+    warnings: list[str] = []
     try:
         reply: dict[str, Any] = await client.send_websocket_message(
-            {"type": "update/release_notes", "entity_id": entity_id},
-            expected_error_codes=_ANSWERED_CODES,
+            message if language is None else {**message, "language": language},
+            expected_error_codes=_ANSWERED_CODES | {"invalid_format"},
         )
+        # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
+        if language is not None and reply.get("error_code") == "invalid_format":
+            # Known from here on, also when the second call gets no answer.
+            warnings.append(
+                "This Home Assistant takes no language for release notes "
+                "(2026.12+), so they come in its configured language"
+            )
+            reply = await client.send_websocket_message(
+                message, expected_error_codes=_ANSWERED_CODES
+            )
     except HomeAssistantConnectionError as e:
         logger.debug(f"update/release_notes unanswered for {entity_id}: {e}")
-        return None
-    return reply
+        return None, warnings
+    return reply, warnings
 
 
 def _hint(release_url: str | None, problems: list[str]) -> str:

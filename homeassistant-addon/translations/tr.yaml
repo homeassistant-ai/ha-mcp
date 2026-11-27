@@ -1,0 +1,205 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/tr.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_stable.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  verify_ssl:
+    name: TLS sertifikalarını doğrula
+    description: 'Home Assistant sunucusunun TLS sertifikasını doğrulayın. Bunu yalnızca
+      güvenilir bir ağda, kendi kendine imzalanmış bir sertifika veya ana bilgisayar
+      adı uyuşmazlığı için kapatın: taşıma güvenliğini zayıflatır.'
+  ha_tool_concurrency:
+    name: Home Assistant araç eşzamanlılığı
+    description: 'Tüm oturumlardaki dış Home Assistant araç çağrılarında isteğe bağlı
+      sınır. Dahili REST, WebSocket ve araç bazlı fan-out eşzamanlılığı değişmeden
+      kalır. 0, sınırsız davranışı korur. Kapasite için bekleyen bir çağrı 60 saniye
+      sonra başarısız olur. Aralık: 0–32.'
+  custom_instructions:
+    name: Özel sunucu talimatları
+    description: Bağlanan her yapay zeka asistanına, MCP sunucu talimatlarının bir
+      parçası olarak gönderilen metin — örneğin ev notlarının nerede tutulduğu ve
+      ne zaman okunacağı veya güncelleneceği gibi. Bu araç setini kullanan Home Assistant
+      sohbet asistanlarının (Assist) komut isteminin de bir parçasıdır. Tüm istemcilerinize
+      aynı anda ulaşması gereken rehberlik için kullanın; kısa tutun ve gizli bilgiler
+      içermesin. Hiçbir şey eklememek için boş bırakın. Yeniden başlatma gerektirir;
+      istemciler yeniden bağlandıklarında değişikliği görür.
+  enable_tool_search:
+    name: Araç aramayı etkinleştir
+    description: 'Replace the full tool catalog with search-based discovery. Reduces
+      idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients
+      with their own built-in tool search / deferred tools (claude.ai, Claude Desktop,
+      Claude Code) — the two search layers conflict, and the client''s built-in tool
+      search is the better choice there; leave this off. Whether tools are deferred
+      depends on your client and model combination: use this when your setup loads
+      the full catalog up front — models without native deferred tools (e.g. Gemini,
+      OpenAI-compatible local models, Claude Haiku), clients that inline all tool
+      schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows.
+      Some Codex models and ChatGPT include deferred tools too — check your client/model
+      directly to confirm its features so you don''t leave this enabled unnecessarily.
+      Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete).
+      Requires an app (add-on) restart to take effect — then reconnect or refresh
+      the MCP server in your AI client so it reloads the tool list. Restarting the
+      app (add-on) alone does NOT refresh a client''s cached tool list; this applies
+      after changing any setting here.'
+  tool_search_max_results:
+    name: Araç arama maksimum sonuç sayısı
+    description: 'Araç araması etkinken her ha_search_tools çağrısı başına döndürülen
+      maksimum gizli araç sayısı; bu üst sayım içinde yer alan sabitlenmiş bir araç,
+      bunun üzerine yalnızca kısa ada sahip bir giriş olarak eklenir. Düşük değerler
+      (2-3) bağlam tokenlerinden tasarruf sağlar ancak ilgili araçları kaçırabilir.
+      Yeniden başlatma gerektirir. Aralık: 2–10.'
+  enable_tool_security_policies:
+    name: Araç Güvenlik Politikalarını Etkinleştir (gelişmiş)
+    description: Yüksek riskli araç çağrılarını (kilit/alarm kontrolü, otomasyon yazmaları
+      vb.) kullanıcı onayına bağlayın. Korumalı bir araç çağrıldığında, ajan kullanıcıya
+      web arayüzünde Tool Security Policies sekmesini açmasını ve çağrı gerçekleşmeden
+      önce Approve düğmesine tıklamasını söyler. İsteğe bağlı argüman koşullarına
+      sahip araç bazlı kurallar Tool Security Policies sekmesinde yapılandırılır.
+      Varsayılan olarak kapalıdır. Etkili olması için yeniden başlatma gerektirir.
+  enable_security_policy_tool:
+    name: Yapay zeka ajanlarının araç güvenlik politikalarını düzenlemesine izin ver
+    description: 'Bağlı yapay zeka ajanlarının araç güvenlik politikalarını okumasını
+      ve yeniden yazmasını (onay kapılarının kaldırılması dahil) sağlayan ha_manage_security_policy
+      aracını kaydeder. Varsayılan olarak kapalıdır. Yukarıdaki Araç Güvenlik Politikaları
+      seçeneğinden bağımsızdır: bu, kuralların uygulanıp uygulanmadığını değil, kimin
+      düzenleyebileceğini kontrol eder. Araç, bekleyen onayları göremez veya karara
+      bağlayamaz. İnsanı süreçte tutmak için, etkinleştirmeden önce aracın önünü kapatın:
+      web arayüzünün Araçlar sekmesinde Güvenlik Korumalı (security gated) seçeneğini
+      açın. Etkinleşmesi için yeniden başlatma gerektirir.'
+  read_only_mode:
+    name: Salt Okunur Mod
+    description: Tüm yazma araçlarını kapatır ve araçların herhangi bir yazma veya
+      yıkıcı çağrı yapma yeteneğini kaldırır. Karışık okuma/yazma araçları — yedeklemeler,
+      Apps (add-ons), enerji tercihleri, ses işlem hatları ve etkinken kod modu —
+      yazma işlemleri engellenmiş olarak kullanılabilir durumda kalır. Web arayüzü
+      Tools sekmesiyle aynı anahtardır. Varsayılan olarak kapalıdır. Etkili olması
+      için yeniden başlatma gerektirir.
+  redact_secrets:
+    name: Gizli Bilgileri Maskele
+    description: AI asistanına ulaşmadan önce araç yanıtlarındaki gizli bilgileri
+      (secrets) gizler. App (add-on) seçenekleri ve parola olarak işaretlenmiş entegrasyon
+      alanları bir ayarla/boş işaretçisiyle değiştirilir (böylece "bu kimlik bilgisi
+      yapılandırılmış mı?" sorusu yanıtlanabilir kalır) ve diğer araç yanıtları sunucunun
+      zaten gördüğü gizli değerlerden arındırılır (küçük parçaların değiştirilmesi
+      ilgili olmayan çıktıyı bocheceği için 6 karakterden kısa değerler atlanır).
+      Uygulama seçeneklerindeki özel anahtarlar ve aşağıda listelenen uygulama seçeneği
+      adları dışında diğer alanlar algılanmaz. Varsayılan olarak kapalıdır.
+  redact_app_option_keys:
+    name: Gizlenecek ekstra uygulama seçenek anahtarları
+    description: Şeması bir sırrı düz metin olarak saklayan uygulamalar için (örneğin
+      backup_password), parola alanları gibi gizlenecek uygulama (eklenti) seçenek
+      adları. Adları virgülle veya yeni satırlarla ayırın. Bir ad tüm uygulamalar
+      için geçerlidir; bunu tek bir uygulamayla sınırlamak için app_slug:name yazın.
+      Bir seçenek grubunu adlandırmak içindeki her seçeneği kapsar. Yalnızca Sırları
+      Gizle açıkken kullanılır. Varsayılan olarak boştur.
+  ipv6_allowed_networks:
+    name: İzin verilen ek IPv6 ağları
+    description: 'IPv6 istemcileri bu sunucunun kendi bağlantı noktasına yalnızca
+      yerel ağdan erişebilir: geri döngü (loopback), bağlantı yerel (link-local),
+      benzersiz yerel (fc00::/7) ve Home Assistant ana bilgisayarının doğrudan bağlı
+      olduğu ağlar. IPv4 bundan etkilenmez. Virgüllerle veya yeni satırlarla ayrılmış
+      olarak izin verilecek diğer IPv6 ağlarını listeleyin (örneğin 2001:db8:5::/48).
+      ::/0 eklemek, yönlendiriciniz gelen IPv6 trafiğine izin veriyorsa internetten
+      gelenler dahil tüm IPv6 istemcilerine izin verir.'
+  enable_mandatory_bps:
+    name: Yazma işlemlerinde en iyi uygulama kılavuzlarını ekle
+    description: 'Yazma aracı beceri içeriği sunma özelliği için ana anahtar (sayı
+      #1182). Etkinleştirildiğinde (varsayılan), altı yapılandırma yazma aracı (otomasyonlar,
+      betikler, sahneler, yardımcılar, panolar, hammaddeler YAML) başarılı her yazma
+      işleminde kanonik Home Assistant en iyi uygulama referans dosyalarını `skill_content`
+      altında ekler ve ayrıca en iyi uygulama uyarıları tarafından atıfta bulunulan
+      tüm referans bölümlerini otomatik olarak gömer. Her araç ayrıca, ajanın içeriğe
+      sahip olduktan sonra sonraki çağrılarda false olarak ayarlayabileceği çağrı
+      başına bir `MandatoryBPS` parametresi sunar. Bu ana anahtar kapalıyken, çağrı
+      başına parametreden veya BP uyarılarından bağımsız olarak HİÇBİR `skill_content`
+      dışarı çıkmaz. İlk seçenek olarak AÇIK önerilir; yalnızca çok küçük bağlam pencerelerine
+      sahip modeller için devre dışı bırakın. Bunu kapatmak yazma doğruluğunu düşürebilir.
+      Etkili olması için yeniden başlatma gerektirir.'
+  enable_strict_mandatory_bps:
+    name: Sıkı en iyi uygulamalar modu
+    description: 'Katı mod: istemcinin en iyi uygulamaları okuduğunu kanıtlayana kadar
+      aracını kullanmasını engeller. Etkinken, altı en iyi uygulama yazma aracı (otomasyonlar,
+      betikler, sahneler, yardımcılar, panolar, ham YAML) engellenir ve istemciyi
+      ha_get_skill_guide aracılığıyla en iyi uygulamalar becerisini okumaya ve orada
+      elde ettiği onay anahtarını geri geçmeye yönlendiren bir hata döndürür. Etkinken,
+      ha_get_skill_guide aracı kilitli olarak etkinleştirilir — onay anahtarının tek
+      yayıncısıdır. Yukarıdaki "Attach best-practice skills on writes" seçeneğinin
+      alt öğesidir ve üst öğe kapalıyken etkinsizdir. Etkili olması için yeniden başlatma
+      gerektirir.'
+  enable_auto_backup:
+    name: Düzenlemeleri otomatik yedekle
+    description: Her yazma veya silme aracı çağrısı değiştirmeden önce bir varlığın
+      anlık görüntüsünü kaydedin. Bu kapalıyken dosya ve ham YAML araçları (ha_write_file,
+      ha_delete_file, ha_config_set_yaml) yazmayı reddeder.
+  auto_backup_throttle_minutes:
+    name: Otomatik yedekleme aralığı (dakika)
+    description: 'Otomatik yedeklemenin aynı varlığı ne sıklıkla yakalayabileceği.
+      0 her yazmada yakalar; 0''dan büyük N, varlık başına her N dakikada en fazla
+      bir anlık görüntü yakalar. Aralık: 0–1440.'
+  auto_backup_retain_per_entity:
+    name: Otomatik yedek saklama sayısı (varlık başına)
+    description: 'Varlık başına tutulan en fazla anlık görüntü sayısı. Her yeni yakalama,
+      bu sayının üzerindeki en eski anlık görüntüleri kaldırır. Aralık: 1–10000.'
+  enable_snapshot_actions:
+    name: Tam HA anlık görüntü işlemlerine izin ver
+    description: Yapay zeka asistanlarının ha_manage_backup ve ha_call_service içindeki
+      eşdeğer yedekleme servisleri ve komutları aracılığıyla tam Home Assistant anlık
+      görüntülerini yönetmesine izin verin. Bunu kapatmak, listeleme dahil tüm anlık
+      görüntü işlemlerini engeller. Anlık görüntü silme yalnızca ha_manage_backup
+      üzerinden kullanılabilir ve ayrıca Anlık görüntü silme izni gerektirir. Web
+      ayarları arayüzünde bir kişinin aldığı yedeklemeler ve yedekleme eylemleri kullanılabilir
+      kalır.
+  backup_read_only:
+    name: Yedek yönetimini salt okunur yap
+    description: Yapay zeka asistanlarının düzenleme yedeklerini listelemesine, görüntülemesine
+      ve farkını almasına ve anlık görüntü eylemleri etkinleştirildiğinde tam HA anlık
+      görüntülerini listelemesine izin verin. ha_call_service içindeki eşdeğer yedekleme
+      servisleri ve komutları dahil olmak üzere manuel yedekleme oluşturma, geri yükleme
+      (düzenleme geri yüklemeleri dahil) ve silmeyi engelleyin. Otomatik düzenleme
+      öncesi yedeklemeler devam eder. Web ayarları arayüzünde bir kişinin aldığı yedekleme
+      eylemleri kullanılabilir kalır.
+  enable_settings_transfer_actions:
+    name: ha_manage_backup ile ayar dışa/içe aktarmaya izin ver
+    description: Server Settings sekmesindeki Dışarı Aktar ve İçeri Aktar düğmelerinde
+      olduğu gibi, yapay zeka asistanlarının bu sunucunun ayarlar dosyasını indirmesine
+      ve ha_manage_backup aracılığıyla bir dosya içe aktarmasına izin verin. İçeri
+      aktarma, yalnızca insana özel ayarları korur ve güvenlik politikasını, varlık
+      görünürlüğünü veya Dosya ve YAML Araçları izinlerini değiştirmek ayrıca Geliştirici
+      araçları güvenlik politikası erişimi gerektirir. Dosyada belirtildiği gibi,
+      içeri aktarma işlemi ayrıca geliştirici modunu, araçları ve özellikleri açabilir;
+      gizli veri maskeleme, SSL doğrulaması ve IPv6 izin verilenler listesi gibi korumaları
+      kapatabilir, bu nedenle bir yapay zeka asistanı içeri aktarma yaptıktan sonra
+      ayarlarınızı kontrol edin.
+  enable_snapshot_delete:
+    name: Anlık görüntü silmeye izin ver
+    description: ha_manage_backup özelliğinin tam Home Assistant anlık görüntülerini
+      silmesine izin verin. Bir anlık görüntü, hatalı bir değişiklikten sonra geri
+      dönmenin son yolu olabilir, bu nedenle bir kişinin bunu açması gerekir. Zamanlanmış
+      yedeklemeler, en yeni anlık görüntü ve minimum yaştan küçük anlık görüntüler
+      korundulu kalır.
+  snapshot_delete_min_age_days:
+    name: Silinebilecek minimum anlık görüntü yaşı (gün)
+    description: 'Bir anlık görüntünün silinebilmesi için gün cinsinden ne kadar eski
+      olması gerektiği. 0 yaş sınırını kapatır; en yeni anlık görüntü ve zamanlanmış
+      yedeklemeler korunur. Aralık: 0–365.'
+  disabled_tools:
+    name: Devre dışı araçlar (virgülle ayrılmış)
+    description: Burada listelenen araçlar zorla kapatılır ve web Ayarları arayüzünde
+      (Araçlar sekmesi) kilitlenir; önce bu ayar kaldırılmadan orada yeniden etkinleştirilemezler.
+      Küçük bir zorunlu araç seti (ha_search, ha_get_overview, ha_get_state, ha_report_issue,
+      ha_manage_backup) devre dışı bırakılamaz ve burada listelense bile çalışmaya
+      devam eder. ha_get_skill_guide yalnızca katı en iyi uygulamalar modu (enable_strict_mandatory_bps)
+      kapalıyken devre dışı bırakılabilir. Virgülle ayrılmış araç adları (örn. ha_call_event,
+      ha_eval_template).
+  pinned_tools:
+    name: Sabitlenen araçlar (virgülle ayrılmış)
+    description: Burada listelenen araçlar sabitlenmiştir; Araçlar sekmesinin en üstünde
+      görünürler ve önce bu ayar kaldırılmadan web Ayarları arayüzünden sabitlemeleri
+      kaldırılamaz. Araç Arama ile birlikte kullanışlıdır. Virgülle ayrılmış araç
+      adları.
+  secret_path:
+    name: Özel gizli yol
+    description: 'MCP sunucusu için isteğe bağlı özel HTTP yolu. Otomatik oluşturulan
+      güvenli yolu kullanmak için boş bırakın.
+
+      '

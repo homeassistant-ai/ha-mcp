@@ -34,6 +34,7 @@ from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
 
 from ._component_frames import drop_connection_on, frames, held, older_component, pooled
+from ._core_setup import set_up_domain
 from ._search_routing import SEARCH, bridge_types, fell_back, routes
 from ._search_tool import _build_ha_search, _setup_visibility_disabled
 
@@ -273,6 +274,24 @@ async def test_component_diagnostics_mark_partial(
     assert any("config components inaccessible" in w for w in resp["warnings"])
 
 
+async def test_body_request_without_component_explains_how_to_enable_it(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    await set_up_domain(hass, "script", {"garden_routine": {"sequence": []}})
+    result = await _search(
+        core_client,
+        query="garden_routine",
+        search_types=["script"],
+        include_config=True,
+    )
+
+    assert [row["entity_id"] for row in result["scripts"]] == ["script.garden_routine"]
+    assert any(
+        "install" in w.lower() and "ha_mcp_tools" in w and "incomplete" in w
+        for w in result.get("warnings", [])
+    )
+
+
 class TestOlderComponent:
     """A component without a capability keeps the legacy path for what it
     cannot serve."""
@@ -291,6 +310,52 @@ class TestOlderComponent:
             await _search(client, query="kitchen")
 
         spies.states.assert_awaited_once()
+        assert frames(spies.component, SEARCH) == []
+
+    async def test_missing_editor_bodies_require_an_update_before_search(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        older_component(monkeypatch, "search_editor_bodies")
+        await set_up_domain(
+            hass,
+            "automation",
+            [
+                {
+                    "alias": "Garden routine",
+                    "triggers": [{"trigger": "event", "event_type": "garden_probe"}],
+                    "actions": [],
+                }
+            ],
+        )
+
+        metadata = await _search(
+            component_core_client,
+            query="garden_probe",
+            search_types=["automation"],
+        )
+        assert [row["entity_id"] for row in metadata["automations"]] == [
+            "automation.garden_routine"
+        ]
+
+        socket = await pooled(component_core_client)
+        with (
+            routes(component_core_client, socket) as spies,
+            pytest.raises(ToolError) as exc,
+        ):
+            await _search(
+                component_core_client,
+                query="garden_probe",
+                search_types=["automation", "helper"],
+                include_config=True,
+            )
+
+        assert "ha_mcp_tools" in str(exc.value)
+        assert "Update" in str(exc.value)
+        spies.states.assert_not_called()
+        spies.bridge.assert_not_called()
         assert frames(spies.component, SEARCH) == []
 
     async def test_membership_request_falls_back_from_old_component(

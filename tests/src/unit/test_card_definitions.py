@@ -241,6 +241,31 @@ def test_the_index_keeps_inherited_cards_but_excludes_dialogs(
     ]
 
 
+def _has_form_field(fields: list[Any]) -> bool:
+    return any(
+        "selector" in field or _has_form_field(field.get("schema") or [])
+        for field in fields
+        if isinstance(field, dict)
+    )
+
+
+def test_every_card_editor_form_is_read(definitions: cd.CardDefinitions) -> None:
+    """A card whose editor form the index cannot read is described from its
+    stored struct alone, without the selectors that say what each option
+    takes. Frontend builds move forms between bundling shapes, and each move
+    dropped whole card families at once (#3212)."""
+    unread = {
+        card["type"]
+        for card in definitions.card_types()
+        if not _has_form_field(
+            (definitions.describe(card["type"]) or {}).get("fields") or []
+        )
+    }
+
+    # The conditional card's editor edits its child card instead of a form.
+    assert unread <= {*_CARDS_WITHOUT_A_FORM, "conditional"}
+
+
 @pytest.mark.parametrize("card_type", _CARDS_WITHOUT_A_FORM)
 def test_a_card_without_an_editor_form_lists_no_fields_and_claims_no_coverage(
     definitions: cd.CardDefinitions, card_type: str

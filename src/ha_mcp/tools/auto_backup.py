@@ -273,6 +273,30 @@ def automation_backup_target(kw: dict[str, Any]) -> str:
     return _resolve_str(kw.get("entity_id"))
 
 
+async def back_up_entities(
+    client: Any, entity_ids: list[str], tool_name: str
+) -> list[str]:
+    """Snapshot each entity of a call with many targets, before its first write.
+
+    The decorator captures one target, so a tool that takes a list calls this
+    after its own validation. Returns why a backup that was due was not taken.
+    """
+    settings = get_global_settings()
+    if not getattr(settings, "enable_auto_backup", False):
+        return []
+    skipped: list[str] = []
+    try:
+        mgr = get_backup_manager(client, settings)
+        for eid in entity_ids:
+            await mgr.maybe_snapshot(
+                "entity", eid, tool_name=tool_name, skip_reasons=skipped
+            )
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        logger.warning("Entity backup failed: %s", err)
+        skipped.append(f"No pre-write backup was taken: {type(err).__name__}")
+    return skipped
+
+
 def with_auto_backup(
     *,
     domain: str | None = None,

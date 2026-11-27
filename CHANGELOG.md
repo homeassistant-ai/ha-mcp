@@ -3,6 +3,346 @@
 <!-- version list -->
 
 
+## v9.3.0 (2026-11-25)
+
+### Added
+
+- **panel**: Deep-link the settings app to a tab and an approval card
+  ([#3188](https://github.com/homeassistant-ai/ha-mcp/pull/3188))
+- Export and import HA-MCP settings between installations
+  ([#3164](https://github.com/homeassistant-ai/ha-mcp/pull/3164))
+- Ha_manage_updates follows Home Assistant's update and Repairs paths and reads Core's breaking changes again
+  ([#3179](https://github.com/homeassistant-ai/ha-mcp/pull/3179))
+- Read and change Home Assistant's backup-before-update settings in ha_manage_backup
+  ([#3177](https://github.com/homeassistant-ai/ha-mcp/pull/3177))
+- Capture live states into scenes and align the scene tools with Core (#2632)
+  ([#3136](https://github.com/homeassistant-ai/ha-mcp/pull/3136))
+- Advertise public cacheScope for the static tool catalog (SEP-2549)
+  ([#3171](https://github.com/homeassistant-ai/ha-mcp/pull/3171))
+- **camera**: Support image entities in ha_get_camera_image
+  ([#3055](https://github.com/homeassistant-ai/ha-mcp/pull/3055))
+- Explain short history reads from the recorder, and add ha_manage_logs
+  ([#3165](https://github.com/homeassistant-ai/ha-mcp/pull/3165))
+- Callback allowlist for the Webhook Proxy dev app's none-mode OAuth, and the homeassistant_config mount
+  ([#3158](https://github.com/homeassistant-ai/ha-mcp/pull/3158))
+- Run the store tools on the Marketplace only and require Home Assistant 2026.11
+  ([#3167](https://github.com/homeassistant-ai/ha-mcp/pull/3167))
+- Add area and floor reordering and align their tools with Core's contracts (#2632)
+  ([#3101](https://github.com/homeassistant-ai/ha-mcp/pull/3101))
+- **system**: Build ha_get_system_health on Core's own health, repair and config data
+  ([#3075](https://github.com/homeassistant-ai/ha-mcp/pull/3075))
+- **logs**: Honour hours_back for supervisor and system_service logs
+  ([#2974](https://github.com/homeassistant-ai/ha-mcp/pull/2974))
+- **traces**: Move ha_get_automation_traces onto Core's trace data (#2632)
+  ([#3003](https://github.com/homeassistant-ai/ha-mcp/pull/3003))
+- **i18n**: Add the Serbian (sr, sr-Latn) locales
+  ([#3062](https://github.com/homeassistant-ai/ha-mcp/pull/3062))
+- Drop Python 3.13, require Python 3.14
+  ([#3035](https://github.com/homeassistant-ai/ha-mcp/pull/3035))
+
+### Changed
+
+- Consolidate automatic E2E lanes on fewer runners
+  ([#3141](https://github.com/homeassistant-ai/ha-mcp/pull/3141))
+- **visibility**: Remove the post-call trace rescan
+  ([#3069](https://github.com/homeassistant-ai/ha-mcp/pull/3069))
+- Keep the native contracts doc to general rules
+  ([#3134](https://github.com/homeassistant-ai/ha-mcp/pull/3134))
+- Drop outdated-component guidance and correct the version gate comment
+  ([#3105](https://github.com/homeassistant-ai/ha-mcp/pull/3105))
+- **i18n**: Align locale omissions with post-merge sync
+  ([#3070](https://github.com/homeassistant-ai/ha-mcp/pull/3070))
+
+### Fixed
+
+- Bound memory use when reading the Home Assistant Logbook
+  ([#3201](https://github.com/homeassistant-ai/ha-mcp/pull/3201))
+- Protect automation and script bodies in configuration search
+  ([#3194](https://github.com/homeassistant-ai/ha-mcp/pull/3194))
+- Run real integrations where unit tests registered stand-ins under their names
+  ([#3189](https://github.com/homeassistant-ai/ha-mcp/pull/3189))
+- Keep a failed script or automation write's own error in enforce mode
+  ([#3181](https://github.com/homeassistant-ai/ha-mcp/pull/3181))
+- **scenes,scripts**: No guessed entity after a write, on activation by key, or for a YAML scene id (#2632)
+  ([#3176](https://github.com/homeassistant-ai/ha-mcp/pull/3176))
+- Take the file tools' log path, file names and hidden-definition check from Core (#2632)
+  ([#3173](https://github.com/homeassistant-ai/ha-mcp/pull/3173))
+- Catch restricted entity_ids wherever they stand in tool output in enforce mode
+  ([#3175](https://github.com/homeassistant-ai/ha-mcp/pull/3175))
+- Bound filenames for long edit-backup identities
+  ([#3097](https://github.com/homeassistant-ai/ha-mcp/pull/3097))
+- Finish real-Core test conversions and structured error routing (#3023)
+  ([#3155](https://github.com/homeassistant-ai/ha-mcp/pull/3155))
+- Set themes over WebSocket and expose Core's dark-mode default (#2632)
+  ([#3152](https://github.com/homeassistant-ai/ha-mcp/pull/3152))
+- Align the calendar tools with Core's event commands (#2632)
+  ([#3138](https://github.com/homeassistant-ai/ha-mcp/pull/3138))
+- Validate service identifiers before dispatch
+  ([#3149](https://github.com/homeassistant-ai/ha-mcp/pull/3149))
+- Convert 27 more unit test files to real Core and fix the tool failures they hid
+  ([#3129](https://github.com/homeassistant-ai/ha-mcp/pull/3129))
+- Convert 25 more unit test files to real Core and fix the tool failures they hid
+  ([#3126](https://github.com/homeassistant-ai/ha-mcp/pull/3126))
+- Close the shared fake client test list and fix the tool failures it hid
+  ([#3118](https://github.com/homeassistant-ai/ha-mcp/pull/3118))
+- Move the last stand-in test files to real Core and close four exemption lists
+  ([#3106](https://github.com/homeassistant-ai/ha-mcp/pull/3106))
+- Serve the live last_reported from the component's state reads
+  ([#3103](https://github.com/homeassistant-ai/ha-mcp/pull/3103))
+- Keep the minimum component version at the server's own release
+  ([#3100](https://github.com/homeassistant-ai/ha-mcp/pull/3100))
+- Align label and category tools with Core and restore deleted registry items (#2632)
+  ([#3078](https://github.com/homeassistant-ai/ha-mcp/pull/3078))
+- Serve Core's entity registry rows and refusals in the Entity Registry tools
+  ([#3046](https://github.com/homeassistant-ai/ha-mcp/pull/3046))
+- Take a device's integration from its config entry and remove it with Core's own command (#2632)
+  ([#3042](https://github.com/homeassistant-ai/ha-mcp/pull/3042))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Changed
+
+- Run server credentials tests on real Core and drop unreachable is_active checks (#3023)
+  ([#3082](https://github.com/homeassistant-ai/ha-mcp/pull/3082))
+- Treat a failing component command like a missing component
+  ([#3085](https://github.com/homeassistant-ai/ha-mcp/pull/3085))
+- State the Home Assistant version policy and when a fallback is needed
+  ([#3074](https://github.com/homeassistant-ai/ha-mcp/pull/3074))
+
+### Fixed
+
+- Let maintainers require generated bug report output
+  ([#3193](https://github.com/homeassistant-ai/ha-mcp/pull/3193))
+
+### Build System
+
+- **deps**: Bump astro from 7.3.3 to 7.4.7 in /site
+  ([#3090](https://github.com/homeassistant-ai/ha-mcp/pull/3090))
+
+### Chores
+
+- Sync tool docs after merge [skip ci]
+  ([`9f66b23`](https://github.com/homeassistant-ai/ha-mcp/commit/9f66b2349778cd4c75df3a74f163c2a6af3a48aa))
+- Sync ratchet baselines after merge [skip ci]
+  ([`fee0814`](https://github.com/homeassistant-ai/ha-mcp/commit/fee081472619a5a6d284fdeb0e8fcf1471703aab))
+- Sync tool docs after merge [skip ci]
+  ([`9f73649`](https://github.com/homeassistant-ai/ha-mcp/commit/9f73649bb2c3eddfba990d06f492305646f9f60f))
+- **deps**: Update dependency astral-sh/uv to v0.13.9
+  ([#3200](https://github.com/homeassistant-ai/ha-mcp/pull/3200))
+- **deps**: Update public.ecr.aws/docker/library/python:3.14-slim docker digest to 22eafb3
+  ([#3199](https://github.com/homeassistant-ai/ha-mcp/pull/3199))
+- Sync ratchet baselines after merge [skip ci]
+  ([`4a9d6eb`](https://github.com/homeassistant-ai/ha-mcp/commit/4a9d6ebbf8479b1389312a13f4d527990cce9db5))
+- Sync ratchet baselines after merge [skip ci]
+  ([`991a7a8`](https://github.com/homeassistant-ai/ha-mcp/commit/991a7a8c58da4dc25d0ccbb380fdadb054267163))
+- **deps**: Update ghcr.io/home-assistant/home-assistant docker tag to v2026.11.3
+  ([#3191](https://github.com/homeassistant-ai/ha-mcp/pull/3191))
+- Sync ratchet baselines after merge [skip ci]
+  ([`ae3e2ae`](https://github.com/homeassistant-ai/ha-mcp/commit/ae3e2ae090970a5cb8dd908d442644b2ef34f41b))
+- Sync tool docs after merge [skip ci]
+  ([`cdea92b`](https://github.com/homeassistant-ai/ha-mcp/commit/cdea92b8f7bad0d1c49962c5e84c91c815d151ea))
+- Sync ratchet baselines after merge [skip ci]
+  ([`4a8e52e`](https://github.com/homeassistant-ai/ha-mcp/commit/4a8e52ec3f9625e4dc93ce4679c85514d40e4a23))
+- Machine-translate locale updates
+  ([`d640d6d`](https://github.com/homeassistant-ai/ha-mcp/commit/d640d6d4abd8b477ab8f044643317a2861913619))
+- Sync ratchet baselines after merge [skip ci]
+  ([`e2dc8f0`](https://github.com/homeassistant-ai/ha-mcp/commit/e2dc8f024480733b4c372060785f1b7a7a6f439c))
+- Sync ratchet baselines after merge [skip ci]
+  ([`a260f27`](https://github.com/homeassistant-ai/ha-mcp/commit/a260f27cd596714d7559053b87fb83784772ccd9))
+- Sync tool docs after merge [skip ci]
+  ([`6ade120`](https://github.com/homeassistant-ai/ha-mcp/commit/6ade1205c29c5ebbc7a3d93e73da0b04cae5f2af))
+- Sync ratchet baselines after merge [skip ci]
+  ([`aab1589`](https://github.com/homeassistant-ai/ha-mcp/commit/aab1589f8c0d69091a592ab897665334431db95a))
+- Sync tool docs after merge [skip ci]
+  ([`c75e427`](https://github.com/homeassistant-ai/ha-mcp/commit/c75e42760cb3ad9fd4fa10232f4aa7efa6b1617f))
+- Sync tool docs after merge [skip ci]
+  ([`f1efa04`](https://github.com/homeassistant-ai/ha-mcp/commit/f1efa0437a34858813db8d5493f56122f0ad744c))
+- Machine-translate locale updates
+  ([`2ddc6e4`](https://github.com/homeassistant-ai/ha-mcp/commit/2ddc6e47002b3d88dc11a3cc8cf9b11a0fc83f26))
+- Sync tool docs after merge [skip ci]
+  ([`ca1941b`](https://github.com/homeassistant-ai/ha-mcp/commit/ca1941b2dbbf6f255d0b4bcc982e16a857b3c7fb))
+- Sync ratchet baselines after merge [skip ci]
+  ([`c84efa5`](https://github.com/homeassistant-ai/ha-mcp/commit/c84efa59deffcd4041b47efffe8dde065d24e091))
+- Sync tool docs after merge [skip ci]
+  ([`f44186e`](https://github.com/homeassistant-ai/ha-mcp/commit/f44186e59b6b1f8bad633c2f7a4d60e52b8bb082))
+- Sync tool docs after merge [skip ci]
+  ([`aaae748`](https://github.com/homeassistant-ai/ha-mcp/commit/aaae74829f48987482c0a59a08c8929c35b45a75))
+- Sync ratchet baselines after merge [skip ci]
+  ([`8422d6d`](https://github.com/homeassistant-ai/ha-mcp/commit/8422d6d2e9a958be923b2db156c9f37f0056f9c2))
+- Sync ratchet baselines after merge [skip ci]
+  ([`ce15237`](https://github.com/homeassistant-ai/ha-mcp/commit/ce152378a953f09276143eee2b56a2f4a9404b35))
+- Sync tool docs after merge [skip ci]
+  ([`c6f06f2`](https://github.com/homeassistant-ai/ha-mcp/commit/c6f06f205ab2fedbca4676a88b9e125ffcc9a2c8))
+- Sync ratchet baselines after merge [skip ci]
+  ([`cd23bb7`](https://github.com/homeassistant-ai/ha-mcp/commit/cd23bb7db955830903ad36367d51c01e29d52695))
+- Sync ratchet baselines after merge [skip ci]
+  ([`b6b3351`](https://github.com/homeassistant-ai/ha-mcp/commit/b6b3351eccccdf5d6a28beda9a98e08268b59537))
+- Sync ratchet baselines after merge [skip ci]
+  ([`299d690`](https://github.com/homeassistant-ai/ha-mcp/commit/299d6906de1b4d7986063c701bd2b35deec2b2f3))
+- Sync ratchet baselines after merge [skip ci]
+  ([`dfe833c`](https://github.com/homeassistant-ai/ha-mcp/commit/dfe833cd69e2eafe28f9c4f352f66c60704b1374))
+- Sync tool docs after merge [skip ci]
+  ([`83ecf96`](https://github.com/homeassistant-ai/ha-mcp/commit/83ecf969c7928e685d46eef5fd904697399cdeb2))
+- Sync tool docs after merge [skip ci]
+  ([`b3fde4f`](https://github.com/homeassistant-ai/ha-mcp/commit/b3fde4f07c2870588006974e0195c416a23c75c1))
+- Sync ratchet baselines after merge [skip ci]
+  ([`b205172`](https://github.com/homeassistant-ai/ha-mcp/commit/b2051726725fbdf42b63861aa671ae219e5e417f))
+- Sync tool docs after merge [skip ci]
+  ([`fe9b5e9`](https://github.com/homeassistant-ai/ha-mcp/commit/fe9b5e968eaa11747dbef2360f9a195f13dc4400))
+- Sync ratchet baselines after merge [skip ci]
+  ([`0ec3409`](https://github.com/homeassistant-ai/ha-mcp/commit/0ec3409f228bc2531ad192735db83bc21189acf3))
+- Sync ratchet baselines after merge [skip ci]
+  ([`5e0d757`](https://github.com/homeassistant-ai/ha-mcp/commit/5e0d75754e151e22aa9a7124c65c88ab367f94a8))
+- Sync ratchet baselines after merge [skip ci]
+  ([`cf7cf3d`](https://github.com/homeassistant-ai/ha-mcp/commit/cf7cf3d0ab3dcd87ccf8108916303ff59390f9e3))
+- Sync ratchet baselines after merge [skip ci]
+  ([`48bea5b`](https://github.com/homeassistant-ai/ha-mcp/commit/48bea5b6321b5f68bcb5e0544b6da27fbe22da08))
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.13.9
+  ([#3140](https://github.com/homeassistant-ai/ha-mcp/pull/3140))
+- **deps**: Update dependency fastmcp-slim to v4.1.8
+  ([#3139](https://github.com/homeassistant-ai/ha-mcp/pull/3139))
+- Sync ratchet baselines after merge [skip ci]
+  ([`1184793`](https://github.com/homeassistant-ai/ha-mcp/commit/11847937ef55518b3b647c16b23f53c67a07660e))
+- Machine-translate locale updates
+  ([`4983bf4`](https://github.com/homeassistant-ai/ha-mcp/commit/4983bf47f1651d2ee0893c7e7f8fac9cc4494cd6))
+- Sync ratchet baselines after merge [skip ci]
+  ([`105a486`](https://github.com/homeassistant-ai/ha-mcp/commit/105a486c6a4548139991eb0a88f4b901932983fd))
+- Sync ratchet baselines after merge [skip ci]
+  ([`3accc57`](https://github.com/homeassistant-ai/ha-mcp/commit/3accc57e25ee0243e138dc2a1b2d29db6d1d9a52))
+- Sync tool docs after merge [skip ci]
+  ([`9584e06`](https://github.com/homeassistant-ai/ha-mcp/commit/9584e06e3227717bbed6adf015e1ab74b42e09b2))
+- **deps**: Update ghcr.io/home-assistant/home-assistant docker tag to v2026.11.2
+  ([#3130](https://github.com/homeassistant-ai/ha-mcp/pull/3130))
+- Sync tool docs after merge [skip ci]
+  ([`0aaee19`](https://github.com/homeassistant-ai/ha-mcp/commit/0aaee1988a045ec9cefc137c95be64f1b99405a5))
+- Sync ratchet baselines after merge [skip ci]
+  ([`248cb51`](https://github.com/homeassistant-ai/ha-mcp/commit/248cb51eb05b16c5cc24a82c21d5cfd45f5fbe25))
+- Machine-translate locale updates
+  ([`bb0e6e4`](https://github.com/homeassistant-ai/ha-mcp/commit/bb0e6e4f5fc6609d3ff8799889c9613a35444dc0))
+- Sync ratchet baselines after merge [skip ci]
+  ([`11fac2e`](https://github.com/homeassistant-ai/ha-mcp/commit/11fac2e71dace7aa41fad955626df845e84f3e27))
+- Sync tool docs after merge [skip ci]
+  ([`2a27a8d`](https://github.com/homeassistant-ai/ha-mcp/commit/2a27a8df596b00984ee691e747d8cf7e485d16a9))
+- Sync ratchet baselines after merge [skip ci]
+  ([`67fdfdd`](https://github.com/homeassistant-ai/ha-mcp/commit/67fdfddbe26d49385327f9b0d4a5bc36356c69b2))
+- Sync ratchet baselines after merge [skip ci]
+  ([`8d764e8`](https://github.com/homeassistant-ai/ha-mcp/commit/8d764e8509ecb79a50c1782f115cd3c50482d7ad))
+- Sync ratchet baselines after merge [skip ci]
+  ([`f21ac00`](https://github.com/homeassistant-ai/ha-mcp/commit/f21ac000382bef7946c1cfe9913a5eefdddb8aba))
+- Sync tool docs after merge [skip ci]
+  ([`4453c74`](https://github.com/homeassistant-ai/ha-mcp/commit/4453c74e72d4334323277f1b80ec4a3f85dd2b86))
+- Sync ratchet baselines after merge [skip ci]
+  ([`dcf2580`](https://github.com/homeassistant-ai/ha-mcp/commit/dcf258006033093a5fb8062a619d89c8c1347421))
+- Machine-translate locale updates
+  ([`7f14dcf`](https://github.com/homeassistant-ai/ha-mcp/commit/7f14dcfde811b96988f44d724a5b4fb55731f282))
+- Sync ratchet baselines after merge [skip ci]
+  ([`999550f`](https://github.com/homeassistant-ai/ha-mcp/commit/999550ff1b1862404877095aa37ed631e1eb4d9a))
+- Sync tool docs after merge [skip ci]
+  ([`5baa965`](https://github.com/homeassistant-ai/ha-mcp/commit/5baa965bb90c2e21bff19fca4207406322017671))
+- Sync ratchet baselines after merge [skip ci]
+  ([`5c6e4e7`](https://github.com/homeassistant-ai/ha-mcp/commit/5c6e4e73d1e3fcc3d8151b508e2816487a372162))
+- Sync tool docs after merge [skip ci]
+  ([`fc4a8f9`](https://github.com/homeassistant-ai/ha-mcp/commit/fc4a8f9c31436727241cbba7068adf979eb6d978))
+- Sync ratchet baselines after merge [skip ci]
+  ([`7d0e0df`](https://github.com/homeassistant-ai/ha-mcp/commit/7d0e0df10d42e1ca8f3c04956146945bc4bd2121))
+- Sync tool docs after merge [skip ci]
+  ([`28eb136`](https://github.com/homeassistant-ai/ha-mcp/commit/28eb136a9ebf6dc1aa3d5912cd7603ff8849d72d))
+- Machine-translate locale updates
+  ([`1fadf7c`](https://github.com/homeassistant-ai/ha-mcp/commit/1fadf7ca3f20edffcecf2417e3641c3721f23e0e))
+- Sync ratchet baselines after merge [skip ci]
+  ([`9158360`](https://github.com/homeassistant-ai/ha-mcp/commit/915836060f92e71c43855bd73c57bf4c02683ecf))
+- Sync tool docs after merge [skip ci]
+  ([`c8df42e`](https://github.com/homeassistant-ai/ha-mcp/commit/c8df42eb763ef803a8af837f06ef738dcee4fa76))
+- Sync ratchet baselines after merge [skip ci]
+  ([`3458c4b`](https://github.com/homeassistant-ai/ha-mcp/commit/3458c4bcf5910d78f7d653fe0cf92a0330414daf))
+- Sync ratchet baselines after merge [skip ci]
+  ([`9a8e84a`](https://github.com/homeassistant-ai/ha-mcp/commit/9a8e84a7abba2e73b5186cb950113f804bbce3a0))
+- Machine-translate locale updates
+  ([`1eae16e`](https://github.com/homeassistant-ai/ha-mcp/commit/1eae16e131ae8126a55f581ec0f8e3a0e965e3c1))
+- Sync tool docs after merge [skip ci]
+  ([`188996d`](https://github.com/homeassistant-ai/ha-mcp/commit/188996da352f90a2ea56c19422a5d5e05195d9e3))
+- Sync ratchet baselines after merge [skip ci]
+  ([`797ebfe`](https://github.com/homeassistant-ai/ha-mcp/commit/797ebfe7079cc0b4355c134ee7b28bd338490be1))
+- Sync tool docs after merge [skip ci]
+  ([`43e1d9e`](https://github.com/homeassistant-ai/ha-mcp/commit/43e1d9edff37f3c8bb6faa44ae2ebac0d1019099))
+- Machine-translate locale updates
+  ([`a776181`](https://github.com/homeassistant-ai/ha-mcp/commit/a7761810493da816b62f7284ddf7d80328bd7ba2))
+- Sync ratchet baselines after merge [skip ci]
+  ([`c19fb55`](https://github.com/homeassistant-ai/ha-mcp/commit/c19fb55837e87ff027892463305beb416e8c8795))
+- Sync ratchet baselines after merge [skip ci]
+  ([`64db854`](https://github.com/homeassistant-ai/ha-mcp/commit/64db85488bc98e09571a988f7bac63761d14705b))
+- Sync ratchet baselines after merge [skip ci]
+  ([`0615a08`](https://github.com/homeassistant-ai/ha-mcp/commit/0615a08ae25624c7b6fd23d104ba10d7cd06252a))
+- Sync tool docs after merge [skip ci]
+  ([`45f5379`](https://github.com/homeassistant-ai/ha-mcp/commit/45f5379b2f205e74573ca8a489a3c1261576209f))
+- Sync tool docs after merge [skip ci]
+  ([`cddafea`](https://github.com/homeassistant-ai/ha-mcp/commit/cddafea391745accc6153711a4d55892e3ab0683))
+- Sync tool docs after merge [skip ci]
+  ([`3b460f1`](https://github.com/homeassistant-ai/ha-mcp/commit/3b460f1dc28bfa299ca865df759894aaf20817df))
+- Sync ratchet baselines after merge [skip ci]
+  ([`ad071da`](https://github.com/homeassistant-ai/ha-mcp/commit/ad071da19e3d9809787cb6ac0681035129434f96))
+- **deps**: Update dependency home-assistant/supervisor to v2026.11.0
+  ([#3063](https://github.com/homeassistant-ai/ha-mcp/pull/3063))
+- **addon**: Publish version 9.2.0 [skip ci]
+  ([`4d71483`](https://github.com/homeassistant-ai/ha-mcp/commit/4d7148309af7e4d3da95e16ced8bb67d6a43b9c1))
+
+### Continuous Integration
+
+- **deps**: Bump renovatebot/github-action
+  ([#3187](https://github.com/homeassistant-ai/ha-mcp/pull/3187))
+- Raise pyproject floors and re-lock on a vendored FastMCP bump
+  ([#3135](https://github.com/homeassistant-ai/ha-mcp/pull/3135))
+- Keep the dev group's Core integration pins on Core's manifests
+  ([#3119](https://github.com/homeassistant-ai/ha-mcp/pull/3119))
+- **deps**: Bump renovatebot/github-action
+  ([#3125](https://github.com/homeassistant-ai/ha-mcp/pull/3125))
+- **deps**: Bump docker/login-action
+  ([#3117](https://github.com/homeassistant-ai/ha-mcp/pull/3117))
+- Run the unit and app suites against the beta Core on pull requests
+  ([#3073](https://github.com/homeassistant-ai/ha-mcp/pull/3073))
+
+### Testing
+
+- Seed the E2E Marketplace directly and remove the HACS fixtures
+  ([#3168](https://github.com/homeassistant-ai/ha-mcp/pull/3168))
+- Write the E2E recorder database with Core each session
+  ([#3163](https://github.com/homeassistant-ai/ha-mcp/pull/3163))
+- Cover ha_manage_theme's Core refusal and modes listing in e2e
+  ([#3157](https://github.com/homeassistant-ai/ha-mcp/pull/3157))
+- Run the remaining replaced steps for real
+  ([#3148](https://github.com/homeassistant-ai/ha-mcp/pull/3148))
+- Close private-string access gaps and add an exemption-free guard
+  ([#3146](https://github.com/homeassistant-ai/ha-mcp/pull/3146))
+- Remove the final 41 SLF001 exemptions
+  ([#3145](https://github.com/homeassistant-ai/ha-mcp/pull/3145))
+- Move the remaining unit tests onto real Core, the real frontend and Supervisor's models
+  ([#3137](https://github.com/homeassistant-ai/ha-mcp/pull/3137))
+- Run the component command and routing tests on real Home Assistant Core
+  ([#3093](https://github.com/homeassistant-ai/ha-mcp/pull/3093))
+- Type-check 32 more test modules (#3023)
+  ([#3098](https://github.com/homeassistant-ai/ha-mcp/pull/3098))
+- Stop fake-clock tests from racing real timers
+  ([#3096](https://github.com/homeassistant-ai/ha-mcp/pull/3096))
+- Run file write tests on real Home Assistant Core
+  ([#3076](https://github.com/homeassistant-ai/ha-mcp/pull/3076))
+- Type-check Settings with pydantic's mypy plugin (#3023)
+  ([#3095](https://github.com/homeassistant-ai/ha-mcp/pull/3095))
+- Run 13 more unit test files on real Core and fix what converting them found (#3023)
+  ([#3089](https://github.com/homeassistant-ai/ha-mcp/pull/3089))
+- Run 50 more unit test files on real Core (#3023)
+  ([#3083](https://github.com/homeassistant-ai/ha-mcp/pull/3083))
+- Run 49 more unit test files on real Core, and fix what converting them found (#3023)
+  ([#3081](https://github.com/homeassistant-ai/ha-mcp/pull/3081))
+- Run the webhook proxy app tests on real Home Assistant Core (#3023)
+  ([#3067](https://github.com/homeassistant-ai/ha-mcp/pull/3067))
+- Refuse private-name imports in converted unit tests (#3023)
+  ([#3068](https://github.com/homeassistant-ai/ha-mcp/pull/3068))
+</details>
+
+
 ## v9.2.0 (2026-11-11)
 
 ### Added

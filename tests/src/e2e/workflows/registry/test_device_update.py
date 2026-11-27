@@ -1,8 +1,8 @@
 """
 Device Update E2E Tests
 
-ha_set_device: rename, labels, a call without fields, and blank or
-quote-only names.
+ha_set_device: rename, labels, a call without fields, an unknown area, and
+blank or quote-only names.
 """
 
 import logging
@@ -16,6 +16,7 @@ from ...utilities.assertions import (
     safe_call_tool,
 )
 from ...utilities.cleanup import CleanupSteps
+from ...utilities.core_version import core_at_least
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,24 @@ class TestDeviceSet:
                 expected_error="no updates",
             )
         logger.info("No-changes update correctly rejected")
+
+    async def test_unknown_area_is_refused(self, mcp_client, ha_client):
+        """An unknown area is refused, not stored as a dangling one: by Core
+        itself from 2026.12, with its code, and by HA-MCP's check before."""
+        device = await _device_for_entity(mcp_client, "sensor.total_gas_ft3")
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_set_device", {"device_id": device["id"], "area_id": "no_such_area"}
+            )
+
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", data
+        if await core_at_least(ha_client, (2026, 12)):
+            assert data["ha_error_code"] == "invalid_info", data
+        else:
+            assert data["area_id"] == "no_such_area", data
+        after = await _device_for_entity(mcp_client, "sensor.total_gas_ft3")
+        assert after.get("area_id") == device.get("area_id")
 
 
 async def _device_for_entity(mcp_client: Any, entity_id: str) -> dict[str, Any]:

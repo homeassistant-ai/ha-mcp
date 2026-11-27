@@ -70,6 +70,18 @@ async def test_statistic_import_adjust_and_clear(mcp_client: Client) -> None:
             description="imported statistic listed",
             timeout=30,
         )
+        # The query matches the name and the id; the entities' aliases are
+        # searched only with the component.
+        searched = await mcp.call_tool_success(
+            "ha_manage_logs",
+            {
+                "action": "recorder/list_statistic_ids",
+                "query": f"HA_MANAGE_LOGS {statistic_id.split(':')[1]}",
+            },
+        )
+        assert [row["statistic_id"] for row in searched["result"]] == [statistic_id]
+        aliases_skipped = any("aliases" in w for w in searched.get("warnings", []))
+        assert aliases_skipped is not component_surface_available()
         await wait_for_tool_result(
             mcp_client,
             tool_name="ha_get_history",

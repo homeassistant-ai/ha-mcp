@@ -40,7 +40,6 @@ from .const import (
     DATA_SECRET_PATH,
     DATA_SERVER_USER_ID,
     DATA_WEBHOOK_ID,
-    DEFAULT_PIP_SPEC,
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
     DOMAIN,
@@ -60,7 +59,7 @@ from .const import (
     WEBHOOK_AUTH_NONE,
 )
 from .embedded_entry import access_enabled, bring_up_in_progress, server_running
-from .spec_dist import version_dist
+from .spec_dist import async_effective_pip_spec, pip_spec_override, version_dist
 from .websocket_api.registry import _enum_value
 
 if TYPE_CHECKING:
@@ -144,23 +143,16 @@ async def _async_server_summary(
     """
     # Lazy import, the embedded chain's convention (embedded_entry.py): only a
     # server-entry install needs the embedded server module.
-    from .embedded_server import (
-        async_paired_server_requirement,
-        installed_ha_mcp_version,
-    )
+    from .embedded_server import installed_ha_mcp_version
 
     options = entry.options
-    pip_spec = str(options.get(OPT_PIP_SPEC) or "").strip()
-    # Same test as EmbeddedServerManager: the default spec is no override.
-    override = pip_spec if pip_spec != DEFAULT_PIP_SPEC else ""
-    # The effective spec, as EmbeddedServerManager._resolve_pip_spec resolves it.
-    spec = override or await async_paired_server_requirement(hass) or DEFAULT_PIP_SPEC
+    spec = await async_effective_pip_spec(hass, options)
     return {
         # Blocking dist-info read; the spec's distribution first, as bring-up.
         "installed_server_version": await hass.async_add_executor_job(
             installed_ha_mcp_version, version_dist(spec)
         ),
-        "package_override_set": bool(override),
+        "package_override_set": bool(pip_spec_override(options)),
         "access_enabled": access_enabled(entry),
         "running": server_running(hass),
         "bring_up_in_progress": bring_up_in_progress(hass),

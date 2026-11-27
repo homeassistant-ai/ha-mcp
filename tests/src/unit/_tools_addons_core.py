@@ -17,14 +17,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Iterator
-from dataclasses import dataclass, field, replace
+import shutil
+import tempfile
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field, fields, replace
 from datetime import timedelta
 from ipaddress import IPv4Address
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+import pytest_socket
 from aiohasupervisor.models import (
     AddonBoot,
     AddonStage,
@@ -40,6 +45,7 @@ from aiohasupervisor.models.addons import (
     InstalledAddon,
     SupervisorRole,
 )
+from aiohasupervisor.models.ingress import Session
 from aiohttp import WSMsgType, web
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -284,8 +290,9 @@ class Supervisor:
         answer = self._next_answer(request.method, path)
         if answer is None:
             if (request.method, path) == ("POST", "/ingress/session"):
-                self.sessions.append(f"session-{len(self.sessions) + 1}")
-                return web.json_response(supervisor_ok({"session": self.sessions[-1]}))
+                session = Session(session=f"session-{len(self.sessions) + 1}")
+                self.sessions.append(session.session)
+                return web.json_response(supervisor_ok(session.to_dict()))
             return web.json_response(
                 supervisor_error(f"No answer for {path}"), status=404
             )
@@ -310,7 +317,14 @@ class Supervisor:
 def app_info(slug: str = SLUG, **changes: Any) -> dict[str, Any]:
     """``GET /addons/<slug>/info`` as Supervisor answers it: a started app with
     ingress, built from aiohasupervisor's model; ``changes`` replace its fields."""
+    # The aiohasupervisor release Core 2026.12 pins requires log_format; the
+    # one 2026.11 pins has no such field. Drop this check once the stable Core
+    # pin moves off 2026.11.
+    log_fields: dict[str, Any] = {}
+    if any(spec.name == "log_format" for spec in fields(InstalledAddonComplete)):
+        log_fields["log_format"] = "plain"
     info = InstalledAddonComplete(
+        **log_fields,
         apparmor=AppArmor.DEFAULT,
         auth_api=False,
         docker_api=False,
@@ -419,6 +433,45 @@ async def serve_supervisor(aiohttp_client: Any, target: TargetApp) -> Supervisor
 async def supervisor(aiohttp_client: Any, target_app: TargetApp) -> Supervisor:
     """The stand-in Supervisor, in front of ``target_app``."""
     return await serve_supervisor(aiohttp_client, target_app)
+
+
+@asynccontextmanager
+async def app_socket(
+    handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[None]:
+    """Serve ``handler`` on a Unix socket mounted as Supervisor 2026.11.1
+    mounts the app's (``SUPERVISOR_SOCKET``)."""
+    # The plugin's allow list refuses Unix sockets; Core's hassio tests reset it.
+    pytest_socket.socket_allow_hosts(["127.0.0.1"], allow_unix_socket=True)
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Not tmp_path: it can exceed the 104-byte sun_path limit on macOS.
+    socket_dir = tempfile.mkdtemp(dir="/tmp")
+    socket_path = Path(socket_dir, "supervisor.sock")
+    await web.UnixSite(runner, str(socket_path)).start()
+    monkeypatch.setenv("SUPERVISOR_SOCKET", str(socket_path))
+    try:
+        yield
+    finally:
+        await runner.cleanup()
+        shutil.rmtree(socket_dir)
+
+
+@pytest.fixture
+async def socket_supervisor(
+    target_app: TargetApp, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Supervisor]:
+    """The stand-in Supervisor on the app's Unix socket; ``http://supervisor``
+    leads nowhere, so only a request over the socket is answered."""
+    found = Supervisor(target_app)
+    monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+    monkeypatch.delenv("SUPERVISOR_BASE_URL", raising=False)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", APP_TOKEN)
+    async with app_socket(found.serve, monkeypatch):
+        yield found
 
 
 @pytest.fixture

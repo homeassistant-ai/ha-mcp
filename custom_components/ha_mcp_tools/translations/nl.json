@@ -250,6 +250,9 @@
     "switch": {
       "server_access": {
         "name": "Toegang"
+      },
+      "server_read_only_mode": {
+        "name": "Alleen-lezen modus"
       }
     }
   }

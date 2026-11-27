@@ -9,6 +9,7 @@ from typing import Any, Literal
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._dashboard_screenshot_common import (
     BMP,
@@ -27,14 +28,21 @@ def _clear_env(monkeypatch: Any) -> None:
 
 
 class TestCapture:
-    async def test_builds_url_and_returns_png(self, engine: Engine) -> None:
+    async def test_builds_url_and_returns_png(
+        self, core_client: HomeAssistantClient, engine: Engine
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         png = b"\x89PNG\r\n\x1a\nfake"
         engine.next_response = Render(200, png)
 
         captures = await capture.capture_dashboard_images(
-            "lovelace/0", width=640, height=480, zoom=1.5, wait_ms=2000
+            "lovelace/0",
+            width=640,
+            height=480,
+            zoom=1.5,
+            wait_ms=2000,
+            client=core_client,
         )
         assert captures[0].data == png
         got = engine.gets[-1]
@@ -44,33 +52,35 @@ class TestCapture:
         assert got["params"]["wait"] == "2000"
         assert got["params"]["format"] == "png"
 
-    async def test_full_page_uses_native_auto_height(self, engine: Engine) -> None:
+    async def test_full_page_uses_native_auto_height(
+        self, core_client: HomeAssistantClient, engine: Engine
+    ) -> None:
         """full_page=True uses the content-sized viewport request."""
         from ha_mcp.dashboard_screenshot import capture
 
         engine.next_response = Render(200, b"\x89PNG\r\n\x1a\nfake")
 
         await capture.capture_dashboard_images(
-            "lovelace/0", width=1024, height=480, full_page=True
+            "lovelace/0", width=1024, height=480, full_page=True, client=core_client
         )
         got = engine.gets[-1]
         assert got["params"]["viewport"] == "1024xauto"
 
     async def test_auto_height_and_full_page_are_true_custom_aliases(
-        self, engine: Engine
+        self, core_client: HomeAssistantClient, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         engine.next_response = Render(200, PNG)
 
         explicit = await capture.capture_dashboard_images(
-            "lovelace/0", width=700, height="auto"
+            "lovelace/0", width=700, height="auto", client=core_client
         )
         alias_a = await capture.capture_dashboard_images(
-            "lovelace/0", width=700, height=480, full_page=True
+            "lovelace/0", width=700, height=480, full_page=True, client=core_client
         )
         alias_b = await capture.capture_dashboard_images(
-            "lovelace/0", width=700, height=1600, full_page=True
+            "lovelace/0", width=700, height=1600, full_page=True, client=core_client
         )
 
         assert [request["params"]["viewport"] for request in engine.gets] == [
@@ -88,18 +98,21 @@ class TestCapture:
             (700, "auto", None)
         ]
 
-    async def test_custom_auto_height_rejects_orientation(self) -> None:
+    async def test_custom_auto_height_rejects_orientation(
+        self,
+        core_client: HomeAssistantClient,
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images(
-                "lovelace/0", height="auto", orientation="landscape"
+                "lovelace/0", height="auto", orientation="landscape", client=core_client
             )
 
         assert "custom auto-height viewport" in str(exc_info.value)
 
     async def test_preset_full_page_keeps_orientation_support(
-        self, engine: Engine
+        self, core_client: HomeAssistantClient, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -110,6 +123,7 @@ class TestCapture:
             viewport_presets=["mobile"],
             orientation="landscape",
             full_page=True,
+            client=core_client,
         )
 
         assert engine.gets[-1]["params"]["viewport"] == "844xauto"
@@ -120,19 +134,21 @@ class TestCapture:
         )
 
     async def test_explicit_auto_does_not_use_legacy_full_page_fallback(
-        self, engine: Engine
+        self, core_client: HomeAssistantClient, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         engine.next_response = Render(400, b"", content_type="text/plain")
 
         with pytest.raises(ToolError):
-            await capture.capture_dashboard_images("lovelace/0", height="auto")
+            await capture.capture_dashboard_images(
+                "lovelace/0", height="auto", client=core_client
+            )
 
         assert len(engine.gets) == 1
 
     async def test_declared_oversize_rejected_before_body_read(
-        self, engine: Engine, monkeypatch: Any
+        self, core_client: HomeAssistantClient, engine: Engine, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -143,7 +159,7 @@ class TestCapture:
 
         async with asyncio.timeout(3):
             with pytest.raises(ToolError) as exc_info:
-                await capture.capture_dashboard_images("lovelace/0")
+                await capture.capture_dashboard_images("lovelace/0", client=core_client)
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
@@ -151,7 +167,7 @@ class TestCapture:
         assert len(engine.gets) == 1
 
     async def test_chunked_oversize_stops_at_limit(
-        self, engine: Engine, monkeypatch: Any
+        self, core_client: HomeAssistantClient, engine: Engine, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -160,14 +176,14 @@ class TestCapture:
         engine.next_response = Render(200, b"", chunks=[b"123", b"45"])
 
         with pytest.raises(ToolError) as exc_info:
-            await capture.capture_dashboard_images("lovelace/0")
+            await capture.capture_dashboard_images("lovelace/0", client=core_client)
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "IMAGE_PAYLOAD_TOO_LARGE"
         assert error["received_bytes"] == 5
 
     async def test_exact_payload_boundary_succeeds(
-        self, engine: Engine, monkeypatch: Any
+        self, core_client: HomeAssistantClient, engine: Engine, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -178,13 +194,13 @@ class TestCapture:
         )
 
         result = await capture.capture_dashboard_images(
-            "lovelace/0", image_format="bmp"
+            "lovelace/0", image_format="bmp", client=core_client
         )
 
         assert result[0].data == BMP
 
     async def test_batch_limit_identifies_second_capture(
-        self, engine: Engine, monkeypatch: Any
+        self, core_client: HomeAssistantClient, engine: Engine, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -199,6 +215,7 @@ class TestCapture:
                 "lovelace/0",
                 viewport_presets=["mobile", "desktop"],
                 image_format="bmp",
+                client=core_client,
             )
 
         error = json.loads(str(exc_info.value))
@@ -209,7 +226,7 @@ class TestCapture:
         assert error["preset"] == "desktop"
 
     async def test_partial_batch_retains_success_and_structured_failure(
-        self, engine: Engine
+        self, core_client: HomeAssistantClient, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -224,6 +241,7 @@ class TestCapture:
             viewport_presets=["mobile", "desktop"],
             render_timeout_seconds=1,
             partial_failures=failures,
+            client=core_client,
         )
 
         assert [item.preset for item in result] == ["mobile"]
@@ -233,7 +251,7 @@ class TestCapture:
         assert failures[0]["preset"] == "desktop"
 
     async def test_partial_batch_continues_after_first_failure(
-        self, engine: Engine
+        self, core_client: HomeAssistantClient, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -248,6 +266,7 @@ class TestCapture:
             viewport_presets=["mobile", "desktop"],
             render_timeout_seconds=1,
             partial_failures=failures,
+            client=core_client,
         )
 
         assert [item.preset for item in result] == ["desktop"]
@@ -256,7 +275,7 @@ class TestCapture:
         assert failures[0]["preset"] == "mobile"
 
     async def test_all_failed_batch_raises_ordered_aggregate(
-        self, engine: Engine
+        self, core_client: HomeAssistantClient, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -272,6 +291,7 @@ class TestCapture:
                 viewport_presets=["mobile", "desktop"],
                 render_timeout_seconds=1,
                 partial_failures=failures,
+                client=core_client,
             )
 
         error = json.loads(str(exc_info.value))
@@ -287,7 +307,7 @@ class TestCapture:
         ]
 
     async def test_batch_cap_returns_prior_capture_as_partial(
-        self, engine: Engine, monkeypatch: Any
+        self, core_client: HomeAssistantClient, engine: Engine, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -303,6 +323,7 @@ class TestCapture:
             viewport_presets=["mobile", "desktop"],
             image_format="bmp",
             partial_failures=failures,
+            client=core_client,
         )
 
         assert [item.preset for item in result] == ["mobile"]
@@ -311,7 +332,7 @@ class TestCapture:
         assert failures[0]["capture_index"] == 1
 
     async def test_batch_presets_forward_deterministic_context(
-        self, engine: Engine
+        self, core_client: HomeAssistantClient, engine: Engine
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -328,6 +349,7 @@ class TestCapture:
             language="de",
             image_format="jpeg",
             render_timeout_seconds=90,
+            client=core_client,
         )
 
         assert [item.preset for item in captures] == ["mobile", "desktop"]
@@ -352,13 +374,17 @@ class TestCapture:
                 "lang": "de",
             }
 
-    async def test_rejects_unexpected_content_type(self, engine: Engine) -> None:
+    async def test_rejects_unexpected_content_type(
+        self, core_client: HomeAssistantClient, engine: Engine
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         engine.next_response = Render(200, b"not a jpeg", content_type="image/png")
 
         with pytest.raises(ToolError) as exc_info:
-            await capture.capture_dashboard_images("lovelace/0", image_format="jpeg")
+            await capture.capture_dashboard_images(
+                "lovelace/0", image_format="jpeg", client=core_client
+            )
         assert "unexpected content type" in str(exc_info.value).lower()
 
     @pytest.mark.parametrize(
@@ -372,6 +398,7 @@ class TestCapture:
     )
     async def test_accepts_matching_image_signatures(
         self,
+        core_client: HomeAssistantClient,
         engine: Engine,
         image_format: Literal["png", "jpeg", "webp", "bmp"],
         mime_type: str,
@@ -382,7 +409,7 @@ class TestCapture:
         engine.next_response = Render(200, body, content_type=mime_type)
 
         result = await capture.capture_dashboard_images(
-            "lovelace/0", image_format=image_format
+            "lovelace/0", image_format=image_format, client=core_client
         )
 
         assert result[0].data == body
@@ -398,6 +425,7 @@ class TestCapture:
     )
     async def test_rejects_mislabeled_non_image_bytes(
         self,
+        core_client: HomeAssistantClient,
         engine: Engine,
         image_format: Literal["png", "jpeg", "webp", "bmp"],
         mime_type: str,
@@ -410,7 +438,7 @@ class TestCapture:
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images(
-                "lovelace/0", image_format=image_format
+                "lovelace/0", image_format=image_format, client=core_client
             )
 
         error = json.loads(str(exc_info.value))
@@ -418,41 +446,50 @@ class TestCapture:
         assert error["requested_format"] == image_format
         assert error["received_signature_hex"]
 
-    async def test_timeout_has_distinct_structured_error(self, engine: Engine) -> None:
+    async def test_timeout_has_distinct_structured_error(
+        self, core_client: HomeAssistantClient, engine: Engine
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         engine.next_response = None
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images(
-                "lovelace/0", render_timeout_seconds=1
+                "lovelace/0", render_timeout_seconds=1, client=core_client
             )
         assert "TIMEOUT_API_REQUEST" in str(exc_info.value)
 
-    async def test_rejects_duplicate_viewport_presets(self) -> None:
+    async def test_rejects_duplicate_viewport_presets(
+        self,
+        core_client: HomeAssistantClient,
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images(
-                "lovelace/0", viewport_presets=["mobile", "mobile"]
+                "lovelace/0", viewport_presets=["mobile", "mobile"], client=core_client
             )
         assert "without duplicate presets" in str(exc_info.value)
 
-    async def test_http_error_raises_toolerror(self, engine: Engine) -> None:
+    async def test_http_error_raises_toolerror(
+        self, core_client: HomeAssistantClient, engine: Engine
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         engine.next_response = Render(502, b"", text="bad gateway")
 
         with pytest.raises(ToolError):
-            await capture.capture_dashboard_images("lovelace/0")
+            await capture.capture_dashboard_images("lovelace/0", client=core_client)
 
-    async def test_empty_body_raises_toolerror(self, engine: Engine) -> None:
+    async def test_empty_body_raises_toolerror(
+        self, core_client: HomeAssistantClient, engine: Engine
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
         engine.next_response = Render(200, b"")
 
         with pytest.raises(ToolError):
-            await capture.capture_dashboard_images("lovelace/0")
+            await capture.capture_dashboard_images("lovelace/0", client=core_client)
 
     @pytest.mark.parametrize(
         "path",
@@ -475,7 +512,7 @@ class TestCapture:
         ],
     )
     async def test_unsafe_dashboard_paths_never_reach_the_engine(
-        self, engine: Engine, path: str
+        self, core_client: HomeAssistantClient, engine: Engine, path: str
     ) -> None:
         """A path that is not a plain dashboard path is refused before the
         engine is asked for anything."""
@@ -484,15 +521,17 @@ class TestCapture:
         engine.next_response = Render(200, PNG)
 
         with pytest.raises(ToolError):
-            await capture.capture_dashboard_images(path)
+            await capture.capture_dashboard_images(path, client=core_client)
         assert engine.gets == []
 
-    async def test_path_segments_are_percent_encoded(self, engine: Engine) -> None:
+    async def test_path_segments_are_percent_encoded(
+        self, core_client: HomeAssistantClient, engine: Engine
+    ) -> None:
         """A valid segment with an encodable char reaches the engine
         percent-encoded (defense-in-depth), not raw."""
         from ha_mcp.dashboard_screenshot import capture
 
         engine.next_response = Render(200, b"\x89PNG\r\n\x1a\nfake")
 
-        await capture.capture_dashboard_images("my dash/0")
+        await capture.capture_dashboard_images("my dash/0", client=core_client)
         assert engine.gets[-1]["path"] == "/my%20dash/0"

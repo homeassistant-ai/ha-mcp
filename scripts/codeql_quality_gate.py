@@ -184,13 +184,13 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     (
         "py/unused-global-variable",
         "custom_components/ha_mcp_tools/embedded_server.py",
-        "_PENDING_INSTALL_DONE",
+        "_PENDING_PACKAGE_JOB_DONE",
         "",
-        "Cross-method use: _async_run_tracked_install_job registers/clears the "
-        "slot under a 'global' declaration and _async_wait_for_pending_install "
-        "reads it on the NEXT bring-up (a different coroutine). CodeQL's "
-        "single-pass dead-store analysis misses the cross-method read, so the "
-        "assignment looks dead.",
+        "Cross-method use: _async_run_tracked_package_job registers/clears the "
+        "slot under a 'global' declaration and "
+        "_async_wait_for_pending_package_job reads it on the NEXT bring-up "
+        "(a different coroutine). CodeQL's single-pass dead-store analysis "
+        "misses the cross-method read, so the assignment looks dead.",
     ),
     (
         "py/unused-global-variable",

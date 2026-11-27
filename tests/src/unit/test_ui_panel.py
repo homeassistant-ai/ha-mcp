@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import json
+import secrets
 import shutil
 from datetime import timedelta
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Any
 
 import pytest
 from aiohttp import web
@@ -38,6 +41,8 @@ from custom_components.ha_mcp_tools.mcp_webhook import (
 )
 
 from ._garbled_upstream import garbled_upstream
+from ._js_harness import HarnessResult, run_script
+from ._settings_ui_js_helpers import probe
 from ._ui_panel_core import (
     _APP,
     _BASE,
@@ -521,6 +526,99 @@ def _boot_script(page: str) -> str:
     return script
 
 
+# The boot page's own DOM: the status element it writes to and the iframe it
+# fills. The script runs as soon as it is parsed, so both must exist.
+_BOOT_DOM = """<!DOCTYPE html><html><body>
+<div class="msg"></div><iframe></iframe>
+</body></html>"""
+
+# What the boot script fetches: the session it mints, then the app URL it
+# probes before pointing the iframe at it.
+_BOOT_FETCHES = {
+    "/api/ha_mcp_tools/ui/session": {"status": 200, "json": {}},
+    "/api/ha_mcp_tools/ui/app/settings": {"status": 200, "body": "<!doctype html>"},
+}
+
+
+class _IframeSrc(HTMLParser):
+    """The ``src`` the boot page's iframe was pointed at."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.src: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "iframe" and self.src is None:
+            self.src = dict(attrs).get("src")
+
+
+def _parent_prelude(search: str, language: str = "en", session_delay: int = 0) -> str:
+    """Replace the boot script's parent frame with a fake frontend window."""
+    script = (
+        "window.__parent = {"
+        f"  location: {{ search: {json.dumps(search)} }},"
+        "  document: { querySelector: (sel) => sel === 'home-assistant'"
+        f"    ? {{ hass: {{ language: {json.dumps(language)},"
+        "      auth: { accessToken: 'bearer' } } } : null },"
+        "  addEventListener: (type, fn) => { window.__parentHandlers[type] = fn; },"
+        "};"
+        "window.__parentHandlers = {};"
+        "Object.defineProperty(window, 'parent', {"
+        "  configurable: true, get: () => window.__parent });"
+    )
+    if session_delay:
+        # Hold the session mint open so the script reaches its first frame with
+        # the app not yet probed.
+        script += (
+            "(function () {"
+            "  const realFetch = window.fetch;"
+            "  window.fetch = function (url, opts) {"
+            "    if (String(url).includes('/api/ha_mcp_tools/ui/session')) {"
+            "      return new Promise((resolve) => setTimeout("
+            f"        () => resolve(realFetch(url, opts)), {session_delay}));"
+            "    }"
+            "    return realFetch(url, opts);"
+            "  };"
+            "})();"
+        )
+    return script
+
+
+def _boot_iframe(
+    script: str,
+    *,
+    search: str,
+    invoke: str = "",
+    language: str = "en",
+    fetch_map: dict[str, Any] | None = None,
+    settle_ms: int = 2000,
+    session_delay: int = 0,
+) -> tuple[str, HarnessResult]:
+    """Run the boot script against ``search`` and return the iframe's target."""
+    result = run_script(
+        script,
+        initial_html=_BOOT_DOM,
+        prelude=_parent_prelude(search, language, session_delay),
+        fetch_map=fetch_map or _BOOT_FETCHES,
+        invoke=invoke,
+        settle_ms=settle_ms,
+        timeout_s=30,
+    )
+    parser = _IframeSrc()
+    parser.feed(result.dom)
+    return parser.src or "", result
+
+
+@pytest.fixture
+async def boot_script(
+    panel_views: None, hass_client_no_auth: ClientSessionGenerator
+) -> str:
+    """The script of the served boot page, as a browser would run it."""
+    client = await hass_client_no_auth()
+    page = await (await client.get(_BOOT)).text()
+    return _boot_script(page)
+
+
 class TestBootView:
     async def test_page_is_public_and_embeds_script_and_session_url(
         self, panel_views: None, hass_client_no_auth: ClientSessionGenerator
@@ -538,8 +636,6 @@ class TestBootView:
         # The script builds the app URL as this prefix + "settings".
         assert _APP in page
         assert "root.hass.language" in page
-        assert "?ha_lang=" in page
-        assert "encodeURIComponent(language)" in page
         assert "<iframe" in page
 
     async def test_boot_script_handles_stale_tokens_without_retry_storm(
@@ -577,6 +673,201 @@ class TestBootView:
         _, errors = await check.communicate()
 
         assert check.returncode == 0, errors.decode()
+
+
+class TestBootLink:
+    """#3104: a notification link opens its tab and approval card.
+
+    On an embedded install the panel route is the only deep-linkable target
+    that needs no secret path, so the iframe's ``src`` is the URL the settings
+    app actually loads.
+    """
+
+    async def test_a_link_opens_its_tab_and_approval_card(
+        self, boot_script: str
+    ) -> None:
+        token = secrets.token_urlsafe(24)
+
+        src, result = _boot_iframe(
+            boot_script, search=f"?tab=tool-security-policies&token={token}"
+        )
+
+        assert src == (
+            "/api/ha_mcp_tools/ui/app/settings"
+            f"?tab=tool-security-policies&token={token}&ha_lang=en"
+        ), result.errors
+
+    async def test_foreign_parameters_never_reach_the_app(
+        self, boot_script: str
+    ) -> None:
+        token = secrets.token_urlsafe(24)
+
+        src, result = _boot_iframe(
+            boot_script,
+            search=f"?tab=tools&drop=me&approve=1&action=approve&token={token}",
+        )
+
+        assert src == (
+            f"/api/ha_mcp_tools/ui/app/settings?tab=tools&token={token}&ha_lang=en"
+        ), result.errors
+
+    async def test_a_crafted_token_never_reaches_the_app(
+        self, boot_script: str
+    ) -> None:
+        src, result = _boot_iframe(
+            boot_script,
+            search='?tab=tool-security-policies&token=x"],[data-pending-token^="As2-',
+        )
+
+        assert src == (
+            "/api/ha_mcp_tools/ui/app/settings?tab=tool-security-policies&ha_lang=en"
+        ), result.errors
+
+    async def test_a_crafted_tab_never_reaches_the_app(self, boot_script: str) -> None:
+        src, result = _boot_iframe(
+            boot_script, search='?tab=x"],[data-panel=tool-security-policies'
+        )
+
+        assert src == "/api/ha_mcp_tools/ui/app/settings?ha_lang=en", result.errors
+
+    async def test_a_link_followed_while_the_panel_is_open_updates_the_app(
+        self, boot_script: str
+    ) -> None:
+        token = secrets.token_urlsafe(24)
+
+        # The initial load settles first (100 ms of virtual time), then the
+        # parent navigates, as it does when a notification link is opened with
+        # the panel already showing.
+        src, result = _boot_iframe(
+            boot_script,
+            search="?tab=tools",
+            invoke=(
+                "setTimeout(() => {"
+                "  window.__parent.location.search ="
+                f" '?tab=tool-security-policies&token={token}';"
+                "  window.__parentHandlers['location-changed']();"
+                "}, 100);"
+            ),
+        )
+
+        assert src == (
+            "/api/ha_mcp_tools/ui/app/settings"
+            f"?tab=tool-security-policies&token={token}&ha_lang=en"
+        ), (result.errors, src)
+
+    async def test_following_the_same_link_again_reloads_the_app(
+        self, boot_script: str
+    ) -> None:
+        """Only the parent URL changes on a repeated link, so the app has to
+        reload to re-read the query and bring the card back into view."""
+        token = secrets.token_urlsafe(24)
+
+        src, result = _boot_iframe(
+            boot_script,
+            search=f"?tab=tool-security-policies&token={token}",
+            invoke=(
+                "setTimeout(() => window.__parentHandlers['location-changed'](), 100);"
+            ),
+        )
+
+        assert src == (
+            "/api/ha_mcp_tools/ui/app/settings?tab=tool-security-policies"
+            f"&token={token}&ha_lang=en"
+        ), result.errors
+        assert result.reloads == 1, result.errors
+
+    async def test_a_link_that_loaded_during_an_outage_reloads_on_recovery(
+        self, boot_script: str
+    ) -> None:
+        """The iframe may be showing the proxy's error page, so the first probe
+        that comes back has to reload it once."""
+        token = secrets.token_urlsafe(24)
+        app = "/api/ha_mcp_tools/ui/app/settings"
+
+        src, result = _boot_iframe(
+            boot_script,
+            search="?tab=tools",
+            fetch_map={
+                "/api/ha_mcp_tools/ui/session": {"status": 200, "json": {}},
+                app: {
+                    "responses": [
+                        {"status": 200, "body": "<!doctype html>"},
+                        {"status": 503},
+                        {"status": 200, "body": "<!doctype html>"},
+                    ]
+                },
+            },
+            invoke=(
+                "await new Promise((r) => setTimeout(r, 100));"
+                "window.__parent.location.search ="
+                f" '?tab=tool-security-policies&token={token}';"
+                "window.__parentHandlers['location-changed']();"
+                "await new Promise((r) => setTimeout(r, 50));"
+                "await window.mint();"
+            ),
+        )
+
+        assert src == (f"{app}?tab=tool-security-policies&token={token}&ha_lang=en"), (
+            result.errors,
+            src,
+        )
+        assert result.reloads == 1, result.errors
+
+    async def test_a_background_probe_failure_does_not_reload_a_loaded_link(
+        self, boot_script: str
+    ) -> None:
+        """A probe that fails after the navigation loaded fine says nothing
+        about that load; reloading would drop the tab the user picked."""
+        app = "/api/ha_mcp_tools/ui/app/settings"
+
+        src, result = _boot_iframe(
+            boot_script,
+            search="?tab=tools",
+            fetch_map={
+                "/api/ha_mcp_tools/ui/session": {"status": 200, "json": {}},
+                app: {
+                    "responses": [
+                        {"status": 200, "body": "<!doctype html>"},
+                        {"status": 200, "body": "<!doctype html>"},
+                        {"status": 503},
+                        {"status": 200, "body": "<!doctype html>"},
+                    ]
+                },
+            },
+            invoke=(
+                "await new Promise((r) => setTimeout(r, 100));"
+                "window.__parent.location.search = '?tab=entity-visibility';"
+                "window.__parentHandlers['location-changed']();"
+                "await new Promise((r) => setTimeout(r, 50));"
+                "await window.mint();"
+                "await window.mint();"
+            ),
+        )
+
+        assert src == f"{app}?tab=entity-visibility&ha_lang=en", (result.errors, src)
+        assert result.reloads == 0, result.errors
+
+    async def test_a_link_followed_before_the_session_is_ready_is_not_loaded(
+        self, boot_script: str
+    ) -> None:
+        """The iframe must stay empty until the session exists: the proxy would
+        answer 401 and that document would stay in place."""
+        src, result = _boot_iframe(
+            boot_script,
+            search="?tab=tools",
+            session_delay=200,
+            invoke=(
+                "window.__parent.location.search = '?tab=entity-visibility';"
+                "window.__parentHandlers['location-changed']();"
+                "document.body.dataset.early = String("
+                "  document.querySelector('iframe').getAttribute('src') || '');"
+            ),
+        )
+
+        assert probe(result, "early") == "", result.errors
+        assert src == (
+            "/api/ha_mcp_tools/ui/app/settings?tab=entity-visibility&ha_lang=en"
+        ), (result.errors, src)
 
 
 class TestPanelRegistration:

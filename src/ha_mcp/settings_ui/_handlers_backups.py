@@ -572,8 +572,8 @@ async def apply_backup_config(
     """
     if is_running_in_addon():
         # ``is_running_in_addon()`` checks SUPERVISOR_TOKEN — the
-        # ``_save_backup_config_addon`` helper also catches the missing-token
-        # ``RuntimeError`` from ``make_supervisor_httpx_client`` as
+        # ``_save_backup_config_addon`` helper also catches the
+        # no-socket-no-token ``RuntimeError`` from ``make_supervisor_httpx_client`` as
         # defense-in-depth.
         return await _save_backup_config_addon(server, clean)
     # Same write-guard treatment as tool_config/tool_policy: the RMW is

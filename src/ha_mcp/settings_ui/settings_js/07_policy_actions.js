@@ -346,7 +346,7 @@ async function policyLoadPending() {
       t('policies.pending.empty', {}, 'No pending approvals.'),
       {emphasis: false}
     );
-    return;
+    return pending;
   }
   // Rebuilding unchanged cards would drop keyboard focus from Approve/Deny on
   // every poll and reset a screen reader's cursor. A deadline can still be cut
@@ -363,7 +363,7 @@ async function policyLoadPending() {
       changed.push(p.tool_name + ': ' + text);
     });
     if (changed.length) policyAnnouncePending(changed.join(' '), {repeat: true});
-    return;
+    return pending;
   }
   list.dataset.pendingTokens = tokens;
   list.classList.remove('backup-empty');
@@ -390,6 +390,9 @@ async function policyLoadPending() {
       policyDecide(btn.dataset.policyToken, btn.dataset.policyAction)
     );
   });
+  // Returned so a deep link can wait for the render instead of racing it:
+  // undefined means the queue could not be read (its own message says why).
+  return pending;
 }
 
 async function policyDecide(token, action) {
@@ -655,7 +658,11 @@ function activateTab(target, opts) {
     p.classList.toggle('active', p.id === 'panel-' + target)
   );
   if (target === 'backups') { loadBackupConfig(); loadBackups(); }
-  if (target === 'tool-security-policies') { policyWriteOnce(policyLoadConfig); policyLoadPending(); }
+  if (target === 'tool-security-policies') {
+    policyWriteOnce(policyLoadConfig);
+    // Returned for the deep link: it scrolls once the list has rendered.
+    return policyLoadPending();
+  }
   if (target === 'entity-visibility') { visibilityLoadConfig(); }
   if (target === 'tools') {
     // Refresh gated-toggle + read-only state in case the user changed

@@ -23,6 +23,16 @@ def has_command_failed_prefix(text: str) -> bool:
     return text.lower().startswith(COMMAND_FAILED.lower().rstrip())
 
 
+# --- Core: helpers/entity_registry.py and helpers/device_registry.py --------
+# _validate_area_and_labels (2026.12) raises ValueError "Area '<id>' not found.";
+# config/entity_registry/update and config/device_registry/update answer it
+# ``invalid_info``, the code of every other ValueError an update raises.
+
+
+def registry_unknown_area(message: str) -> bool:
+    return "Area '" in message and "' not found" in message
+
+
 # --- Core: blueprint/websocket_api.py --------------------------------------
 # ws_substitute_blueprint answers ERR_UNKNOWN_ERROR with str(err) for every
 # BlueprintException (MissingInput: "Missing input ...", FailedToLoad: "Failed

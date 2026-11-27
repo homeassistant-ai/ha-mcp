@@ -66,7 +66,7 @@ EDIT_FILE_SERVICE = "edit_file"
 # component's own version. An older component (a lower version, or no
 # ``version`` in the get_caller_token response) gets an actionable "update"
 # error.
-MIN_COMPONENT_VERSION = "9.2.0"
+MIN_COMPONENT_VERSION = "9.3.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:

@@ -28,6 +28,7 @@ import anyio
 from .._vendor import websockets
 from .._vendor.websockets.exceptions import ConnectionClosed
 from ..config import get_global_settings
+from .exceptions import websocket_close_error_type
 from .rest_client import (
     HomeAssistantAuthError,
     HomeAssistantCommandError,
@@ -329,10 +330,8 @@ class HomeAssistantWebSocketClient:
         """Background task to handle incoming WebSocket messages."""
         if not self.websocket:
             raise HomeAssistantConnectionError("WebSocket not connected")
-        # None means a clean exit (the async-for loop simply ended); the
-        # except blocks below fill this in so pending futures — and the
-        # log — carry *why* the connection went away instead of a bare
-        # "WebSocket connection closed" that gave no lead on #1721.
+        error_type = HomeAssistantConnectionError
+        # Keep the close details for callers waiting on a pending command.
         close_reason: str | None = None
         try:
             async for message in self.websocket:
@@ -345,29 +344,25 @@ class HomeAssistantWebSocketClient:
                 except Exception as e:  # noqa: BLE001
                     logger.error(f"Error processing message: {e}")
         except ConnectionClosed as e:
-            # Prefer the frame we received (the peer closed on us); fall
-            # back to the frame we sent (we failed the connection
-            # ourselves, e.g. an over-max_size frame produces a sent
-            # Close(1009, ...) with no frame received at all).
+            error_type = websocket_close_error_type(e)
+            # A frame exceeding max_size sends Close(1009) locally; the peer
+            # may never send a close frame back. Preserve that local reason.
             close = e.rcvd if e.rcvd is not None else e.sent
+            close_reason = "connection dropped without a close frame"
             if close is not None:
                 verb = "received" if e.rcvd is not None else "sent"
                 close_reason = f"{verb} close code {close.code}"
                 if close.reason:
                     close_reason = f"{close_reason} ({close.reason})"
-            else:
-                close_reason = "connection dropped without a close frame"
 
-            log_message = f"WebSocket connection closed ({close_reason})"
-            if close is None or close.code not in (1000, 1001):
-                logger.warning(log_message)
-            else:
-                logger.info(log_message)
+            normal_close = close is not None and close.code in (1000, 1001)
+            log = logger.info if normal_close else logger.warning
+            log("WebSocket connection closed (%s)", close_reason)
         except Exception as e:  # noqa: BLE001
             close_reason = str(e)
             logger.error(f"WebSocket message handler error: {e}")
         finally:
-            self._state.mark_disconnected(close_reason)
+            self._state.mark_disconnected(close_reason, error_type=error_type)
 
     async def _process_message(self, data: dict[str, Any]) -> None:
         """Process incoming WebSocket message."""

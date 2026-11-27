@@ -144,7 +144,7 @@ class TestATokenOnTheWrongSource:
         self, core_client: HomeAssistantClient
     ):
         token = str(WindowToken(EPOCH, 2, "host", "s=a;i=1", 5))
-        with pytest.raises(ToolError, match="Cursor tokens only apply"):
+        with pytest.raises(ToolError, match="Invalid 'offset' token for source='logb"):
             await ask(core_client, source="logbook", slug=None, offset=token)
 
     @pytest.mark.parametrize(

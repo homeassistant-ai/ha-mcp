@@ -145,7 +145,7 @@ class TestRenderResults:
     def transform(self):
         return CategorizedSearchTransform(max_results=5)
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_tool_execute_via(self, transform):
         tools = [_make_tool("ha_get_state", read_only=True, description="Get state")]
         results = await render_search_results(transform, tools)
@@ -154,7 +154,7 @@ class TestRenderResults:
         assert "ha_call_read_tool" in results[0]["execute_via"]
         assert "ha_get_state" in results[0]["execute_via"]
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_write_tool_execute_via(self, transform):
         tools = [
             _make_tool("ha_config_set_automation", destructive=True, description="Set")
@@ -165,7 +165,7 @@ class TestRenderResults:
         assert "ha_call_delete_tool" not in results[0]["execute_via"]
         assert "ha_config_set_automation" in results[0]["execute_via"]
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_manage_tool_with_read_actions_execute_via_every_proxy(
         self, transform
     ):
@@ -189,7 +189,7 @@ class TestRenderResults:
             'or ha_call_delete_tool(name="ha_manage_updates", arguments={...})'
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_only_mode_hints_only_the_read_route(
         self, transform, read_only_on
     ):
@@ -206,7 +206,7 @@ class TestRenderResults:
             'or ha_call_read_tool(name="ha_manage_updates", arguments={...})'
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_manage_tool_without_read_actions_execute_via_write_and_delete(
         self, transform
     ):
@@ -225,7 +225,7 @@ class TestRenderResults:
             'or ha_call_delete_tool(name="ha_manage_hacs", arguments={...})'
         )
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_delete_tool_execute_via(self, transform):
         tools = [
             _make_tool(
@@ -236,7 +236,7 @@ class TestRenderResults:
         assert "ha_call_delete_tool" in results[0]["execute_via"]
         assert "ha_remove_area_or_floor" in results[0]["execute_via"]
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_hit_is_compact(self, transform):
         """A hit carries name, description, params and proxy, no schema."""
         tools = [_make_tool("ha_get_state", read_only=True, description="Get state")]
@@ -245,7 +245,7 @@ class TestRenderResults:
         assert results[0]["description"] == "Get state"
         assert "inputSchema" not in results[0]
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_multiple_tools(self, transform):
         tools = [
             _make_tool("ha_get_state", read_only=True, description="Read"),
@@ -289,7 +289,7 @@ class TestTransformTools:
             ),
         ]
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_returns_pinned_plus_synthetic(self, transform, sample_tools):
         result = await transform.transform_tools(sample_tools)
         names = [t.name for t in result]
@@ -307,7 +307,7 @@ class TestTransformTools:
         assert "ha_config_set_automation" not in names
         assert "ha_remove_area_or_floor" not in names
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_only_mode_lists_only_the_read_proxy(
         self, transform, sample_tools, read_only_on
     ):
@@ -320,34 +320,34 @@ class TestTransformTools:
         assert "ha_call_write_tool" not in names
         assert "ha_call_delete_tool" not in names
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_total_count(self, transform, sample_tools):
         result = await transform.transform_tools(sample_tools)
         # 2 pinned + 4 synthetic (search + 3 proxies)
         assert len(result) == 6
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_search_tool_is_read_only(self, transform, sample_tools):
         result = await transform.transform_tools(sample_tools)
         search = next(t for t in result if t.name == "ha_search_tools")
         assert search.annotations is not None
         assert search.annotations.read_only_hint is True
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_proxy_is_read_only(self, transform, sample_tools):
         result = await transform.transform_tools(sample_tools)
         proxy = next(t for t in result if t.name == "ha_call_read_tool")
         assert proxy.annotations is not None
         assert proxy.annotations.read_only_hint is True
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_write_proxy_is_destructive(self, transform, sample_tools):
         result = await transform.transform_tools(sample_tools)
         proxy = next(t for t in result if t.name == "ha_call_write_tool")
         assert proxy.annotations is not None
         assert proxy.annotations.destructive_hint is True
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_delete_proxy_is_destructive(self, transform, sample_tools):
         result = await transform.transform_tools(sample_tools)
         proxy = next(t for t in result if t.name == "ha_call_delete_tool")
@@ -367,7 +367,7 @@ class TestGetTool:
     def transform(self):
         return CategorizedSearchTransform(max_results=5)
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_resolves_read_proxy(self, transform):
         call_next = AsyncMock(return_value=None)
         tool = await transform.get_tool("ha_call_read_tool", call_next)
@@ -375,7 +375,7 @@ class TestGetTool:
         assert tool.name == "ha_call_read_tool"
         call_next.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_resolves_write_proxy(self, transform):
         call_next = AsyncMock(return_value=None)
         tool = await transform.get_tool("ha_call_write_tool", call_next)
@@ -383,7 +383,7 @@ class TestGetTool:
         assert tool.name == "ha_call_write_tool"
         call_next.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_resolves_delete_proxy(self, transform):
         call_next = AsyncMock(return_value=None)
         tool = await transform.get_tool("ha_call_delete_tool", call_next)
@@ -391,7 +391,7 @@ class TestGetTool:
         assert tool.name == "ha_call_delete_tool"
         call_next.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_read_only_mode_still_resolves_destructive_proxies(
         self, transform, read_only_on
     ):
@@ -405,7 +405,7 @@ class TestGetTool:
             assert tool is not None and tool.name == name
         call_next.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_resolves_search_tool(self, transform):
         call_next = AsyncMock(return_value=None)
         tool = await transform.get_tool("ha_search_tools", call_next)
@@ -413,7 +413,7 @@ class TestGetTool:
         assert tool.name == "ha_search_tools"
         call_next.assert_not_called()
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_delegates_unknown_to_call_next(self, transform):
         real_tool = _make_tool("ha_get_state", read_only=True)
         call_next = AsyncMock(return_value=real_tool)
@@ -480,7 +480,7 @@ class TestDefaultPinnedTools:
 class TestSearchKeywordsTransform:
     """Tests for the SearchKeywordsTransform."""
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_keywords_appended(self):
         """Keywords are appended to existing description."""
         transform = SearchKeywordsTransform(
@@ -492,7 +492,7 @@ class TestSearchKeywordsTransform:
         assert result[0].description.startswith("Search entities.")
         assert "find lookup discover" in result[0].description
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_overrides_replace_description(self):
         """Overrides completely replace the description."""
         transform = SearchKeywordsTransform(
@@ -504,7 +504,7 @@ class TestSearchKeywordsTransform:
         result = await transform.list_tools([tool])
         assert result[0].description == "Narrowed description."
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_override_takes_priority_over_keywords(self):
         """When both override and keywords exist, override wins."""
         transform = SearchKeywordsTransform(
@@ -516,7 +516,7 @@ class TestSearchKeywordsTransform:
         assert result[0].description == "Override wins."
         assert "extra keywords" not in result[0].description
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_no_match_leaves_description_unchanged(self):
         """Tools not in keywords or overrides are unchanged."""
         transform = SearchKeywordsTransform(keywords={"ha_other_tool": "some keywords"})
@@ -524,7 +524,7 @@ class TestSearchKeywordsTransform:
         result = await transform.list_tools([tool])
         assert result[0].description == "Get state."
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_get_tool_enriches(self):
         """get_tool also applies enrichment."""
         transform = SearchKeywordsTransform(keywords={"ha_get_state": "status check"})
@@ -534,7 +534,7 @@ class TestSearchKeywordsTransform:
         assert result is not None
         assert "status check" in result.description
 
-    @pytest.mark.anyio
+    @pytest.mark.asyncio
     async def test_get_tool_returns_none_for_missing(self):
         """get_tool returns None when call_next returns None."""
         transform = SearchKeywordsTransform()

@@ -17,6 +17,7 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
 from tests.addon.docker_build import python_base_args
 from tests.src.unit._tools_addons_core import Supervisor
+from tests.src.unit._tools_addons_core import socket_supervisor as socket_supervisor
 from tests.src.unit._tools_addons_core import supervisor as supervisor
 from tests.src.unit._tools_addons_core import target_app as target_app
 
@@ -150,6 +151,21 @@ class TestMaybePersistSecretPath:
         assert headers["Content-Type"] == "application/json"
         assert options_supervisor.sent("POST", OPTIONS) == [
             {"options": {"verify_ssl": True, "secret_path": "/private_new"}}
+        ]
+
+    async def test_persists_over_the_supervisor_socket_without_the_token(
+        self, socket_supervisor
+    ):
+        """Supervisor deprecates the app's token over TCP: with the app's
+        socket mounted the options go over it, and no token is sent there."""
+        socket_supervisor.answer("POST", OPTIONS)
+        addon = load_addon_start()
+        await asyncio.to_thread(
+            addon.persist_addon_options, {"verify_ssl": True}, "test-token"
+        )
+        assert "Authorization" not in socket_supervisor.headers("POST", OPTIONS)
+        assert socket_supervisor.sent("POST", OPTIONS) == [
+            {"options": {"verify_ssl": True}}
         ]
 
     async def test_refused_options_raise_the_supervisors_status(
@@ -824,3 +840,13 @@ class TestBetaMasterAutoEnableInDevAddon:
         assert set(self.subflags) == set(BETA_FEATURE_FIELDS), (
             "start.py's beta sub-flags differ from config.BETA_FEATURE_FIELDS"
         )
+
+
+def test_the_webhook_proxy_ships_the_apps_supervisor_transport() -> None:
+    """Both apps send Supervisor requests through one transport module; each
+    image copies its own file, so the two copies must stay the same."""
+    repo = Path(__file__).parents[2]
+    shared = "supervisor_transport.py"
+    assert (repo / "homeassistant-addon" / shared).read_bytes() == (
+        repo / "homeassistant-addon-webhook-proxy-dev" / shared
+    ).read_bytes()

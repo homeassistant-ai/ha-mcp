@@ -30,7 +30,7 @@ from ha_mcp.client.websocket_client import (
 from ha_mcp.tools.tools_hacs import HacsTools
 
 from ._client_spies import sent_commands
-from ._hacs_actions_core import add_connected_marketplace, serve_card
+from ._hacs_actions_core import add_connected_marketplace, serve_card, serve_repository
 from ._hacs_marketplace import (
     CARD_ID,
     MAIN,
@@ -495,21 +495,46 @@ class TestInfo:
 
     async def test_release_notes_come_from_the_update_entity(
         self,
-        marketplace: MockConfigEntry,
+        hass: HomeAssistant,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
         tools: HacsTools,
-        socket: HomeAssistantWebSocketClient,
     ) -> None:
-        """An installed repository with an upgrade asks Core's update entity
-        for the notes, the way the update dialog shows them."""
-        with sent_commands(socket) as spy:
+        """A pending upgrade's info carries the notes as text, as the update
+        entity shows them; Core 2026.12 wraps them in an object."""
+        serve_repository(
+            aioclient_mock,
+            CARD,
+            int(CARD_ID),
+            ("lovelace-mushroom.js",),
+            releases=("v2.0.0", "v1.0.0"),
+        )
+        entry = add_connected_marketplace(
+            hass,
+            aioclient_mock,
+            hass_storage,
+            {
+                CARD_ID: stored(
+                    CARD,
+                    "plugin",
+                    installed="v1.0.0",
+                    last_version="v2.0.0",
+                    releases=True,
+                )
+            },
+        )
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        try:
+            await hass.async_block_till_done()
             out = await tools.ha_get_hacs_info(
-                action="info", repository_id=MIRROR_ID, include_releases=True
+                action="info", repository_id=CARD_ID, include_releases=True
             )
-        entity_id = out["data"]["update_entity_id"]
-        assert out["data"]["pending_upgrade"] is True
-        assert entity_id is not None
-        notes = sent_with(spy, "update/release_notes")
-        assert [n["entity_id"] for n in notes] == [entity_id]
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+        data = out["data"]
+        assert data["pending_upgrade"] is True
+        assert "Release notes for v2.0.0" in data["release_notes"]
+        assert "release_notes_messages" not in data
 
 
 REMOVED = [

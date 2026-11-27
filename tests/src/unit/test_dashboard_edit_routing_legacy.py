@@ -305,3 +305,20 @@ async def test_a_dashboard_core_cannot_read_is_not_reported_as_missing(
     assert (body["reason"], body["write_committed"]) == ("load_failed", False)
     assert "'config'" not in advice(body)
     assert seen[SAVE] == []
+
+
+async def test_a_dashboard_core_does_not_know_is_reported_as_missing(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core's config_not_found is the one answer that means the dashboard is
+    absent, so the edit says so instead of reporting a failed read."""
+    assert await async_setup_component(hass, "lovelace", {})
+
+    with received(hass, SAVE) as seen:
+        body = await refused(
+            core_client, patch=EDITS["patch"], config_hash=DOCUMENT_HASH
+        )
+
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert (body["reason"], body["write_committed"]) == ("not_found", False)
+    assert seen[SAVE] == []

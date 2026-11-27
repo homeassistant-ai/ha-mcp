@@ -59,18 +59,16 @@ logger = logging.getLogger(__name__)
 def _normalize_component_config_record(
     bucket: str, rec: dict[str, Any], include_config: bool
 ) -> dict[str, Any]:
-    """Map one component config-bucket record onto the exact legacy key set.
+    """Map one component config-bucket record into the MCP search response.
 
     The component speaks HA-native vocabulary (automations/scripts carry an
     ``alias``, scenes a ``name``, storage ids ride an ``id`` key, and records
-    add ``source``/``kind``/``object_id`` metadata). The legacy deep-search
+    add ``kind``/``object_id`` metadata). The legacy deep-search
     records that agents, tests, and downstream consumers key on use
     ``friendly_name`` plus per-bucket id keys (``script_id``/``scene_id``) —
     so normalize here, at the single seam, rather than teaching the component
-    the MCP envelope's vocabulary. Extra component fields are dropped to keep
-    the legacy key set, except ``options_withheld``, which marks a custom
-    helper whose options the component did not read; enrichment
-    (e.g. ``source: yaml``) can be added to BOTH paths together later.
+    the MCP envelope's vocabulary. Keep the component's explanations for
+    missing editor bodies and withheld helper options.
 
     ``config`` key semantics mirror the legacy pipeline's include_config pop:
     present (possibly ``None`` for YAML/name-only matches) when
@@ -114,6 +112,8 @@ def _normalize_component_config_record(
         if config is None and "options" in rec:
             config = rec.get("options")
         out["config"] = config if config else None
+        if "config_hint" in rec:
+            out["config_hint"] = rec["config_hint"]
     return out
 
 

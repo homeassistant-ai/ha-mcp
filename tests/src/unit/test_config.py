@@ -162,22 +162,31 @@ def test_read_only_mode_disabled_by_default():
 @pytest.mark.parametrize(
     ("env_value", "expected"),
     [
-        ("true", True),
-        ("TRUE", True),
-        ("1", True),
-        ("false", False),
-        ("0", False),
+        (" true ", True),
+        (" TRUE ", True),
+        (" 1 ", True),
+        (" yes ", True),
+        (" on ", True),
+        (" false ", False),
+        (" 0 ", False),
+        (" no ", False),
+        (" off ", False),
     ],
 )
-def test_read_only_mode_env_var_coercion_accepted(env_value, expected):
-    """READ_ONLY_MODE accepts the documented boolean strings."""
+def test_server_and_switch_accept_the_same_read_only_boolean_spellings(
+    env_value, expected, isolated_data_dir
+):
+    """The server and embedded switch share one whitespace-tolerant parser."""
+    from custom_components.ha_mcp_tools.embedded_read_only import read_only_mode
     from ha_mcp.config import Settings
 
-    settings = Settings(
+    server_value = Settings(
         _env_file=None,
         READ_ONLY_MODE=env_value,
-    )
-    assert settings.read_only_mode is expected
+    ).read_only_mode
+    switch_value = read_only_mode(isolated_data_dir, {"READ_ONLY_MODE": env_value})
+
+    assert server_value is switch_value is expected
 
 
 @pytest.mark.parametrize("env_value", ["garbage", "enable", ""])
@@ -387,6 +396,41 @@ def _clear_all_feature_envs(monkeypatch):
     for _fname, ename, *_ in ADVANCED_SETTINGS_FIELDS:
         monkeypatch.delenv(ename, raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+
+
+def test_lowercase_read_only_env_wins_over_the_override_file(
+    isolated_data_dir, monkeypatch
+) -> None:
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.setenv("read_only_mode", "true")
+    (isolated_data_dir / "feature_flags.json").write_text(
+        json.dumps({"read_only_mode": False})
+    )
+
+    from ha_mcp.config import (
+        get_feature_flag_origin,
+        get_global_settings,
+        reset_global_settings,
+    )
+
+    reset_global_settings()
+    assert get_global_settings().read_only_mode is True
+    assert get_feature_flag_origin("READ_ONLY_MODE") == "env"
+
+
+def test_lowercase_advanced_env_wins_over_the_override_file(
+    isolated_data_dir, monkeypatch
+) -> None:
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.setenv("log_level", "ERROR")
+    (isolated_data_dir / "feature_flags.json").write_text(
+        json.dumps({"log_level": "DEBUG"})
+    )
+
+    from ha_mcp.config import get_global_settings, reset_global_settings
+
+    reset_global_settings()
+    assert get_global_settings().log_level == "ERROR"
 
 
 def test_master_off_forces_beta_subflags_false_even_with_file_overrides(

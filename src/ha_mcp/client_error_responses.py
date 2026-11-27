@@ -25,6 +25,15 @@ from .errors import (
 )
 
 
+def core_validation_errors(error: HomeAssistantAPIError) -> dict[str, Any]:
+    """``{"errors": [...]}`` from a 400 whose body lists each error with its
+    path, as Core's automation and script config views answer from 2026.12;
+    empty otherwise."""
+    body = error.response_data
+    errors = body.get("errors") if isinstance(body, dict) else None
+    return {"errors": errors} if isinstance(errors, list) else {}
+
+
 def _classify_api_status(
     error: HomeAssistantAPIError,
     error_msg: str,
@@ -43,7 +52,9 @@ def _classify_api_status(
         case 401 | 403:
             result = create_auth_error(error_msg, context=context)
         case 400:
-            result = create_validation_error(error_msg, context=context)
+            result = create_validation_error(
+                error_msg, context={**(context or {}), **core_validation_errors(error)}
+            )
         case _:
             result = create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context

@@ -283,7 +283,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -308,8 +308,6 @@ jobs:
         # worker amortizes its boot cost. 4-vCPU/16-GB runner fits 2x
         # QEMU at -smp 2 -m 4096 each (#1350).
         #
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3 so we see the
-        # full failure surface for triage — early-terminating loses signal.
         run: |
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
@@ -317,7 +315,7 @@ jobs:
           # lanes. Both stay unquoted for word splitting.
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
+            -n2 --dist loadscope -v --tb=short $PYTEST_ARGS
         env:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
@@ -515,7 +513,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -536,9 +534,7 @@ jobs:
         # the 3 self-referential haos_only embedded smoke tests skip automatically.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
-        # other HAOS lanes (#1350); --maxfail=0 overrides
-        # pyproject.toml's --maxfail=3
-        # so triage sees the full failure surface.
+        # other HAOS lanes (#1350).
         run: |
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
@@ -546,7 +542,7 @@ jobs:
           # lanes. Both stay unquoted for word splitting.
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
+            -n2 --dist loadscope -v --tb=short $PYTEST_ARGS
         env:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
@@ -768,7 +764,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -834,14 +830,14 @@ jobs:
           # lanes. Both stay unquoted for word splitting.
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 \
+            -n2 --dist loadscope -v --tb=short \
             -m "not addon_disruptive" $PYTEST_ARGS || parallel=$?
           # Exit 5 is an empty selection: a -k can pick only disruptive tests,
           # or none. Either phase may be empty, not both.
           [ "${parallel:-0}" -eq 0 ] || [ "$parallel" -eq 5 ] || exit "$parallel"
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n0 -v --tb=short --maxfail=0 \
+            -n0 -v --tb=short \
             -m addon_disruptive $PYTEST_ARGS || serial=$?
           [ "${serial:-0}" -eq 0 ] || [ "$serial" -eq 5 ] || exit "$serial"
           if [ "${parallel:-0}" -eq 5 ] && [ "${serial:-0}" -eq 5 ]; then

@@ -456,6 +456,8 @@ async def _dispatch_edits_action(
     limit: int,
 ) -> dict[str, Any]:
     """Route a ``scope="edits"`` action to its per-entity auto-backup handler."""
+    # Entity snapshots are filed under Core's lowercase id (maybe_snapshot).
+    entity_id = entity_id.lower() if domain == "entity" and entity_id else entity_id
     if action == "create" and domain and entity_id:
         await refuse_reading_hidden_backup(client, domain, entity_id)
     if action in ("view", "diff", "restore") and backup_name:
@@ -531,7 +533,8 @@ async def _edits_create(
         )
     path = await capture_on_demand(mgr, dom, eid)
     # The id the snapshot is stored under: a flow helper's config entry id
-    # when the caller passed an entity_id alias, else the id as given.
+    # when the caller passed an entity_id alias, else the id maybe_snapshot
+    # filed it under (Core's lowercase id for an entity).
     eid = await asyncio.to_thread(mgr._payload_entity_id, path) or eid
     return {
         "success": True,
