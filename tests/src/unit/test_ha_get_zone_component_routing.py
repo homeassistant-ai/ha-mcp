@@ -126,8 +126,8 @@ async def test_the_home_and_yaml_zones_are_listed_as_not_editable(
 ) -> None:
     zones = _by_id(await ZoneTools(client).ha_get_zone())
 
-    for zone_id in ("home", "school"):
-        assert (zones[zone_id]["editable"], zones[zone_id]["source"]) == (False, "yaml")
+    for zone_id, source in (("home", "home"), ("school", "yaml")):
+        assert (zones[zone_id]["editable"], zones[zone_id]["source"]) == (False, source)
     assert zones["home"]["latitude"] == hass.config.latitude
     assert zones["school"]["entity_id"] == "zone.school"
 

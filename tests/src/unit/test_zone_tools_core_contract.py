@@ -474,7 +474,7 @@ class TestListing:
         home = by_id["home"]
         assert (home["entity_id"], home["source"], home["editable"]) == (
             "zone.home",
-            "yaml",
+            "home",
             False,
         )
         assert home["name"] == hass.config.location_name

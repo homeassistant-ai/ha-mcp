@@ -116,7 +116,8 @@ def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
     The component supplies each zone entity's config as ``config``: the stored
     body for a storage zone, and the YAML or core-configuration body for the
     YAML and home zones that ``zone/list`` omits. The row is that body plus
-    ``entity_id`` and an ``editable`` / ``source`` discriminator.
+    ``entity_id`` and an ``editable`` / ``source`` (storage, yaml, home)
+    discriminator.
     """
     config = rec.get("config")
     out: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
@@ -131,8 +132,14 @@ def _shape_component_zone_record(rec: dict[str, Any]) -> dict[str, Any]:
     out["id"] = storage_id if storage_id is not None else rec.get("object_id")
     out["entity_id"] = rec.get("entity_id")
     out["editable"] = not is_yaml
-    out["source"] = "yaml" if is_yaml else "storage"
+    out["source"] = _outside_storage(out["entity_id"]) if is_yaml else "storage"
     return out
+
+
+def _outside_storage(entity_id: str | None) -> str:
+    """The ``source`` of a zone outside the storage: the home zone, from the
+    general settings, or a YAML zone."""
+    return "home" if entity_id == HOME_ZONE else "yaml"
 
 
 def _with_registry_icons(
@@ -208,11 +215,11 @@ class ZoneTools:
         - Get specific zone: ha_get_zone(zone_id="office")
         - Same zone by entity_id: ha_get_zone(zone_id="zone.office")
 
-        Zones outside the zone storage, the home zone (from the general
-        settings) and YAML zones, are listed with ``editable=false`` /
-        ``source="yaml"``; editable means ha_set_zone and ha_remove_zone can
-        change the zone. The home zone's latitude, longitude and radius can
-        still be changed with ha_set_zone. Each zone carries its entity_id.
+        Each zone carries its entity_id and a ``source``: ``storage`` (a zone
+        ha_set_zone and ha_remove_zone change, ``editable=true``), ``home``
+        (the home zone, from the general settings) or ``yaml``, both
+        ``editable=false``. The home zone's latitude, longitude and radius
+        can be changed with ha_set_zone; a YAML zone cannot be changed.
 
         A stored zone's ``icon`` is the one stored in the zone, which the
         Zones editor shows. ``entity_icon`` is an icon override in the zone
@@ -443,7 +450,7 @@ class ZoneTools:
                     "id": object_id,
                     "entity_id": entity_id,
                     "editable": False,
-                    "source": "yaml",
+                    "source": _outside_storage(entity_id),
                 }
             )
         return rows, []

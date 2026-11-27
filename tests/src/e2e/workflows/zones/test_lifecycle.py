@@ -462,7 +462,7 @@ class TestZoneLifecycle:
             zone = listed["zone"]
             assert zone["entity_id"] == "zone.home", zone
             assert zone["editable"] is False, zone
-            assert zone["source"] == "yaml", zone
+            assert zone["source"] == "home", zone
 
             radius = zone["radius"]
             try:
