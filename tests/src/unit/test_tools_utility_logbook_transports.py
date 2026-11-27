@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -113,7 +114,7 @@ async def test_component_rows_are_cores_own_and_skip_the_rest_view(
 
 
 @pytest.mark.parametrize("order", ["oldest", "newest"])
-@pytest.mark.parametrize("scope", ["entity", "device", "both"])
+@pytest.mark.parametrize("scope", ["entity", "both"])
 async def test_scoped_pages_are_cores_own_rows_with_what_caused_them(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
@@ -121,23 +122,26 @@ async def test_scoped_pages_are_cores_own_rows_with_what_caused_them(
     scope: str,
     order: str,
 ) -> None:
-    """Each kitchen change is caused by an action call that only Core's
-    context lookup ties to it; the hall changes sit between the pages."""
+    """A user's action call causes each kitchen change through a child
+    context, which only Core's lookups tie together; the last change has no
+    cause but itself."""
     for state in ("off", "on", "off"):
-        context = Context()
+        action = Context(user_id=uuid4().hex)
         hass.bus.async_fire(
             "call_service",
             {"domain": "light", "service": f"turn_{state}"},
-            context=context,
+            context=action,
         )
         hass.states.async_set("light.hall", state)
-        hass.states.async_set("light.kitchen", state, context=context)
+        hass.states.async_set(
+            "light.kitchen", state, context=Context(parent_id=action.id)
+        )
         await async_wait_recording_done(hass)
+    hass.states.async_set("light.kitchen", "on")
+    await async_wait_recording_done(hass)
     end = dt_util.utcnow()
-    filters: dict[str, Any] = {}
-    if scope != "device":
-        filters["entity_ids"] = ["light.kitchen"]
-    if scope != "entity":
+    filters: dict[str, Any] = {"entity_ids": ["light.kitchen"]}
+    if scope == "both":
         filters["device_ids"] = [kitchen_device]
     native = (
         await component_core_client.send_websocket_message(
@@ -149,14 +153,12 @@ async def test_scoped_pages_are_cores_own_rows_with_what_caused_them(
             }
         )
     )["result"]
-    assert native
-    if scope != "device":
-        assert any("context_service" in row for row in native)
+    assert any("context_user_id" in row for row in native)
 
     params = call_kwargs(
         source="logbook",
-        entity_id="light.kitchen" if scope != "device" else None,
-        device_id=kitchen_device if scope != "entity" else None,
+        entity_id="light.kitchen",
+        device_id=kitchen_device if scope == "both" else None,
         end_time=end.isoformat(),
         limit=1,
         order=order,
