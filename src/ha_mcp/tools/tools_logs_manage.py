@@ -449,9 +449,10 @@ class LogsManageTools:
         refusal comes back with its own error code. Call with describe=True
         first when the fields are not known. With the HA-MCP component a
         recorder write returns once the recorder has finished it, and a
-        recorder service returns the recorder's purge settings and oldest
-        state alongside Core's recorder/info fields. Without the component the tool
-        reads recorder/info once. A statistics command that names
+        recorder action returns `recorder`: Core's recorder/info fields plus
+        `enabled` (what recorder.disable turns off; `recording` does not
+        change), the purge settings and the oldest state. Without the
+        component it holds recorder/info only. A statistics command that names
         statistics (Core's `statistic_id` / `statistic_ids` fields) also
         returns Core's metadata for them as `statistics_metadata`, read
         after the write. Core also lists a statistic a sensor still
