@@ -226,22 +226,34 @@ async def raise_core_rejection(
     """Raise VALIDATION_FAILED with Core's text and the hints it supports."""
     error_context: dict[str, Any] = {**context, "failed_section": failed_section}
     suggestions = text_suggestions(core_text, config)
-    match = invalid_platform_key(core_text)
-    if match:
-        kind = cast(Literal["trigger", "condition"], match.group(1))
-        key = match.group(2)
+    # Core's message names its first error only; 2026.12's list names each.
+    texts = [core_text] + [
+        e["message"]
+        for e in context.get("errors", [])
+        if isinstance(e, dict) and isinstance(e.get("message"), str)
+    ]
+    unknown: dict[tuple[str, str], None] = {}
+    for text in texts:
+        if match := invalid_platform_key(text):
+            unknown[(match.group(1), match.group(2))] = None
+    hints: list[str] = []
+    for kind_text, key in unknown:
+        kind = cast(Literal["trigger", "condition"], kind_text)
         descriptions = await platform_descriptions(client, kind) or {}
         matches = closest_matches(key, sorted(descriptions))
-        if matches:
-            error_context["closest_matches"] = matches
+        if not matches:
+            continue
+        if "closest_matches" not in error_context:
             description = descriptions.get(matches[0])
             if isinstance(description, dict):
                 error_context["platform_description"] = description
-            suggestions.insert(
-                0,
-                f"Home Assistant has no {kind} '{key}'. Registered {kind}s "
-                f"closest to it: {', '.join(matches)}.",
-            )
+        listed = error_context.setdefault("closest_matches", [])
+        listed.extend(m for m in matches if m not in listed)
+        hints.append(
+            f"Home Assistant has no {kind} '{key}'. Registered {kind}s "
+            f"closest to it: {', '.join(matches)}."
+        )
+    suggestions[:0] = hints
     if failed_section == "blueprint":
         suggestions.append(
             f"Use ha_manage_blueprints(action='list', domain='{domain}') to list "

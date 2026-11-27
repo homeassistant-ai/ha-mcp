@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 
 from custom_components.ha_mcp_tools import websocket_api
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -81,3 +82,34 @@ async def test_a_refused_script_lists_every_error_core_found(
     body = error_body(exc_info)
     assert body["error"]["code"] == "VALIDATION_FAILED"
     assert [path[0] for path in _paths(body)] == ["sequence"]
+
+
+async def test_an_unknown_trigger_after_the_first_error_gets_its_closest_matches(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core's message names only the first error; a renamed trigger further
+    down the list still gets the registered keys nearest to it."""
+    assert await async_setup_component(hass, "homeassistant", {})
+    assert await async_setup_component(hass, "schedule", {})
+    await hass.async_block_till_done()
+    tools = await script_tools(hass, core_client, monkeypatch)
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_script(
+            script_id="broken",
+            config={
+                "alias": "Broken",
+                "sequence": [
+                    *_BAD_ACTIONS,
+                    {"wait_for_trigger": [{"trigger": "schedule.turned_on"}]},
+                ],
+            },
+            MandatoryBPS=False,
+        )
+
+    body = error_body(exc_info)
+    assert "schedule.turned_on" not in body["error"]["message"]
+    assert "schedule.block_started" in body["closest_matches"]
+    assert any("'schedule.turned_on'" in s for s in body["error"]["suggestions"])
