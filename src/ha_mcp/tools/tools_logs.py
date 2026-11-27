@@ -365,7 +365,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ge=1,
                 description=(
                     "How many hours back to read. Logbook (default 1), "
-                    "supervisor and system_service. For Logbook continuation see offset. "
+                    "supervisor and system_service. Without the component, HA-MCP caps Logbook reads at 24 hours. "
                     "For the journal sources, only "
                     "when given: the journal serves that window, from its "
                     "start to the journal's end, one page at a time, "
@@ -414,10 +414,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | str,
             Field(
                 description=(
-                    "For a whole-instance Logbook cursor, pass next_offset as offset with the same "
-                    "search and order. The cursor pins the window and its first-page match count. "
-                    "For an integer next_offset, reuse the original hours_back and returned end_time. "
-                    "Scoped Logbook reads provide pagination_hint with those arguments. "
+                    "For a Logbook cursor, pass next_offset as offset with the same filters, "
+                    "search and order. HA-MCP caps recorder pages per call. When total_entries is null, "
+                    "total_entries_lower_bound counts verified matches. For integer offsets reuse hours_back and end_time. "
                     "Page deeper into source='logbook', 'error_log', "
                     "'fault_log', and supervisor/system_service on a page "
                     "read: hours_back and no search (ignored otherwise). "

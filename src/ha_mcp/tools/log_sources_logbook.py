@@ -78,8 +78,6 @@ class LogbookLogSourceMixin:
 
     @staticmethod
     def _validate_logbook_filters(
-        entity_id: str | None,
-        device_id: str | None,
         context_id: str | None,
     ) -> None:
         # Core uses a binary ULID to constrain a context-only recorder query.
@@ -317,12 +315,7 @@ class LogbookLogSourceMixin:
         if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
             return None
         message = {**command, "type": LOGBOOK_EVENTS_COMMAND}
-        scoped = any(
-            command.get(k)
-            for k in ("device_ids", "entity_ids", "context_id", "action_calls")
-        )
-        cap = "logbook_scoped_pages" if scoped else "logbook_page_counts"
-        if page and component_supports(caps, cap):
+        if page and component_supports(caps, "logbook_scoped_pages"):
             message["page"] = page
         elif page:
             return None
@@ -660,9 +653,9 @@ class LogbookLogSourceMixin:
                     entries,
                     hours,
                     end.isoformat(),
-                    None,
-                    None,
-                    None,
+                    data["entity_filter"],
+                    data["device_filter"],
+                    data["context_filter"],
                     search,
                     compact,
                     order,
@@ -682,7 +675,7 @@ class LogbookLogSourceMixin:
                 open_at_count=open_window,
             ).token()
             data["pagination_hint"] = (
-                "Pass next_offset as offset with the same search and order to continue this Logbook window."
+                "Pass next_offset as offset with the same filters and order to continue this Logbook window."
             )
         return await add_timezone_metadata(self._client, data)
 
@@ -771,7 +764,7 @@ class LogbookLogSourceMixin:
                     "Use the same hours_back with this Logbook cursor.",
                 )
             )
-        self._validate_logbook_filters(entity_id, device_id, context_id)
+        self._validate_logbook_filters(context_id)
         numeric_offset = offset if isinstance(offset, int) else 0
         start_dt = end_dt - timedelta(hours=hours_back)
         try:

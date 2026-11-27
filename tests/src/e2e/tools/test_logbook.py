@@ -37,7 +37,7 @@ async def test_logbook_basic(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
         raw_data = await mcp.call_tool_success("ha_get_logs", {"hours_back": 1})
     data = get_logbook_data(raw_data)
-    assert_component_path(data)
+    assert_component_path(raw_data)
 
     # Verify response structure
     assert "entries" in data, "Response should contain entries"
@@ -67,7 +67,7 @@ async def test_logbook_with_custom_limit(mcp_client):
             "ha_get_logs", {"hours_back": 1, "limit": 10}
         )
     data = get_logbook_data(raw_data)
-    assert_component_path(data)
+    assert_component_path(raw_data)
 
     # Verify custom limit is applied
     assert data["limit"] == 10, f"Limit should be 10, got {data['limit']}"
@@ -89,7 +89,7 @@ async def test_logbook_limit_capped_at_maximum(mcp_client):
             {"hours_back": 1, "limit": 1000},  # Request more than maximum
         )
     data = get_logbook_data(raw_data)
-    assert_component_path(data)
+    assert_component_path(raw_data)
 
     # Verify limit is capped at 500
     assert data["limit"] == 500, f"Limit should be capped at 500, got {data['limit']}"
@@ -151,11 +151,15 @@ async def test_logbook_pagination_with_offset(mcp_client):
         )
     first_data = get_logbook_data(first_raw)
     second_data = get_logbook_data(second_raw)
+    assert_component_path(first_raw)
+    assert_component_path(second_raw)
 
     # The generated recorder seed (tests/src/recorder_seed.py) holds >5
     # logbook-visible events in the last 24h, so a missing seed fails here
     # instead of skipping.
-    assert first_data.get("total_entries", 0) > 5, (
+    assert (
+        first_data["total_entries"] or first_data.get("total_entries_lower_bound", 0)
+    ) > 5, (
         f"Expected >5 logbook entries from seed, got "
         f"{first_data.get('total_entries', 0)}; see the generated recorder "
         f"seed in tests/src/recorder_seed.py."
@@ -212,13 +216,13 @@ async def test_logbook_has_more_indicator(mcp_client):
         {"hours_back": 24, "limit": 2, "offset": 0},
     )
     data = get_logbook_data(raw_data)
-    assert_component_path(data)
+    assert_component_path(raw_data)
 
     total = data["total_entries"]
     has_more = data["has_more"]
 
     # has_more should be True if total > limit + offset
-    expected_has_more = total > 2
+    expected_has_more = total is None or total > 2
     assert has_more == expected_has_more, (
         f"has_more should be {expected_has_more} when total={total}, limit=2, offset=0"
     )
@@ -242,7 +246,7 @@ async def test_logbook_entity_filter(mcp_client):
             "ha_get_logs", {"hours_back": 24, "entity_id": "sun.sun", "limit": 50}
         )
     data = get_logbook_data(raw_data)
-    assert_component_path(data)
+    assert_component_path(raw_data)
 
     # Verify entity filter is recorded in response
     assert data["entity_filter"] == "sun.sun", (
@@ -271,7 +275,7 @@ async def test_logbook_response_metadata(mcp_client):
         {"hours_back": 2, "limit": 10},
     )
     data = get_logbook_data(raw_data)
-    assert_component_path(data)
+    assert_component_path(raw_data)
 
     # Skip if no entries — can't verify full metadata on an empty response
     if not data.get("success"):
@@ -322,7 +326,7 @@ async def test_logbook_empty_result(mcp_client):
             },
         )
     data = get_logbook_data(raw_data)
-    assert_component_path(data)
+    assert_component_path(raw_data)
 
     # Empty results are a valid success — not an error
     assert data["success"] is True, "Empty logbook should return success"
@@ -625,7 +629,7 @@ async def test_logs_default_source_is_logbook(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
         raw_data = await mcp.call_tool_success("ha_get_logs", {"hours_back": 1})
     data = get_logbook_data(raw_data)
-    assert_component_path(data)
+    assert_component_path(raw_data)
 
     assert data["success"] is True
     assert data.get("source") == "logbook", "Default source should be 'logbook'"
@@ -747,7 +751,7 @@ async def test_logs_logbook_with_search(mcp_client):
             "ha_get_logs", {"source": "logbook", "hours_back": 24, "search": "sun"}
         )
     data = get_logbook_data(raw_data)
-    assert_component_path(data)
+    assert_component_path(raw_data)
 
     assert data["success"] is True
     assert data.get("source") == "logbook"

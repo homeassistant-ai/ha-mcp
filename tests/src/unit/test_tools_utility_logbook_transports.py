@@ -147,7 +147,7 @@ async def test_component_rows_are_cores_own_and_skip_the_rest_view(
     command = sent_command(sent, COMPONENT_COMMAND)
     assert command["start_time"] < command["end_time"]
     rest.assert_not_awaited()
-    assert not component_fallback_warnings(result["data"])
+    assert not component_fallback_warnings(result)
     kitchen = by_entity(result)["light.kitchen"]
     assert kitchen["name"] == "Kitchen Light"
     assert dt_util.parse_datetime(kitchen["when"]) is not None
@@ -192,7 +192,7 @@ async def test_component_that_lost_the_command_falls_back_to_rest(
 
     assert COMPONENT_COMMAND in sent_types(sent)
     rest.assert_awaited_once()
-    assert component_fallback_warnings(result["data"])
+    assert component_fallback_warnings(result)
     assert by_entity(result)["light.kitchen"]["name"] == "Kitchen Light"
 
 
@@ -239,32 +239,18 @@ async def test_component_timeout_surfaces_without_a_rest_fallback(
 
 
 @pytest.mark.usefixtures("logbook")
-async def test_component_dropped_connection_falls_back_to_rest(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
-) -> None:
-    socket = await pooled_socket(component_core_client)
-    with (
-        rest_reads(component_core_client) as rest,
-        dropped_on(hass, COMPONENT_COMMAND, socket),
-    ):
-        result = await LogTools(component_core_client).get_logs(
-            **call_kwargs(source="logbook", entity_id="light.kitchen")
-        )
-
-    rest.assert_awaited()
-    assert by_entity(result)["light.kitchen"]["name"] == "Kitchen Light"
-
-
-@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("scope", [{}, {"entity_id": "light.kitchen"}])
 async def test_dropped_paged_connection_does_not_repeat_a_dense_read(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    scope: dict[str, str],
 ) -> None:
     socket = await pooled_socket(component_core_client)
     with (
         rest_reads(component_core_client) as rest,
         dropped_on(hass, COMPONENT_COMMAND, socket),
     ):
-        error = await logbook_error(LogTools(component_core_client))
+        error = await logbook_error(LogTools(component_core_client), **scope)
     assert error["message"]
     rest.assert_not_awaited()
 
@@ -324,7 +310,8 @@ async def test_device_without_events_has_no_name_warning(
     )
 
     assert result["data"]["entries"] == []
-    assert "warnings" not in result
+    assert component_fallback_warnings(result)
+    assert not any("carry no 'name'" in warning for warning in result["warnings"])
 
 
 async def test_device_rows_that_carry_a_name_have_no_name_warning(
@@ -347,7 +334,8 @@ async def test_device_rows_that_carry_a_name_have_no_name_warning(
 
     movie = [e for e in result["data"]["entries"] if e.get("message") == "started"]
     assert movie[0]["name"] == "Movie night"
-    assert "warnings" not in result
+    assert component_fallback_warnings(result)
+    assert not any("carry no 'name'" in warning for warning in result["warnings"])
 
 
 @pytest.mark.usefixtures("logbook")
@@ -488,12 +476,9 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
         limit=2,
     )
     actual: list[str] = []
-    first_page_calls = 0
     with rest_reads(core_client) as rest:
         for page_index in range(len(names)):
             data = (await LogTools(core_client).get_logs(**params))["data"]
-            if page_index == 0:
-                first_page_calls = len(sent.await_args_list)
             assert data["total_entries"] == len(names)
             assert data["offset"] == len(actual)
             actual.extend(row["name"] for row in data["entries"])
@@ -512,23 +497,13 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
             if call.args[0]["type"] == COMPONENT_COMMAND
         ]
         assert all("page" in cmd for cmd in commands)
-        counts = [cmd for cmd in commands if "count_range" in cmd["page"]]
-        assert counts
-        assert all(
-            "count_range" not in call.args[0].get("page", {})
-            for call in sent.await_args_list[first_page_calls:]
-        )
-        for cmd in counts:
-            span = datetime.fromisoformat(cmd["end_time"]) - datetime.fromisoformat(
-                cmd["start_time"]
-            )
-            assert span <= timedelta(hours=1, microseconds=1)
+        assert not any("count_range" in cmd["page"] for cmd in commands)
     else:
-        assert rest.await_args_list
+        assert len(rest.await_args_list) == page_index + 1
         for call in rest.await_args_list:
             start = datetime.fromisoformat(call.kwargs["start_time"])
             finish = datetime.fromisoformat(call.kwargs["end_time"])
-            assert finish - start <= timedelta(hours=1, microseconds=2)
+            assert finish - start == timedelta(hours=3)
 
 
 @pytest.mark.usefixtures("logbook")
@@ -556,16 +531,13 @@ async def test_phrase_pages_fill_across_raw_batches(
     )
     tools = LogTools(component_core_client)
     first = (await tools.get_logs(**params))["data"]
-    # One hourly count locates every match. Only the selected keys need a
-    # second component command, regardless of how many raw batches separate them.
     pages = [
-        call.args[0]["page"]
-        for call in sent.await_args_list
-        if call.args[0]["type"] == COMPONENT_COMMAND
+        c.args[0]["page"]
+        for c in sent.await_args_list
+        if c.args[0]["type"] == COMPONENT_COMMAND
     ]
-    assert len(pages) == 2
-    assert pages[0]["collect_keys"] == 3
-    assert len(pages[1]["keys"]) == 3
+    assert len(pages) > 1
+    assert all("after" in page for page in pages[1:])
     assert first["total_entries"] == 4
     assert first["returned_entries"] == 3
     sent.reset_mock()
@@ -595,39 +567,25 @@ async def test_selected_matches_change_before_render(
         for state in ("off", "on"):
             hass.states.async_set(entity, state, {"friendly_name": "selection race"})
     await async_wait_recording_done(hass)
-    handler, schema = hass.data[websocket_api.DOMAIN][COMPONENT_COMMAND]
-
-    @websocket_api.async_response
-    async def change_before_render(
-        core: HomeAssistant, conn: Any, message: dict[str, Any]
-    ) -> None:
-        if message.get("page", {}).get("keys"):
-            if change == "rename":
-                for entity in entities[:2]:
-                    hass.states.async_set(entity, "on", {"friendly_name": "renamed"})
-            else:
-                await hass.services.async_call(
-                    "recorder",
-                    "purge_entities",
-                    {"entity_id": entities[:2]},
-                    blocking=True,
-                )
-            await async_wait_recording_done(hass)
-        handler(core, conn, message)
-
     params = call_kwargs(
         source="logbook", order="oldest", limit=2, search="selection race"
     )
-    websocket_api.async_register_command(
-        hass, COMPONENT_COMMAND, change_before_render, schema
-    )
-    try:
-        page = (await LogTools(component_core_client).get_logs(**params))["data"]
-    finally:
-        websocket_api.async_register_command(hass, COMPONENT_COMMAND, handler, schema)
-    assert page["total_entries"] == 4
-    assert [entry["entity_id"] for entry in page["entries"]] == entities[2:]
-    assert not page["has_more"]
+    tools = LogTools(component_core_client)
+    first = (await tools.get_logs(**params))["data"]
+    assert first["total_entries"] == 4
+    returned = {row["entity_id"] for row in first["entries"]}
+    remaining = sorted(set(entities) - returned)
+    if change == "rename":
+        for entity in remaining:
+            hass.states.async_set(entity, "on", {"friendly_name": "renamed"})
+    else:
+        await hass.services.async_call(
+            "recorder", "purge_entities", {"entity_id": remaining}, blocking=True
+        )
+    await async_wait_recording_done(hass)
+    last = (await tools.get_logs(**(params | {"offset": first["next_offset"]})))["data"]
+    assert last["entries"] == []
+    assert not last["has_more"]
 
 
 @pytest.mark.usefixtures("logbook")
@@ -755,7 +713,10 @@ async def test_dense_logbook_pages_return_each_tied_event_once(
     with rest_reads(component_core_client) as rest:
         for _ in range(len(names)):
             data = (await LogTools(component_core_client).get_logs(**params))["data"]
-            assert data["total_entries"] == len(names)
+            if data["total_entries"] is None:
+                assert 0 < data["total_entries_lower_bound"] <= len(names)
+            else:
+                assert data["total_entries"] == len(names)
             assert len(data["entries"]) <= limit
             actual.extend(row["name"] for row in data["entries"])
             if not data["has_more"]:
@@ -838,14 +799,13 @@ async def test_sparse_search_across_context_and_page_boundaries(
     # The page holding the only match says nothing more follows.
     assert pages == 1
     if not component_enabled:
-        assert any("context" in warning.lower() for warning in result["warnings"])
-        assert "context_service" not in actual[0]
-        assert actual[0]["name"] == expected[0]["name"]
-        return
+        assert component_fallback_warnings(result)
+        rest.assert_awaited_once()
     for entry in actual + expected:
         entry["when"] = datetime.fromisoformat(entry["when"])
     assert actual == expected
-    rest.assert_not_awaited()
+    if component_enabled:
+        rest.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -923,14 +883,14 @@ async def test_omitted_end_time_covers_the_requested_window_up_to_now(
     before = dt_util.utcnow()
     result = await LogTools(core_client).get_logs(
         **call_kwargs(
-            source="logbook", entity_id="light.kitchen,light.hall", hours_back=48
+            source="logbook", entity_id="light.kitchen,light.hall", hours_back=24
         )
     )
 
     start = datetime.fromisoformat(result["data"]["start_time"])
     end = datetime.fromisoformat(result["data"]["end_time"])
     assert end >= before
-    assert end - start == timedelta(hours=48)
+    assert end - start == timedelta(hours=24)
 
 
 @pytest.mark.usefixtures("logbook")
@@ -947,7 +907,7 @@ async def test_explicit_end_time_honors_the_callers_window(
         **call_kwargs(
             source="logbook",
             entity_id="light.kitchen,light.hall",
-            hours_back=48,
+            hours_back=24,
             end_time=past,
         )
     )
@@ -955,14 +915,14 @@ async def test_explicit_end_time_honors_the_callers_window(
         **call_kwargs(
             source="logbook",
             entity_id="light.kitchen,light.hall",
-            hours_back=48,
+            hours_back=24,
             end_time=future,
         )
     )
 
     start = datetime.fromisoformat(earlier["data"]["start_time"])
     end = datetime.fromisoformat(earlier["data"]["end_time"])
-    assert end - start == timedelta(hours=48)
+    assert end - start == timedelta(hours=24)
     assert earlier["data"]["total_entries"] == 0
     assert "light.kitchen" in by_entity(later)
 
@@ -975,14 +935,14 @@ async def test_omitted_and_explicit_end_time_return_the_same_rows(
     tools = LogTools(core_client)
     omitted = await tools.get_logs(
         **call_kwargs(
-            source="logbook", entity_id="light.kitchen,light.hall", hours_back=48
+            source="logbook", entity_id="light.kitchen,light.hall", hours_back=24
         )
     )
     explicit = await tools.get_logs(
         **call_kwargs(
             source="logbook",
             entity_id="light.kitchen,light.hall",
-            hours_back=48,
+            hours_back=24,
             end_time=omitted["data"]["end_time"],
         )
     )
@@ -1002,3 +962,67 @@ async def test_pagination_hint_keeps_pages_in_the_same_window(
 
     hint = result["data"]["pagination_hint"]
     assert f"end_time='{result['data']['end_time']}'" in hint
+
+
+@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("component_enabled", [False, True])
+async def test_action_calls_use_cores_admin_view(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    component_enabled: bool,
+    sent: AsyncMock,
+) -> None:
+    from custom_components.ha_mcp_tools.websocket_api import async_register_commands
+
+    if component_enabled:
+        async_register_commands(hass)
+    await hass.services.async_call(
+        "logbook", "log", {"name": "action proof", "message": "record"}, blocking=True
+    )
+    await async_wait_recording_done(hass)
+    with rest_reads(core_client) as rest:
+        result = await LogTools(core_client).get_logs(**call_kwargs(action_calls=True))
+    entries = result["data"]["entries"]
+    assert any(e.get("service_data", {}).get("name") == "action proof" for e in entries)
+    assert bool(component_fallback_warnings(result)) != component_enabled
+    assert ("logbook/get_action_calls" in sent_types(sent)) != component_enabled
+    rest.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("logbook")
+async def test_long_native_window_is_refused_before_read(
+    core_client: HomeAssistantClient,
+) -> None:
+    with rest_reads(core_client) as rest:
+        error = await logbook_error(LogTools(core_client), hours_back=720)
+    assert "ha_mcp_tools" in error["message"]
+    rest.assert_not_awaited()
+
+
+@pytest.mark.usefixtures("logbook")
+async def test_tied_state_and_event_follow_native_order(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    state = hass.states.get("light.kitchen")
+    assert state
+    hass.bus.async_fire(
+        "logbook_entry",
+        {"name": "tie", "message": "marker"},
+        time_fired=state.last_updated.timestamp(),
+    )
+    await async_wait_recording_done(hass)
+    end = dt_util.utcnow()
+    native = await component_core_client.get_logbook(
+        start_time=(end - timedelta(hours=1)).isoformat(), end_time=end.isoformat()
+    )
+    assert native
+    params = call_kwargs(end_time=end.isoformat(), limit=1, order="oldest")
+    rows = []
+    tools = LogTools(component_core_client)
+    for _ in range(len(native)):
+        page = (await tools.get_logs(**params))["data"]
+        rows.extend(page["entries"])
+        if not page["has_more"]:
+            break
+        params["offset"] = page["next_offset"]
+    assert rows == native

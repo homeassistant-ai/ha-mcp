@@ -39,8 +39,6 @@ from .seam import PreSerializedResult
 
 CAPABILITIES = (
     "logbook_events",
-    "logbook_page_counts",
-    "logbook_match_keys",
     "logbook_scoped_pages",
 )
 
@@ -124,8 +122,8 @@ async def _logbook_events_prep(
             # Everything has been filtered away
             return {"payload": _empty_result(msg["id"], page)}
 
-    if start_time > dt_util.utcnow() and page is None:
-        return {"payload": _empty_result(msg["id"])}
+    if start_time > dt_util.utcnow():
+        return {"payload": _empty_result(msg["id"], page)}
 
     if "logbook" not in hass.data:
         # Core's processor reads its config from ``hass.data[DOMAIN]``; without

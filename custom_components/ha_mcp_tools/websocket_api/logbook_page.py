@@ -1,10 +1,9 @@
-"""Bound a whole-instance Logbook read before Core loads or encodes its rows."""
+"""Bound a Logbook read before Core loads or encodes its rows."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from heapq import nlargest, nsmallest
 from typing import Any, cast
 
 from homeassistant.components.logbook.models import (
@@ -64,7 +63,9 @@ def _branches(source: Subquery) -> Sequence[Select[Any]]:
             state = pk.shares_lineage(States.__table__.c.state_id)
             if not state and not pk.shares_lineage(Events.__table__.c.event_id):
                 break
-            shape.append((state, flag.element.value))
+            shape.append(
+                (state, getattr(getattr(flag, "element", None), "value", "unsupported"))
+            )
         if len(shape) == len(branches) and shape in (
             [(False, None), (True, None)],
             [(False, None), (False, "1"), (True, "1")],
@@ -208,6 +209,12 @@ def _hydrate_rows(
         # A purge can remove a probed row before its size is read.
         if (chars := sizes.get((stamp, kind, row_id))) is None:
             continue
+        if chars > PAGE_BYTES:
+            if chosen:
+                break
+            raise HomeAssistantError(
+                "A single raw Logbook row exceeds the HA-MCP page byte budget"
+            )
         if chosen and used + chars * 4 > PAGE_BYTES:
             break
         chosen.append((stamp, kind, row_id))
@@ -281,12 +288,6 @@ def read_logbook_page(
             else None
         )
         source = _source(processor, period, types, metadata_ids=metadata)
-        if bounds := page.get("count_range"):
-            return _count_matches(
-                session, processor, source, bounds, page, types, period
-            )
-        if "keys" in page:
-            return _render_keys(session, processor, source, page)
         probe = (
             _source(processor, period, types, page, metadata)
             if page.get("after")
@@ -322,142 +323,8 @@ def _matches(entry: dict[str, Any], search: str) -> bool:
     message = entry.get("message") or ""
     return (
         search in f"{name} {message}".strip().lower()
-        or search in str(entry.get("entity_id", "")).lower()
+        or search in str(entry.get("entity_id") or "").lower()
     )
-
-
-def _count_matches(
-    session: Session,
-    processor: EventProcessor,
-    source: Subquery,
-    bounds: list[float],
-    page: dict[str, Any],
-    event_types: tuple[int, ...],
-    period: tuple[datetime, datetime],
-) -> dict[str, Any]:
-    """Keep at most one public page of identities while computing its exact count."""
-    stamp = source.c.time_fired_ts
-    stmt = select(source).where(stamp >= bounds[0], stamp < bounds[1])
-    newest = page["order"] == "newest"
-    if after := page.get("after"):
-        keys = tuple_(*_columns(source))
-        stmt = stmt.where(keys < tuple(after) if newest else keys > tuple(after))
-    needle = page.get("search", "").lower()
-    total = 0
-    take = page.get("collect_keys", 0)
-    skip = page["skip"]
-    with session.connection().execute(stmt.execution_options(yield_per=4)) as result:
-        if not take:
-            for rows in result.partitions(4):
-                processor.switch_to_live()
-                total += sum(
-                    _matches(entry, needle) for entry in processor.humanify(rows)
-                )
-            return {"entries": [], "total": total, "keys": []}
-
-        def matches() -> Iterator[RowKey]:
-            nonlocal total
-            for rows in result.partitions(4):
-                processor.switch_to_live()
-                for row in rows:
-                    events = processor.humanify([row])
-                    if events and _matches(events[0], needle):
-                        total += 1
-                        yield _key(row)
-
-        # A deep numeric offset skips whole hours by count. Resolve only
-        # its boundary hour separately, without an offset-sized heap.
-        select_keys = nlargest if newest else nsmallest
-        selected = select_keys(min(skip + take, 500), matches())
-    if skip < total and min(skip + take, total) > len(selected):
-        selected = _deep_keys(session, processor, bounds, page, event_types, period)
-    else:
-        selected = selected[skip : skip + take]
-    return {"entries": [], "total": total, "keys": selected}
-
-
-def _deep_keys(
-    session: Session,
-    processor: EventProcessor,
-    bounds: list[float],
-    page: dict[str, Any],
-    event_types: tuple[int, ...],
-    period: tuple[datetime, datetime],
-) -> list[RowKey]:
-    """Only the hour containing a deep numeric offset needs a second pass."""
-    skip = page["skip"]
-    selected: list[RowKey] = []
-    needle = page.get("search", "").lower()
-    while True:
-        probe = _source(processor, period, event_types, page)
-        rows, more = _read_rows(session, probe, page, event_types)
-        if not rows:
-            break
-        if page["order"] == "newest":
-            rows.reverse()
-        processor.switch_to_live()
-        for row in rows:
-            key = _key(row)
-            if bounds[0] <= key[0] < bounds[1]:
-                events = processor.humanify([row])
-                if events and _matches(events[0], needle):
-                    if skip:
-                        skip -= 1
-                    else:
-                        selected.append(key)
-                        if len(selected) == page["collect_keys"]:
-                            return selected
-        if not more:
-            break
-        page = {**page, "after": _key(rows[-1])}
-    return selected
-
-
-def _render_keys(
-    session: Session, processor: EventProcessor, source: Subquery, page: dict[str, Any]
-) -> dict[str, Any]:
-    """Hydrate only the requested matches, keeping the public page byte-bounded."""
-    newest = page["order"] == "newest"
-    pending = sorted({tuple(key) for key in page["keys"]}, reverse=newest)
-    entries: list[dict[str, Any]] = []
-    last_selected = pending[-1]
-    needle = page.get("search", "").lower()
-    used = 0
-    after = None
-    while pending:
-        rows, _ = _hydrate_rows(session, source, pending)
-        if not rows:
-            # Recorder can purge rows between the count and render.
-            pending = pending[RAW_PAGE_ROWS:]
-            continue
-        processor.logbook_run.event_cache.clear()
-        origins = _context_origins(session, source, rows, _key(rows[-1]))
-        # Selected matches can have earlier context origins between them.
-        for row in reversed(rows) if newest else rows:
-            lookup = processor.logbook_run.context_lookup
-            lookup.clear()
-            for pos in (CONTEXT_ID_BIN_POS, CONTEXT_PARENT_ID_BIN_POS):
-                if (origin := origins.get(row[pos])) is not None and _key(
-                    origin
-                ) < _key(row):
-                    lookup[row[pos]] = origin
-            for entry in processor.humanify([row]):
-                if not _matches(entry, needle):
-                    continue
-                size = len(json_bytes(entry))
-                if entries and used + size > PAGE_BYTES:
-                    return {
-                        "entries": entries,
-                        "after": after,
-                        "used_bytes": used,
-                        "byte_limited": True,
-                    }
-                entries.append(entry)
-                used += size
-            after = _key(row)
-        last = _key(rows[0] if newest else rows[-1])
-        pending = [key for key in pending if (key < last if newest else key > last)]
-    return {"entries": entries, "after": last_selected, "used_bytes": used}
 
 
 def _select_page(
@@ -481,6 +348,10 @@ def _select_page(
     for row, entry in candidates:
         if entry is not None:
             size = len(json_bytes(entry))
+            if not skip and size > PAGE_BYTES:
+                raise HomeAssistantError(
+                    "A single Logbook row exceeds the HA-MCP page byte budget"
+                )
             byte_limited = bool(not skip and used and used + size > PAGE_BYTES)
             if not skip and (len(entries) == page["limit"] or byte_limited):
                 after = after or page.get("after")

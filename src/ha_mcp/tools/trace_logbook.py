@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from .component_api import component_unusable_warning, get_component_caps
 from .log_sources_logbook import LogbookLogSourceMixin
+from .logbook_cursor import MAX_PAGE_READS
 
 LOGBOOK_ROW_LIMIT = 50
 
@@ -72,7 +73,6 @@ async def fetch_trace_logbook(
     if isinstance(page, dict):
         entries = list(page["entries"])
         total = page["total"]
-        from .logbook_cursor import MAX_PAGE_READS
 
         for _ in range(MAX_PAGE_READS - 1):
             if (

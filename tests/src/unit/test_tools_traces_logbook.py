@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.automation.trace import AutomationTrace
@@ -106,7 +106,13 @@ class TestFetchTraceLogbook:
             ],
         )
 
-        logbook = await fetch_trace_logbook(component_core_client, trace)
+        with patch.object(
+            component_core_client,
+            "get_logbook",
+            new_callable=lambda: AsyncMock(wraps=component_core_client.get_logbook),
+        ) as rest:
+            logbook = await fetch_trace_logbook(component_core_client, trace)
+        rest.assert_not_awaited()
 
         assert logbook.transport == "component"
         assert [(row["entity_id"], row["state"]) for row in logbook.entries] == [
@@ -136,6 +142,7 @@ class TestFetchTraceLogbook:
         logbook = await fetch_trace_logbook(core_client, trace)
 
         assert logbook.transport == "rest"
+        assert any("ha_mcp_tools" in warning for warning in logbook.warnings)
         assert [(row["entity_id"], row["state"]) for row in logbook.entries] == [
             ("light.matched", "on")
         ]
