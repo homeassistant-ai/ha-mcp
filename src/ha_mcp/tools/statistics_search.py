@@ -38,7 +38,10 @@ async def matching_statistics(
     # A malformed answer counts as no component too.
     if not (
         isinstance(aliases, dict)
-        and all(isinstance(names, list) for names in aliases.values())
+        and all(
+            isinstance(names, list) and all(isinstance(name, str) for name in names)
+            for names in aliases.values()
+        )
     ):
         aliases = {}
         warnings.append(
