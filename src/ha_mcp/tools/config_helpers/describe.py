@@ -50,8 +50,10 @@ MAX_OPTIONS = 12
 
 _Submit = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
-# The keys compact_field reads itself; every other key Core sends with a field
-# (a selector's config, a serialized validator's bounds) is passed on as sent.
+# The keys compact_field handles or drops itself (``optional`` is implied by a
+# missing ``required``); any other key Core sends with a field, such as a
+# serialized validator's ``valueMin``, is passed on as sent. A selector's
+# settings go through _compact_selector.
 _FIELD_KEYS = frozenset(
     {"name", "required", "optional", "secret", "selector", "schema", "type"}
     | {"default", "description", "label", "suggested_value", "options"}
@@ -251,8 +253,9 @@ async def _with_field_texts(
     placeholders: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
     """Put Core's label and help text on ``described["fields"]``, from Home
-    Assistant's flow formatter where it runs, else from Core's strings, which
-    are returned for the later forms."""
+    Assistant's flow formatter where it runs, else from Core's strings.
+    Returns the strings it read, for ``_later_form``; ``None`` on the formatter
+    path, where the outline already carries the later forms' texts."""
     step_id = step.get("step_id")
     if not step_id:
         return None
@@ -286,9 +289,10 @@ async def describe_form(
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``,
     ``config_subentries.<type>`` or ``issues.<key>.fix_flow``. The texts come
-    from Home Assistant's flow formatter where it runs, filled with the step's
-    ``description_placeholders`` over ``placeholders`` (a fix flow's issue
-    placeholders); otherwise from Core's strings, which need a ``domain``.
+    from Home Assistant's flow formatter where it runs, otherwise from Core's
+    strings, which need a ``domain``; either way they are filled with the
+    step's ``description_placeholders`` over ``placeholders`` (a fix flow's
+    issue placeholders).
     """
     fields = compact_schema(step.get("data_schema") or [])
     described: dict[str, Any] = {"fields": fields}

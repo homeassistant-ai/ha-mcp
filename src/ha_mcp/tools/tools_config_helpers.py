@@ -64,7 +64,11 @@ from .config_write_helpers import (
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
 )
-from .flow_catalog import helper_catalog
+from .flow_catalog import (
+    helper_catalog,
+    refuse_category_without_catalog,
+    warn_ignored,
+)
 from .helper_flows import helper_flow_types, require_helper_type
 from .helpers import (
     clear_or_keep,
@@ -219,8 +223,15 @@ class HelperConfigTools:
         """
         await require_helper_type(self._client, helper_type, "all")
         if catalog or category is not None:
-            return await _catalog_response(
-                self._client, helper_type, category, catalog=catalog
+            return warn_ignored(
+                await _catalog_response(
+                    self._client, helper_type, category, catalog=catalog
+                ),
+                {
+                    "describe": describe,
+                    "menu_choice": menu_choice,
+                    "helper_id": helper_id,
+                },
             )
         if describe or menu_choice is not None or helper_id is not None:
             return await describe_helper_response(
@@ -397,7 +408,8 @@ class HelperConfigTools:
 
     async def _legacy_helper_list(self, helper_type: str) -> dict[str, Any]:
         """A storage type's helpers from Core's ``{helper_type}/list``: the
-        listing without the component, and the § 4 #3 fallback.
+        listing without the component, and the fallback when the component's
+        listing fails (``_list_helpers_via_component``).
 
         It flattens and joins the entity registry (issue #1945), so a renamed
         helper carries its current entity_id/name; on the fallback the caller
@@ -892,13 +904,7 @@ async def _catalog_response(
     client: Any, helper_type: str, category: str | None, *, catalog: bool
 ) -> dict[str, Any]:
     if not catalog:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "category applies only with catalog=True.",
-                suggestions=["Pass catalog=True, or drop category"],
-            )
-        )
+        refuse_category_without_catalog()
     try:
         catalog_response = await helper_catalog(client, helper_type, category)
     except ToolError:

@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ..client.rest_client import HomeAssistantConnectionError
 from .component_api import ask_component, component_serves
 
 # A flow's place in strings.json -> the flow manager holding it.
@@ -23,20 +24,6 @@ _MANAGER_OF_PATH = {
     "config_subentries": "subentries",
     "issues": "repairs",
 }
-# What the formatter reads of a step that has ended or is waiting; a form or
-# menu it reads from the flow itself.
-_STEP_KEYS = (
-    "flow_id",
-    "handler",
-    "type",
-    "step_id",
-    "reason",
-    "title",
-    "description",
-    "description_placeholders",
-    "progress_action",
-    "translation_domain",
-)
 
 # A component that reads Repairs fix flows advertises this beside flow_record.
 _REPAIRS_FLOW_RECORD = "flow_record_repairs"
@@ -122,8 +109,11 @@ async def core_flow_step(
     abort text as ``description``. ``path`` is the flow's place in
     ``strings.json`` (``config``, ``options``, ``config_subentries.<type>`` or
     ``issues.<key>.fix_flow``) and ``placeholders`` a fix flow's issue
-    placeholders. ``None`` before Home Assistant 2026.12, without the
-    component, or once the flow has moved past a form or menu."""
+    placeholders. ``None`` whenever the component does not format it: Home
+    Assistant before 2026.12, no component or one without ``flow_format``,
+    a failed or unanswered command (a failed component read counts as no
+    component), a flow no longer at that form or menu, or a flow whose
+    integration Core does not know."""
     head, _, rest = path.partition(".")
     manager = _MANAGER_OF_PATH.get(head)
     if manager is None or not isinstance(step.get("flow_id"), str):
@@ -134,13 +124,17 @@ async def core_flow_step(
             "translation_key": rest.removesuffix(".fix_flow"),
             "placeholders": dict(placeholders) if placeholders else None,
         }
-    result = await ask_component(
-        client,
-        "flow_format",
-        manager=manager,
-        step={key: step[key] for key in _STEP_KEYS if key in step},
-        **extra,
-    )
+    try:
+        result = await ask_component(
+            client,
+            "flow_format",
+            manager=manager,
+            # The component reads a form's schema from the flow itself.
+            step={k: v for k, v in step.items() if k != "data_schema"},
+            **extra,
+        )
+    except HomeAssistantConnectionError:
+        return None
     formatted = result.get("step") if result and result.get("found") else None
     return formatted if isinstance(formatted, dict) else None
 

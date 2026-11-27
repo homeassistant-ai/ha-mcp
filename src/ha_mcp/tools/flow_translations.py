@@ -94,8 +94,9 @@ def field_help(
 ) -> dict[str, dict[str, str]]:
     """HA's ``label`` and help ``description`` for a flow step's fields, keyed
     by field name, or by ``<section>.<field>`` for a field inside a section,
-    filled with ``placeholders`` as ``flow_text`` fills a text: the keys Home
-    Assistant's flow formatter reads, for a Core that does not ship it.
+    filled with ``placeholders`` as ``flow_text`` fills a text: the field
+    keys Home Assistant's flow formatter reads, for a Core that does not ship
+    it. A section's own ``name`` and ``description`` are not read.
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``,
     ``config_subentries.<type>`` or ``issues.<key>.fix_flow``.

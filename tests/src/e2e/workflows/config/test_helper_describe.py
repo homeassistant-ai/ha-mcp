@@ -54,10 +54,10 @@ async def test_the_catalogs_list_what_home_assistant_can_create(mcp_client):
         "integration catalog",
     )
 
+    # The unit tests cover the rows; this checks the tools answer over MCP.
     rows = {row["helper_type"]: row for row in helpers["catalog"]}
     assert "helpers.calculate_value" in rows["derivative"]["categories"], rows
-    assert rows["counter"]["config_flow"] is False, rows
-    assert integrations["catalog"][0]["domain"] == "met", integrations
+    assert integrations["catalog"], integrations
 
 
 @pytest.mark.asyncio

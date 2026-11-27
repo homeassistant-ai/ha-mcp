@@ -46,7 +46,11 @@ from .config_entry_flow_introspect import abort_probe_flow
 from .config_helpers.registry import _get_entities_for_config_entry
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES, StorageHelperType
 from .diagnostics_helpers import fetch_integration_diagnostics, parse_diagnostics_fields
-from .flow_catalog import integration_catalog
+from .flow_catalog import (
+    CATALOG_UNUSED,
+    filter_by_query,
+    integration_catalog_response,
+)
 from .flow_helper_lookup import (
     get_entry_id_for_flow_helper,
     not_stored_reply,
@@ -547,8 +551,9 @@ class IntegrationTools:
                     "Instead of configured entries, list the integrations that "
                     "can be set up (Home Assistant's Add integration dialog), "
                     "each with its domain, name and categories; query matches "
-                    "the domain, name or brand. Set one up with "
-                    "ha_set_integration(domain=...)."
+                    "the domain or name, as in list mode. Set one up with "
+                    "ha_set_integration(domain=...). Helper types are listed by "
+                    "ha_config_list_helpers(catalog=True)."
                 ),
                 default=False,
             ),
@@ -632,13 +637,16 @@ class IntegrationTools:
                 validate_identifier_not_empty(domain, "domain")
                 include_opts = True
 
-            if catalog:
-                return await integration_catalog(
+            if catalog or category is not None:
+                return await integration_catalog_response(
                     self._client,
+                    catalog=catalog,
                     query=query,
+                    exact_match=exact_match,
                     category=category,
                     limit=limit,
                     offset=offset,
+                    given={k: v for k, v in locals().items() if k in CATALOG_UNUSED},
                 )
             # If entry_id provided, get specific config entry
             if entry_id is not None:
@@ -1218,9 +1226,7 @@ class IntegrationTools:
         """
         # Apply search filter if query provided
         if query and query.strip():
-            formatted_entries = self._filter_by_query(
-                formatted_entries, query, exact_match
-            )
+            formatted_entries = filter_by_query(formatted_entries, query, exact_match)
 
         # Group by state for summary (computed before pagination for full picture)
         state_summary: dict[str, int] = {}
@@ -1289,36 +1295,6 @@ class IntegrationTools:
             formatted_entry["options"] = entry.get("options", {})
 
         return formatted_entry
-
-    @staticmethod
-    def _filter_by_query(
-        entries: list[dict[str, Any]], query: str, exact_match: bool | None
-    ) -> list[dict[str, Any]]:
-        """Filter formatted entries by query string with exact or fuzzy matching."""
-        matches: list[tuple[int, dict[str, Any]]] = []
-        query_lower = query.strip().lower()
-
-        for entry in entries:
-            domain_lower = (entry.get("domain") or "").lower()
-            title_lower = (entry.get("title") or "").lower()
-
-            # Check for exact substring matches first (highest priority)
-            if query_lower in domain_lower or query_lower in title_lower:
-                matches.append((100, entry))
-            elif not exact_match:
-                # Fuzzy matching only when exact_match is disabled
-                from ..utils.fuzzy_search import calculate_ratio
-
-                domain_score = calculate_ratio(query_lower, domain_lower)
-                title_score = calculate_ratio(query_lower, title_lower)
-                best_score = max(domain_score, title_score)
-
-                if best_score >= 70:  # threshold for fuzzy matches
-                    matches.append((best_score, entry))
-
-        # Sort by score descending
-        matches.sort(key=lambda x: x[0], reverse=True)
-        return [match[1] for match in matches]
 
     @tool(
         name="ha_set_integration",

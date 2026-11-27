@@ -19,6 +19,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantAdminRequiredError,
+    HomeAssistantAPIError,
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
@@ -45,13 +46,13 @@ async def fetch_helper_flow_types(client: Any) -> frozenset[str]:
     return frozenset(str(domain) for domain in domains)
 
 
-async def _fetch_core_helper_domains(client: Any) -> frozenset[str]:
-    """Core's own helper flows: the ``core.helper`` domains of
-    ``integration/descriptions``, the frontend's integration catalog.
+async def integration_descriptions(client: Any) -> dict[str, Any]:
+    """Core's ``integration/descriptions``, the frontend's integration catalog.
 
     The command is admin-only, and only a REST 401 latches the client's
     refused-admin-route flag, so the token is checked first: a non-admin
     token is refused here, which is what tells the search to name the token.
+    A refusal from Core keeps Core's message and code.
     """
     if await client.token_is_admin() is False:
         raise HomeAssistantAdminRequiredError(
@@ -59,17 +60,26 @@ async def _fetch_core_helper_domains(client: Any) -> frozenset[str]:
             "token's user is not an administrator"
         )
     answer = await client.send_websocket_message({"type": "integration/descriptions"})
+    if isinstance(answer, dict) and answer.get("success") is False:
+        raise HomeAssistantAPIError(
+            f"integration/descriptions failed: {answer.get('error')}",
+            response_data=answer,
+        )
     result = answer.get("result") if isinstance(answer, dict) else None
-    helpers = (
-        (result or {}).get("core", {}).get("helper")
-        if isinstance(result, dict)
-        else None
-    )
-    if not isinstance(helpers, dict):
+    if not isinstance(result, dict) or not isinstance(
+        (result.get("core") or {}).get("helper"), dict
+    ):
         raise HomeAssistantConnectionError(
             "integration/descriptions returned an unexpected response shape: "
             f"{answer!r}"[:300]
         )
+    return result
+
+
+async def _fetch_core_helper_domains(client: Any) -> frozenset[str]:
+    """Core's own helper flows: the ``core.helper`` domains of
+    ``integration/descriptions``."""
+    helpers = (await integration_descriptions(client))["core"]["helper"]
     return frozenset(str(domain) for domain in helpers)
 
 

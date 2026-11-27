@@ -497,12 +497,13 @@ def test_a_flow_ref_refuses_a_path_core_has_no_flow_for(path: str) -> None:
         FlowRef("demo", path)
 
 
-async def test_a_form_error_whose_strings_cannot_be_read_warns_at_top_level(
+async def test_a_form_error_whose_strings_cannot_be_read_is_still_reported(
     hass: HomeAssistant, component_core_client: HomeAssistantClient, flows: None
 ) -> None:
-    """Nothing registered ``frontend/get_translations``: Core refuses the read,
-    and the error says its texts are missing. Core's own formatter reads the
-    strings in process, so on 2026.12 the text is there."""
+    """Nothing registered ``frontend/get_translations``: the strings lookup
+    is refused and the error says its texts are missing. Core's own formatter
+    (2026.12) reads the strings in process, so nothing is missing there; this
+    error code has no string either way."""
     assert await async_setup_component(hass, "config", {})
     entry = _entry(hass)
 
@@ -511,8 +512,6 @@ async def test_a_form_error_whose_strings_cannot_be_read_warns_at_top_level(
 
     body = error_body(exc_info)
     assert body["errors"] == {"base": "not_valid"}
-    if _CORE_FORMATS:
-        assert "warnings" not in body
-    else:
-        assert "error_text" not in body
-        assert any("could not be read" in w for w in body["warnings"])
+    assert "error_text" not in body
+    unread = any("could not be read" in w for w in body.get("warnings", []))
+    assert unread is not _CORE_FORMATS

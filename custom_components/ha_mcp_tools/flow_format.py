@@ -5,9 +5,11 @@ Home Assistant 2026.12 formats a flow step for its LLM tools with
 description, each field's label and help text, the errors, menu option labels,
 and the progress, create-entry and abort texts, with their placeholders
 filled. This command runs it in process on the flow's live step, with the
-translations Core's config and repairs tools hand it, so the server keeps no
-copy of how a flow text is looked up. Nothing here needs Core's LLM API to be
-enabled. An older Core has no formatter and answers ``supported: false``.
+translations Core's config and repairs tools hand it (``_async_finalize_flow_step``
+in ``config/llm.py``, the fix-flow formatting in ``repairs/llm.py``), so on
+2026.12 the server looks up no flow text itself. Nothing here needs Core's LLM
+API to be enabled. An older Core has no formatter and answers
+``supported: false``.
 """
 
 from __future__ import annotations
@@ -23,8 +25,9 @@ if TYPE_CHECKING:
 
 WS_FLOW_FORMAT = "ha_mcp_tools/flow_format"
 CAPABILITY = "flow_format"
-# What Core reports of a step that has ended (abort, create_entry) or is
-# waiting (progress); the formatter reads nothing else of them.
+# What the formatter and the string selection below read of a step that has
+# ended (abort, create_entry) or is waiting (progress). The server sends the
+# step whole, so this is the one list to change when Core reads more.
 _ENDED_STEP_KEYS = (
     "flow_id",
     "handler",
@@ -84,21 +87,23 @@ async def format_form(
     return fields
 
 
-async def _live_step(flow: ModuleType, manager: Any, step: dict[str, Any]) -> Any:
+def _live_step(manager: Any, step: dict[str, Any], step_type: Any) -> Any:
     """The form or menu the flow shows now, with its schema, if it is still
-    at ``step``; Core's ``async_configure_step`` hands it over unchanged when
-    given no input."""
-    from homeassistant.data_entry_flow import UnknownFlow
-
-    try:
-        shown = manager.async_get(step["flow_id"])
-    except UnknownFlow:
+    at ``step``. Read from the flow manager as Core's own
+    ``llm.flow.async_configure_step`` reads it; that function also advances a
+    flow whose current step is a finished progress step, which a read must
+    never do, so its step is compared first and it is not called."""
+    handler = manager._progress.get(step["flow_id"])
+    current = getattr(handler, "cur_step", None)
+    if (
+        not isinstance(current, dict)
+        or current.get("type") != step_type
+        or current.get("step_id") != step.get("step_id")
+        # Answered again since: its errors would not be the step's.
+        or (current.get("errors") or None) != (step.get("errors") or None)
+    ):
         return None
-    if shown.get("step_id") != step.get("step_id"):
-        return None
-    result = await flow.async_configure_step(manager, step["flow_id"])
-    # A flow Core no longer holds answers with an error ToolResult.
-    return result if isinstance(result, dict) else None
+    return current
 
 
 async def _repair_strings(
@@ -109,12 +114,13 @@ async def _repair_strings(
     placeholders = {"extra_placeholders": msg.get("placeholders")}
     if not isinstance(handler, str) or key is None:
         return {}, "", placeholders
-    trans_domain = step.get("translation_domain") or handler
-    trans = await translations(hass, "issues", {handler, trans_domain})
+    # Read under the issue's own domain, also when a step names another
+    # translation_domain, as the Repairs dialog reads a fix flow's texts.
+    trans = await translations(hass, "issues", {handler})
     title = trans.get(f"component.{handler}.issues.{key}.title")
     return (
         trans,
-        f"component.{trans_domain}.issues.{key}.fix_flow",
+        f"component.{handler}.issues.{key}.fix_flow",
         {"fallback_title": title, **placeholders},
     )
 
@@ -192,7 +198,7 @@ async def async_flow_format(hass: HomeAssistant, msg: dict[str, Any]) -> dict[st
         return {"supported": True, "found": False}
     result: Any
     if step_type in (FlowResultType.FORM, FlowResultType.MENU):
-        result = None if manager is None else await _live_step(flow, manager, step)
+        result = None if manager is None else _live_step(manager, step, step_type)
     else:
         result = {k: step[k] for k in _ENDED_STEP_KEYS if k in step}
         result["type"] = step_type

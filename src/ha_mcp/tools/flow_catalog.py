@@ -2,52 +2,95 @@
 its Create helper and Add integration dialogs.
 
 Both are read from Core's ``integration/descriptions``, the frontend's
-catalog, as Core's own ``config__search_integrations`` tool reads it: Core's
-and the custom integrations' entries (a brand's integrations included), each
-with its name and ``categories`` as Core sends them (``helpers.calculate_value``,
-``energy.energy_prices``), and a name Core translates read from its ``title``
-strings.
+catalog: Core's and the custom integrations' entries (a brand's integrations
+included), each with its name and ``categories`` as Core sends them
+(``helpers.calculate_value``, ``energy.energy_prices``), and a name Core
+translates read from its ``title`` strings. Matching a query, a category and
+paging are this server's own, as in ``ha_get_integration``'s list mode.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, NamedTuple, NoReturn
 
-from ..client.rest_client import HomeAssistantConnectionError
+from ..errors import ErrorCode, create_error_response
 from .config_helpers.schemas import SIMPLE_HELPER_TYPES
 from .flow_translations import configured_language, fetch_flow_strings
+from .helper_flows import integration_descriptions
+from .helpers import raise_tool_error
 
-_Row = tuple[str, dict[str, Any], str]
+# ha_get_integration's parameters that list or read configured entries, which
+# a catalog call does not.
+CATALOG_UNUSED = (
+    "entry_id",
+    "domain",
+    "integration_type",
+    "include_options",
+    "include_schema",
+    "include_subentries",
+    "include_subentry_schema",
+    "subentry_type",
+    "subentry_id",
+    "include_diagnostics",
+    "include_ws_commands",
+    "device_id",
+)
 
 
-async def _descriptions(client: Any) -> dict[str, Any]:
-    answer = await client.send_websocket_message({"type": "integration/descriptions"})
-    result = answer.get("result") if isinstance(answer, dict) else None
-    if not isinstance(result, dict) or not isinstance(result.get("core"), dict):
-        raise HomeAssistantConnectionError(
-            "integration/descriptions returned an unexpected response shape: "
-            f"{answer!r}"[:300]
-        )
-    return result
+class _Row(NamedTuple):
+    domain: str
+    meta: dict[str, Any]
+
+
+def filter_by_query(
+    entries: list[dict[str, Any]],
+    query: str,
+    exact_match: bool | None,
+    title_key: str = "title",
+) -> list[dict[str, Any]]:
+    """Entries whose domain or ``title_key`` holds ``query``, or with
+    ``exact_match`` off one of them close to it, best match first."""
+    matches: list[tuple[int, dict[str, Any]]] = []
+    query_lower = query.strip().lower()
+
+    for entry in entries:
+        domain_lower = (entry.get("domain") or "").lower()
+        title_lower = (entry.get(title_key) or "").lower()
+
+        # Check for exact substring matches first (highest priority)
+        if query_lower in domain_lower or query_lower in title_lower:
+            matches.append((100, entry))
+        elif not exact_match:
+            # Fuzzy matching only when exact_match is disabled
+            from ..utils.fuzzy_search import calculate_ratio
+
+            domain_score = calculate_ratio(query_lower, domain_lower)
+            title_score = calculate_ratio(query_lower, title_lower)
+            best_score = max(domain_score, title_score)
+
+            if best_score >= 70:  # threshold for fuzzy matches
+                matches.append((best_score, entry))
+
+    # Sort by score descending
+    matches.sort(key=lambda x: x[0], reverse=True)
+    return [match[1] for match in matches]
 
 
 def _entries(descriptions: dict[str, Any], kind: str) -> Iterator[_Row]:
-    """``(domain, metadata, brand)`` for each ``kind`` (``integration`` or
-    ``helper``) entry, Core's and the custom ones."""
-    for origin in ("core", "custom"):
+    """Each ``kind`` (``integration`` or ``helper``) entry, the custom ones
+    first: a custom integration replaces Core's of its domain, and Core drops
+    only a top-level entry for it, not one nested under a brand."""
+    for origin in ("custom", "core"):
         entries = (descriptions.get(origin) or {}).get(kind) or {}
         for key, meta in entries.items():
             if not isinstance(meta, dict):
                 continue
             if "integration_type" in meta or kind == "helper":
-                yield key, meta, ""
+                yield _Row(key, meta)
             elif isinstance(sub := meta.get("integrations"), dict):
                 # A brand groups its integrations, as the Add dialog shows them.
-                brand = str(meta.get("name", key)).casefold()
-                yield from (
-                    (d, m, brand) for d, m in sub.items() if isinstance(m, dict)
-                )
+                yield from (_Row(d, m) for d, m in sub.items() if isinstance(m, dict))
 
 
 async def _names(
@@ -56,7 +99,7 @@ async def _names(
     """The name Core shows for each row, and a warning when the names Core
     translates could not be read."""
     translated = set((descriptions.get("core") or {}).get("translated_name") or ())
-    wanted = sorted({d for d, meta, _ in rows if not meta.get("name")} & translated)
+    wanted = sorted({r.domain for r in rows if not r.meta.get("name")} & translated)
     titles: dict[str, Any] = {}
     warnings: list[str] = []
     if wanted:
@@ -71,44 +114,32 @@ async def _names(
             )
         titles = found or {}
     names = {
-        d: str(meta.get("name") or titles.get(f"component.{d}.title") or d)
-        for d, meta, _ in rows
+        r.domain: str(
+            r.meta.get("name") or titles.get(f"component.{r.domain}.title") or r.domain
+        )
+        for r in rows
     }
     return names, warnings
 
 
-def _in_category(meta: dict[str, Any], category: str | None) -> bool:
-    """A category matches itself and its subcategories, as Core's search
-    matches a top-level category (``helpers`` finds ``helpers.store_value``)."""
+def _in_category(row: _Row, category: str | None) -> bool:
+    """A category matches itself and its subcategories (``helpers`` finds
+    ``helpers.store_value``); a subcategory matches only itself. This is the
+    server's own filter: Core's search matches a top-level category only."""
     if category is None:
         return True
-    categories = meta.get("categories") or []
+    categories = row.meta.get("categories") or []
     return any(
         c == category or str(c).partition(".")[0] == category for c in categories
     )
 
 
-def _rank(query: str, domain: str, name: str, brand: str) -> int | None:
-    """Core's search rank: 0 an exact domain or name, 1 every word in the
-    domain or name, 2 every word there or in the brand; ``None`` no match."""
-    head = f"{domain} {name}".replace("_", " ")
-    words = query.replace("_", " ").split()
-    if not all(word in f"{head} {brand}" for word in words):
-        return None
-    if query in (domain, name):
-        return 0
-    return 1 if all(word in head for word in words) else 2
-
-
 def _category_hint(rows: list[_Row], category: str | None) -> list[str]:
-    if category is None:
+    """Name the categories there are, when ``category`` itself matches none."""
+    if category is None or any(_in_category(r, category) for r in rows):
         return []
     known = sorted(
-        {
-            str(c).partition(".")[0]
-            for _, meta, _ in rows
-            for c in meta.get("categories") or []
-        }
+        {str(c).partition(".")[0] for r in rows for c in r.meta.get("categories") or []}
     )
     return [f"No entry has category {category!r}. Categories here: {', '.join(known)}"]
 
@@ -116,34 +147,39 @@ def _category_hint(rows: list[_Row], category: str | None) -> list[str]:
 async def helper_catalog(
     client: Any, helper_type: str, category: str | None
 ) -> dict[str, Any]:
-    """The helper types ha_config_set_helper can create (a helper flow, or a
-    storage helper), ``helper_type`` one of them or ``all``."""
-    descriptions = await _descriptions(client)
+    """The helper types Home Assistant's Create helper dialog offers that
+    ha_config_set_helper creates (a helper flow, or a storage helper),
+    ``helper_type`` one of them or ``all``."""
+    descriptions = await integration_descriptions(client)
     rows = [
-        row
-        for row in _entries(descriptions, "helper")
-        if row[1].get("config_flow") or row[0] in SIMPLE_HELPER_TYPES
+        r
+        for r in _entries(descriptions, "helper")
+        if r.meta.get("config_flow") or r.domain in SIMPLE_HELPER_TYPES
     ]
     matched = [
-        row
-        for row in rows
-        if _in_category(row[1], category) and helper_type in ("all", row[0])
+        r
+        for r in rows
+        if _in_category(r, category) and helper_type in ("all", r.domain)
     ]
     names, warnings = await _names(client, descriptions, matched)
     catalog = sorted(
         (
             {
-                "helper_type": domain,
-                "name": names[domain],
-                "categories": meta.get("categories") or [],
-                "config_flow": bool(meta.get("config_flow")),
+                "helper_type": r.domain,
+                "name": names[r.domain],
+                "categories": r.meta.get("categories") or [],
+                "config_flow": bool(r.meta.get("config_flow")),
             }
-            for domain, meta, _ in matched
+            for r in matched
         ),
         key=lambda row: str(row["name"]).casefold(),
     )
-    if not catalog:
-        warnings += _category_hint(rows, category)
+    warnings += _category_hint(rows, category)
+    if helper_type != "all" and not any(r.domain == helper_type for r in rows):
+        warnings.append(
+            f"{helper_type} is not in Home Assistant's Create helper dialog; "
+            "ha_config_set_helper creates it all the same."
+        )
     response: dict[str, Any] = {
         "success": True,
         "count": len(catalog),
@@ -158,45 +194,84 @@ async def integration_catalog(
     client: Any,
     *,
     query: str | None,
+    exact_match: bool,
     category: str | None,
     limit: int,
     offset: int,
 ) -> dict[str, Any]:
-    """The integrations set up through a config flow, matched by ``query``
-    against the domain, name and brand as Core's search matches, one page."""
-    descriptions = await _descriptions(client)
+    """The integrations set up through a config flow, by name, matched by
+    ``query`` as ``ha_get_integration``'s list mode matches, one page."""
+    descriptions = await integration_descriptions(client)
     seen: set[str] = set()
     rows: list[_Row] = []
     for row in _entries(descriptions, "integration"):
-        if row[0] not in seen and row[1].get("config_flow"):
-            seen.add(row[0])
+        # A domain can sit under more than one brand; its first row wins.
+        if row.domain in seen:
+            continue
+        seen.add(row.domain)
+        if row.meta.get("config_flow"):
             rows.append(row)
-    in_category = [row for row in rows if _in_category(row[1], category)]
+    in_category = [r for r in rows if _in_category(r, category)]
     names, warnings = await _names(client, descriptions, in_category)
-    needle = (query or "").strip().casefold()
-    ranked: list[tuple[int, str, dict[str, Any]]] = []
-    for domain, meta, brand in in_category:
-        name = names[domain]
-        rank = _rank(needle, domain, name.casefold(), brand) if needle else 0
-        if rank is not None:
-            entry = {
-                "domain": domain,
-                "name": name,
-                "categories": meta.get("categories") or [],
+    listed = sorted(
+        (
+            {
+                "domain": r.domain,
+                "name": names[r.domain],
+                "categories": r.meta.get("categories") or [],
             }
-            ranked.append((rank, name.casefold(), entry))
-    ranked.sort(key=lambda item: item[:2])
-    page = [row for _, _, row in ranked[offset : offset + limit]]
-    if not ranked:
-        warnings += _category_hint(rows, category)
+            for r in in_category
+        ),
+        key=lambda row: str(row["name"]).casefold(),
+    )
+    if query and query.strip():
+        listed = filter_by_query(listed, query, exact_match, title_key="name")
+    warnings += _category_hint(rows, category)
     response: dict[str, Any] = {
         "success": True,
-        "total_count": len(ranked),
+        "total_count": len(listed),
         "offset": offset,
         "limit": limit,
-        "has_more": offset + limit < len(ranked),
-        "catalog": page,
+        "has_more": offset + limit < len(listed),
+        "catalog": listed[offset : offset + limit],
     }
     if warnings:
         response["warnings"] = warnings
     return response
+
+
+def refuse_category_without_catalog() -> NoReturn:
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "category applies only with catalog=True.",
+            suggestions=["Pass catalog=True, or drop category"],
+        )
+    )
+
+
+def warn_ignored(response: dict[str, Any], given: dict[str, Any]) -> dict[str, Any]:
+    """Add a warning naming each parameter set alongside catalog=True that a
+    catalog does not use."""
+    ignored = [name for name, value in given.items() if value not in (None, False)]
+    if ignored:
+        response.setdefault("warnings", []).append(
+            f"{', '.join(ignored)} ignored: catalog=True lists what can be set "
+            "up, not what is configured"
+        )
+    return response
+
+
+async def integration_catalog_response(
+    client: Any,
+    *,
+    catalog: bool,
+    given: dict[str, Any],
+    **params: Any,
+) -> dict[str, Any]:
+    """``ha_get_integration(catalog=True)``; ``category`` without it is
+    refused. ``given`` holds the entry parameters the call set, which a
+    catalog ignores with a warning."""
+    if not catalog:
+        refuse_category_without_catalog()
+    return warn_ignored(await integration_catalog(client, **params), given)

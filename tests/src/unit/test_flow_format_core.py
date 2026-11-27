@@ -9,6 +9,7 @@ the form, on every version.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -19,13 +20,28 @@ from homeassistant.components.frontend import websocket_get_translations
 from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.schema_config_entry_flow import (
+    SchemaConfigFlowHandler,
+    SchemaFlowFormStep,
+)
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 from homeassistant.helpers.translation import async_get_translations
-from homeassistant.loader import async_get_integration_descriptions
+from pytest_homeassistant.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_config_flow,
+    mock_integration,
+    mock_platform,
+)
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
-from ha_mcp.tools.tools_integrations import IntegrationTools
 
+from ._component_core import ws_result
 from ._core_setup import install_custom_helper, with_config_component
 
 # Remove once the hacs.json minimum is 2026.12.
@@ -155,65 +171,142 @@ async def test_an_existing_helper_s_entity_choices_are_described(
     assert "sensor.energy" in _by_name(result["fields"])["source"]["include_entities"]
 
 
-async def test_the_helper_catalog_lists_what_core_can_create(
+# --- a later form's password ---------------------------------------------------------
+
+_LATER_FORM_HELPER = "flow_format_later_form_probe"
+
+
+class _LaterFormFlow(SchemaConfigFlowHandler):
+    """A helper whose second form suggests a stored password."""
+
+    config_flow: Mapping[str, SchemaFlowFormStep] = {
+        "user": SchemaFlowFormStep(
+            probatio.Schema({probatio.Required("name"): TextSelector()}),
+            next_step="extra",
+        ),
+        "extra": SchemaFlowFormStep(
+            probatio.Schema(
+                {
+                    probatio.Optional(
+                        "api_key", description={"suggested_value": "hunter2"}
+                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+                }
+            )
+        ),
+    }
+
+    def async_config_entry_title(self, options: Mapping[str, Any]) -> str:
+        return "probe"
+
+
+@pytest.mark.usefixtures("redact_on")
+async def test_a_later_forms_suggested_password_is_redacted(
     hass: HomeAssistant,
-    core_only: HomeAssistantClient,
+    client: HomeAssistantClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     enable_custom_integrations: None,
 ) -> None:
-    """Every helper type Core's Create helper catalog offers, a custom one
-    included, with its categories as Core sends them; a category keeps its
-    subcategories."""
-    install_custom_helper(tmp_path, monkeypatch, "catalog_probe_helper")
-    descriptions = await async_get_integration_descriptions(hass)
+    """Core's formatter lifts a field's suggested value out of its
+    description; a password's stays withheld in the later forms either way."""
+    install_custom_helper(tmp_path, monkeypatch, _LATER_FORM_HELPER)
+    mock_integration(hass, MockModule(_LATER_FORM_HELPER))
+    mock_platform(hass, f"{_LATER_FORM_HELPER}.config_flow", None)
 
-    tools = HelperConfigTools(core_only)
-    catalog = (await tools.ha_config_list_helpers("all", catalog=True))["catalog"]
-    stored = (
-        await tools.ha_config_list_helpers(
-            "all", catalog=True, category="helpers.store_value"
+    with mock_config_flow(_LATER_FORM_HELPER, _LaterFormFlow):
+        result = await HelperConfigTools(client).ha_config_list_helpers(
+            _LATER_FORM_HELPER, describe=True
         )
-    )["catalog"]
 
-    rows = {row["helper_type"]: row for row in catalog}
-    core = descriptions["core"]["helper"]
-    assert rows["derivative"]["categories"] == core["derivative"]["categories"]
-    assert rows["derivative"]["config_flow"] is True
-    assert rows["counter"]["config_flow"] is False
-    assert "catalog_probe_helper" in rows
-    assert {row["helper_type"] for row in stored} == {
-        domain
-        for domain, meta in core.items()
-        if domain in rows and "helpers.store_value" in meta.get("categories", [])
-    }
+    (later,) = result["later_forms"]
+    assert later["step_id"] == "extra"
+    assert "hunter2" not in str(result)
+    assert _by_name(later["fields"])["api_key"]["current"].startswith("<redacted")
 
 
-async def test_an_unknown_category_lists_the_categories_there_are(
-    core_only: HomeAssistantClient,
+# --- what the component formats ----------------------------------------------------
+
+
+async def _format(component_ws: Any, manager: str, **step: Any) -> dict[str, Any]:
+    result: dict[str, Any] = await ws_result(
+        component_ws, "ha_mcp_tools/flow_format", manager=manager, step=step
+    )
+    return result
+
+
+@needs_formatter
+async def test_a_form_is_formatted_only_while_the_flow_shows_it_unchanged(
+    hass: HomeAssistant, component_ws: Any
 ) -> None:
-    result = await HelperConfigTools(core_only).ha_config_list_helpers(
-        "all", catalog=True, category="no_such_category"
+    """The form is read from the flow itself, so a step the flow has left,
+    changed into another kind of step or answered again with other errors is
+    not formatted, and nothing is run to read it."""
+    flow = await hass.config_entries.flow.async_init(
+        "derivative", context={"source": "user"}
+    )
+    shown = {"flow_id": flow["flow_id"], "handler": "derivative"}
+
+    as_shown = await _format(
+        component_ws, "config", **shown, type="form", step_id="user"
+    )
+    others = [
+        await _format(component_ws, "config", **shown, **changed)
+        for changed in (
+            {"type": "form", "step_id": "options"},
+            {"type": "menu", "step_id": "user"},
+            {"type": "form", "step_id": "user", "errors": {"base": "unknown"}},
+            {"type": "no_such_type", "step_id": "user"},
+        )
+    ]
+
+    assert as_shown["found"] is True
+    assert as_shown["step"]["step_id"] == "user"
+    assert [o["found"] for o in others] == [False] * len(others)
+    assert hass.config_entries.flow.async_get(flow["flow_id"])["step_id"] == "user"
+    hass.config_entries.flow.async_abort(flow["flow_id"])
+
+
+@needs_formatter
+async def test_a_flow_of_an_entry_core_does_not_hold_is_not_formatted(
+    component_ws: Any,
+) -> None:
+    result = await _format(
+        component_ws,
+        "options",
+        flow_id="gone",
+        handler="no_such_entry",
+        type="abort",
+        reason="unknown",
     )
 
-    assert result["catalog"] == []
-    assert "helpers" in result["warnings"][0]
+    assert result == {"supported": True, "found": False}
 
 
-async def test_the_integration_catalog_finds_an_integration_by_its_domain(
-    hass: HomeAssistant, core_only: HomeAssistantClient
+@needs_formatter
+async def test_an_options_abort_without_its_own_text_gets_home_assistants(
+    hass: HomeAssistant, component_ws: Any
 ) -> None:
-    """Integrations that can be set up are found as Core's own search finds
-    them, an exact domain first, named as Core names them, a page at a time."""
-    tools = IntegrationTools(core_only)
-    found = await tools.ha_get_integration(catalog=True, query="met")
-    page = await tools.ha_get_integration(catalog=True, limit=2, offset=2)
+    """Core's formatter falls back on Home Assistant's common abort texts,
+    which live under the config strings, for an options flow too."""
+    entry = MockConfigEntry(domain="derivative")
+    entry.add_to_hass(hass)
+    common = await async_get_translations(hass, "en", "config", ["homeassistant"])
+    own = await async_get_translations(hass, "en", "options", ["derivative"])
+    prefix = "component.homeassistant.config.abort."
+    reason, text = next(
+        (key.removeprefix(prefix), value)
+        for key, value in common.items()
+        if key.startswith(prefix)
+        and f"component.derivative.options.abort.{key.removeprefix(prefix)}" not in own
+    )
 
-    meta = (await async_get_integration_descriptions(hass))["core"]["integration"]
-    titles = await async_get_translations(hass, "en", "title", ["met"])
-    first = found["catalog"][0]
-    assert first["domain"] == "met"
-    assert first["name"] == meta["met"].get("name", titles.get("component.met.title"))
-    assert first["categories"] == meta["met"].get("categories", [])
-    assert len(page["catalog"]) == 2
-    assert page["has_more"] is True
+    result = await _format(
+        component_ws,
+        "options",
+        flow_id="ended",
+        handler=entry.entry_id,
+        type="abort",
+        reason=reason,
+    )
+
+    assert result["step"]["description"] == text

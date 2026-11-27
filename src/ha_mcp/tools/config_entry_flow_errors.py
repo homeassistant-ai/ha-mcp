@@ -113,7 +113,7 @@ async def _core_step(
     client: Any, flow: FlowRef | None, step: dict[str, Any]
 ) -> dict[str, Any] | None:
     """Home Assistant's own formatting of ``step`` (2026.12, through the
-    component), or ``None``: the texts are then looked up as above."""
+    component), or ``None``: the texts are then read by ``_flow_texts``."""
     if flow is None:
         return None
     return await core_flow_step(client, flow.path, step, flow.placeholders)
@@ -452,8 +452,9 @@ async def step_texts(
 ) -> dict[str, Any]:
     """Core's ``title``, ``description`` and ``submit`` label of a form or menu
     step, and a menu's option labels and descriptions, as the frontend shows
-    them; a text Core ships no string for is left out. Home Assistant's own
-    formatter gives the title, description and option labels where it runs."""
+    them; a text Core ships no string for is left out. Where Home Assistant's
+    own formatter runs it gives the title (the integration's name for a step
+    without one), the description and the option labels."""
     step_id = step.get("step_id")
     if not isinstance(step_id, str):
         return {}
@@ -479,8 +480,15 @@ async def step_texts(
                 if isinstance(core.get(k), str)
             }
         )
-        if options and isinstance(core.get("menu_options"), dict):
-            texts["menu_option_labels"] = core["menu_options"]
+        labels = core.get("menu_options")
+        # The formatter labels an option it has no string for with its key.
+        labels = {
+            o: label
+            for o, label in (labels.items() if isinstance(labels, dict) else ())
+            if label != o
+        }
+        if options and labels:
+            texts["menu_option_labels"] = labels
         return texts
     supplied = step.get("menu_options")
     if options and isinstance(supplied, dict):
