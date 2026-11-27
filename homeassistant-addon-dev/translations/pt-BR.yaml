@@ -1,0 +1,311 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/pt-BR.json (keys addon.*, features.*, advanced.*,
+# backup.fields.*, addon_dev.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  verify_ssl:
+    name: Verificar certificados TLS
+    description: 'Verifique o certificado TLS do servidor Home Assistant. Desative
+      isso apenas em uma rede confiável, para um certificado autoassinado ou uma incompatibilidade
+      de nome de host: isso enfraquece a segurança do transporte.'
+  ha_tool_concurrency:
+    name: Concorrência de ferramenta do Home Assistant
+    description: Limite opcional para chamadas de ferramenta externas do Home Assistant
+      em todas as sessões. A concorrência interna de REST, WebSocket e fan-out por
+      ferramenta permanece inalterada. 0 mantém o comportamento ilimitado. Uma chamada
+      esperando por capacidade falha após 60 segundos. Intervalo 0–32.
+  custom_instructions:
+    name: Instruções personalizadas do servidor
+    description: Texto enviado a cada assistente de IA que se conecta, como parte
+      das instruções do servidor MCP — por exemplo, onde as notas domésticas são mantidas
+      e quando lê-las ou atualizá-las. Também faz parte do prompt dos agentes de conversação
+      do Home Assistant (Assist) que usam este conjunto de ferramentas. Use-o para
+      orientações que devem chegar a todos os seus clientes de uma vez; mantenha-o
+      curto e livre de segredos. Deixe em branco para não adicionar nada. Requer reinício;
+      os clientes veem a mudança quando se reconectam.
+  enable_beta_features:
+    name: Ativar recursos beta (mestre)
+    description: ⚠ PERIGO — estas ferramentas podem DANIFICAR PERMANENTEMENTE sua
+      instalação do Home Assistant. Elas escrevem em sua configuração YAML, seu sistema
+      de arquivos, instalam componentes personalizados, executam Python arbitrário
+      em sandbox e editam as docstrings das ferramentas que a IA vê. Não há garantia
+      nem suporte — você as ativa por sua CONTA E RISCO. Faça um backup do Home Assistant
+      antes de ativar isso e nunca ative em produção sem um. Portão mestre para as
+      sub-flags experimentais abaixo; as sub-flags são ignoradas em tempo de execução
+      enquanto este mestre estiver desativado, mesmo quando explicitamente definidas
+      como true. A mesma alternância também é exibida na interface de configurações
+      web em "Recursos beta (perigosos)" — qualquer uma das interfaces reflete a outra
+      no reinício.
+  enable_tool_search:
+    name: Ativar pesquisa de ferramentas
+    description: 'Substitui o catálogo completo de ferramentas por descoberta baseada
+      em pesquisa. Reduz o contexto ocioso em aproximadamente 90%, para cerca de 5K
+      tokens. ⚠️ NÃO ative isso em clientes com sua própria pesquisa de ferramentas/ferramentas
+      adiadas integradas (claude.ai, Claude Desktop, Claude Code) — as duas camadas
+      de pesquisa entram em conflito, e a pesquisa de ferramentas integrada do cliente
+      é a melhor escolha; deixe isso desativado. Se as ferramentas são adiadas depende
+      da sua combinação de cliente e modelo: use isso quando sua configuração carrega
+      o catálogo completo de antemão — modelos sem ferramentas adiadas nativas (por
+      exemplo, Gemini, modelos locais compatíveis com OpenAI, Claude Haiku), clientes
+      que incorporam todos os esquemas de ferramentas independentemente do modelo
+      (por exemplo, GitHub Copilot CLI), ou janelas de contexto menores. Alguns modelos
+      Codex e ChatGPT também incluem ferramentas adiadas — verifique seu cliente/modelo
+      diretamente para confirmar seus recursos e não deixar isso ativado desnecessariamente.
+      As ferramentas são encontradas via ha_search_tools e executadas via proxies
+      categorizados (leitura/escrita/exclusão). Requer reinício para ter efeito.'
+  tool_search_max_results:
+    name: Máximo de resultados da pesquisa de ferramentas
+    description: Número máximo de ferramentas ocultas retornadas por chamada de ha_search_tools
+      quando a pesquisa de ferramentas está ativada; uma ferramenta fixada que se
+      classifica dentro dessa contagem superior é adicionada como uma entrada curta
+      apenas com o nome, além disso. Valores mais baixos (2-3) economizam tokens de
+      contexto, mas podem perder ferramentas relevantes. Requer reinício. Intervalo
+      2–10.
+  enable_tool_security_policies:
+    name: Ativar Políticas de Segurança de Ferramentas (avançado)
+    description: Protege chamadas de ferramentas de alto risco (controle de bloqueio/alarme,
+      escritas de automação, etc.) por trás da aprovação do usuário. Quando uma ferramenta
+      protegida é chamada, o agente informa ao usuário para abrir a aba Políticas
+      de Segurança de Ferramentas na interface web e clicar em Aprovar antes que a
+      chamada prossiga. Regras por ferramenta com condições de argumento opcionais
+      são configuradas na aba Políticas de Segurança de Ferramentas. Desativado por
+      padrão. Requer reinício para ter efeito.
+  enable_security_policy_tool:
+    name: Permitir que agentes de IA editem políticas de segurança de ferramentas
+    description: 'Registers the ha_manage_security_policy tool, which lets connected
+      AI agents read and rewrite the tool security policies — including removing approval
+      gates. Off by default. Independent of the Tool Security Policies option above:
+      this controls who can edit the rules, not whether they are enforced. The tool
+      cannot see or decide pending approvals. To keep a human in the loop, gate the
+      tool before enabling it: switch on "security gated" for Manage Security Policy
+      in the Tools tab of the web UI. Requires restart to take effect.'
+  read_only_mode:
+    name: Modo Somente Leitura
+    description: Desativa todas as ferramentas de escrita e remove a capacidade das
+      ferramentas de fazer chamadas de escrita ou destrutivas. Ferramentas mistas
+      de leitura/escrita — backups, Apps (add-ons), preferências de energia, pipelines
+      de voz e modo de código quando ativado — permanecem disponíveis com suas operações
+      de escrita bloqueadas. Mesma alternância da aba Ferramentas da interface web.
+      Desativado por padrão. Requer reinício para ter efeito.
+  redact_secrets:
+    name: Redact Secrets
+    description: Redacts secrets from tool responses before they reach the AI assistant.
+      App (add-on) options and integration fields marked as passwords are replaced
+      with a set/empty marker (so "is this credential configured?" stays answerable),
+      and other tool responses are scrubbed of secret values the server has already
+      seen (values shorter than 6 characters are skipped, since replacing tiny fragments
+      would corrupt unrelated output). Other fields are not detected, except private
+      keys in app options and the app option names listed below. Off by default.
+  redact_app_option_keys:
+    name: Chaves de opção de aplicativo extras para ocultar
+    description: Nomes de opções de aplicativo (add-on) para ocultar, como campos
+      de senha, para aplicativos cujo esquema armazena um segredo como texto simples
+      (por exemplo, backup_password). Separe os nomes com vírgulas ou novas linhas.
+      Um nome se aplica a cada aplicativo; escreva app_slug:name para limitá-lo a
+      um aplicativo. Nomear um grupo de opções cobre todas as opções nele. Usado apenas
+      enquanto Ocultar Segredos estiver ativado. Vazio por padrão.
+  ipv6_allowed_networks:
+    name: Redes IPv6 extras permitidas
+    description: 'Clientes IPv6 alcançam a própria porta deste servidor apenas da
+      rede local: loopback, link-local, local único (fc00::/7) e as redes às quais
+      o host do Home Assistant está diretamente conectado. IPv4 não é afetado. Liste
+      outras redes IPv6 para permitir, separadas por vírgulas ou novas linhas (por
+      exemplo, 2001:db8:5::/48). Adicionar ::/0 permite todos os clientes IPv6, incluindo
+      da internet se o seu roteador permitir IPv6 de entrada.'
+  enable_mandatory_bps:
+    name: Anexar habilidades de melhores práticas em escritas
+    description: 'Interruptor mestre para o recurso de entrega de conteúdo de habilidades
+      de ferramentas de escrita (issue #1182). Quando ativado (padrão), as seis ferramentas
+      de escrita de configuração (automações, scripts, cenas, auxiliares, painéis,
+      YAML bruto) anexam os arquivos de referência canônicos de melhores práticas
+      do Home Assistant em `skill_content` em cada escrita bem-sucedida, além de incorporar
+      automaticamente quaisquer seções de referência citadas por avisos de melhores
+      práticas. Cada ferramenta também expõe um parâmetro `MandatoryBPS` por chamada
+      que o agente pode definir como falso em chamadas subsequentes, uma vez que tenha
+      o conteúdo. Quando este interruptor mestre está desativado, NENHUM `skill_content`
+      é enviado, independentemente do parâmetro por chamada ou dos avisos de BP. Recomendado
+      LIGADO como primeira escolha; desative apenas para modelos com janelas de contexto
+      muito pequenas. Desativar isso pode degradar a precisão da escrita. Requer reinício
+      para ter efeito.'
+  enable_strict_mandatory_bps:
+    name: Modo de melhores práticas estritas
+    description: 'Strict mode: prevents the client from using the tool until it can
+      prove that it read the best practices. While on, the six best-practice write
+      tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked
+      and return an error directing the client to read the best-practices skill via
+      ha_get_skill_guide and pass back the acknowledgment key it obtains there. While
+      on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
+      of the acknowledgment key. Child of the "Attach best-practice skills on writes"
+      option above and inert while that parent is off. Requires restart to take effect.'
+  enable_yaml_config_editing:
+    name: Ativar edição de configuração YAML (beta)
+    description: Beta feature. Allows AI assistants to add, replace, or remove top-level
+      keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed
+      (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant,
+      http, and recorder are blocked. Each edit validates YAML syntax, runs a config
+      check, and creates an automatic backup. Changes to most keys require a full
+      HA restart to take effect. See docs/beta.md for known limitations. Dedicated
+      tools (automations, scripts, scenes, helpers, template sensors) should be preferred
+      when available. REQUIRES the master "Enable beta features" toggle above (and
+      in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
+      of its value here.
+  enable_yaml_edit_confirm:
+    name: Exigir confirmação para edições YAML (pré-visualização de diff)
+    description: 'Sub-interruptor da edição de configuração YAML, ATIVADO por padrão
+      (recomendado). A primeira chamada ha_config_set_yaml retorna um diff unificado
+      do que exatamente mudaria no disco, mais um token de confirmação, e não escreve
+      nada; a edição só é aplicada quando a chamada é repetida com esse token. Existe
+      para que alterações não intencionais fora da edição solicitada sejam detectadas
+      antes de chegarem ao disco (problema #1720). Desative apenas para economizar
+      uma viagem de ida e volta por edição.'
+  enable_yaml_packages_automation:
+    name: Permitir automação em packages/*.yaml
+    description: Sub-interruptor da edição de configuração YAML. Quando ativado, ha_config_set_yaml
+      aceita yaml_path='automation' dentro de packages/*.yaml. Quando desativado,
+      a chamada é rejeitada tanto no lado do cliente quanto no lado do servidor. A
+      ferramenta de modo de armazenamento (ha_config_set_automation) não é afetada.
+      Padrão DESATIVADO; só tem efeito quando "Ativar edição de configuração YAML"
+      acima também está ativado.
+  enable_yaml_packages_script:
+    name: Permitir script em packages/*.yaml
+    description: Sub-interruptor da edição de configuração YAML. Quando ativado, ha_config_set_yaml
+      aceita yaml_path='script' dentro de packages/*.yaml. Quando desativado, a chamada
+      é rejeitada tanto no lado do cliente quanto no lado do servidor. A ferramenta
+      de modo de armazenamento (ha_config_set_script) não é afetada. Padrão DESATIVADO;
+      só tem efeito quando "Ativar edição de configuração YAML" acima também está
+      ativado.
+  enable_yaml_packages_scene:
+    name: Permitir cena em packages/*.yaml
+    description: Sub-interruptor da edição de configuração YAML. Quando ativado, ha_config_set_yaml
+      aceita yaml_path='scene' dentro de packages/*.yaml. Quando desativado, a chamada
+      é rejeitada tanto no lado do cliente quanto no lado do servidor. A ferramenta
+      de modo de armazenamento (ha_config_set_scene) não é afetada. Padrão DESATIVADO;
+      só tem efeito quando "Ativar edição de configuração YAML" acima também está
+      ativado.
+  enable_lite_docstrings:
+    name: Ativar docstrings de ferramenta lite (beta)
+    description: 'Recurso beta. Substitui as docstrings de 15 ferramentas ha-mcp pesadas
+      (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script,
+      ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper,
+      ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml,
+      ha_search, ha_manage_backup, ha_report_issue) por variantes mais curtas que
+      delegam detalhes de esquema e exemplos à ferramenta ha_get_skill_guide (ou seu
+      recurso skill://). Uma exceção: ha_report_issue delega ao campo de instruções
+      de sua própria resposta. AVISO: isso reduz o uso de tokens ociosos, mas pode
+      degradar o desempenho do LLM — as descrições encurtadas dependem do LLM realmente
+      chamar a ferramenta de skill ou ler o recurso de skill para obter detalhes,
+      o que não é garantido (alguns modelos pularão a chamada de ferramenta extra
+      e acabarão com menos orientação do que tinham antes). Melhor combinado com um
+      cliente que suporte recursos MCP ou com enable_tool_search. Requer reinício
+      para ter efeito. REQUER que a chave mestra "Ativar recursos beta" acima (e na
+      interface da web) esteja ativada — caso contrário, esta sub-chave é ignorada
+      em tempo de execução, independentemente do seu valor aqui.'
+  enable_filesystem_tools:
+    name: Ativar ferramentas de sistema de arquivos (beta)
+    description: 'Define HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Ativa o acesso direto
+      de leitura/escrita de arquivo ao seu sistema de arquivos do Home Assistant.
+      AVISO: Isso concede ao servidor MCP acesso direto e sensível a arquivos do seu
+      sistema. Ative apenas se você confiar no assistente de IA para operações de
+      arquivo. Requer reinício para ter efeito. REQUER que a alternância mestre "Ativar
+      recursos beta" acima (e na interface web) esteja ativada — caso contrário, esta
+      sub-flag é ignorada em tempo de execução, independentemente do seu valor aqui.'
+  enable_code_mode:
+    name: Ativar sandbox de ferramenta personalizada (beta)
+    description: Recurso beta. Ativa a ferramenta ha_manage_custom_tool, que permite
+      aos assistentes de IA criar, executar, salvar e excluir código Python personalizado
+      em um sandbox seguro quando nenhuma ferramenta integrada pode lidar com a solicitação.
+      O código é executado em um interpretador isolado, sem sistema de arquivos ou
+      acesso arbitrário à rede. O código do sandbox pode acessar a API REST do HA
+      (api_get/api_post), enviar comandos WebSocket (ws_send), chamar ferramentas
+      MCP existentes (call_tool) ou remover uma ferramenta salva (delete_saved_tool).
+      As ferramentas salvas persistem em /data/saved_tools.json por padrão para que
+      sobrevivam a reinicializações do aplicativo (add-on) e sejam visíveis para qualquer
+      cliente que possa se conectar. Consulte docs/beta.md para limitações conhecidas.
+      Requer reinício para ter efeito. REQUER que a chave mestra "Ativar recursos
+      beta" acima (e na interface da web) esteja ativada — caso contrário, esta sub-chave
+      é ignorada em tempo de execução, independentemente do seu valor aqui.
+  enable_dashboard_screenshot:
+    name: Ativar modo de captura de tela do painel (beta)
+    description: 'Recurso beta — desativado por padrão. Adiciona a ferramenta ha_get_dashboard_screenshot
+      mais as opções include_screenshot / return_screenshot nas ferramentas de obter/definir
+      painel, para que os assistentes de IA possam inspecionar imagens responsivas
+      do Lovelace. Suporta visualizações nomeadas estáveis, lotes para celular/tablet/desktop
+      e saída PNG/JPEG/WebP/BMP. A renderização é executada em um aplicativo separado:
+      Puppet do balloob ou WPE Screenshot Engine. Instale e configure um motor com
+      seu próprio token de acesso de longa duração do Home Assistant. HA OS / Supervised
+      descobre um motor iniciado através do Supervisor; implantações Docker/Container
+      o executam como um sidecar e definem HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+      Nada pesado é instalado a menos que você ative isso e instale um motor. Requer
+      reinício para ter efeito. REQUER que a chave mestra "Ativar recursos beta" acima
+      (e na interface da web) esteja ativada — caso contrário, esta sub-chave é ignorada
+      em tempo de execução, independentemente do seu valor aqui.'
+  enable_auto_backup:
+    name: Auto-backup de edições
+    description: Save a snapshot of an entity before each write or delete tool call
+      changes it. While this is off, the file and raw-YAML tools (ha_write_file, ha_delete_file,
+      ha_config_set_yaml) refuse to write.
+  auto_backup_throttle_minutes:
+    name: Limite de auto-backup (minutos)
+    description: Com que frequência o backup automático pode capturar a mesma entidade.
+      0 captura a cada gravação; N acima de 0 captura no máximo um instantâneo a cada
+      N minutos por entidade. Intervalo 0–1440.
+  auto_backup_retain_per_entity:
+    name: Retenção de backup automático (por entidade)
+    description: O máximo de instantâneos mantidos por entidade. Cada nova captura
+      remove os instantâneos mais antigos acima deste número. Intervalo 1–10000.
+  enable_snapshot_actions:
+    name: Allow full HA snapshot actions
+    description: Allow AI assistants to manage full Home Assistant snapshots through
+      ha_manage_backup and the equivalent backup services and commands in ha_call_service.
+      Turning this off blocks every snapshot action, including listing. Snapshot deletion
+      is only available through ha_manage_backup and also requires Allow snapshot
+      deletion. Edit backups and the backup actions a person takes in the web settings
+      UI remain available.
+  backup_read_only:
+    name: Tornar o gerenciamento de backup somente leitura
+    description: Allow AI assistants to list, view, and diff edit backups, and list
+      full HA snapshots when snapshot actions are enabled. Block manual backup create,
+      restore (including edit restores), and delete, including the equivalent backup
+      services and commands in ha_call_service. Automatic pre-edit backups continue.
+      The backup actions a person takes in the web settings UI remain available.
+  enable_settings_transfer_actions:
+    name: Allow ha_manage_backup to export and import settings
+    description: Allow AI assistants to download this server's settings file and import
+      one through ha_manage_backup, as the Export and Import buttons on the Server
+      Settings tab do. An import keeps the human-only settings, and changing the security
+      policy, entity visibility or File & YAML Tools permissions also needs Dev tools
+      security policy access. An import can also turn on developer mode, tools and
+      features, and turn off protections such as secret redaction, SSL verification
+      and the IPv6 allowlist, as the file says, so check your settings after an AI
+      assistant imports one.
+  enable_snapshot_delete:
+    name: Permitir exclusão de instantâneos
+    description: Permitir que ha_manage_backup exclua instantâneos completos do Home
+      Assistant. Um instantâneo pode ser a última forma de reverter uma alteração
+      equivocada, portanto, uma pessoa deve ativar isso. Backups agendados, o instantâneo
+      mais recente e instantâneos mais recentes que a idade mínima permanecem protegidos.
+  snapshot_delete_min_age_days:
+    name: Idade mínima do instantâneo para exclusão (dias)
+    description: Quantos dias um instantâneo deve ter antes de poder ser excluído.
+      0 desativa o limite de idade; o instantâneo mais recente e os backups agendados
+      permanecem protegidos. Intervalo 0–365.
+  disabled_tools:
+    name: Ferramentas desativadas (separadas por vírgulas)
+    description: 'As ferramentas listadas aqui são forçadas a serem desativadas e
+      bloqueadas na interface web de Configurações (aba Ferramentas) — elas não podem
+      ser reativadas lá sem desmarcar esta opção primeiro. Um pequeno conjunto de
+      ferramentas obrigatórias (ha_search, ha_get_overview, ha_get_state, ha_report_issue,
+      ha_manage_backup) não pode ser desativado e continua funcionando mesmo se listado
+      aqui. ha_get_skill_guide pode ser desativado apenas enquanto o modo de melhores
+      práticas estritas (enable_strict_mandatory_bps) estiver desativado. Nomes de
+      ferramentas separados por vírgulas (ex: ha_call_event,ha_eval_template).'
+  pinned_tools:
+    name: Ferramentas fixadas (separadas por vírgulas)
+    description: As ferramentas listadas aqui são fixadas e bloqueadas — elas aparecem
+      no topo da aba Ferramentas e não podem ser desafixadas da interface web de Configurações
+      sem desmarcar esta opção primeiro. Útil em combinação com a Pesquisa de Ferramentas.
+      Nomes de ferramentas separados por vírgulas.
+  secret_path:
+    name: Substituição do caminho secreto
+    description: Caminho HTTP personalizado opcional para o servidor MCP. Deixe vazio
+      para usar o caminho seguro gerado automaticamente.
