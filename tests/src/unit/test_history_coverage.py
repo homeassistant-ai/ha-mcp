@@ -465,12 +465,13 @@ async def test_a_removed_entity_whose_rows_came_back_is_not_called_a_wrong_id(
     assert "No entity has a state under" not in _warnings(result)
 
 
-async def test_five_minute_statistics_carry_the_recorders_oldest_state(
+async def test_five_minute_statistics_carry_their_own_first_row(
     recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
     result = await _late_five_minute_statistics(hass, component_core_client)
 
     assert f"purge_keep_days: {recorded.keep_days}" in _warnings(result)
+    assert f"First short-term statistic for sensor.power: {(START + HOUR).isoformat()}" in _warnings(result)
 
 
 async def test_a_recorder_without_states_says_so(

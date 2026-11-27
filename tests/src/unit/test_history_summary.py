@@ -9,7 +9,7 @@ clock runs ahead of the reading the tool took before its query.
 
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Self
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.recorder import Recorder
@@ -80,6 +80,32 @@ def _summary(result: dict[str, Any], entity_id: str) -> dict[str, Any]:
         if totals[key] is not None:
             totals[key] = datetime.fromisoformat(totals[key]).timestamp() - _START
     return totals
+
+
+@pytest.mark.usefixtures("recorder")
+@pytest.mark.parametrize(("minimal", "no_attributes", "significant", "include_start"), [
+    (True, False, True, True), (False, False, False, True), (True, True, False, False)
+])
+async def test_history_page_matches_core(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient,
+    minimal: bool, no_attributes: bool, significant: bool, include_start: bool,
+) -> None:
+    client = component_core_client
+    await _record(hass, "climate.hall", ("heat", _BEFORE), ("heat", 5), ("off", 20),
+                  temperature={_BEFORE: 19, 5: 20, 20: 20})
+    query = {"entity_ids": ["climate.hall"], "start_time": _iso(0), "end_time": _iso(30),
+             "minimal_response": minimal, "no_attributes": no_attributes,
+             "significant_changes_only": significant, "include_start_time_state": include_start}
+    expected = (await client.send_websocket_message({"type": "history/history_during_period", **query}))["result"]["climate.hall"]
+    for order in ("asc", "desc"):
+        reply = await client.send_websocket_message({"type": "ha_mcp_tools/history_page",
+            "query": query, "limit": 1, "offset": 1, "order": order})
+        page = reply["result"]["entities"]["climate.hall"]
+        assert page == {"states": (expected if order == "asc" else expected[::-1])[1:2], "total_count": len(expected), "first": expected[0]["lu"]}
+    with patch.object(client, "send_websocket_message", new_callable=AsyncMock, wraps=client.send_websocket_message) as sent:
+        result = await _query(client, "climate.hall", 30, limit=1)
+    assert not result.get("warnings")
+    assert all(call.args[0]["type"] != "history/history_during_period" for call in sent.call_args_list)
 
 
 @pytest.mark.usefixtures("recorder")
