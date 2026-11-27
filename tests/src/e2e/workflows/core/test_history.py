@@ -22,6 +22,7 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.component_path import assert_component_path
 from ...utilities.topology import component_surface_available
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class TestGetHistory:
         )
 
         data = assert_mcp_success(result, "Get history for sun.sun")
+        assert_component_path(data)
 
         # Verify response structure - history data is nested in 'data' key
         inner_data = data.get("data", data)
@@ -467,6 +469,7 @@ class TestGetHistoryStatisticsSource:
             },
         )
         data = assert_mcp_success(result, "Energy statistics with units")
+        assert_component_path(data)
         data = data.get("data", data)
         entities = {row["entity_id"]: row for row in data["entities"]}
         for entity_id, unit in [

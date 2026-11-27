@@ -103,21 +103,26 @@ def statistics_warnings(entities: list[dict[str, Any]]) -> list[str]:
 
 
 async def converter_records(
-    client: Any, statistic_ids: list[str], units: dict[str, Any]
+    client: Any, statistic_ids: list[str], units: dict[str, Any], warnings: list[str]
 ) -> dict[str, dict[str, Any]]:
     """Core's converter choice and output unit for each statistic, through the
     component; empty without it."""
     from ..client.websocket_client import get_websocket_client
     from .component_api import (
         component_supports,
+        component_unusable_warning,
         get_component_caps,
         invalidate_caps,
         is_unknown_command,
     )
 
+    caps = await get_component_caps(client)
+    warning = component_unusable_warning(
+        caps, "Core's statistics converter could not be read"
+    )
     try:
-        caps = await get_component_caps(client)
         if not component_supports(caps, "core_contract"):
+            warnings.append(warning)
             return {}
         ws = await get_websocket_client(
             url=client.base_url,
@@ -132,18 +137,24 @@ async def converter_records(
         if is_unknown_command(exc):
             invalidate_caps(client)
         logger.warning("Statistics converter resolution failed", exc_info=True)
+        warnings.append(warning)
         return {}
 
 
 async def resolve_requested_units(
-    client: Any, entities: list[dict[str, Any]], units: dict[str, Any]
+    client: Any,
+    entities: list[dict[str, Any]],
+    units: dict[str, Any],
+    warnings: list[str],
 ) -> None:
     """Label each entity with the unit Core converts to for explicitly requested ``units``."""
     if not units or not entities:
         return
     label_requested_units(
         entities,
-        await converter_records(client, [e["entity_id"] for e in entities], units),
+        await converter_records(
+            client, [e["entity_id"] for e in entities], units, warnings
+        ),
         units,
     )
 

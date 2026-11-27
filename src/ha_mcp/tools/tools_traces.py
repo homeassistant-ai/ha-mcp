@@ -617,6 +617,8 @@ def _add_context_match(
     detail["context_id"] = context_id
     detail["context_match"] = match.match
     detail["context_scanned"] = match.scanned
+    if match.warning:
+        detail.setdefault("warnings", []).append(match.warning)
     if match.other_matches:
         detail["context_other_matches"] = list(match.other_matches)
 

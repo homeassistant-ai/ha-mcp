@@ -6,7 +6,12 @@ from typing import Any, Literal, NoReturn, cast
 
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
-from .component_api import component_supports, get_component_caps, invalidate_caps
+from .component_api import (
+    component_supports,
+    component_unusable_warning,
+    get_component_caps,
+    invalidate_caps,
+)
 from .helpers import raise_core_refusal, raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -31,6 +36,7 @@ class ContextTraceMatch:
     item_id: str
     trace_data: dict[str, Any] | None = None
     other_matches: tuple[dict[str, str], ...] = ()
+    warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +196,10 @@ async def resolve_context_trace(
         scanned=0,
         domain=domain,
         item_id=item_id,
+        warning=component_unusable_warning(
+            await get_component_caps(client),
+            "only a run's own context could be searched",
+        ),
     )
 
 
@@ -253,6 +263,10 @@ async def resolve_global_context(
         scanned=0,
         domain=entry_domain,
         item_id=entry_item_id,
+        warning=component_unusable_warning(
+            await get_component_caps(client),
+            "only a run's own context could be searched",
+        ),
     )
 
 

@@ -74,8 +74,9 @@ async def fetch_statistics(
         metadata,
         metadata_failure,
     )
+    warnings: list[str] = []
     await resolve_requested_units(
-        client, entities_statistics, command_params.get("units", {})
+        client, entities_statistics, command_params.get("units", {}), warnings
     )
     all_stat_types = (
         stat_types_list
@@ -109,7 +110,7 @@ async def fetch_statistics(
     }
 
     # An unknown unit says nothing about a statistic that returned no rows.
-    warnings = statistics_warnings(
+    warnings += statistics_warnings(
         [entity for entity in entities_statistics if entity["total_count"]]
     ) + await statistics_coverage_warnings(
         client,
@@ -177,7 +178,10 @@ async def fetch_statistics_totals(
         params.pop("types")
     metadata, metadata_failure = await fetch_statistics_metadata(client, statistic_ids)
     requested = params.get("units")
-    converted = await converter_records(client, statistic_ids, requested or {})
+    warnings: list[str] = []
+    converted = await converter_records(
+        client, statistic_ids, requested or {}, warnings
+    )
     entities = []
     for statistic_id in statistic_ids:
         record = metadata.get(statistic_id)
@@ -216,7 +220,7 @@ async def fetch_statistics_totals(
         ),
         "query_params": {"statistic_types": types, "summary": True},
     }
-    warnings = statistics_warnings(
+    warnings += statistics_warnings(
         [entity for entity in entities if entity["entity_id"] not in empty]
     ) + await empty_statistics_warnings(
         client,

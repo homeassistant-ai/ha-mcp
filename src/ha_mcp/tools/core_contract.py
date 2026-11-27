@@ -9,6 +9,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
     component_supports,
+    component_unusable_warning,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
@@ -33,6 +34,13 @@ async def include_core_contract(
     warnings = contract.pop("warnings", [])
     if contract.get("status") == "unavailable":
         warnings.append(contract["reason"])
+        if command.startswith(("recorder/", "history/", "logger/")):
+            warnings.append(
+                component_unusable_warning(
+                    await get_component_caps(client),
+                    "the requested Core schema could not be described",
+                )
+            )
     if warnings:
         result.setdefault("warnings", []).extend(warnings)
     result["core_contract"] = contract
