@@ -262,6 +262,7 @@ CAPABILITIES: list[str] = [
     scene_editor.CAPABILITY,
     config_keys.CAPABILITY,
     automation_config.CAPABILITY,
+    automation_config.SCRIPT_LOOKUP_CAPABILITY,
     config_references.CAPABILITY,
     config_file_items.CAPABILITY,
     recorder_status.CAPABILITY,

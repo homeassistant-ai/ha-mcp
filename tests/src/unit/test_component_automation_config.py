@@ -481,6 +481,114 @@ async def test_references_are_absent_while_the_automation_is_not_loaded(
     assert got["references"] is None
 
 
+# --- lookup of a script -------------------------------------------------------
+
+_SCRIPT_BLUEPRINT_PATH = "ha_mcp_test/flash.yaml"
+_SCRIPT_BLUEPRINT = """\
+blueprint:
+  name: Flash
+  domain: script
+  input:
+    target:
+      selector: {target: {}}
+sequence:
+  - action: light.turn_on
+    target: !input target
+"""
+FLASH = "script.flash"
+
+
+async def _load_scripts(hass: HomeAssistant, scripts: dict[str, Any]) -> None:
+    """Load ``scripts`` the way Core loads ``scripts.yaml`` at start."""
+    await write_config_files(
+        hass,
+        {
+            f"blueprints/script/{_SCRIPT_BLUEPRINT_PATH}": _SCRIPT_BLUEPRINT,
+            "scripts.yaml": dump(scripts),
+            "configuration.yaml": "script: !include scripts.yaml\n",
+        },
+    )
+    await setup_from_configuration(hass, "script")
+
+
+async def test_a_script_lookup_carries_the_references_core_reads(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    flash = {
+        "use_blueprint": {
+            "path": _SCRIPT_BLUEPRINT_PATH,
+            "input": {"target": {"entity_id": ["light.porch"], "floor_id": "f1"}},
+        }
+    }
+    await _load_scripts(hass, {"flash": flash})
+
+    got = await _command(
+        component_ws, action="lookup", domain="script", unique_id="flash"
+    )
+
+    assert got["found"] is True
+    assert got["entity"]["entity_id"] == FLASH
+    assert got["loaded"] is True
+    assert got["validation"] is None
+    assert got["references"] == {
+        "entities": ["light.porch"],
+        "devices": [],
+        "areas": [],
+        "floors": ["f1"],
+        "labels": [],
+        "blueprint": _SCRIPT_BLUEPRINT_PATH,
+    }
+
+
+async def test_a_script_lookup_reports_the_validation_issue_core_filed(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """A blueprint script missing a required input fails to load; Core files
+    a repair issue for it under the script domain."""
+    await _load_scripts(
+        hass, {"flash": {"use_blueprint": {"path": _SCRIPT_BLUEPRINT_PATH}}}
+    )
+    issue = issue_registry.async_get_issue(
+        "script", f"{FLASH}_validation_failed_blueprint"
+    )
+    assert issue is not None
+    assert issue.translation_placeholders is not None
+
+    got = await _command(
+        component_ws, action="lookup", domain="script", entity_id=FLASH
+    )
+
+    assert got["found"] is True
+    assert got["validation"] == {
+        "status": "failed_blueprint",
+        "error": issue.translation_placeholders["error"],
+    }
+    assert got["loaded"] is False
+    assert got["references"] is None
+
+
+async def test_a_script_lookup_does_not_answer_for_an_automation(
+    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+) -> None:
+    await _load(hass, _MORNING)
+
+    got = await _command(
+        component_ws, action="lookup", domain="script", entity_id=MORNING
+    )
+
+    assert got["found"] is False
+
+
+async def test_only_the_lookup_takes_the_script_domain(hass: HomeAssistant) -> None:
+    """Answered, a script validate would run Core's automation validator."""
+    with pytest.raises(HomeAssistantError):
+        await automation_config.async_automation_config(
+            hass, {"action": "validate", "domain": "script", "config": {}}
+        )
+
+
 @pytest.mark.parametrize(
     "msg",
     [

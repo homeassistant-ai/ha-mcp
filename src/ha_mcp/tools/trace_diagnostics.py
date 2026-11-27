@@ -58,18 +58,9 @@ async def _gather_diagnostics(
         if last_triggered:
             diagnostics["last_triggered"] = last_triggered
 
-    lookup = (
-        await automation_lookup(client, entity_id=entity_id)
-        if domain == "automation"
-        else None
-    )
+    lookup = await automation_lookup(client, entity_id=entity_id, domain=domain)
     entity, validation, references = await registry_details(
-        client,
-        lookup,
-        entity_id,
-        warnings,
-        component_lookup=domain == "automation",
-        related_fallback=False,
+        client, lookup, entity_id, warnings, domain=domain, related_fallback=False
     )
     diagnostics["validation"] = validation
     diagnostics["references"] = references
@@ -78,7 +69,7 @@ async def _gather_diagnostics(
         "ok",
     }:
         warnings.append(
-            f"automation validation failed ({validation['status']}): "
+            f"{domain} validation failed ({validation['status']}): "
             f"{validation.get('error') or 'see the repair issue'}"
         )
     if lookup is not None:

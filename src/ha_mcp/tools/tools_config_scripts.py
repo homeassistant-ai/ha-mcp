@@ -30,6 +30,7 @@ from ..utils.python_sandbox import (
 )
 from .auto_backup import with_auto_backup
 from .automation_errors import raise_if_core_rejected
+from .automation_registry_details import registry_details
 from .best_practice_checker import (
     BestPracticeCheckResult,
 )
@@ -42,13 +43,14 @@ from .blueprint_substitute import (
     validate_write_modes,
 )
 from .coercion import JSON_STRING_COERCION, parse_json_param
+from .component_automation import automation_lookup
 from .config_helpers.registry import validate_registry_ids
 from .config_write_helpers import (
     apply_entity_category,
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
-    fetch_entity_category,
+    entry_category,
     merge_validation_meta,
     refuse_write_by_bare_id_of_another_key,
 )
@@ -141,6 +143,8 @@ class ConfigScriptTools:
 
         The returned `config_hash` stays the same across consecutive reads of an unchanged config.
 
+        `entity` is the script's entity registry row, `validation` holds Home Assistant's status and error when the script failed to load (None when it loaded), and `references` lists the entities, devices, areas, floors, labels and blueprint it uses. `references` is None without the ha_mcp_tools component's lookup and while Home Assistant has not loaded the script (it failed to load); `warnings` says which.
+
         The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A bare id names the script stored under that key first; `script.<x>` names that entity's script, or the script stored under key `<x>` when no entity has that id.
 
         EXAMPLES:
@@ -162,8 +166,8 @@ class ConfigScriptTools:
                 ],
             )
 
-            # Script gets ALWAYS take the legacy path — the component's
-            # in-process ``config_get`` was withdrawn. It served
+            # The body ALWAYS comes from the REST config endpoint — the
+            # component's in-process ``config_get`` was withdrawn. It served
             # ``entity.raw_config``, which is only the storage body as of the
             # last COMPLETED async reload, with no version marker to tell a
             # fresh body from a stale one. A get racing a reload returned the
@@ -189,32 +193,45 @@ class ConfigScriptTools:
             return None  # unreachable: exception_to_structured_error always raises
 
     async def _legacy_get_script(self, script_id: str) -> dict[str, Any]:
-        """Assemble the script-get response from the REST/WS pipeline.
+        """Assemble the script-get response: the body from REST, the registry
+        row, load failure and references from the component's lookup, or from
+        Core's registry and repairs commands without it.
 
-        The multi-fetch path: id-resolution WS + per-id config REST + entity
-        lookup + ``fetch_entity_category`` WS call. This is the ONLY script-get path —
-        see ``ha_config_get_script`` for why script gets never route through the
-        component's ``config_get`` (its ``raw_config`` freshness lags the config
-        file between a write and the next completed reload).
+        The body never comes from the component's ``config_get`` (see
+        ``ha_config_get_script``: its ``raw_config`` lags the config file
+        between a write and the next completed reload).
         """
         config_result = await self._fetch_script_config_envelope(script_id)
         # Extract actual script config body and compute hash before category injection
         actual_config = config_result.get("config", config_result)
         config_hash_value = compute_config_hash(actual_config)
 
-        # Fetch category from entity registry (best-effort)
-        # (injected after hash so transient registry failures don't affect the hash)
-        cat_warnings: list[str] = []
+        # The category is injected after hashing so a failed registry read
+        # does not change the hash.
+        warnings: list[str] = []
         key = config_result.get("script_id")
-        entity_id = await script_entity_or_warning(
-            self._client, script_id, key, cat_warnings, "category unavailable"
+        lookup = (
+            await automation_lookup(self._client, unique_id=key, domain="script")
+            if key
+            else None
         )
-        if entity_id:
-            cat_id = await fetch_entity_category(
-                self._client, entity_id, "script", cat_warnings
+        if lookup is not None:
+            entity_id = (lookup.get("entity") or {}).get("entity_id")
+        else:
+            entity_id = await script_entity_or_warning(
+                self._client, script_id, key, warnings, "registry entry unavailable"
             )
-            if cat_id:
-                actual_config["category"] = cat_id
+        entity, validation, references = await registry_details(
+            self._client,
+            lookup,
+            entity_id,
+            warnings,
+            domain="script",
+            related_fallback=False,
+        )
+        cat_id = entry_category(entity, "script")
+        if cat_id:
+            actual_config["category"] = cat_id
 
         # Issue #1334: return the canonical storage key from the
         # rest_client envelope so callers can thread the result into
@@ -245,11 +262,12 @@ class ConfigScriptTools:
             # over the body.
             "config": actual_config,
             "config_hash": config_hash_value,
+            "entity": entity,
+            "validation": validation,
+            "references": references,
         }
-        # Top level, not inside ``config``: warnings are a top-level list[str]
-        # by contract.
-        if cat_warnings:
-            response.setdefault("warnings", []).extend(cat_warnings)
+        if warnings:
+            response["warnings"] = warnings
         return response
 
     async def _raise_script_not_found(

@@ -16,7 +16,7 @@ from homeassistant.setup import async_setup_component
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.automation_registry_details import (
-    REFERENCES_NOT_LOADED,
+    references_not_loaded,
     registry_details,
 )
 from ha_mcp.tools.component_automation import automation_lookup
@@ -244,10 +244,11 @@ class TestGatherDiagnostics:
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("registry_api")
-    async def test_script_reads_the_registry_without_the_automation_component(
+    async def test_a_script_is_looked_up_through_the_component(
         self, hass: HomeAssistant, component_core_client: HomeAssistantClient
     ) -> None:
-        """The automation-only component is not reported missing for scripts."""
+        """The component's lookup reads scripts too, so it is not reported
+        missing for one."""
         await _setup(
             hass,
             "script",
@@ -259,7 +260,8 @@ class TestGatherDiagnostics:
         assert result["entity_exists"] is True
         assert result["trace_key_available"] is True
         assert result["trace_storage_enabled"] is True
-        assert result["loaded"] is None
+        assert result["loaded"] is True
+        assert result["references"]["blueprint"] is None
         assert not any("component" in warning for warning in warnings)
 
 
@@ -366,4 +368,4 @@ class TestRegistryDetailsReferences:
             component_core_client, lookup, "automation.bad", warnings
         )
 
-        assert warnings == [REFERENCES_NOT_LOADED]
+        assert warnings == [references_not_loaded("automation")]

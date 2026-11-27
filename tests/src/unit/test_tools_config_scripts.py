@@ -875,8 +875,11 @@ class TestCollidingIds:
 
         assert got["config"]["alias"] == "A"
         assert "category" not in got["config"]
-        assert len(got["warnings"]) == 1
-        assert "registry unavailable" in got["warnings"][0]
+        # The other warning: no component, so no references.
+        assert [w for w in got["warnings"] if "registry unavailable" in w] == [
+            got["warnings"][0]
+        ]
+        assert len(got["warnings"]) == 2
 
     async def test_the_id_search_reports_opens_that_script(
         self, tools: ConfigScriptTools, core_client: HomeAssistantClient

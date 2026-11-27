@@ -7,7 +7,9 @@ automation that fails to load shows that same pair in its repair issue. The
 needs no copy of Core's automation schema. ``describe`` answers Core's trigger
 or condition descriptions, keyed by every registered platform. ``lookup``
 joins an automation's entity registry row, the validation repair issue Core
-filed for it and the references Core's search integration reads.
+filed for it and the references Core's search integration reads; with
+``domain: "script"`` it reads the same three for a script, whose entities Core
+validates, repairs and references the same way.
 
 A Core without one of these parts, or one that fails unexpectedly, answers
 ``status: "unavailable"`` and the server takes its REST/WebSocket fallback.
@@ -44,7 +46,10 @@ WS_AUTOMATION_CONFIG = "ha_mcp_tools/automation_config"
 # Advertised by websocket_api's info; the server's automation tools use it and
 # fall back to Core's automation REST API and WebSocket commands.
 CAPABILITY = "automation_config"
-_DOMAIN = "automation"
+# Advertised once lookup takes ``domain: "script"``; a component without it
+# refuses the field, so the server asks it for automations only.
+SCRIPT_LOOKUP_CAPABILITY = "script_lookup"
+_DOMAINS = ("automation", "script")
 # The field each action reads; lookup takes either key.
 _NEEDS: dict[str, tuple[str, ...]] = {
     "validate": ("config",),
@@ -57,6 +62,28 @@ _REFERENCES = ("entities", "devices", "areas", "floors", "labels")
 
 def _unavailable(error: str) -> dict[str, Any]:
     return {"status": "unavailable", "error": error}
+
+
+def _script_parts() -> SimpleNamespace:
+    """Core's script parts the lookup uses; a script has no validate or describe."""
+    from homeassistant.components import script
+    from homeassistant.components.script import config
+    from homeassistant.helpers import entity_registry as er
+    from homeassistant.helpers import issue_registry as ir
+
+    return SimpleNamespace(
+        domain="script",
+        statuses=getattr(config, "ValidationStatus", None),
+        entity_registry=getattr(er, "async_get", None),
+        issue_registry=getattr(ir, "async_get", None),
+        # Core keeps the script EntityComponent under its bare domain key.
+        component_key="script",
+        references={
+            name: getattr(script, f"{name}_in_script", None) for name in _REFERENCES
+        },
+        blueprint=getattr(script, "blueprint_in_script", None),
+        unavailable_entity=getattr(script, "UnavailableScriptEntity", None),
+    )
 
 
 def core_parts() -> SimpleNamespace:
@@ -73,6 +100,7 @@ def core_parts() -> SimpleNamespace:
     from homeassistant.helpers import issue_registry as ir
 
     return SimpleNamespace(
+        domain="automation",
         # Private, but it is what Core's loader runs and what fills the repair
         # issue; the public one raises instead of reporting the failed section.
         validate=getattr(config, "_async_validate_config_item", None),
@@ -159,28 +187,28 @@ async def _describe(
     return {"descriptions": await describe(hass)}
 
 
-def _registry_entry(registry: Any, msg: dict[str, Any]) -> Any:
+def _registry_entry(registry: Any, domain: str, msg: dict[str, Any]) -> Any:
     if msg.get("entity_id"):
         entry = registry.async_get(msg["entity_id"])
-        if entry is not None and entry.platform == _DOMAIN:
+        if entry is not None and entry.platform == domain:
             return entry
     if not msg.get("unique_id"):
         return None
-    entity_id = registry.async_get_entity_id(_DOMAIN, _DOMAIN, msg["unique_id"])
+    entity_id = registry.async_get_entity_id(domain, domain, msg["unique_id"])
     return registry.async_get(entity_id) if entity_id else None
 
 
 def _validation(
     hass: HomeAssistant, core: SimpleNamespace, entity_id: str
 ) -> dict[str, Any] | None:
-    """The validation repair issue Core keeps for an automation it could not load.
+    """The validation repair issue Core keeps for an item it could not load.
 
-    Read by its exact id: an id prefix can match another automation's
-    entity_id. An inactive issue is a stored record from an earlier run.
+    Read by its exact id: an id prefix can match another item's entity_id.
+    An inactive issue is a stored record from an earlier run.
     """
     issues = core.issue_registry(hass)
     for status in core.statuses:
-        issue = issues.async_get_issue(_DOMAIN, f"{entity_id}_validation_{status}")
+        issue = issues.async_get_issue(core.domain, f"{entity_id}_validation_{status}")
         if issue is not None and issue.active:
             placeholders = issue.translation_placeholders or {}
             return {"status": str(status), "error": placeholders.get("error")}
@@ -188,9 +216,9 @@ def _validation(
 
 
 def _loaded(hass: HomeAssistant, core: SimpleNamespace, entity_id: str) -> bool:
-    """Whether Core's automation EntityComponent holds a working entity for it.
+    """Whether Core's EntityComponent for the domain holds a working entity.
 
-    Core also adds an entity for an automation that failed validation, an
+    Core also adds an entity for an item that failed validation, an
     unavailable placeholder whose reference readers answer empty sets; that
     one does not count as loaded.
     """
@@ -222,8 +250,10 @@ async def _lookup(
         *core.references.values(),
     )
     if None in needed:
-        return _unavailable("This Home Assistant lacks part of the automation lookup")
-    entry = _registry_entry(core.entity_registry(hass), msg)
+        return _unavailable(
+            f"This Home Assistant lacks part of the {core.domain} lookup"
+        )
+    entry = _registry_entry(core.entity_registry(hass), core.domain, msg)
     if entry is None:
         return {
             "found": False,
@@ -250,21 +280,23 @@ _HANDLERS = {"validate": _validate, "describe": _describe, "lookup": _lookup}
 def _require(msg: dict[str, Any]) -> None:
     """Refuse a request without the field its action reads, as registry_lookup
     does, rather than answer a result the caller could take for "not found"."""
+    from homeassistant.exceptions import HomeAssistantError
+
     action = msg["action"]
     needs = _NEEDS[action]
     if all(msg.get(field) in (None, "") for field in needs):
-        from homeassistant.exceptions import HomeAssistantError
-
         raise HomeAssistantError(
             f"{WS_AUTOMATION_CONFIG} {action} needs {' or '.join(needs)}"
         )
+    if msg.get("domain", "automation") != "automation" and action != "lookup":
+        raise HomeAssistantError(f"{WS_AUTOMATION_CONFIG} {action} is for automations")
 
 
 async def async_automation_config(
     hass: HomeAssistant, msg: dict[str, Any]
 ) -> dict[str, Any]:
     _require(msg)
-    core = core_parts()
+    core = _script_parts() if msg.get("domain") == "script" else core_parts()
     try:
         return await _HANDLERS[msg["action"]](hass, core, msg)
     except Exception as err:
@@ -296,6 +328,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
                 vol.Optional("kind"): vol.In(_KINDS),
                 vol.Optional("entity_id"): str,
                 vol.Optional("unique_id"): str,
+                vol.Optional("domain"): vol.In(_DOMAINS),
             },
             do_automation_config,
             prep,
