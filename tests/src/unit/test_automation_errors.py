@@ -201,6 +201,42 @@ async def test_rejection_offers_the_registered_trigger_closest_to_the_typo(
     assert body["closest_matches"] == ["schedule.block_started", "schedule.block_ended"]
 
 
+async def test_each_error_core_lists_gets_its_closest_triggers(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    schedule_triggers: None,
+) -> None:
+    """Core's message names its first error only; the hint for a later one
+    comes from Core's errors list, and the first is not hinted twice."""
+    texts = [
+        await _core_rejection(
+            hass,
+            core_client,
+            {"alias": "porch", "triggers": [{"trigger": key}], "actions": []},
+        )
+        for key in ("schedule.block_strt", "schedule.turned_on")
+    ]
+
+    with pytest.raises(ToolError) as exc:
+        await raise_core_rejection(
+            core_client,
+            texts[0],
+            {},
+            failed_section="triggers",
+            context={"errors": [{"message": text} for text in texts]},
+            bp_warnings=[],
+        )
+    body = json.loads(str(exc.value))
+
+    hints = [s for s in body["error"]["suggestions"] if "has no trigger" in s]
+    assert [hint.split("'")[1] for hint in hints] == [
+        "schedule.block_strt",
+        "schedule.turned_on",
+    ]
+    assert "schedule.block_started" in body["closest_matches"]
+    assert len(body["closest_matches"]) == len(set(body["closest_matches"]))
+
+
 async def test_component_describe_offers_the_same_closest_trigger(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,

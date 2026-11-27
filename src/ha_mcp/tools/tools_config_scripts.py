@@ -144,7 +144,7 @@ class ConfigScriptTools:
 
         The returned `config_hash` stays the same across consecutive reads of an unchanged config.
 
-        `entity` is the script's entity registry row, `validation` holds Home Assistant's status and error when the script failed to load (None when it loaded), and `references` lists the entities, devices, areas, floors, labels and blueprint it uses. `references` is None without the ha_mcp_tools component's lookup and while Home Assistant has not loaded the script (it failed to load); `warnings` says which.
+        `entity` is the script's entity registry row, `validation` holds Home Assistant's status and error when the script failed to load (None when it loaded), and `references` lists the entities, devices, areas, floors, labels and blueprint it uses. `references` is None without the ha_mcp_tools component's lookup, while Home Assistant has not loaded the script (its entity is disabled or it failed to load), and before Home Assistant registers an entity for a new script (`entity` is None then); `warnings` says which.
 
         The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A bare id names the script stored under that key first; `script.<x>` names that entity's script, or the script stored under key `<x>` when no entity has that id.
 
@@ -170,7 +170,7 @@ class ConfigScriptTools:
             # The body ALWAYS comes from the REST config endpoint, which reads
             # the config file. The entity's in-memory raw_config lags it until
             # the reload after a write completes, so a get racing that reload
-            # broke the get -> python_transform -> set round-trip.
+            # would return the pre-edit body.
             return await self._legacy_get_script(script_id)
         except ToolError:
             raise
@@ -187,16 +187,11 @@ class ConfigScriptTools:
             return None  # unreachable: exception_to_structured_error always raises
 
     async def _legacy_get_script(self, script_id: str) -> dict[str, Any]:
-        """Assemble the script-get response: the body from REST, the registry
-        row, load failure and references from the component's lookup, or from
-        Core's registry and repairs commands without it.
-
-        The body never comes from the component's ``config_get`` (see
-        ``ha_config_get_script``: its ``raw_config`` lags the config file
-        between a write and the next completed reload).
-        """
+        """Assemble the script-get response: the body from REST; the registry
+        row, load failure and references from the component's lookup, or,
+        without it, the row and load failure from Core's registry and repairs
+        commands (no references)."""
         config_result = await self._fetch_script_config_envelope(script_id)
-        # Extract actual script config body and compute hash before category injection
         actual_config = config_result.get("config", config_result)
         config_hash_value = compute_config_hash(actual_config)
 
@@ -209,9 +204,13 @@ class ConfigScriptTools:
             if key
             else None
         )
-        if lookup is not None:
-            entity_id = (lookup.get("entity") or {}).get("entity_id")
-        else:
+        entity_id: str | None = None
+        if lookup is not None and lookup.get("found") is False:
+            warnings.append(
+                "registry entry, validation and references unavailable: Home "
+                "Assistant has no script entity for this config yet"
+            )
+        elif lookup is None:
             entity_id = await script_entity_or_warning(
                 self._client, script_id, key, warnings, "registry entry unavailable"
             )
@@ -229,7 +228,7 @@ class ConfigScriptTools:
 
         # The canonical storage key, for later ha_config_*_script calls; an
         # envelope without it is a client contract violation, logged.
-        canonical_id = config_result.get("script_id")
+        canonical_id = key
         if canonical_id is None:
             logger.warning(
                 "get_script_config envelope missing 'script_id' for "
@@ -378,7 +377,7 @@ class ConfigScriptTools:
         passed as the write target so the REST client skips the redundant
         entity-registry lookup; ``None`` lets the REST
         client resolve. Passing the caller id separately keeps a renamed
-        script's alias caller-facing (#1935). A 400 carrying the config view's
+        script's alias caller-facing. A 400 carrying the config view's
         verdict is raised with Core's text and its hints, as for automations;
         any other API error propagates unchanged.
         """
@@ -555,8 +554,10 @@ class ConfigScriptTools:
                 description=(
                     "Run these actions now without storing them, as the script "
                     "editor's Run on a single action does (Core's execute_script). "
-                    "Used alone with script_id, which is not sent; returns when "
-                    "the run ends, with the response of a `stop` step."
+                    "Waits up to 30 s for the run to end; `response` is what a "
+                    "`stop` step with `response_variable` returned. A failed "
+                    "condition, or a `stop` with `error: true`, ends the run "
+                    "early with the same success reply."
                 ),
                 default=None,
             ),
@@ -606,8 +607,10 @@ class ConfigScriptTools:
           variables), 'stop' stops its running executions. Write config changes
           in a separate call first: Home Assistant signals no completion of the
           script reload a write triggers.
-        - run_sequence (alone with script_id): run actions without storing them,
-          e.g. one step of the script, with optional variables.
+        - run_sequence (alone with script_id, which is not sent): run actions
+          without storing them, e.g. one step of the script; the script's own
+          variables and field defaults do not apply, so pass what the steps
+          read in variables.
 
         EXAMPLES:
         - Create: ha_config_set_script(script_id="blink_light", config={"alias": "Light Blink", "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.living_room"}}, {"delay": {"seconds": 2}}, {"action": "light.turn_off", "target": {"entity_id": "light.living_room"}}]})
@@ -977,7 +980,7 @@ class ConfigScriptTools:
         # upsert skips a second entity-registry lookup.
         # ``script_id`` stays the caller id (the fetched config already
         # carries an alias here, so the default is a no-op, but keep the
-        # contract consistent — #1935).
+        # contract consistent).
         result = await self._upsert_script(
             transformed_config, script_id, resolved_id, bp_warnings
         )

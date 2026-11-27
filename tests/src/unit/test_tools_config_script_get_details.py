@@ -119,3 +119,26 @@ async def test_a_component_without_the_script_lookup_is_not_asked_for_it(
 
     _assert_failed_blueprint(got)
     assert got["warnings"] == [REFERENCES_OMITTED_WITHOUT_COMPONENT]
+
+
+async def test_a_script_home_assistant_has_not_registered_yet_says_so(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """A script written to the file before the reload that registers it."""
+    await write_config_files(
+        hass,
+        {
+            "scripts.yaml": dump(
+                {"working": _WORKING, "failing": _FAILING, "new": _WORKING}
+            )
+        },
+    )
+
+    got = await _get(component_core_client, "new")
+
+    assert got["entity"] is None
+    assert got["references"] is None
+    assert got["warnings"] == [
+        "registry entry, validation and references unavailable: Home "
+        "Assistant has no script entity for this config yet"
+    ]

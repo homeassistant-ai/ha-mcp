@@ -3,54 +3,98 @@ editor's Run on one action does, and the checks on ha_config_set_script's run
 arguments.
 
 The editor sends Core's ``execute_script`` with the action as its sequence.
-Core validates the whole sequence before it runs any of it and answers once
-the run has finished, with the response a ``stop`` step returned, if any.
+Core checks each action's config before any step runs; a service's own data
+is checked only when its step runs. Core answers once the run has finished,
+with the response a ``stop`` step returned, if any.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..client.exceptions import HomeAssistantCommandTimeout, HomeAssistantError
-from ..errors import ErrorCode, create_error_response
-from .helpers import exception_to_structured_error, raise_tool_error
+from ..client.exceptions import (
+    HomeAssistantCommandNotSent,
+    HomeAssistantConnectionError,
+)
+from ..errors import ErrorCode, create_error_response, create_validation_error
+from .backup_access import guard_snapshot_route
+from .config_entry_flow import is_component_domain
+from .helpers import (
+    exception_to_structured_error,
+    raise_core_refusal,
+    raise_tool_error,
+)
+
+_CHECK_BEFORE_RESENDING = (
+    "Steps before the failing one may already have run; check their effects "
+    "before sending the actions again."
+)
+
+
+def _guard_actions(node: Any) -> None:
+    """Hold each literal action, nested ones too, to ha_call_service's checks.
+
+    shortcut: a templated action name is not resolved here, as in a stored
+    script; Core resolves it when the step runs.
+    """
+    if isinstance(node, list):
+        for item in node:
+            _guard_actions(item)
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("action", "service") and isinstance(value, str):
+                domain, _, service = value.partition(".")
+                if is_component_domain(domain):
+                    raise_tool_error(
+                        create_validation_error(
+                            "run_sequence cannot run 'ha_mcp_tools' actions; use "
+                            "the dedicated ha-mcp tools.",
+                            parameter="run_sequence",
+                        )
+                    )
+                guard_snapshot_route(domain=domain, service=service)
+            _guard_actions(value)
 
 
 async def run_script_sequence(
     client: Any, sequence: list[dict[str, Any]], variables: dict[str, Any] | None
 ) -> dict[str, Any]:
     """Core's ``execute_script`` reply as the tool's reply."""
+    _guard_actions(sequence)
     message: dict[str, Any] = {"type": "execute_script", "sequence": sequence}
     if variables:
         message["variables"] = variables
     try:
         result = await client.send_websocket_message(message)
-    except HomeAssistantCommandTimeout:
-        # Core answers only when the run ends; the run goes on without it.
+    except HomeAssistantCommandNotSent as exc:
+        exception_to_structured_error(exc, context={"action": "run_sequence"})
+    except HomeAssistantConnectionError as exc:
+        # Sent, then no answer: Core answers only when the run ends, and the
+        # run goes on without the connection.
         return {
             "success": True,
             "partial": True,
             "action": "run_sequence",
-            "message": "Home Assistant took the actions but did not answer before "
-            "the wait ended; they are likely still running.",
+            "message": "The actions were sent, but "
+            + (
+                "Home Assistant did not answer within the wait"
+                if exc.timed_out
+                else "the connection dropped before Home Assistant answered"
+            )
+            + "; they are most likely still running.",
             "warnings": [
-                "Do not send the actions again: a second run would repeat any "
-                "step the first one has already done."
+                "Check the actions' effects before sending them again: a second "
+                "run would repeat any step the first one has already done."
             ],
         }
-    except HomeAssistantError as exc:
-        exception_to_structured_error(exc, context={"action": "run_sequence"})
     if not result.get("success"):
-        code = result.get("error_code")
-        # A step that fails as it runs fails after the steps before it ran.
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED
-                if code == "invalid_format"
-                else ErrorCode.SERVICE_CALL_FAILED,
-                f"Home Assistant did not complete the actions: {result.get('error')}",
-                context={"action": "run_sequence", "error_code": code},
-            )
+        # Core does not say which step failed, and a refusal can come after
+        # earlier steps ran: a service's data is checked when its step runs.
+        raise_core_refusal(
+            "Home Assistant did not complete the actions",
+            result,
+            context={"action": "run_sequence"},
+            suggestions=[_CHECK_BEFORE_RESENDING],
         )
     reply = result.get("result") or {}
     return {

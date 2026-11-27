@@ -20,13 +20,14 @@ from .config_write_helpers import fetch_registry_entry
 from .util_helpers import search_related
 
 REFERENCES_NEED_COMPONENT = (
-    "references need the ha_mcp_tools component's automation_config bridge, "
-    "which is not available; related holds Core's broader Related set instead "
-    "(also the devices, areas and integrations of what the automation uses)"
+    "references need the ha_mcp_tools component's automation_config lookup, "
+    "which did not answer (component absent or too old); related holds Core's "
+    "broader Related set instead (also the devices, areas and integrations of "
+    "what the automation uses)"
 )
 REFERENCES_OMITTED_WITHOUT_COMPONENT = (
-    "references need the ha_mcp_tools component's automation_config bridge, "
-    "which is not available; references are omitted when the component is absent"
+    "references need the ha_mcp_tools component's automation_config lookup, "
+    "which did not answer (component absent or too old); references are omitted"
 )
 
 
@@ -85,7 +86,7 @@ async def core_related(
 
 
 async def repair_validation(
-    client: Any, entity_id: str, warnings: list[str], domain: str = "automation"
+    client: Any, entity_id: str, warnings: list[str], domain: str
 ) -> dict[str, Any] | None:
     """Core's validation verdict from the repair issue it raises for a failed load."""
     try:

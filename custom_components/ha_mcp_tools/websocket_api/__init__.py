@@ -125,8 +125,9 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/automation_config`` — Core's automation validator run on a
   proposed config (``validate``: Core's ``validation_status`` and humanized
   error), Core's trigger/condition descriptions (``describe``), and an
-  automation's registry row, validation repair issue and references
-  (``lookup``). See ``automation_config.py``.
+  automation's or, with ``domain: "script"`` (capability ``script_lookup``), a
+  script's registry row, validation repair issue and references (``lookup``).
+  See ``automation_config.py``.
 * ``ha_mcp_tools/config_references`` — a proposed automation, script or scene
   validated by Core, its references collected by Core's own helpers and
   checked against Core's registries, and each entity target put to Core's

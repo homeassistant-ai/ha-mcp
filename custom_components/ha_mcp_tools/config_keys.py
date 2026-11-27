@@ -23,8 +23,8 @@ DOMAINS = ("automation", "script")
 def config_keys(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     """The keys Core's schema for ``msg["domain"]`` takes (``PLATFORM_SCHEMA``
     for an automation, ``SCRIPT_ENTITY_SCHEMA`` for a script) plus
-    ``BLUEPRINT_INSTANCE_FIELDS``. A Core without them fails the command,
-    which the server answers like a missing component."""
+    ``BLUEPRINT_INSTANCE_FIELDS``. A Core without them fails the command; the
+    server then has no key list, as without the component."""
     from homeassistant.components.automation import config as automation
     from homeassistant.components.blueprint import schemas as blueprint
     from homeassistant.components.script import config as script

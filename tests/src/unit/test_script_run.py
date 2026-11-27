@@ -15,8 +15,13 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import async_capture_events
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.exceptions import HomeAssistantCommandTimeout
+from ha_mcp.client.exceptions import (
+    HomeAssistantCommandNotSent,
+    HomeAssistantCommandTimeout,
+)
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+from ha_mcp.config import get_global_settings
 from ha_mcp.tools import auto_backup, entity_registration
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
@@ -225,44 +230,121 @@ async def test_run_sequence_returns_the_response_of_a_stop_step(
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    ("sequence", "code"),
+    ("sequence", "ha_error_code", "ran_before_failure"),
     [
         # Core's schema refuses it before the run starts.
-        ([{"event": "step_ran"}, {"delay": "not a time"}], "VALIDATION_FAILED"),
+        ([{"event": "step_ran"}, {"delay": "not a time"}], "invalid_format", 0),
+        # A service's data is checked only when its step runs.
+        (
+            [
+                {"event": "step_ran"},
+                {"action": "script.turn_on", "data": {"bogus_field": 1}},
+            ],
+            "invalid_format",
+            1,
+        ),
         # The step runs and Core has no such action.
-        ([{"event": "step_ran"}, {"action": "nope.nothing"}], "SERVICE_CALL_FAILED"),
+        (
+            [{"event": "step_ran"}, {"action": "nope.nothing"}],
+            "service_validation_error",
+            1,
+        ),
     ],
-    ids=["refused", "failed-while-running"],
+    ids=["refused", "data-refused-while-running", "failed-while-running"],
 )
 async def test_run_sequence_reports_cores_refusal_and_what_ran(
     hass: HomeAssistant,
     tools: ConfigScriptTools,
     sequence: list[dict[str, Any]],
-    code: str,
+    ha_error_code: str,
+    ran_before_failure: int,
 ) -> None:
     ran = async_capture_events(hass, "step_ran")
 
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_config_set_script(script_id="morning", run_sequence=sequence)
 
-    assert json.loads(str(exc_info.value))["error"]["code"] == code
-    assert len(ran) == (0 if code == "VALIDATION_FAILED" else 1)
+    body = json.loads(str(exc_info.value))
+    error = body["error"]
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert body["ha_error_code"] == ha_error_code
+    assert "Command failed" not in error["message"]
+    assert len(ran) == ran_before_failure
+    assert "may already have run" in error["suggestions"][0]
 
 
 @pytest.mark.unit
-async def test_run_sequence_without_an_answer_says_it_may_still_run(
-    tools: ConfigScriptTools, core_client: HomeAssistantClient
+@pytest.mark.parametrize(
+    ("timed_out", "says"),
+    [(True, "did not answer"), (False, "connection dropped")],
+    ids=["timeout", "dropped"],
+)
+async def test_run_sequence_sent_without_an_answer_says_it_may_still_run(
+    tools: ConfigScriptTools, timed_out: bool, says: str
 ) -> None:
-    """Core answers when the run ends; a run past the wait is not a failure,
-    and sending it again would repeat its steps."""
+    """Core answers when the run ends; a run past the wait or a socket lost
+    after the send is not a failure, and sending it again would repeat steps."""
     with patch.object(
-        core_client,
-        "send_websocket_message",
-        AsyncMock(side_effect=HomeAssistantCommandTimeout("Command timeout")),
+        HomeAssistantWebSocketClient,
+        "send_command",
+        AsyncMock(
+            side_effect=HomeAssistantCommandTimeout("Command timeout")
+            if timed_out
+            else HomeAssistantConnectionError("Connection lost")
+        ),
     ):
         result = await tools.ha_config_set_script(
             script_id="morning", run_sequence=[{"delay": {"minutes": 5}}]
         )
 
     assert result["partial"] is True
-    assert "Do not send the actions again" in result["warnings"][0]
+    assert says in result["message"]
+    assert "before sending them again" in result["warnings"][0]
+
+
+@pytest.mark.unit
+async def test_run_sequence_not_sent_is_an_error(tools: ConfigScriptTools) -> None:
+    with (
+        patch.object(
+            HomeAssistantWebSocketClient,
+            "send_command",
+            AsyncMock(side_effect=HomeAssistantCommandNotSent("not authenticated")),
+        ),
+        pytest.raises(ToolError),
+    ):
+        await tools.ha_config_set_script(
+            script_id="morning", run_sequence=[{"event": "step_ran"}]
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        [{"action": "ha_mcp_tools.get_caller_token", "response_variable": "r"}],
+        # Nested in a building block, and under the legacy key.
+        [{"if": [], "then": [{"service": "HA_MCP_TOOLS.write_file"}]}],
+        [{"parallel": [{"action": "hassio.restore_full"}]}],
+    ],
+    ids=["component", "component-nested", "snapshot-restore-nested"],
+)
+async def test_run_sequence_holds_its_actions_to_the_service_guards(
+    tools: ConfigScriptTools,
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    sequence: list[dict[str, Any]],
+) -> None:
+    """ha_call_service refuses ha_mcp_tools services and gated snapshot ones;
+    run_sequence does not run them either."""
+    monkeypatch.setattr(get_global_settings(), "enable_snapshot_actions", False)
+    with (
+        patch.object(
+            core_client,
+            "send_websocket_message",
+            wraps=core_client.send_websocket_message,
+        ) as send,
+        pytest.raises(ToolError),
+    ):
+        await tools.ha_config_set_script(script_id="morning", run_sequence=sequence)
+
+    send.assert_not_called()

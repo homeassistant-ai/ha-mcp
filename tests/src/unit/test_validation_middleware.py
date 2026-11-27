@@ -4,13 +4,19 @@ import json
 import logging
 import re
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.automation import config as automation_config
+from homeassistant.components.script import config as script_config
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.exceptions import HomeAssistantCommandTimeout
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.errors import DEFAULT_SUGGESTIONS, ErrorCode
+from ha_mcp.tools.component_api import get_component_caps
 from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
 from ha_mcp.utils.usage_logger import get_recent_logs, shutdown_usage_logger
 
@@ -585,6 +591,47 @@ async def test_a_component_without_the_config_keys_is_answered_the_same(
         domain,
         "component is too old",
     )
+
+
+@pytest.mark.parametrize(
+    ("domain", "core_module", "schema"),
+    [
+        ("script", script_config, "SCRIPT_ENTITY_SCHEMA"),
+        ("automation", automation_config, "PLATFORM_SCHEMA"),
+    ],
+)
+async def test_a_component_whose_keys_command_fails_points_at_the_log(
+    monkeypatch: pytest.MonkeyPatch,
+    component_core_client: HomeAssistantClient,
+    domain: str,
+    core_module: object,
+    schema: str,
+) -> None:
+    """A current component on a Core without the schema fails the command; it
+    is neither absent nor too old."""
+    monkeypatch.delattr(core_module, schema)
+
+    _assert_keys_unread(
+        await _trace_rejection(component_core_client, domain),
+        domain,
+        "component's answer failed",
+    )
+
+
+async def test_a_component_that_stops_answering_says_so(
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """The component answered its info probe, then its keys command got no
+    answer: it is installed, so the note does not say to install it."""
+    assert await get_component_caps(component_core_client) is not None
+    with patch.object(
+        HomeAssistantWebSocketClient,
+        "send_command",
+        AsyncMock(side_effect=HomeAssistantCommandTimeout("Command timeout")),
+    ):
+        body = await _trace_rejection(component_core_client, "script")
+
+    _assert_keys_unread(body, "script", "component could not be asked")
 
 
 @pytest.mark.asyncio

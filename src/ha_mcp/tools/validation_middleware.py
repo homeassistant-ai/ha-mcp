@@ -11,8 +11,8 @@ reported with the closest declared parameter, if one resembles it (a config
 key passed top-level on a config-writing tool is told to move inside
 ``config`` instead), the full parameter list, and, for any other name, a
 suggestion for the case where the client's tool list is older than the
-server's. A script tool's config keys are read from Core through the
-``ha_mcp_tools`` component when it serves them.
+server's. The automation and script tools' config keys are read from Core
+through the ``ha_mcp_tools`` component when it serves them.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from ..renamed_tools import CLIENT_TOOL_LIST_REFRESH_STEPS
 from ..utils.usage_logger import log_tool_call
 from .component_api import (
     ask_component,
+    component_supports,
     component_unusable_warning,
     get_component_caps,
 )
@@ -64,9 +65,9 @@ _RejectionKind = Literal["misplaced", "undeclared", "other"]
 
 # The config-writing tools whose `config` body takes Core's automation or
 # script config: a config root key passed as a top-level argument is told to
-# move inside `config` (issue #2649 section 1). The keys come from Core
-# through the component's `ha_mcp_tools/config_keys`; without it there is no
-# list, and any undeclared name gets the field hint and the reason.
+# move inside `config`. The keys come from Core through the component's
+# `ha_mcp_tools/config_keys`; without them any undeclared name gets the field
+# hint, plus why they were not read when the server tried.
 _CONFIG_DOMAIN_BY_TOOL = {
     "ha_config_set_automation": "automation",
     "ha_config_set_script": "script",
@@ -95,21 +96,27 @@ async def _config_keys_from_core(
     """Core's config keys for ``domain`` through the component, or why they
     were not read.
 
-    A failed or malformed read counts as no component; the base error class
-    also covers an OAuth client that cannot name the requesting user, which
-    would otherwise replace the rejection.
+    The base error class also covers an OAuth client that cannot name the
+    requesting user, which would otherwise replace the rejection.
     """
+    without = f"Core's {domain} fields could not be read"
     try:
         reply = await ask_component(client, "config_keys", domain=domain)
         keys = reply.get("keys") if reply is not None else None
         if isinstance(keys, list) and keys and all(isinstance(k, str) for k in keys):
             return set(keys), None
         caps = await get_component_caps(client)
-    except HomeAssistantError:
-        caps = None
-    return None, component_unusable_warning(
-        caps, f"Core's {domain} fields could not be read"
-    )
+    except HomeAssistantError as exc:
+        return (
+            None,
+            f"The ha_mcp_tools component could not be asked ({exc}), so {without}.",
+        )
+    if component_supports(caps, "config_keys"):
+        return None, (
+            f"The ha_mcp_tools component's answer failed, so {without}; Home "
+            "Assistant's log has the reason."
+        )
+    return None, component_unusable_warning(caps, without)
 
 
 async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] | None:
@@ -204,7 +211,7 @@ def _argument_hint(
 
     Returns the hint text and the rejection kind: ``misplaced`` for a config
     root key passed at the top level of a config-writing tool, which is told
-    to move inside ``config`` (issue #2649), ``undeclared`` for any other name
+    to move inside ``config``, ``undeclared`` for any other name
     the tool does not declare, and ``other`` for a type error or for any
     rejection when the tool's schema could not be read.
     """
@@ -227,8 +234,7 @@ def _rejection_suggestions(
 ) -> list[str]:
     """Suggestions for undeclared arguments; empty keeps the generic ones.
 
-    A misplaced config key repeats the move into ``config`` (issue #2649
-    section 1); any other undeclared name may come from a tool list the client
+    A misplaced config key repeats the move into ``config``; any other undeclared name may come from a tool list the client
     stored before an update renamed or removed it (#2968, #2978).
     """
     suggestions = [

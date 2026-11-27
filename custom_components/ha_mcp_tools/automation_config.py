@@ -288,7 +288,7 @@ def _require(msg: dict[str, Any]) -> None:
         raise HomeAssistantError(
             f"{WS_AUTOMATION_CONFIG} {action} needs {' or '.join(needs)}"
         )
-    if msg.get("domain", "automation") != "automation" and action != "lookup":
+    if msg.get("domain") == "script" and action != "lookup":
         raise HomeAssistantError(f"{WS_AUTOMATION_CONFIG} {action} is for automations")
 
 
