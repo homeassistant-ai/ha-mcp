@@ -102,6 +102,14 @@ async def test_history_resolves_a_target_with_core(
     )
 
 
+async def test_an_empty_entity_id_gets_cores_own_refusal(
+    recorded: None, component_core_client: HomeAssistantClient
+) -> None:
+    error = await _refusal(component_core_client, entity_ids="")
+
+    assert error["ha_error_code"] == "invalid_entity_ids"
+
+
 async def test_a_target_that_matches_nothing_names_what_core_missed(
     recorded: None, component_core_client: HomeAssistantClient
 ) -> None:
