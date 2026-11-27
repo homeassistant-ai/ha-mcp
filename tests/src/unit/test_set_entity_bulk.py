@@ -293,7 +293,7 @@ class TestBulk:
         with lost:
             result = await tools.ha_set_entity(entity_id=ids, **change)
 
-        assert result["failed"]
+        assert [row["entity_id"] for row in result["failed"]] == ids
         for row in result["failed"]:
             assert row["code"] == "CONNECTION_FAILED"
             assert row.get("write_outcome_unknown", False) is may_have_landed

@@ -2,18 +2,13 @@
 
 import logging
 from collections.abc import Iterable
-from typing import Any, NoReturn
+from typing import Any
 
 from ..client.exceptions import HomeAssistantCommandNotSent, HomeAssistantError
 from ..errors import ErrorCode, create_error_response
 from .entity_exposure import get_entries_or_unregistered
 from .entity_registry_reads import _extract_ws_error
-from .helpers import (
-    exception_to_structured_error,
-    ha_error_code_field,
-    raise_core_refusal,
-    raise_tool_error,
-)
+from .helpers import exception_to_structured_error, raise_core_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -115,28 +110,6 @@ def expose_failure_response(
     return response
 
 
-def raise_expose_failure(
-    error: str,
-    failure: HomeAssistantError | dict[str, Any] | None,
-    context: dict[str, Any],
-) -> NoReturn:
-    """Raise :func:`expose_failure_response`."""
-    raise_tool_error(expose_failure_response(error, failure, context))
-
-
-def failure_row(response: dict[str, Any]) -> dict[str, Any]:
-    """A bulk row's failure fields from a tool error: its message and code,
-    Core's code as ``ha_error_code``, and ``write_outcome_unknown`` when set."""
-    row = {
-        "error": response["error"]["message"],
-        "code": response["error"]["code"],
-        **ha_error_code_field(response.get("ha_error_code")),
-    }
-    if response.get("write_outcome_unknown"):
-        row["write_outcome_unknown"] = True
-    return row
-
-
 async def apply_bulk_expose(
     client: Any,
     entity_ids: list[str],
@@ -147,11 +120,11 @@ async def apply_bulk_expose(
     The command's schema accepts the full entity_ids list, so bulk exposure
     needs at most two WS calls (one for the assistants being turned on, one
     for those being turned off) regardless of entity count — not one per
-    entity. Returns (failure_row, changed, applied). failure_row is None on
-    success, else the row fields (``failure_row``) for the first failing set,
-    which apply to every id in the list: a refusal or an unsent command failed,
-    while a connection lost after sending leaves the outcome unknown. A refusal
-    keeps the code Core gave as ``ha_error_code``. changed holds the ids Core reports it
+    entity. Returns (failure, changed, applied). failure is None on success,
+    else the tool error (:func:`expose_failure_response`) of the first failing
+    set, which applies to every id in the list: a refusal or an unsent command
+    failed, while a connection lost after sending leaves the outcome unknown.
+    A refusal keeps the code Core gave as ``ha_error_code``. changed holds the ids Core reports it
     changed, and is empty on error. applied maps each assistant whose set
     landed to its value.
     """
@@ -181,7 +154,7 @@ async def apply_bulk_expose(
                 f"{', '.join(applied)} were already applied before "
                 "this failure)"
             )
-        return failure_row(expose_failure_response(error, failure, {})), set(), applied
+        return expose_failure_response(error, failure, {}), set(), applied
     return None, changed, applied
 
 

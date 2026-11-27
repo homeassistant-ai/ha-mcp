@@ -44,9 +44,9 @@ from .component_api import (
 from .config_helpers.registry import validate_registry_ids
 from .entity_bulk_update import bulk_update_entities
 from .entity_expose_batch import (
+    expose_failure_response,
     expose_update,
     expose_write,
-    raise_expose_failure,
     refresh_warning,
     reject_unknown_assistants,
 )
@@ -190,8 +190,9 @@ def _single_entity_target(kw: dict[str, Any]) -> str:
     """
     entity_id = kw.get("entity_id")
     if isinstance(entity_id, list):
-        return str(entity_id[0]) if len(entity_id) == 1 else ""
-    return str(entity_id or "")
+        entity_id = entity_id[0] if len(entity_id) == 1 else ""
+    # Filed under Core's lowercase id, as a list path files it.
+    return str(entity_id or "").lower()
 
 
 def _unique_entity_ids(entity_ids: list[str]) -> list[str]:
@@ -700,7 +701,7 @@ class EntityTools:
                     updates_made,
                     core_extras,
                 )
-                raise_expose_failure(error_msg, failure, context)
+                raise_tool_error(expose_failure_response(error_msg, failure, context))
 
             # Track successful exposures
             for a in assistants:
@@ -1256,8 +1257,8 @@ class EntityTools:
 
         BULK OPERATIONS:
         When entity_id is a list of two or more, only labels, categories, enabled, hidden, and expose_to are supported.
-        A row whose registry update or exposure write failed has the code its single call would give; write_outcome_unknown=true marks a write sent without an answer, which may have been applied (sending it again is safe).
         Other parameters (area_id, name, use_device_name, icon, device_class, options, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
+        A row whose registry update or exposure write failed has the code its single call would give; write_outcome_unknown=true marks a write sent without an answer, which may have been applied.
 
         SHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload
         needed.

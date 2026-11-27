@@ -24,11 +24,14 @@ from .entity_expose_batch import (
     apply_bulk_expose,
     expose_targets,
     expose_update,
-    failure_row,
     refresh_warning,
 )
 from .entity_registry_reads import get_entries_raw
-from .helpers import exception_to_structured_error, raise_tool_error
+from .helpers import (
+    exception_to_structured_error,
+    ha_error_code_field,
+    raise_tool_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +39,30 @@ logger = logging.getLogger(__name__)
 _ROW_KEYS = frozenset({"success", "entity_id", "entity_entry", "updates"})
 
 
+def _row_fields(response: dict[str, Any]) -> dict[str, Any]:
+    """A failed row's fields from a tool error: its message and code, Core's
+    code as ``ha_error_code``, and ``write_outcome_unknown`` when set."""
+    row = {
+        "error": response["error"]["message"],
+        "code": response["error"]["code"],
+        **ha_error_code_field(response.get("ha_error_code")),
+    }
+    if response.get("write_outcome_unknown"):
+        row["write_outcome_unknown"] = True
+    return row
+
+
 def _failure_row(entity_id: str, exc: Exception) -> dict[str, Any]:
-    """The row of an entity whose update failed, with the error its single
+    """The row of an entity whose update failed, with the code its single
     call would raise."""
     if isinstance(exc, ToolError):
         response = json.loads(str(exc))
     else:
         # Not from the update send, which raises a ToolError: a read before
-        # it, or a fault on this side.
-        logger.warning("Bulk update of %s failed", entity_id, exc_info=exc)
+        # it, or a fault on this side, whose own text the row keeps.
         response = exception_to_structured_error(exc, raise_error=False)
-    return {"entity_id": entity_id, **failure_row(response)}
+        response["error"]["message"] = str(exc) or response["error"]["message"]
+    return {"entity_id": entity_id, **_row_fields(response)}
 
 
 async def _registry_phase(
@@ -126,7 +142,8 @@ async def _expose_phase(
     )
     if failure is not None:
         landed = {"partial": True, "exposure_succeeded": applied} if applied else {}
-        failed.extend({"entity_id": eid, **failure, **landed} for eid in eligible_ids)
+        row = _row_fields(failure)
+        failed.extend({"entity_id": eid, **row, **landed} for eid in eligible_ids)
         return [], failed, []
 
     for eid in eligible_ids:

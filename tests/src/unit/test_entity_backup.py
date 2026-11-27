@@ -565,18 +565,26 @@ async def test_a_bulk_call_backs_up_every_entity_before_writing(
     assert restored.hidden_by is None
 
 
-@pytest.mark.parametrize("repeat", ["light.desk", "LIGHT.DESK"])
-async def test_a_list_repeating_one_entity_backs_it_up_once(
+@pytest.mark.parametrize(
+    "entity_id",
+    [
+        ["light.desk", "light.desk"],
+        ["light.desk", "LIGHT.DESK"],
+        ["LIGHT.DESK", "light.desk"],
+        ["LIGHT.DESK"],
+        "LIGHT.DESK",
+    ],
+)
+async def test_an_entity_is_backed_up_once_under_cores_id(
     entity_client: HomeAssistantClient,
     backup_settings: config.Settings,
     desk: Desk,
-    repeat: str,
+    entity_id: str | list[str],
 ) -> None:
-    """The repeat collapses to one entity, in any case, and that entity still
-    gets its backup, one."""
-    await EntityTools(entity_client).ha_set_entity(
-        entity_id=[desk.entity_id, repeat], hidden=True
-    )
+    """Core lowercases an entity_id, so a repeat in any case is one entity
+    with one backup, filed under the id Core keeps, as a single call files
+    it."""
+    await EntityTools(entity_client).ha_set_entity(entity_id=entity_id, hidden=True)
 
     files = await asyncio.to_thread(backup_files, backup_dir(backup_settings))
     assert [name.split(".20")[0] for name in files] == ["entity.light.desk"]
@@ -671,23 +679,29 @@ async def test_a_single_call_names_the_backup_it_could_not_take(
     assert any("light.desk" in warning for warning in result["warnings"])
 
 
-@pytest.mark.parametrize("repeat", ["light.desk", "LIGHT.DESK"])
+@pytest.mark.parametrize(
+    "ids",
+    [
+        ["light.desk", "light.desk"],
+        ["light.desk", "LIGHT.DESK"],
+        ["LIGHT.DESK", "light.desk"],
+    ],
+)
 async def test_a_list_repeating_one_entity_removes_and_backs_it_up_once(
     entity_client: HomeAssistantClient,
     entity_registry: er.EntityRegistry,
     backup_settings: config.Settings,
     desk: Desk,
-    repeat: str,
+    ids: list[str],
 ) -> None:
     """A repeat, in any case, is one entity: one removal, one outcome, and its
-    one backup, which the decorator does not take for a list of two."""
-    result = await EntityTools(entity_client).ha_remove_entity(
-        entity_id=[desk.entity_id, repeat]
-    )
+    one backup under the id Core keeps, which the decorator does not take for
+    a list of two."""
+    result = await EntityTools(entity_client).ha_remove_entity(entity_id=ids)
 
     assert (result["total"], result["removed"], result["skipped"]) == (
         1,
-        ["light.desk"],
+        ids[:1],
         [],
     )
     files = await asyncio.to_thread(backup_files, backup_dir(backup_settings))
