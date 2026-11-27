@@ -30,11 +30,14 @@ from ha_mcp.tools.automation_errors import (
     failed_section_from_core,
     platform_descriptions,
     raise_core_rejection,
+    raise_if_core_rejected,
     section_from_status,
     text_suggestions,
 )
 from ha_mcp.tools.best_practice_checker import check_automation_config
 from ha_mcp.visibility.result_payloads import serialize_error
+
+from ._tool_errors import error_body
 
 REJECTION_PREFIX = "Home Assistant rejected the automation: "
 
@@ -132,6 +135,28 @@ def test_a_400_page_core_did_not_send_is_no_rejection_of_cores() -> None:
     )
 
     assert core_rejection_text(error) is None
+
+
+async def test_the_errors_core_lists_reach_the_rejection(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """Core 2026.12 lists each error with its path in the rejection body; the
+    list is set here so the stable lane checks the pass-through as well."""
+    config = {"alias": "porch", "triggers": [{"trigger": "zz_bogus"}], "actions": []}
+    assert await async_setup_component(hass, "config", {})
+    with pytest.raises(HomeAssistantAPIError) as rejected:
+        await core_client.upsert_automation_config(config, None, _resolved=True)
+    errors = [{"path": ["triggers", 0], "message": "Invalid trigger"}]
+    body = rejected.value.response_data
+    assert body is not None
+    body["errors"] = errors
+
+    with pytest.raises(ToolError) as exc:
+        await raise_if_core_rejected(
+            core_client, rejected.value, config, context={}, bp_warnings=[]
+        )
+
+    assert error_body(exc)["errors"] == errors
 
 
 async def test_a_missing_blueprint_points_to_the_blueprint_list(
