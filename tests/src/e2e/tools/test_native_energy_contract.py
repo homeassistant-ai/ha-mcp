@@ -5,8 +5,11 @@ from typing import Any
 import pytest
 
 from ha_mcp._vendor.fastmcp import Client
+from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ..utilities.assertions import MCPAssertions, assert_mcp_success
+from ..utilities.cleanup import CleanupSteps
+from ..utilities.core_version import core_at_least
 from ..utilities.topology import component_surface_available
 
 
@@ -188,11 +191,12 @@ async def test_history_schema_does_not_warn_when_core_describes_it_completely(
 @pytest.mark.component_topology
 @pytest.mark.asyncio
 async def test_energy_suggestions_come_from_the_frontend_through_the_component(
-    mcp_client: Client,
+    mcp_client: Client, ha_client: HomeAssistantClient
 ) -> None:
-    """The component runs the installed frontend's suggestions (Home Assistant
-    2026.12 and later; an older frontend says it has none); without the
-    component the read still answers and names it."""
+    """From Core 2026.12 the component runs the installed frontend's
+    suggestions, and a dismissed meter comes back when restored; an older
+    frontend says it has none; without the component the read still answers
+    and names it."""
     raw = assert_mcp_success(
         await mcp_client.call_tool(
             "ha_manage_energy_prefs", {"mode": "get", "include_suggestions": True}
@@ -204,20 +208,24 @@ async def test_energy_suggestions_come_from_the_frontend_through_the_component(
     if not component_surface_available():
         assert suggestions["status"] == "unavailable"
         assert "HA-MCP component" in suggestions["reason"]
-    elif suggestions["status"] == "available":
-        assert suggestions["editors"]["device"]["stat"] == "stat_consumption"
-        if suggestions["suggestions"]:
-            meter = suggestions["suggestions"][0]["statisticId"]
-            async with MCPAssertions(mcp_client) as mcp:
-                hidden = await mcp.call_tool_success(
-                    "ha_manage_energy_prefs",
-                    {"mode": "dismiss_suggestions", "statistic_ids": [meter]},
-                )
-                restored = await mcp.call_tool_success(
-                    "ha_manage_energy_prefs",
-                    {"mode": "restore_suggestions", "statistic_ids": [meter]},
-                )
-            assert meter in hidden["energy_suggestions"]["dismissed"]
-            assert meter not in restored["energy_suggestions"]["dismissed"]
-    else:
+        return
+    if not await core_at_least(ha_client, (2026, 12)):
         assert "frontend suggests no energy meters" in suggestions["reason"]
+        return
+    assert suggestions["editors"]["device"]["stat"] == "stat_consumption"
+    # The recorder seed gives the energy meters sum statistics.
+    meter = suggestions["suggestions"][0]["statisticId"]
+    mcp = MCPAssertions(mcp_client)
+    try:
+        hidden = await mcp.call_tool_success(
+            "ha_manage_energy_prefs",
+            {"mode": "dismiss_suggestions", "statistic_ids": [meter]},
+        )
+    finally:
+        with CleanupSteps() as cleanup, cleanup.step():
+            restored = await mcp.call_tool_success(
+                "ha_manage_energy_prefs",
+                {"mode": "restore_suggestions", "statistic_ids": [meter]},
+            )
+    assert meter in hidden["energy_suggestions"]["dismissed"]
+    assert meter not in restored["energy_suggestions"]["dismissed"]

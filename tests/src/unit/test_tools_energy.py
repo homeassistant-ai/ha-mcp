@@ -379,6 +379,50 @@ async def test_never_configured_install_reads_as_empty_prefs(
 async def test_read_failure_is_not_mistaken_for_unconfigured(
     core_client: HomeAssistantClient,
 ) -> None:
-    """Core refusing energy/get_prefs (energy not loaded) is an error."""
-    with pytest.raises(ToolError, match="Failed to get energy prefs"):
+    """Core refusing energy/get_prefs (energy not loaded) is an error that keeps
+    Core's code."""
+    with pytest.raises(ToolError, match="Failed to get energy prefs") as refused:
         await EnergyTools(core_client).ha_manage_energy_prefs(mode="get")
+
+    assert '"ha_error_code": "unknown_command"' in str(refused.value)
+
+
+@pytest.mark.usefixtures("energy")
+async def test_save_without_a_hash_is_refused_and_saves_nothing(
+    core_client: HomeAssistantClient,
+) -> None:
+    """Every list is saved whole, so a save without the caller's lock would
+    overwrite a list the caller never read."""
+    with (
+        sent_messages(core_client) as spy,
+        pytest.raises(ToolError, match="VALIDATION_MISSING_PARAMETER"),
+    ):
+        await EnergyTools(core_client).ha_manage_energy_prefs(
+            mode="set", config={"device_consumption": []}
+        )
+
+    assert not _sent(spy, "energy/save_prefs")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "code"),
+    [
+        (
+            {"statistic_ids": ["sensor.x"], "dry_run": True},
+            "VALIDATION_INVALID_PARAMETER",
+        ),
+        ({}, "VALIDATION_MISSING_PARAMETER"),
+        ({"statistic_ids": []}, "VALIDATION_MISSING_PARAMETER"),
+    ],
+    ids=["dry_run", "no_ids", "empty_ids"],
+)
+async def test_suggestion_change_without_ids_or_with_a_preview_is_refused(
+    component_core_client: HomeAssistantClient,
+    arguments: dict[str, Any],
+    code: str,
+) -> None:
+    """A dismiss or restore has no preview and needs the meters to change."""
+    with pytest.raises(ToolError, match=code):
+        await EnergyTools(component_core_client).ha_manage_energy_prefs(
+            mode="dismiss_suggestions", **arguments
+        )

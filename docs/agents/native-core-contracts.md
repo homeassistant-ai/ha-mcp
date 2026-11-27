@@ -335,10 +335,11 @@ that happen to match statistic IDs into asserted references.
 Some rules and data exist only in the frontend's JavaScript. Read them from
 the installed build (`hass_frontend`) through the component's
 `frontend_build.py` instead of rewriting them in Python: find the webpack
-module by strings its source must hold, run that module's own factory, and
-call its export on Core's data. Its imports are then resolved one export at a
-time, so the function keeps its own closures. A build that lacks the module
-(an older frontend) answers that it lacks it.
+module by strings its source must hold, run that module's own factory so its
+exports keep their closures, and call the export on Core's data. The module's
+imports are resolved one export at a time, so browser-only dependencies never
+start. A build that lacks the module (an older frontend) answers that it lacks
+it.
 
 ## Frontend and custom-card semantics
 

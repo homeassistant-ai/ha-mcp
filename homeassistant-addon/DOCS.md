@@ -464,7 +464,7 @@ Mixed read/write tools whose read functionality exists nowhere else stay availab
 - `ha_config_get_dashboard` — config/list/search reads; optional screenshot rendering is a beta feature that uses a separate screenshot engine (see [beta documentation](../docs/beta.md))
 - `ha_manage_backup` — only listing and viewing per-edit backups
 - `ha_manage_app` — only HTTP GET proxy reads of app (add-on) APIs
-- `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
+- `ha_manage_energy_prefs` — only `mode='get'` and dry-run previews (`mode='set'`, `dry_run=true`)
 - `ha_manage_pipeline` — only `action='list'` / `'get'`
 - `ha_manage_custom_tool` — only `list_saved=true`
 

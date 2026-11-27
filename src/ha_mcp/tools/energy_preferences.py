@@ -1,7 +1,7 @@
 """Read native Energy preferences, hash saved state and enrich statistic references."""
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
@@ -80,16 +80,30 @@ async def include_energy_suggestions(
 
 
 async def change_energy_suggestions(
-    client: Any, action: str, statistic_ids: list[str]
+    client: Any, action: Literal["dismiss", "restore"], statistic_ids: list[str]
 ) -> dict[str, Any]:
-    """Dismiss or restore suggested meters for this user, as Settings > Energy does."""
+    """Dismiss or restore suggested meters for the token's Home Assistant user,
+    as Settings > Energy does."""
+    mode = f"{action}_suggestions"
     suggestions = await energy_suggestions(client, {action: statistic_ids})
     if suggestions["status"] != "available":
         raise_tool_error(
             create_error_response(
                 ErrorCode.COMPONENT_NOT_INSTALLED,
                 suggestions["reason"],
-                context={"mode": f"{action}_suggestions"},
+                context={"mode": mode},
+            )
+        )
+    if unknown := suggestions.get("unknown"):
+        listed = "suggested" if action == "dismiss" else "dismissed"
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Not {listed} by Settings > Energy, nothing changed: {', '.join(unknown)}",
+                context={"mode": mode, "unknown": unknown},
+                suggestions=[
+                    "Take statisticId values from ha_manage_energy_prefs(mode='get', include_suggestions=True)",
+                ],
             )
         )
     return {

@@ -91,7 +91,8 @@ class EnergyTools:
                     "'get' reads the preferences; 'set' saves the top-level "
                     "keys passed in config; 'dismiss_suggestions' / "
                     "'restore_suggestions' hide or bring back suggested meters "
-                    "(statistic_ids) for this user, as Settings > Energy does."
+                    "(statistic_ids) for the token's Home Assistant user, as "
+                    "Settings > Energy does."
                 )
             ),
         ],
@@ -126,10 +127,11 @@ class EnergyTools:
             bool,
             Field(
                 description=(
-                    "If True, preview without saving. With the component, validates "
+                    "With mode='set', preview without saving. With the component, validates "
                     "the complete proposal through Core's registered save schema. "
                     "Without that capability, explicitly reports proposal validation "
-                    "unavailable. Semantic energy/validate checks persisted state only."
+                    "unavailable. Semantic energy/validate checks persisted state only. "
+                    "The suggestion modes have no preview."
                 ),
                 default=False,
             ),
@@ -181,14 +183,11 @@ class EnergyTools:
           provide them, and they must exist before they are referenced here.
 
         WHEN TO USE:
-        - mode='get' reads the preferences as Core stores them, with a
-          config_hash for the whole and one per top-level key.
-        - mode='set' saves top-level keys. To add, change or remove one source
-          or device, take its list from mode='get', edit it and send that key
-          back with its config_hash_per_key entry, as Settings > Energy does.
-        - include_suggestions=True lists the meters not yet in the dashboard
-          that Settings > Energy suggests, and where each one can go;
-          dismiss_suggestions / restore_suggestions hide or bring them back.
+        - To add, change or remove one source or device: read its list with
+          mode='get', edit it, and send that key back with its
+          config_hash_per_key entry, as Settings > Energy does.
+        - To add a meter that is not in the dashboard yet: mode='get' with
+          include_suggestions=True names the slots each suggested meter fills.
 
         RELATED TOOLS: Use ha_get_history(source="statistics") with the returned
         statistic IDs for consumption, totals, and trends. Metadata comes directly
@@ -199,7 +198,6 @@ class EnergyTools:
           removes every other entry of that key.
         - A config_hash that no longer matches is refused with RESOURCE_LOCKED
           (the offending keys in mismatched_keys) and nothing is saved.
-          dry_run=True skips the hash check.
         - Writes need an administrator token; Home Assistant rejects the save
           otherwise.
         - After a save, the tool calls ``energy/validate`` and returns its
@@ -223,6 +221,14 @@ class EnergyTools:
             )
 
         if mode in ("dismiss_suggestions", "restore_suggestions"):
+            if dry_run:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"mode='{mode}' has no preview; dry_run applies to mode='set'",
+                        context={"mode": mode},
+                    )
+                )
             if not statistic_ids:
                 raise_tool_error(
                     create_error_response(
@@ -235,7 +241,9 @@ class EnergyTools:
                     )
                 )
             return await change_energy_suggestions(
-                self._client, mode.removesuffix("_suggestions"), statistic_ids
+                self._client,
+                "dismiss" if mode == "dismiss_suggestions" else "restore",
+                statistic_ids,
             )
 
         if config is None:

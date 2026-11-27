@@ -329,7 +329,10 @@ class FrontendBuild:
             self._index_file(text, starts)
 
     def _index_file(self, text: str, starts: list[tuple[int, str]]) -> None:
-        """Collect what a subclass needs from a build file while it is indexed."""
+        """Collect what a subclass needs from a build file while it is indexed.
+
+        It runs inside ``__init__``: a subclass sets the fields it fills here
+        before calling ``super().__init__()``."""
 
     def module_containing(self, *markers: str) -> str | None:
         """The id of the first module whose source holds every marker."""
