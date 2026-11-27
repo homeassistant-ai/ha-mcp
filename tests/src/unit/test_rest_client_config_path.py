@@ -15,8 +15,11 @@ import pytest
 from homeassistant.core import Event, HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 
+from ha_mcp import backup_manager as bm
 from ha_mcp.client.rest_client import HomeAssistantAPIError, HomeAssistantClient
 
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import snapshot_manager as snapshot_manager
 from ._rest_client_config_core import config_client as config_client
 
 DOMAINS = ["automation", "script", "scene"]
@@ -35,6 +38,21 @@ async def test_an_id_that_climbs_the_path_does_not_read_another_endpoint(
 
     with pytest.raises(HomeAssistantAPIError):
         await read("../../../config")
+
+
+# The script and scene backups read a bare id themselves; the automation
+# backup reads through ``get_automation_config``, covered above.
+@pytest.mark.parametrize("domain", ["script", "scene"])
+async def test_a_backup_of_an_id_that_climbs_the_path_holds_no_other_endpoint(
+    config_client: HomeAssistantClient,
+    snapshot_manager: bm.BackupManager,
+    domain: str,
+) -> None:
+    handler = snapshot_manager.handler_for(domain)
+    assert handler is not None
+
+    with pytest.raises(HomeAssistantAPIError):
+        await handler.fetch(config_client, "../../../config")
 
 
 @pytest.mark.parametrize("domain", DOMAINS)
