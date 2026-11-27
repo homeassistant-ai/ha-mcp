@@ -3,8 +3,6 @@
 from datetime import UTC, datetime, tzinfo
 from typing import Any
 
-# Re-exported: the component imports it from here when the server wheel predates history_summary.py.
-from ..history_summary import summarize_states as summarize_states
 from .response_helpers import resolve_local_timezone
 
 _FIELD_NAMES = {

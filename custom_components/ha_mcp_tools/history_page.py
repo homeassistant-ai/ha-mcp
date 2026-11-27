@@ -30,9 +30,9 @@ def _summarize_states() -> Callable[..., dict[str, Any]]:
     if not path.is_file() or spec is None or spec.loader is None:
         # A server wheel from before the file existed: remove once the
         # manifest pins a release that has it.
-        from ha_mcp.tools.history_response import summarize_states
-
-        legacy: Callable[..., dict[str, Any]] = summarize_states
+        legacy: Callable[..., dict[str, Any]] = importlib.import_module(
+            "ha_mcp.tools.history_response"
+        ).summarize_states
         return legacy
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
