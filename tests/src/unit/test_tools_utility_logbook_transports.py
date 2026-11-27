@@ -477,7 +477,7 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
     )
     actual: list[str] = []
     with rest_reads(core_client) as rest:
-        for page_index in range(len(names)):
+        for _ in range(len(names)):
             data = (await LogTools(core_client).get_logs(**params))["data"]
             assert data["total_entries"] == len(names)
             assert data["offset"] == len(actual)
@@ -499,7 +499,7 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
         assert all("page" in cmd for cmd in commands)
         assert not any("count_range" in cmd["page"] for cmd in commands)
     else:
-        assert len(rest.await_args_list) == page_index + 1
+        assert len(rest.await_args_list) == (len(names) + 1) // 2
         for call in rest.await_args_list:
             start = datetime.fromisoformat(call.kwargs["start_time"])
             finish = datetime.fromisoformat(call.kwargs["end_time"])
@@ -1008,7 +1008,7 @@ async def test_tied_state_and_event_follow_native_order(
     hass.bus.async_fire(
         "logbook_entry",
         {"name": "tie", "message": "marker"},
-        time_fired=state.last_updated.timestamp(),
+        time_fired=state.last_updated_timestamp,
     )
     await async_wait_recording_done(hass)
     end = dt_util.utcnow()
@@ -1025,4 +1025,6 @@ async def test_tied_state_and_event_follow_native_order(
         if not page["has_more"]:
             break
         params["offset"] = page["next_offset"]
+    for row in rows + native:
+        row["when"] = datetime.fromisoformat(row["when"])
     assert rows == native

@@ -109,7 +109,7 @@ class TestFetchTraceLogbook:
         with patch.object(
             component_core_client,
             "get_logbook",
-            new_callable=lambda: AsyncMock(wraps=component_core_client.get_logbook),
+            AsyncMock(wraps=component_core_client.get_logbook),
         ) as rest:
             logbook = await fetch_trace_logbook(component_core_client, trace)
         rest.assert_not_awaited()

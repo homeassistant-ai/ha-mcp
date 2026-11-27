@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from .component_api import component_unusable_warning, get_component_caps
 from .log_sources_logbook import LogbookLogSourceMixin
-from .logbook_cursor import MAX_PAGE_READS
+from .logbook_cursor import fill_logbook_page
 
 LOGBOOK_ROW_LIMIT = 50
 
@@ -71,29 +71,21 @@ async def fetch_trace_logbook(
     request = {"order": "oldest", "limit": LOGBOOK_ROW_LIMIT, "skip": 0}
     page = await reader._fetch_logbook_component(command, request)
     if isinstance(page, dict):
-        entries = list(page["entries"])
-        total = page["total"]
-
-        for _ in range(MAX_PAGE_READS - 1):
-            if (
-                not page.get("after")
-                or page.get("byte_limited")
-                or len(entries) == LOGBOOK_ROW_LIMIT
-            ):
-                break
-            page = await reader._required_component_page(
-                command,
-                {
-                    **request,
-                    "after": page["after"],
-                    "limit": LOGBOOK_ROW_LIMIT - len(entries),
-                    "used_bytes": page["used_bytes"],
-                },
-            )
-            if page["total"] is not None:
-                total = len(entries) + page["total"]
-            entries.extend(page["entries"])
-        return TraceLogbook(entries, "component", [], total, bool(page.get("after")))
+        result = await fill_logbook_page(
+            reader._required_component_page,
+            command,
+            request,
+            page,
+            None,
+            count_ahead=False,
+        )
+        return TraceLogbook(
+            result["entries"],
+            "component",
+            [],
+            result["total"],
+            bool(result.get("after")),
+        )
     rows = await client.get_logbook(**command)
     warnings = [
         component_unusable_warning(

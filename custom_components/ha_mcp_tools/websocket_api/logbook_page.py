@@ -246,24 +246,25 @@ def _source(
             end = min(end, anchor + timedelta(microseconds=1))
         else:
             start = max(start, anchor - timedelta(microseconds=1))
-    source: Subquery = (
-        (
-            action_calls_stmt(start.timestamp(), end.timestamp(), types)
-            if processor.action_calls
-            else statement_for_request(
-                start,
-                end,
-                types,
-                processor.entity_ids,
-                metadata_ids,
-                processor.device_ids,
-                processor.filters,
-                processor.context_id,
-            )
+    statement = (
+        action_calls_stmt(start.timestamp(), end.timestamp(), types)
+        if processor.action_calls
+        else statement_for_request(
+            start,
+            end,
+            types,
+            processor.entity_ids,
+            metadata_ids,
+            processor.device_ids,
+            processor.filters,
+            processor.context_id,
         )
-        .order_by(None)
-        .subquery()
     )
+    # These three/four-branch statements contain a CTE. Rebuilding Core's
+    # lambda keeps its current bind values when SQLAlchemy nests it for paging.
+    if processor.entity_ids or processor.device_ids or processor.action_calls:
+        statement = statement.spoil()
+    source: Subquery = statement.order_by(None).subquery()
     return source
 
 
@@ -339,7 +340,16 @@ def _select_page(
         (row, events[0] if events and _matches(events[0], search) else None)
         for row, events in rendered
     ]
-    total = None if more else sum(entry is not None for _, entry in candidates)
+    batch_count = sum(entry is not None for _, entry in candidates)
+    total = None if more else batch_count
+    if page.get("count_only"):
+        return {
+            "entries": [],
+            "matched": batch_count,
+            "total": total,
+            "skip": 0,
+            "after": _key(candidates[-1][0]) if more and candidates else None,
+        }
     skip = page["skip"]
     matched = 0
     used = page.get("used_bytes", 0)

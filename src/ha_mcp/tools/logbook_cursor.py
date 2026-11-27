@@ -1,4 +1,4 @@
-"""Continuation for a component-backed whole-instance Recorder page."""
+"""Continuation for a component-backed Recorder page."""
 
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -43,6 +43,8 @@ async def fill_logbook_page(
     request: dict[str, Any],
     page: dict[str, Any],
     cursor: LogbookCursor | None,
+    *,
+    count_ahead: bool = True,
 ) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     before = cursor.seen if cursor else 0
@@ -66,7 +68,7 @@ async def fill_logbook_page(
                 continuation = {**page, "matched": seen - before}
         if (
             not page.get("after")
-            or (continuation is not None and total is not None)
+            or (continuation is not None and (total is not None or not count_ahead))
             or index == MAX_PAGE_READS - 1
         ):
             break
@@ -77,7 +79,10 @@ async def fill_logbook_page(
                 **request,
                 "after": page["after"],
                 "skip": page["skip"],
-                "limit": 500 if counting else request["limit"] - len(entries),
+                "limit": request["limit"]
+                if counting
+                else request["limit"] - len(entries),
+                "count_only": counting,
                 "used_bytes": 0 if counting else page["used_bytes"],
             },
         )
