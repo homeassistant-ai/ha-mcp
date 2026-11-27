@@ -10,17 +10,15 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.auth.models import User
 from homeassistant.auth.providers.homeassistant import HassAuthProvider
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.loader import Integration, async_get_integration
+from homeassistant.loader import async_get_integration
 from pytest_homeassistant.common import MockConfigEntry
 
-from custom_components.ha_mcp_tools import config_flow
 from custom_components.ha_mcp_tools.const import (
     DATA_ADMIN_TOKEN,
     DATA_ISSUED_TOKEN_ID,
@@ -454,15 +452,9 @@ async def test_the_version_line_reads_the_server_the_manifest_pins(
     and the stable ``ha-mcp`` installed beside it must not mask it."""
     _write_server_dist(tmp_path, "ha-mcp-dev", "5.5.5.dev1")
     monkeypatch.syspath_prepend(str(tmp_path))
-    real = await async_get_integration(hass, DOMAIN)
-    pre_release = Integration(
-        hass,
-        real.pkg_path,
-        real.file_path,
-        {**real.manifest, "requirements": ["ha-mcp-dev==5.5.5.dev1"]},
-    )
-    monkeypatch.setattr(
-        config_flow, "async_get_integration", AsyncMock(return_value=pre_release)
+    integration = await async_get_integration(hass, DOMAIN)
+    monkeypatch.setitem(
+        integration.manifest, "requirements", ["ha-mcp-dev==5.5.5.dev1"]
     )
 
     form = await open_options_form(hass)
