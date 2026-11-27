@@ -5,9 +5,14 @@ from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
+from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .core_contract import core_contract, energy_suggestions
-from .helpers import exception_to_structured_error, raise_core_refusal
+from .helpers import (
+    exception_to_structured_error,
+    raise_core_refusal,
+    raise_tool_error,
+)
 from .statistics_helpers import fetch_statistics_metadata, statistics_unit
 
 logger = logging.getLogger(__name__)
@@ -72,6 +77,26 @@ async def include_energy_suggestions(
         result.setdefault("warnings", []).append(suggestions["reason"])
     result["energy_suggestions"] = suggestions
     return result
+
+
+async def change_energy_suggestions(
+    client: Any, action: str, statistic_ids: list[str]
+) -> dict[str, Any]:
+    """Dismiss or restore suggested meters for this user, as Settings > Energy does."""
+    suggestions = await energy_suggestions(client, {action: statistic_ids})
+    if suggestions["status"] != "available":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                suggestions["reason"],
+                context={"mode": f"{action}_suggestions"},
+            )
+        )
+    return {
+        "success": True,
+        "mode": f"{action}_suggestions",
+        "energy_suggestions": suggestions,
+    }
 
 
 def compute_per_key_hashes(prefs: dict[str, Any]) -> dict[str, str]:

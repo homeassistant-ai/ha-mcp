@@ -22,6 +22,7 @@ from .core_contract import (
     validate_energy_proposal,
 )
 from .energy_preferences import (
+    change_energy_suggestions,
     compute_per_key_hashes,
     get_energy_prefs,
     include_energy_statistics,
@@ -84,11 +85,13 @@ class EnergyTools:
     async def ha_manage_energy_prefs(
         self,
         mode: Annotated[
-            Literal["get", "set"],
+            Literal["get", "set", "dismiss_suggestions", "restore_suggestions"],
             Field(
                 description=(
                     "'get' reads the preferences; 'set' saves the top-level "
-                    "keys passed in config."
+                    "keys passed in config; 'dismiss_suggestions' / "
+                    "'restore_suggestions' hide or bring back suggested meters "
+                    "(statistic_ids) for this user, as Settings > Energy does."
                 )
             ),
         ],
@@ -156,6 +159,18 @@ class EnergyTools:
                 )
             ),
         ] = False,
+        statistic_ids: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Statistic IDs for mode='dismiss_suggestions' or "
+                    "'restore_suggestions'. Needs the component and Home "
+                    "Assistant 2026.12 or later."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage the Home Assistant Energy dashboard preferences: its energy
         sources (grid, solar, battery, gas, water, home) and its device
@@ -172,7 +187,8 @@ class EnergyTools:
           or device, take its list from mode='get', edit it and send that key
           back with its config_hash_per_key entry, as Settings > Energy does.
         - include_suggestions=True lists the meters not yet in the dashboard
-          that Settings > Energy suggests, and where each one can go.
+          that Settings > Energy suggests, and where each one can go;
+          dismiss_suggestions / restore_suggestions hide or bring them back.
 
         RELATED TOOLS: Use ha_get_history(source="statistics") with the returned
         statistic IDs for consumption, totals, and trends. Metadata comes directly
@@ -204,6 +220,22 @@ class EnergyTools:
                 await include_energy_statistics(self._client, result)
                 if include_statistics
                 else result
+            )
+
+        if mode in ("dismiss_suggestions", "restore_suggestions"):
+            if not statistic_ids:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_MISSING_PARAMETER,
+                        f"'statistic_ids' is required when mode='{mode}'",
+                        context={"mode": mode},
+                        suggestions=[
+                            "Take statisticId values from ha_manage_energy_prefs(mode='get', include_suggestions=True)",
+                        ],
+                    )
+                )
+            return await change_energy_suggestions(
+                self._client, mode.removesuffix("_suggestions"), statistic_ids
             )
 
         if config is None:
