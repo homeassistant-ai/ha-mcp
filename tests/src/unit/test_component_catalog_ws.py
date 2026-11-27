@@ -16,10 +16,12 @@ import pytest
 from homeassistant.components.api import async_services_json
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import service as core_service
+from homeassistant.loader import IntegrationNotFound
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
+from custom_components.ha_mcp_tools import spec_dist
 from custom_components.ha_mcp_tools.const import (
     DATA_LAST_PIP_SPEC,
     DOMAIN,
@@ -219,6 +221,28 @@ async def test_a_spec_still_to_be_installed_is_reported_pending(
     result = await ws_result(component_ws, "ha_mcp_tools/server_entry")
 
     assert result["install_pending"] is pending
+
+
+async def test_an_override_is_compared_without_reading_the_manifest(
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The override alone decides the spec, so a manifest the loader cannot
+    read does not fail the answer."""
+    monkeypatch.setattr(hass.config, "skip_pip", False)
+    monkeypatch.setattr(
+        spec_dist,
+        "async_get_integration",
+        AsyncMock(side_effect=IntegrationNotFound(DOMAIN)),
+    )
+    add_server_entry(
+        hass, data={DATA_LAST_PIP_SPEC: COMMIT_B}, options={OPT_PIP_SPEC: COMMIT_B}
+    )
+
+    result = await ws_result(component_ws, "ha_mcp_tools/server_entry")
+
+    assert result["install_pending"] is False
 
 
 async def test_a_server_entry_frame_with_extra_keys_is_refused(

@@ -112,7 +112,7 @@ from .oauth_redirect_allowlist import (
     stored_allowlist,
 )
 from .server_pin import server_pins
-from .spec_dist import pip_spec_override, version_dist
+from .spec_dist import effective_pip_spec, pip_spec_override, version_dist
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -782,13 +782,12 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         ]
 
         component_version = common["version_unknown"]
-        # The effective spec, as bring-up resolves it: the override, else the pin.
-        spec = override
+        pin: str | None = None
         hass = getattr(self, "hass", None)
         if hass is not None:
             try:
                 integration = await async_get_integration(hass, DOMAIN)
-                spec = spec or next(iter(server_pins(integration.requirements)), "")
+                pin = next(iter(server_pins(integration.requirements)), None)
                 # A manifest without a version yields None, not an exception —
                 # ``str()`` would render the literal "None" into the form and
                 # the "unknown" wording would never appear for the likeliest
@@ -808,10 +807,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     err,
                 )
 
+        spec = effective_pip_spec(override, pin)
         try:
             # importlib.metadata scans dist-info via os.listdir (blocking I/O),
             # so run it on the executor rather than the event loop.
-            spec = spec or DEFAULT_PIP_SPEC
             raw_version = (
                 await hass.async_add_executor_job(_installed_server_version, spec)
                 if hass is not None

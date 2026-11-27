@@ -60,7 +60,6 @@ from .const import (
     DEFAULT_BIND_HOST,
     DEFAULT_ENABLE_LLM_API,
     DEFAULT_LOOPBACK_URL,
-    DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
@@ -101,6 +100,7 @@ from .server_credentials import (
 from .server_pin import server_dist
 from .spec_dist import (
     async_paired_server_requirement,
+    effective_pip_spec,
     pip_spec_override,
     provides_server,
     spec_dist_name,
@@ -275,7 +275,7 @@ class EmbeddedServerManager:
             options.get(OPT_ENABLE_LLM_API, DEFAULT_ENABLE_LLM_API)
         )
         # Provisional until async_start reads the manifest pin.
-        self._pip_spec: str = self._resolve_pip_spec()
+        self._pip_spec: str = effective_pip_spec(self._pip_spec_override, None)
         self._secret_path: str = str(entry.data.get(DATA_SECRET_PATH, ""))
         self._config_dir: str = hass.config.path(SERVER_CONFIG_SUBDIR)
         # Home Assistant's own configuration directory, captured here on the
@@ -356,7 +356,7 @@ class EmbeddedServerManager:
                 "This component's manifest pins no ha-mcp server; running "
                 "whichever ha-mcp is installed. Reinstall from the Marketplace"
             )
-        self._pip_spec = self._resolve_pip_spec()
+        self._pip_spec = effective_pip_spec(self._pip_spec_override, self._paired_spec)
 
         # Read the importer registry BEFORE the package step too: replacing
         # the distribution's files on disk under a live importer corrupts it
@@ -468,20 +468,6 @@ class EmbeddedServerManager:
         await async_release_credentials(self._hass, self._entry.data)
 
     # -- package install ---------------------------------------------------
-
-    def _resolve_pip_spec(self) -> str:
-        """Return the effective pip requirement for the server.
-
-        An explicit override wins (any pip requirement string — a version pin,
-        a GitHub tarball URL, a ``file://`` wheel — for PR or pre-release
-        testing). Otherwise the requirement this component release pins in its
-        manifest, so the server that runs is the one the Marketplace delivered
-        with the component. A hand-edited manifest without a pin falls back to the bare
-        ``ha-mcp`` distribution.
-        """
-        if self._pip_spec_override:
-            return self._pip_spec_override
-        return self._paired_spec or DEFAULT_PIP_SPEC
 
     def _target_dist(self) -> str | None:
         """Return the known server distribution the effective spec installs.
