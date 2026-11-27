@@ -131,23 +131,34 @@ def test_non_png_native_content_preserves_mime(
 
 
 class TestMaybeAttachScreenshot:
-    async def test_skips_when_not_requested(self) -> None:
+    async def test_skips_when_not_requested(
+        self,
+        core_client: HomeAssistantClient,
+    ) -> None:
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         result = {"success": True}
-        out = await maybe_attach_screenshot(result, "default", requested=False)
+        out = await maybe_attach_screenshot(
+            result, "default", requested=False, client=core_client
+        )
         assert out is result
 
-    async def test_feature_off_warns(self, monkeypatch: Any) -> None:
+    async def test_feature_off_warns(
+        self, core_client: HomeAssistantClient, monkeypatch: Any
+    ) -> None:
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         set_settings(monkeypatch, enable_dashboard_screenshot=False)
         result: dict[str, Any] = {"success": True}
-        out = await maybe_attach_screenshot(result, "default", requested=True)
+        out = await maybe_attach_screenshot(
+            result, "default", requested=True, client=core_client
+        )
         assert out is result
         assert any("disabled" in w.lower() for w in result.get("warnings", []))
 
-    async def test_capture_failure_warns(self, monkeypatch: Any) -> None:
+    async def test_capture_failure_warns(
+        self, core_client: HomeAssistantClient, monkeypatch: Any
+    ) -> None:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
@@ -159,11 +170,15 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", boom)
 
         result: dict[str, Any] = {"success": True}
-        out = await maybe_attach_screenshot(result, "my-dash", requested=True)
+        out = await maybe_attach_screenshot(
+            result, "my-dash", requested=True, client=core_client
+        )
         assert out is result
         assert any("unavailable" in w.lower() for w in result.get("warnings", []))
 
-    async def test_full_page_passed_through(self, monkeypatch: Any) -> None:
+    async def test_full_page_passed_through(
+        self, core_client: HomeAssistantClient, monkeypatch: Any
+    ) -> None:
         """maybe_attach_screenshot forwards full_page to the capture call."""
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
@@ -180,14 +195,18 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", record)
 
         await maybe_attach_screenshot(
-            {"success": True}, "my-dash", requested=True, full_page=True
+            {"success": True},
+            "my-dash",
+            requested=True,
+            full_page=True,
+            client=core_client,
         )
         assert seen["full_page"] is True
         # A concrete url_path passes through unchanged to the engine path.
         assert seen["path"] == "my-dash"
 
     async def test_success_returns_toolresult_with_image(
-        self, monkeypatch: Any
+        self, core_client: HomeAssistantClient, monkeypatch: Any
     ) -> None:
         from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot import capture
@@ -201,7 +220,9 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", ok)
 
         result: dict[str, Any] = {"success": True}
-        out = await maybe_attach_screenshot(result, "my-dash", requested=True)
+        out = await maybe_attach_screenshot(
+            result, "my-dash", requested=True, client=core_client
+        )
         # Success returns a ToolResult so structured_content (the dict) is
         # present on both the screenshot and no-screenshot paths, plus the PNG
         # as an image content block.
@@ -218,7 +239,7 @@ class TestMaybeAttachScreenshot:
         assert "screenshots" not in result
 
     async def test_legacy_fallback_warning_is_preserved_on_config_path(
-        self, monkeypatch: Any
+        self, core_client: HomeAssistantClient, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
@@ -231,7 +252,11 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", ok)
 
         out = await maybe_attach_screenshot(
-            {"success": True}, "my-dash", requested=True, full_page=True
+            {"success": True},
+            "my-dash",
+            requested=True,
+            full_page=True,
+            client=core_client,
         )
 
         assert isinstance(out, ToolResult)
@@ -244,7 +269,7 @@ class TestMaybeAttachScreenshot:
         )
 
     async def test_named_view_and_batch_options_pass_through(
-        self, monkeypatch: Any
+        self, core_client: HomeAssistantClient, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import (
@@ -277,6 +302,7 @@ class TestMaybeAttachScreenshot:
                 dark_mode=True,
                 language="de",
             ),
+            client=core_client,
         )
 
         assert seen["path"] == "wall-panel/home"
@@ -287,7 +313,7 @@ class TestMaybeAttachScreenshot:
         assert out.structured_content["screenshot_render_path"] == "wall-panel/home"
 
     async def test_partial_batch_metadata_is_preserved_on_config_path(
-        self, monkeypatch: Any
+        self, core_client: HomeAssistantClient, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
@@ -308,7 +334,7 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", partial)
 
         out = await maybe_attach_screenshot(
-            {"success": True}, "wall-panel", requested=True
+            {"success": True}, "wall-panel", requested=True, client=core_client
         )
 
         assert isinstance(out, ToolResult)
@@ -318,7 +344,7 @@ class TestMaybeAttachScreenshot:
 
     @pytest.mark.parametrize("raw_error", ["null", "[]"])
     async def test_non_object_tool_error_never_breaks_committed_result(
-        self, monkeypatch: Any, raw_error: str
+        self, core_client: HomeAssistantClient, monkeypatch: Any, raw_error: str
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
@@ -331,14 +357,16 @@ class TestMaybeAttachScreenshot:
         monkeypatch.setattr(capture, "capture_dashboard_images", fail)
         result: dict[str, Any] = {"success": True, "write_committed": True}
 
-        out = await maybe_attach_screenshot(result, "wall-panel", requested=True)
+        out = await maybe_attach_screenshot(
+            result, "wall-panel", requested=True, client=core_client
+        )
 
         assert out is result
         assert out["success"] is True
         assert out["screenshot_error"]["code"] == "INTERNAL_ERROR"
 
     async def test_serialization_failure_does_not_publish_false_image_metadata(
-        self, monkeypatch: Any
+        self, core_client: HomeAssistantClient, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools import tools_config_dashboards as dashboard_tools
@@ -368,7 +396,7 @@ class TestMaybeAttachScreenshot:
         result: dict[str, Any] = {"success": True, "write_committed": True}
 
         out = await dashboard_tools.maybe_attach_screenshot(
-            result, "wall-panel", requested=True
+            result, "wall-panel", requested=True, client=core_client
         )
 
         assert out is result
@@ -377,7 +405,7 @@ class TestMaybeAttachScreenshot:
         assert "screenshot_render_path" not in out
 
     async def test_base_route_warning_is_preserved_when_config_is_available(
-        self, monkeypatch: Any
+        self, core_client: HomeAssistantClient, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
@@ -395,11 +423,14 @@ class TestMaybeAttachScreenshot:
             "wall-panel",
             requested=True,
             config={"views": [{"title": "Home", "path": "home"}]},
+            client=core_client,
         )
 
         assert any("first view visible" in warning for warning in result["warnings"])
 
-    async def test_get_path_raises_on_capture_failure(self, monkeypatch: Any) -> None:
+    async def test_get_path_raises_on_capture_failure(
+        self, core_client: HomeAssistantClient, monkeypatch: Any
+    ) -> None:
         """raise_on_failure (the get path) propagates the engine error instead
         of demoting it to a warning the caller may never read."""
         from ha_mcp.dashboard_screenshot import capture
@@ -414,17 +445,24 @@ class TestMaybeAttachScreenshot:
 
         with pytest.raises(ToolError):
             await maybe_attach_screenshot(
-                {"success": True}, "my-dash", requested=True, raise_on_failure=True
+                {"success": True},
+                "my-dash",
+                requested=True,
+                raise_on_failure=True,
+                client=core_client,
             )
 
-    async def test_full_page_without_request_warns(self) -> None:
+    async def test_full_page_without_request_warns(
+        self,
+        core_client: HomeAssistantClient,
+    ) -> None:
         """full_page is meaningless without a screenshot flag — make the
         dropped request observable rather than a silent no-op."""
         from ha_mcp.tools.tools_config_dashboards import maybe_attach_screenshot
 
         result: dict[str, Any] = {"success": True}
         out = await maybe_attach_screenshot(
-            result, "my-dash", requested=False, full_page=True
+            result, "my-dash", requested=False, full_page=True, client=core_client
         )
         assert out is result
         assert any(

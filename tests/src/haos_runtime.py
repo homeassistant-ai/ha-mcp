@@ -1303,7 +1303,7 @@ def _resolve_local_store_dir(image_path: Path) -> str:
 # the build-context root) and the other repo files it copies, besides src/.
 # Both must match build_image's (kept in sync by hand like
 # HA_MCP_TEST_SECRET_PATH; test_haos_dev_addon_context checks both).
-STABLE_ADDON_FILES = ("start.py", "app_options.json")
+STABLE_ADDON_FILES = ("start.py", "supervisor_transport.py", "app_options.json")
 DEV_ADDON_REPO_FILES = (
     "pyproject.toml",
     "uv.lock",

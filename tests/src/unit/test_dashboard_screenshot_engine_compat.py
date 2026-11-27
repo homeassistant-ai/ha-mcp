@@ -7,6 +7,7 @@ import json
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.dashboard_screenshot import capture
 
 from ._dashboard_screenshot_common import PNG, _puppet_info, set_settings
@@ -40,7 +41,10 @@ def _installed_puppet(
 
 
 async def test_verified_legacy_puppet_retries_with_maximum_height(
-    monkeypatch: pytest.MonkeyPatch, supervisor: Supervisor, engine: Engine
+    core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+    supervisor: Supervisor,
+    engine: Engine,
 ) -> None:
     _installed_puppet(monkeypatch, supervisor, engine, "2.4.9")
     engine.next_response = [
@@ -49,7 +53,7 @@ async def test_verified_legacy_puppet_retries_with_maximum_height(
     ]
 
     result = await capture.capture_dashboard_images(
-        "lovelace/0", width=900, full_page=True
+        "lovelace/0", width=900, full_page=True, client=core_client
     )
 
     assert [request["params"]["viewport"] for request in engine.gets] == [
@@ -64,6 +68,7 @@ async def test_verified_legacy_puppet_retries_with_maximum_height(
     "version", [None, "2.5.0"], ids=["explicit-url", "current-puppet"]
 )
 async def test_only_verified_legacy_puppet_retries_a_rejected_viewport(
+    core_client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
     supervisor: Supervisor,
     engine: Engine,
@@ -74,7 +79,9 @@ async def test_only_verified_legacy_puppet_retries_a_rejected_viewport(
     engine.next_response = Render(400, b"invalid viewport", content_type="text/plain")
 
     with pytest.raises(ToolError) as exc_info:
-        await capture.capture_dashboard_images("lovelace/0", width=900, full_page=True)
+        await capture.capture_dashboard_images(
+            "lovelace/0", width=900, full_page=True, client=core_client
+        )
 
     [request] = engine.gets
     assert request["path"] == "/lovelace/0"

@@ -6,6 +6,7 @@ import errno
 import logging
 import runpy
 import socket
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +21,15 @@ from ._core_client import free_port
 # plugin blocks sockets unless a test asks for them, as its own HTTP clients do.
 pytestmark = pytest.mark.usefixtures("socket_enabled")
 
-_START = runpy.run_path(
-    str(Path(__file__).parents[3] / "homeassistant-addon" / "start.py"),
-    run_name="addon_start_listen_sockets",
-)
+_APP_DIR = Path(__file__).parents[3] / "homeassistant-addon"
+# In the image start.py imports its sibling modules from ``/``.
+sys.path.insert(0, str(_APP_DIR))
+try:
+    _START = runpy.run_path(
+        str(_APP_DIR / "start.py"), run_name="addon_start_listen_sockets"
+    )
+finally:
+    sys.path.remove(str(_APP_DIR))
 
 
 @pytest.fixture

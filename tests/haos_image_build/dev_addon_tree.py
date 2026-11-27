@@ -17,7 +17,7 @@ else:
 
 # Files the dev addon's Dockerfile copies from the stable addon dir, staged at
 # the build-context root with their COPY lines rewritten to match.
-STABLE_ADDON_FILES = ("start.py", "app_options.json")
+STABLE_ADDON_FILES = ("start.py", "supervisor_transport.py", "app_options.json")
 # Other repo files it copies, besides src/. Supervisor builds with the addon
 # dir as the context, so they are staged into it. Both tuples must match
 # haos_runtime's (kept in sync by hand like HA_MCP_TEST_SECRET_PATH;

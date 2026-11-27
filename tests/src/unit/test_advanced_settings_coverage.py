@@ -163,6 +163,7 @@ ENV_ONLY: dict[str, str] = {
     "SUPERVISOR_TOKEN": "Injected by Supervisor; identifies add-on mode (secret/bootstrap)",
     "HA_MCP_EMBEDDED": "Set by the ha_mcp_tools in-process server entry before first import; identifies in-process mode (bootstrap)",
     "SUPERVISOR_BASE_URL": "Supervisor API base; bootstrap before any settings exist",
+    "SUPERVISOR_SOCKET": "Injected by Supervisor; the app's Unix socket to its API (bootstrap)",
     "HAMCP_ENV_FILE": "Selects which .env file to load — read before Settings is built",
     "HA_MCP_CONFIG_DIR": "Resolves the data dir that *holds* the override files (path)",
     "XDG_DATA_HOME": "Root of the pre-#2372 auto-backup default; honoured only while snapshots remain there (path)",

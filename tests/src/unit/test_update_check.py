@@ -19,7 +19,8 @@ from ha_mcp.update_check import (
 )
 
 from ._core_client import refused_url
-from ._tools_addons_core import Supervisor
+from ._tools_addons_core import Supervisor, app_info
+from ._tools_addons_core import socket_supervisor as socket_supervisor
 from ._tools_addons_core import supervisor as supervisor
 from ._tools_addons_core import target_app as target_app
 from ._update_check_sources import PyPI, app_store
@@ -168,6 +169,25 @@ class TestGetUpdateInfoGating:
         info = await asyncio.to_thread(get_update_info)
         assert info == UpdateInfo("7.8.0.dev443", "7.8.0.dev450", True)
         assert pypi.asked == []
+
+    async def test_addon_reads_its_store_over_the_supervisor_socket(
+        self, socket_supervisor: Supervisor
+    ) -> None:
+        """Supervisor deprecates the app's token over TCP: with the app's
+        socket mounted the check asks over it, and sends no token there."""
+        socket_supervisor.answer(
+            "GET",
+            "/addons/self/info",
+            app_info(
+                version="7.8.0.dev443",
+                version_latest="7.8.0.dev450",
+                update_available=True,
+            ),
+        )
+        info = await asyncio.to_thread(get_update_info)
+        assert info == UpdateInfo("7.8.0.dev443", "7.8.0.dev450", True)
+        headers = socket_supervisor.headers("GET", "/addons/self/info")
+        assert "Authorization" not in headers
 
 
 class TestGetUpdateInfoChannels:

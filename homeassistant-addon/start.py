@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
+from supervisor_transport import urlopen_supervisor
+
 
 def _log_with_timestamp(level: str, message: str, stream: TextIO | None = None) -> None:
     """Log a message with a timestamp."""
@@ -159,7 +161,7 @@ def persist_addon_options(options: dict[str, Any], supervisor_token: str) -> Non
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urlopen_supervisor(req, timeout=10) as resp:
         resp.read()
 
 
