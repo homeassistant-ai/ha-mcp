@@ -330,6 +330,16 @@ reference catalog for hypothetical differently named future fields. Preserve
 the complete native preferences regardless, and do not turn ordinary strings
 that happen to match statistic IDs into asserted references.
 
+## Frontend-only rules
+
+Some rules and data exist only in the frontend's JavaScript. Read them from
+the installed build (`hass_frontend`) through the component's
+`frontend_build.py` instead of rewriting them in Python: find the webpack
+module by strings its source must hold, run that module's own factory, and
+call its export on Core's data. Its imports are then resolved one export at a
+time, so the function keeps its own closures. A build that lacks the module
+(an older frontend) answers that it lacks it.
+
 ## Frontend and custom-card semantics
 
 Dashboard configuration has no Core schema. Its meaning lives in the

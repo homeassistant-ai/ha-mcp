@@ -183,3 +183,29 @@ async def test_history_schema_does_not_warn_when_core_describes_it_completely(
         )
     else:
         assert contract["status"] == "unavailable"
+
+
+@pytest.mark.component_topology
+@pytest.mark.asyncio
+async def test_energy_suggestions_come_from_the_frontend_through_the_component(
+    mcp_client: Client,
+) -> None:
+    """The component runs the installed frontend's suggestions (Home Assistant
+    2026.12 and later; an older frontend says it has none); without the
+    component the read still answers and names it."""
+    raw = assert_mcp_success(
+        await mcp_client.call_tool(
+            "ha_manage_energy_prefs", {"mode": "get", "include_suggestions": True}
+        )
+    )
+    result = raw.get("data", raw)
+    suggestions = result["energy_suggestions"]
+    assert "config" in result
+    if not component_surface_available():
+        assert suggestions["status"] == "unavailable"
+        assert "HA-MCP component" in suggestions["reason"]
+    elif suggestions["status"] == "available":
+        assert isinstance(suggestions["suggestions"], list)
+        assert suggestions["editors"]["device"]["stat"] == "stat_consumption"
+    else:
+        assert "frontend suggests no energy meters" in suggestions["reason"]
