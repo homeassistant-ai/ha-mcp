@@ -185,11 +185,12 @@ class TestLabels:
         hass: HomeAssistant,
         tools: EntityTools,
         entity_registry: er.EntityRegistry,
+        labels: list[str],
         sent: AsyncMock,
     ) -> None:
         """The merge needs the current labels: a write after a refused read
         would replace them with a list built from nothing."""
-        registry_entity(entity_registry, "light.test", labels={"outdoor", "porch"})
+        registry_entity(entity_registry, "light.test", labels=set(labels))
 
         with registry_lookup_failing(hass), pytest.raises(ToolError) as exc_info:
             await tools.ha_set_entity(
@@ -200,10 +201,7 @@ class TestLabels:
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert body["ha_error_code"] == "home_assistant_error"
         assert _UPDATE not in sent_types(sent)
-        assert stored_entry(entity_registry, "light.test").labels == {
-            "outdoor",
-            "porch",
-        }
+        assert stored_entry(entity_registry, "light.test").labels == set(labels)
 
 
 @pytest.mark.parametrize("load_registries", [False])
