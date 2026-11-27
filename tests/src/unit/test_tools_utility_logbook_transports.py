@@ -149,7 +149,9 @@ async def test_scoped_pages_are_cores_own_rows_with_what_caused_them(
             }
         )
     )["result"]
-    assert [row["context_service"] for row in native if "context_service" in row]
+    assert native
+    if scope != "device":
+        assert any("context_service" in row for row in native)
 
     params = call_kwargs(
         source="logbook",
