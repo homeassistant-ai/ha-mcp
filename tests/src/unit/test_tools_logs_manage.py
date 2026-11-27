@@ -403,7 +403,9 @@ async def test_a_purge_returns_the_recorders_oldest_state(
     oldest = recorder_mock.states_manager.oldest_ts
     assert oldest is not None and oldest > old
     assert result["recorder"] == {
-        **(await component_client.send_websocket_message({"type": "recorder/info"}))["result"],
+        **(await component_client.send_websocket_message({"type": "recorder/info"}))[
+            "result"
+        ],
         "purge_keep_days": recorder_mock.keep_days,
         "auto_purge": recorder_mock.auto_purge,
         "oldest_state": datetime.fromtimestamp(oldest, UTC).isoformat(
@@ -582,7 +584,7 @@ async def test_without_the_component_a_busy_recorder_is_a_warning(
     await async_wait_recording_done(hass)
 
     assert result["success"] is True
-    assert any("still working" in warning for warning in result["warnings"])
+    assert any("may still be running" in warning for warning in result["warnings"])
 
 
 async def test_describe_of_a_service_core_does_not_have_says_so(
@@ -744,9 +746,8 @@ async def test_the_queue_watch_ends_at_its_deadline(
         for call in sent.call_args_list
         if call.args[0].get("type") == "recorder/info"
     ]
-    assert budgets and all(0 < budget <= 0.3 for budget in budgets)
-    assert any("still working" in warning for warning in result["warnings"])
-    assert not any("gave no answer" in warning for warning in result["warnings"])
+    assert budgets == [0.3]
+    assert any("gave no answer" in warning for warning in result["warnings"])
 
 
 async def test_a_logbook_entry_is_recorded_when_the_call_returns(

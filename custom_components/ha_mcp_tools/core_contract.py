@@ -38,6 +38,7 @@ COMMANDS = (
     "recorder/change_statistics_unit",
     "recorder/adjust_sum_statistics",
     "recorder/import_statistics",
+    "logger/log_level",
 )
 
 
@@ -230,6 +231,7 @@ async def statistics_metadata(
 ) -> dict[str, Any]:
     """Resolve default and explicit output with Core's converter selection."""
     from homeassistant.components.recorder.statistics import (
+        _get_statistic_to_display_unit_converter,
         _get_unit_converter,
         async_list_statistic_ids,
     )
@@ -240,14 +242,15 @@ async def statistics_metadata(
     for record in records:
         stored = record.get("statistics_unit_of_measurement")
         converter = _get_unit_converter(record.get("unit_class"), stored)
-        requested = units.get(converter.UNIT_CLASS) if converter else None
-        # A converter absent in Core means statistics are returned as stored.
-        output = (
-            stored if converter is None else record.get("display_unit_of_measurement")
+        display = record.get("display_unit_of_measurement")
+        convert = _get_statistic_to_display_unit_converter(
+            record.get("unit_class"), stored, display, units
         )
-        if converter and converter.UNIT_CLASS in units:
-            output = requested if requested in converter.VALID_UNITS else stored
-        record["output_unit_of_measurement"] = output
+        record["output_unit_of_measurement"] = (
+            units.get(converter.UNIT_CLASS, display)
+            if convert and converter
+            else stored
+        )
         # The unit class to ask Core for that unit under, which the metadata's
         # own unit_class leaves out for some statistics.
         record["conversion_unit_class"] = converter.UNIT_CLASS if converter else None

@@ -171,6 +171,8 @@ async def fetch_statistics_totals(
         },
         core_options,
     )
+    if "calendar" in params or "rolling_window" in params:
+        params.pop("fixed_period")
     if types is None:
         params.pop("types")
     metadata, metadata_failure = await fetch_statistics_metadata(client, statistic_ids)
@@ -208,7 +210,10 @@ async def fetch_statistics_totals(
         "success": True,
         "source": "statistics",
         "entities": entities,
-        "time_range": time_range,
+        "time_range": next(
+            (params[key] for key in ("calendar", "rolling_window") if key in params),
+            time_range,
+        ),
         "query_params": {"statistic_types": types, "summary": True},
     }
     warnings = statistics_warnings(

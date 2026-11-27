@@ -120,7 +120,7 @@ _MAX_HISTORY_ENTITY_HOURS = 240.0
 _MAX_STATISTICS_ENTITIES = 25
 _MAX_SHORT_TERM_STATISTICS_ROWS = 10_000
 _MAX_LONG_TERM_STATISTICS_ROWS = 20_000
-_VALID_STATISTICS_PERIODS = frozenset(
+_ESTIMATED_STATISTICS_PERIODS = frozenset(
     {"5minute", "hour", *_CALENDAR_STATISTICS_PERIODS}
 )
 
@@ -207,11 +207,17 @@ class HistoryTools:
         minimal_response: Annotated[
             bool,
             Field(
-                description="Return only states/timestamps without attributes. Ignored when "
+                description="Compact repeated history rows where Core permits it. Ignored when "
                 'source="statistics"',
                 default=True,
             ),
         ] = True,
+        no_attributes: Annotated[
+            bool,
+            Field(
+                description="Omit state attributes from history, including climate and water heater attributes."
+            ),
+        ] = False,
         significant_changes_only: Annotated[
             bool,
             Field(
@@ -244,7 +250,7 @@ class HistoryTools:
         period: Annotated[
             str,
             Field(
-                description='Aggregation period: "5minute", "hour", "day", "week", "month", "year".'
+                description="Aggregation period. See include_schema=True for the periods Core accepts."
                 ' Ignored when source="history"',
                 default="day",
             ),
@@ -474,6 +480,7 @@ class HistoryTools:
                     _DEFAULT_HISTORY_LIMIT,
                     _MAX_HISTORY_LIMIT,
                     order=order,
+                    no_attributes=no_attributes,
                     core_options=core_options,
                     summary_until=min(end_dt, now) if summary else None,
                 )
@@ -827,14 +834,16 @@ def _statistics_workload_violation(
     statistics_timezone: tzinfo,
 ) -> tuple[dict[str, Any], list[str]] | None:
     """Return statistics violation details, or None when within budget."""
-    if period not in _VALID_STATISTICS_PERIODS:
+    if period not in _ESTIMATED_STATISTICS_PERIODS:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"Cannot safely estimate recorder workload for period: {period}",
                 context={"period": period},
                 suggestions=[
-                    "Use one of: '5minute', 'hour', 'day', 'week', 'month', 'year'."
+                    "HA-MCP estimates "
+                    + ", ".join(sorted(_ESTIMATED_STATISTICS_PERIODS))
+                    + ". See include_schema=True for Core's accepted periods."
                 ],
             )
         )
@@ -885,6 +894,7 @@ async def _fetch_history(
     order: str = "desc",
     core_options: dict[str, Any] | None = None,
     summary_until: datetime | None = None,
+    no_attributes: bool = False,
 ) -> dict[str, Any]:
     """Execute the history/history_during_period WebSocket call.
 
@@ -905,7 +915,7 @@ async def _fetch_history(
         "entity_ids": entity_id_list,
         "minimal_response": minimal_response,
         "significant_changes_only": significant_changes_only,
-        "no_attributes": minimal_response,
+        "no_attributes": no_attributes,
     }
 
     command_params = merge_core_options(command_params, core_options)
@@ -971,6 +981,7 @@ async def _fetch_history(
         "period": period,
         "query_params": {
             "minimal_response": minimal_response,
+            "no_attributes": no_attributes,
             "significant_changes_only": significant_changes_only,
             "limit": effective_limit,
             "offset": effective_offset,
