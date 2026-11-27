@@ -165,7 +165,7 @@ async def test_history_summary_uses_cores_per_entity_serializer(
     with patch.object(
         core_history,
         "get_significant_states_serialized",
-        wraps=core_history.get_significant_states_serialized,  # type: ignore[attr-defined]
+        wraps=getattr(core_history, "get_significant_states_serialized", None),
     ) as read:
         result = await _query(component_core_client, "switch.pump", 10, summary=True)
     read.assert_called_once()
