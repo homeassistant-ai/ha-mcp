@@ -8,7 +8,8 @@ comes from the entry's real services.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,7 +21,6 @@ from ha_mcp.tools.tools_yaml_read import YamlReadTools
 
 from ._component_filesystem import config_dir, put
 from ._file_services import make_file_service
-from ._symlink_support import symlink_or_skip
 from ._tool_errors import error_of
 
 GetYaml = Callable[..., Awaitable[dict[str, Any]]]
@@ -40,10 +40,19 @@ async def get_yaml(
     return YamlReadTools(component_core_client).ha_config_get_yaml
 
 
-async def _dangling_link(hass: HomeAssistant, name: str) -> None:
-    """An entry the folder listing cannot stat, so the listing fails."""
-    link = config_dir(hass) / name
-    await hass.async_add_executor_job(symlink_or_skip, link, link.parent / "gone")
+def _unreadable_folder(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """A folder the process may not read, so its listing fails."""
+    folder = config_dir(hass) / name
+    original = Path.iterdir
+
+    def refuse(path: Path) -> Iterator[Path]:
+        if path == folder:
+            raise PermissionError(f"denied: {path}")
+        return original(path)
+
+    monkeypatch.setattr(Path, "iterdir", refuse)
 
 
 def _files(result: dict[str, Any]) -> list[str]:
@@ -101,49 +110,42 @@ async def test_bracket_in_a_folder_name_does_not_select_a_sibling_folder(
     assert _files(out) == ["conf/pack[a]ges/svc.yaml"]
 
 
-async def _unlistable_packages(hass: HomeAssistant, *, named_file: bool) -> None:
-    """Core loads ``svc.yaml`` (and ``[.s]vc.yaml``), and skips the dot file
-    ``.vc.yaml``, which the class ``[.s]`` also matches and cannot be listed."""
+async def _unlistable_packages(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, *, named_file: bool
+) -> None:
+    """Core loads ``svc.yaml`` (and ``[.s]vc.yaml``); the folder cannot be listed."""
     files = {"configuration.yaml": PACKAGES, "packages/svc.yaml": TEMPLATE}
     if named_file:
         files["packages/[.s]vc.yaml"] = TEMPLATE
     await put(hass, files)
-    await _dangling_link(hass, "packages/.vc.yaml")
+    _unreadable_folder(hass, monkeypatch, "packages")
 
 
 async def test_bracketed_file_core_loaded_is_searched_when_the_listing_fails(
-    hass: HomeAssistant, get_yaml: GetYaml
+    hass: HomeAssistant, get_yaml: GetYaml, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A file named ``[.s]vc.yaml`` cannot match itself as a pattern; keep it."""
-    await _unlistable_packages(hass, named_file=True)
+    await _unlistable_packages(hass, monkeypatch, named_file=True)
 
     out = await get_yaml(yaml_path="template", file="packages/[.s]vc.yaml")
 
     assert _files(out) == ["packages/[.s]vc.yaml", "packages/svc.yaml"]
-
-
-async def test_bracketed_file_core_loaded_is_not_reported_unsearched(
-    hass: HomeAssistant, get_yaml: GetYaml
-) -> None:
-    await _unlistable_packages(hass, named_file=True)
-
-    out = await get_yaml(yaml_path="template", file="packages/[.s]vc.yaml")
-
-    (warning,) = out["warnings"]
+    (warning,) = out["warnings"]  # the listing failed; the file is not unsearched
     assert _listing_failed(warning)
 
 
 async def test_listing_failure_names_the_bracketed_file_it_could_not_search(
-    hass: HomeAssistant, get_yaml: GetYaml
+    hass: HomeAssistant, get_yaml: GetYaml, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A named file must not vanish behind a generic listing failure."""
-    await _unlistable_packages(hass, named_file=False)
+    await _unlistable_packages(hass, monkeypatch, named_file=False)
 
     out = await get_yaml(yaml_path="template", file="packages/[.s]vc.yaml")
 
     assert _files(out) == ["packages/svc.yaml"]
     listing, unsearched = out["warnings"]
     assert _listing_failed(listing)
+    assert "Permission denied: packages" in listing
     assert (
         unsearched
         == "packages/[.s]vc.yaml was not searched because its listing failed."
@@ -279,15 +281,15 @@ async def test_a_key_merged_in_from_a_folder_is_flagged_and_readable_locally(
 
 
 async def test_failed_lookup_of_a_bracketed_name_reports_it_unsearched(
-    hass: HomeAssistant, get_yaml: GetYaml
+    hass: HomeAssistant, get_yaml: GetYaml, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The literal ``svc[a].yaml`` cannot be listed; the class match
-    ``svca.yaml`` from the same expansion is dropped with it."""
+    """The folder cannot be listed, so the literal ``svc[a].yaml`` is not
+    searched and the class match ``svca.yaml`` is dropped with it."""
     await put(
         hass,
         {"configuration.yaml": NO_PACKAGES, "packages/svca.yaml": "rest:\n  a: 1\n"},
     )
-    await _dangling_link(hass, "packages/svc[a].yaml")
+    _unreadable_folder(hass, monkeypatch, "packages")
 
     out = await get_yaml(yaml_path="rest", file="packages/svc[a].yaml")
 

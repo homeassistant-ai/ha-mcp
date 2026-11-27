@@ -13,6 +13,7 @@ ha-mcp does. Which paths a service accepts is covered in
 import glob
 import logging
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -173,6 +174,36 @@ class TestListFiles:
 
         (entry,) = result["files"]
         assert entry["modified"] == read["modified"]
+
+    @pytest.mark.parametrize(
+        ("error", "message"),
+        [
+            (PermissionError("denied"), "Permission denied: www"),
+            (OSError("disk gone"), "disk gone"),
+        ],
+    )
+    async def test_a_folder_that_cannot_be_read_fails_the_listing(
+        self,
+        hass: HomeAssistant,
+        files: FileService,
+        monkeypatch: pytest.MonkeyPatch,
+        error: OSError,
+        message: str,
+    ) -> None:
+        await put(hass, {"www/a.txt": "hello"})
+        www = config_dir(hass) / "www"
+        original = Path.iterdir
+
+        def refuse(path: Path) -> Iterator[Path]:
+            if path == www:
+                raise error
+            return original(path)
+
+        monkeypatch.setattr(Path, "iterdir", refuse)
+
+        result = await files(SERVICE_LIST_FILES, {"path": "www"})
+
+        assert result == {"success": False, "error": message, "files": []}
 
 
 class TestWriteFile:
