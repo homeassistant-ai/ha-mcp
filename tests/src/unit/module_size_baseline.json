@@ -10,7 +10,7 @@
   "src/ha_mcp/backup_manager.py": 3389,
   "src/ha_mcp/client/rest_client.py": 2356,
   "src/ha_mcp/client/websocket_client.py": 1546,
-  "src/ha_mcp/server.py": 1115,
+  "src/ha_mcp/server.py": 1107,
   "src/ha_mcp/stdio_settings_sidecar.py": 1503,
   "src/ha_mcp/tools/device_control.py": 1670,
   "src/ha_mcp/tools/smart_search/_deep.py": 1524,
