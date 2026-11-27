@@ -11,7 +11,9 @@ LOGBOOK_CURSOR_PREFIX = "logbook:"
 
 class LogbookCursor(BaseModel):
     hours_back: int = Field(default=1, ge=1)
+    # None until a call has counted to the end of the window.
     total: int | None = Field(ge=0)
+    # Matches counted so far, shown when total is None.
     lower_bound: int = Field(default=0, ge=0)
     scope: dict[str, Any] = Field(default_factory=dict)
     end: datetime
@@ -46,6 +48,11 @@ async def fill_logbook_page(
     *,
     count_ahead: bool = True,
 ) -> dict[str, Any]:
+    """Fill one page, then count on for a total, within ``MAX_PAGE_READS``.
+
+    The result continues from where the page filled; the reads after that only
+    count, and ``count_ahead=False`` skips them.
+    """
     entries: list[dict[str, Any]] = []
     before = cursor.seen if cursor else 0
     seen = before

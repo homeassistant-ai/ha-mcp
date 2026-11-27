@@ -47,7 +47,11 @@ def _columns(source: Subquery) -> tuple[Any, Any, Any]:
 
 
 def _branches(source: Subquery) -> Sequence[Select[Any]]:
-    """Validate Core's visible branches and optional context-only suffix."""
+    """Validate Core's visible branches and optional context-only suffix.
+
+    Two branches are Core's whole-instance and context statements, three its
+    device and action-call ones, four its entity and entity-plus-device ones.
+    """
     union = source.element
     if isinstance(union, CompoundSelect):
         branches = union.selects
@@ -186,8 +190,8 @@ def _hydrate_rows(
     keys = tuple_(*cols)
     if not candidates:
         return [], False
-    # Probe sizes without bringing the event JSON/attributes into Python. Use
-    # a conservative UTF-8 allowance for databases where LENGTH counts chars.
+    # Probe sizes without bringing the event JSON/attributes into Python.
+    # LENGTH may count characters, so pages are budgeted at four bytes each.
     size = sum(
         (
             func.coalesce(func.length(col), 0)
@@ -213,7 +217,7 @@ def _hydrate_rows(
             if chosen:
                 break
             raise HomeAssistantError(
-                "A single raw Logbook row exceeds the HA-MCP page byte budget"
+                "A single raw Logbook row exceeds the HA-MCP page size budget"
             )
         if chosen and used + chars * 4 > PAGE_BYTES:
             break
@@ -260,8 +264,8 @@ def _source(
             processor.context_id,
         )
     )
-    # These three/four-branch statements contain a CTE. Rebuilding Core's
-    # lambda keeps its current bind values when SQLAlchemy nests it for paging.
+    # These three/four-branch statements contain a CTE. Nested for paging,
+    # Core's cached lambda would run with an earlier request's bind values.
     with_context = (
         processor.entity_ids or processor.device_ids or processor.action_calls
     )
@@ -298,6 +302,7 @@ def read_logbook_page(
         )
         rows, more = _read_rows(session, probe, page, types)
         origins = {}
+        # A page holds no context-only rows, so what caused its rows is looked up.
         if rows and (
             page.get("after")
             or more
@@ -306,6 +311,8 @@ def read_logbook_page(
             or processor.action_calls
         ):
             origins = _context_origins(session, source, rows, _key(rows[-1]))
+        # Core's get_events does the same: a filtered query drops the parent
+        # call_service rows that name the user.
         parent_users = (
             processor._fetch_parent_user_ids(session, rows, instance.max_bind_vars)
             if processor.entity_ids or processor.device_ids
@@ -329,9 +336,12 @@ def _matches(entry: dict[str, Any], search: str) -> bool:
         return True
     name = entry.get("name") or ""
     message = entry.get("message") or ""
+    # An action-call row has neither; its action is domain.service.
+    action = f"{entry.get('domain') or ''}.{entry.get('service') or ''}"
     return (
         search in f"{name} {message}".strip().lower()
         or search in str(entry.get("entity_id") or "").lower()
+        or ("service" in entry and search in action.lower())
     )
 
 

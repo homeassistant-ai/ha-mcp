@@ -348,7 +348,10 @@ class TraceTools:
           resolving the context id, and is 0 when Core's own-context map
           answered.
         - `logbook_entries`, `logbook_transport`, `logbook_total` and
-          `logbook_truncated` describe the run's logbook rows.
+          `logbook_truncated` describe the run's logbook rows. A truncated
+          read has not counted them: `logbook_total` is null and
+          `logbook_total_lower_bound` says how many were seen; read the rest
+          with ha_get_logs(source='logbook', context_id=...).
         """
         try:
             if run_id is not None and context_id is not None:
@@ -792,6 +795,8 @@ def _format_detailed_trace(
         if logbook.transport is not None:
             result["logbook_transport"] = logbook.transport
         result["logbook_total"] = logbook.total
+        if logbook.lower_bound is not None:
+            result["logbook_total_lower_bound"] = logbook.lower_bound
         result["logbook_truncated"] = logbook.truncated
     if sections:
         result = _filter_trace_sections(result, sections)

@@ -11,10 +11,14 @@ Transport order (best first), all fetching from Home Assistant's own code:
    live HA process through the component (see
    ``docs/agents/native-core-contracts.md``), when the capability is
    advertised. Rows carry Core's names and ISO ``when``.
+   Every read is a bounded recorder page.
 2. ``/api/logbook`` — Core's REST view, the component-absent fallback for
-   requests it can serve (no device filter).
-3. ``logbook/get_events`` — Core's WebSocket command, only for ``device_id``
-   requests without the component (the only transport with a device filter).
+   requests it can serve (no device filter, no action calls).
+3. ``logbook/get_events`` and ``logbook/get_action_calls`` — Core's WebSocket
+   commands, for ``device_id`` requests and action calls without the component.
+
+The two native reads load their whole window, so HA-MCP refuses them past 24
+hours.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -101,7 +105,6 @@ class LogbookLogSourceMixin:
         device_id: str | None,
         context_id: str | None,
         search: str | None,
-        compact_bool: bool,
         order: Literal["newest", "oldest"] = "newest",
         action_calls: bool = False,
     ) -> str:
@@ -128,8 +131,6 @@ class LogbookLogSourceMixin:
             param_parts.append(f"end_time={end_time!r}")
         if search:
             param_parts.append(f"search={search!r}")
-        if not compact_bool:
-            param_parts.append("compact=False")
         if order != "newest":
             param_parts.append(f"order={order!r}")
         param_str = ", ".join(param_parts)
@@ -158,6 +159,12 @@ class LogbookLogSourceMixin:
                     search_lower
                     in f"{e.get('name') or ''} {e.get('message') or ''}".strip().lower()
                     or search_lower in str(e.get("entity_id") or "").lower()
+                    # An action-call row has neither; its action is domain.service.
+                    or (
+                        "service" in e
+                        and search_lower
+                        in f"{e.get('domain') or ''}.{e.get('service') or ''}".lower()
+                    )
                 )
             ]
             filters_applied["search"] = search
@@ -303,25 +310,22 @@ class LogbookLogSourceMixin:
         return rest, "rest"
 
     async def _fetch_logbook_component(
-        self, command: dict[str, Any], page: dict[str, Any] | None = None
-    ) -> list[Any] | dict[str, Any] | None:
-        """Run the component's Core-processor command, or ``None`` to fall back.
+        self, command: dict[str, Any], page: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Read one page through the component, or ``None`` to fall back.
 
-        ``None`` means the component is absent, downgraded (``unknown_command``
-        drops the cached capability) or the transport gave no answer: no
-        connection, or one that dropped before the reply. Core's own rejections
-        surface unchanged. Timeouts and oversized replies must not repeat the
-        recorder query. A token rejected on the command itself also surfaces;
-        a token already rejected on the capability probe falls back.
+        ``None`` means the component is absent, too old to page every read, or
+        downgraded (``unknown_command`` drops the cached capability). Core's
+        own rejections, a lost connection, a timeout and an oversized reply all
+        surface: a failed page is never repeated as a whole-window read.
         """
         caps = await get_component_caps(self._client)
-        if not component_supports(caps, LOGBOOK_EVENTS_CAPABILITY):
+        if not (
+            component_supports(caps, LOGBOOK_EVENTS_CAPABILITY)
+            and component_supports(caps, "logbook_scoped_pages")
+        ):
             return None
-        message = {**command, "type": LOGBOOK_EVENTS_COMMAND}
-        if page and component_supports(caps, "logbook_scoped_pages"):
-            message["page"] = page
-        elif page:
-            return None
+        message = {**command, "type": LOGBOOK_EVENTS_COMMAND, "page": page}
         try:
             response = await self._client.send_websocket_message(message)
         except HomeAssistantCommandTimeout:
@@ -330,10 +334,7 @@ class LogbookLogSourceMixin:
             )
         except HomeAssistantConnectionError as exc:
             self._raise_if_logbook_read_failed(exc, command)
-            if "page" in message or isinstance(exc.__cause__, HomeAssistantAuthError):
-                # A failed paged read must never turn into a whole-window retry.
-                exception_to_structured_error(exc)
-            return None
+            exception_to_structured_error(exc)
         except HomeAssistantCommandError as exc:
             if not is_unknown_command(exc):
                 raise
@@ -341,13 +342,11 @@ class LogbookLogSourceMixin:
             invalidate_caps(self._client)
             return None
 
-        return self._component_reply(response, "page" in message)
+        return self._component_reply(response)
 
-    def _component_reply(
-        self, response: Any, paged: bool
-    ) -> list[Any] | dict[str, Any] | None:
+    def _component_reply(self, response: Any) -> dict[str, Any] | None:
         if isinstance(response, dict) and response.get("success"):
-            return self._component_rows(response.get("result"), paged)
+            return self._component_page(response.get("result"))
 
         self._raise_logbook_rejection(response, LOGBOOK_EVENTS_COMMAND)
         if (
@@ -356,18 +355,15 @@ class LogbookLogSourceMixin:
         ):
             # Older component without the command: stop routing to it.
             invalidate_caps(self._client)
-        elif paged:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.CONNECTION_FAILED, "No reply to the paged Logbook read."
-                )
+            return None
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED, "No reply to the paged Logbook read."
             )
-        return None
+        )
 
     @staticmethod
-    def _component_rows(result: Any, paged: bool) -> list[Any] | dict[str, Any] | None:
-        if not paged:
-            return result if isinstance(result, list) else None
+    def _component_page(result: Any) -> dict[str, Any]:
         if not isinstance(result, dict) or not isinstance(result.get("entries"), list):
             raise_tool_error(
                 create_error_response(
@@ -378,7 +374,7 @@ class LogbookLogSourceMixin:
         return result
 
     async def _fetch_logbook_websocket(self, command: dict[str, Any]) -> list[Any]:
-        """Core's ``logbook/get_events`` — the device-filter fallback."""
+        """Core's own WebSocket read, for a device filter or action calls."""
         try:
             response = await self._client.send_websocket_message(command)
         except HomeAssistantCommandTimeout:
@@ -402,7 +398,7 @@ class LogbookLogSourceMixin:
             result = response.get("result")
             return result if isinstance(result, list) else []
         self._raise_logbook_rejection(response, command["type"])
-        # No REST device fallback exists after this point, so a tolerated
+        # No REST fallback exists after this point, so a tolerated
         # soft failure (``unknown_command`` on an old Core, or a code-less
         # proxy envelope such as a post-connect 403) must surface instead of
         # being reported as an empty logbook.
@@ -455,9 +451,10 @@ class LogbookLogSourceMixin:
         self, command: dict[str, Any], *, reason: str | None = None
     ) -> NoReturn:
         """Surface an unavailable native WebSocket-only read."""
+        action_calls = command["type"] == "logbook/get_action_calls"
         message = (
-            "The device_id filter requires Home Assistant's WebSocket API, "
-            "which is unavailable."
+            f"{'Action calls need' if action_calls else 'The device_id filter requires'} "
+            "Home Assistant's WebSocket API, which is unavailable."
         )
         if reason:
             message = f"{message} Last error: {reason}"
@@ -471,7 +468,7 @@ class LogbookLogSourceMixin:
                 },
                 suggestions=[
                     "Check the Home Assistant WebSocket connection",
-                    "Filter by entity_id instead",
+                    *([] if action_calls else ["Filter by entity_id instead"]),
                 ],
             )
         )
@@ -498,7 +495,9 @@ class LogbookLogSourceMixin:
                     suggestions=[
                         "Check that 'entity_id' uses 'domain.object_id' form, "
                         + "e.g. 'light.kitchen'"
-                    ],
+                    ]
+                    if "entity id" in str(response.get("error")).lower()
+                    else ["Check the filters against the error text"],
                 )
             )
         if error_code and error_code != "unknown_command":
@@ -507,6 +506,13 @@ class LogbookLogSourceMixin:
                     ErrorCode.SERVICE_CALL_FAILED,
                     str(response.get("error") or f"{command} failed"),
                     context={"error_code": error_code},
+                    suggestions=[
+                        "Home Assistant's log has the cause: "
+                        + "ha_get_logs(source='error_log')",
+                        "Pass context_id without entity_id or device_id",
+                    ]
+                    if error_code == "unknown_error"
+                    else None,
                 )
             )
 
@@ -514,7 +520,7 @@ class LogbookLogSourceMixin:
     def _normalize_logbook_events(events: Any, transport: str) -> Any:
         """Normalize the WebSocket fallback rows onto the REST-shaped contract.
 
-        ``logbook/get_events`` returns ``when`` as epoch seconds and omits the
+        Core's WebSocket reads return ``when`` as epoch seconds; get_events omits the
         ``name`` field on state rows. The component command and REST both
         return Core's REST shape (ISO ``when``, names from Core's own
         ``EventProcessor``), so they pass through untouched; only the
@@ -558,6 +564,9 @@ class LogbookLogSourceMixin:
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "HA-MCP limits native Logbook reads to 24 hours. Install or update the ha_mcp_tools component for longer windows.",
+                    suggestions=[
+                        "Read a longer span in 24-hour steps by moving end_time back"
+                    ],
                 )
             )
         rows, transport = await self._native_rows(command)
@@ -594,7 +603,6 @@ class LogbookLogSourceMixin:
         order: Literal["oldest", "newest"],
         search: str | None,
         limit: int,
-        compact: bool,
         scope: dict[str, Any],
     ) -> dict[str, Any]:
         command = {
@@ -664,7 +672,6 @@ class LogbookLogSourceMixin:
                     data["device_filter"],
                     data["context_filter"],
                     search,
-                    compact,
                     order,
                     bool(scope.get("action_calls")),
                 )
@@ -685,6 +692,11 @@ class LogbookLogSourceMixin:
             data["pagination_hint"] = (
                 "Pass next_offset as offset with the same filters and order to continue this Logbook window."
             )
+            if len(entries) < limit:
+                data["pagination_hint"] = (
+                    "HA-MCP's per-call page cap was reached before this page filled. "
+                    + data["pagination_hint"]
+                )
         return await add_timezone_metadata(self._client, data)
 
     async def _logbook_page_request(
@@ -785,7 +797,6 @@ class LogbookLogSourceMixin:
                 order,
                 search,
                 effective_limit,
-                compact,
                 scope,
             )
         except ToolError:

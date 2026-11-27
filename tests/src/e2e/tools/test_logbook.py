@@ -221,7 +221,7 @@ async def test_logbook_has_more_indicator(mcp_client):
     total = data["total_entries"]
     has_more = data["has_more"]
 
-    # has_more should be True if total > limit + offset
+    # has_more is True when more than this page matches, or the count was capped
     expected_has_more = total is None or total > 2
     assert has_more == expected_has_more, (
         f"has_more should be {expected_has_more} when total={total}, limit=2, offset=0"

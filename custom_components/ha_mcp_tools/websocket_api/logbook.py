@@ -9,7 +9,10 @@ reimplementation of Core's naming rules.
 
 Filters are the superset Core's ``logbook/get_events`` WebSocket command takes —
 ``entity_ids``, ``device_ids`` and ``context_id`` (the latter cannot be combined
-with the other two; Core's ``EventProcessor`` asserts on it). Validation and the
+with the other two; Core's ``EventProcessor`` asserts on it). ``action_calls``
+reads Core's ``logbook/get_action_calls`` view instead, for a time window only
+and without entity names. ``page`` asks for one bounded recorder page
+(``logbook_page``). Validation and the
 event-type/entity filters run on the loop; the recorder query AND the result
 encoding run in the executor (Core's own ``_ws_formatted_get_events`` approach),
 and the finished message goes out through :class:`seam.PreSerializedResult` so

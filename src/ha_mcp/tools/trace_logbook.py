@@ -18,8 +18,10 @@ class TraceLogbook:
     entries: list[dict[str, Any]]
     transport: Literal["component", "rest"] | None
     warnings: list[str]
+    # None when the run has more rows than were read; then lower_bound counts them.
     total: int | None = 0
     truncated: bool = False
+    lower_bound: int | None = None
 
 
 class _TraceLogbookReader(LogbookLogSourceMixin):
@@ -38,9 +40,9 @@ async def fetch_trace_logbook(
     The trace page asks Core for ``logbook/get_events`` with the trace's
     start time and the run's context id, and no end time (Core reads that as
     now). The component's ``ha_mcp_tools/logbook_events`` command runs the same
-    processor in process; REST is the explicit no-component fallback. REST
-    defaults an omitted end to ``start + 1 day``, so the fallback sends now
-    explicitly to keep the same window.
+    processor in process and returns one bounded page; REST is the explicit
+    no-component fallback. REST defaults an omitted end to ``start + 1 day``,
+    so both paths send now as the end.
     """
     context = trace.get("context")
     if not isinstance(context, dict):
@@ -85,6 +87,7 @@ async def fetch_trace_logbook(
             [],
             result["total"],
             bool(result.get("after")),
+            None if result["total"] is not None else result["lower_bound"],
         )
     rows = await client.get_logbook(**command)
     warnings = [

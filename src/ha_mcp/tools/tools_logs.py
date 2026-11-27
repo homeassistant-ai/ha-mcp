@@ -215,6 +215,7 @@ class LogTools(
             offset,
             hours_back=hours_back,
             search=search,
+            action_calls=action_calls,
         )
         structured_error_log = structured and source == "error_log"
         if structured and source != "error_log":
@@ -284,7 +285,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ],
             Field(
                 description=(
-                    "'logbook': entity state-change history. 'system': HA's "
+                    "'logbook': entity state-change history, or the actions "
+                    "called with action_calls. 'system': HA's "
                     "structured system_log entries (errors, warnings) with full "
                     "exception tracebacks; search also matches those exceptions. "
                     "'error_log': raw log text (home-assistant.log on "
@@ -329,7 +331,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Keyword filter on entries/lines. Logbook searches the displayed "
                     "name and message together (e.g. 'Home Assistant started'), "
-                    "and the entity ID. For source='system' it "
+                    "and the entity ID; an action call matches on domain.service. "
+                    "For source='system' it "
                     "matches message, name and exception text; for the raw "
                     "error_log path it matches any line of a record, so a "
                     "traceback frame brings back its header and siblings. "
@@ -365,7 +368,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ge=1,
                 description=(
                     "How many hours back to read. Logbook (default 1), "
-                    "supervisor and system_service. Without the component, HA-MCP caps Logbook reads at 24 hours. "
+                    "supervisor and system_service. Without a current component, HA-MCP caps Logbook reads at 24 hours. "
                     "For the journal sources, only "
                     "when given: the journal serves that window, from its "
                     "start to the journal's end, one page at a time, "
@@ -416,7 +419,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "For a Logbook cursor, pass next_offset as offset with the same filters, "
                     "search and order. HA-MCP caps recorder pages per call. When total_entries is null, "
-                    "total_entries_lower_bound counts verified matches. For integer offsets reuse hours_back and end_time. "
+                    "total_entries_lower_bound counts verified matches, and a page can come back short or empty with has_more true: keep following next_offset. For integer offsets reuse hours_back and end_time. "
                     "Page deeper into source='logbook', 'error_log', "
                     "'fault_log', and supervisor/system_service on a page "
                     "read: hours_back and no search (ignored otherwise). "

@@ -129,13 +129,7 @@ set, so names, context fields and the row shape come from Core instead of a
 copied `EntityNameCache`. The server prefers the bridge and keeps Core's REST
 (`/api/logbook`) and WebSocket (`logbook/get_events`) reads as the explicit
 component-absent fallbacks — a `device_id` request needs the WebSocket path
-there because REST has no device filter. Every component read, scoped or not,
-is one bounded recorder page built from Core's `statement_for_request` and
-rendered by `EventProcessor.humanify`; action calls use
-`EventProcessor(action_calls=True)`, with `logbook/get_action_calls` as the
-fallback. The pages read per call, the partial count that follows from it
-(`total_entries` null with `total_entries_lower_bound`) and the 24-hour limit
-on the component-absent reads are HA-MCP policies, not Core rules. If a native read times out or its
+there because REST has no device filter. If a native read times out or its
 reply exceeds the transport limit, surface the error without repeating the
 Recorder query on another transport.
 
