@@ -246,8 +246,7 @@ def _supervisor_post(path: str, data: dict) -> bool:
         try:
             err_body = e.read().decode("utf-8", errors="replace")[:200]
         except Exception:
-            # Best-effort: the error body is optional diagnostic detail; if it
-            # can't be read/decoded we still log the HTTPError below.
+            # Best-effort: the body is optional; the HTTPError is logged below.
             pass
         log_error(f"Supervisor API POST {path} ({type(e).__name__}): {e} — {err_body}")
         return False
@@ -277,8 +276,7 @@ def _supervisor_get_text(path: str) -> str | None:
         try:
             body = e.read().decode("utf-8", errors="replace")[:200]
         except Exception:
-            # Best-effort: the error body is optional diagnostic detail; if it
-            # can't be read/decoded we still log the HTTPError below.
+            # Best-effort: the body is optional; the HTTPError is logged below.
             pass
         log_error(f"Supervisor API GET text {path}: {e} — {body}")
         return None
