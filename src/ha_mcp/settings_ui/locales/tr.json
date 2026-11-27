@@ -217,7 +217,12 @@
     "addon.secret_path.description": "MCP sunucusu için isteğe bağlı özel HTTP yolu. Otomatik oluşturulan güvenli yolu kullanmak için boş bırakın.\n",
     "addon.enable_security_policy_tool.name": "Yapay zeka ajanlarının araç güvenlik politikalarını düzenlemesine izin ver",
     "addon.disabled_tools.name": "Devre dışı araçlar (virgülle ayrılmış)",
-    "addon.pinned_tools.name": "Sabitlenen araçlar (virgülle ayrılmış)"
+    "addon.pinned_tools.name": "Sabitlenen araçlar (virgülle ayrılmış)",
+    "accessibility.storage_blocked": "Tarayıcınız site depolamasını engelliyor; seçimleriniz yalnızca bu oturum için geçerlidir.",
+    "accessibility.theme.help": "Tek tıkla renk temaları. Varsayılan olan Otomatik, işletim sistemi tercihinizi izler ve değiştiğinde anında güncellenir.",
+    "accessibility.colors.help": "Seçili temanın üzerine kendi renklerinizi seçin. Her renk kutusu sisteminizin görsel renk seçicisini açar.",
+    "policies.card.confirm_loosen": "Bu değişiklik, daha önce onayınızı gerektiren \"{tool}\" çağrılarını onaylayabilir. Kaydedilsin mi?",
+    "visibility.errors.conflict": "Yapılandırma başka bir sekmede veya oturumda değiştirildi. Sayfayı yenileyip değişikliklerinizi yeniden uygulayın."
   },
   "tool_groups": {},
   "tools": {}
