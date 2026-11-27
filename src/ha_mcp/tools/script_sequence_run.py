@@ -25,11 +25,6 @@ from .helpers import (
     raise_tool_error,
 )
 
-_CHECK_BEFORE_RESENDING = (
-    "Steps before the failing one may already have run; check their effects "
-    "before sending the actions again."
-)
-
 
 def _guard_actions(node: Any) -> None:
     """Hold each literal action, nested ones too, to ha_call_service's checks.
@@ -42,7 +37,9 @@ def _guard_actions(node: Any) -> None:
             _guard_actions(item)
     elif isinstance(node, dict):
         for key, value in node.items():
-            if key in ("action", "service") and isinstance(value, str):
+            if key in ("action", "service", "service_template") and isinstance(
+                value, str
+            ):
                 domain, _, service = value.partition(".")
                 if is_component_domain(domain):
                     raise_tool_error(
@@ -94,7 +91,10 @@ async def run_script_sequence(
             "Home Assistant did not complete the actions",
             result,
             context={"action": "run_sequence"},
-            suggestions=[_CHECK_BEFORE_RESENDING],
+            suggestions=[
+                "Steps before the failing one may already have run; check "
+                "their effects before sending the actions again."
+            ],
         )
     reply = result.get("result") or {}
     return {

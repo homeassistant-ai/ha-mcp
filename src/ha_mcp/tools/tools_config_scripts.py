@@ -205,14 +205,14 @@ class ConfigScriptTools:
             else None
         )
         entity_id: str | None = None
-        if lookup is not None and lookup.get("found") is False:
+        if lookup is None:
+            entity_id = await script_entity_or_warning(
+                self._client, script_id, key, warnings, "registry entry unavailable"
+            )
+        elif lookup.get("found") is False:
             warnings.append(
                 "registry entry, validation and references unavailable: Home "
                 "Assistant has no script entity for this config yet"
-            )
-        elif lookup is None:
-            entity_id = await script_entity_or_warning(
-                self._client, script_id, key, warnings, "registry entry unavailable"
             )
         entity, validation, references = await registry_details(
             self._client,
@@ -228,20 +228,19 @@ class ConfigScriptTools:
 
         # The canonical storage key, for later ha_config_*_script calls; an
         # envelope without it is a client contract violation, logged.
-        canonical_id = key
-        if canonical_id is None:
+        if key is None:
             logger.warning(
                 "get_script_config envelope missing 'script_id' for "
                 "input %r; falling back to caller input. This indicates "
                 "a rest_client contract violation.",
                 script_id,
             )
-            canonical_id = script_id
+            key = script_id
 
         response: dict[str, Any] = {
             "success": True,
             "action": "get",
-            "script_id": canonical_id,
+            "script_id": key,
             # The script body, not the REST envelope, as the automation get
             # returns it; the hash is computed over the body too.
             "config": actual_config,

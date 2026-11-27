@@ -21,13 +21,14 @@ from .util_helpers import search_related
 
 REFERENCES_NEED_COMPONENT = (
     "references need the ha_mcp_tools component's automation_config lookup, "
-    "which did not answer (component absent or too old); related holds Core's "
-    "broader Related set instead (also the devices, areas and integrations of "
-    "what the automation uses)"
+    "which gave no usable answer (component absent, too old or failing); "
+    "related holds Core's broader Related set instead (also the devices, "
+    "areas and integrations of what the automation uses)"
 )
 REFERENCES_OMITTED_WITHOUT_COMPONENT = (
     "references need the ha_mcp_tools component's automation_config lookup, "
-    "which did not answer (component absent or too old); references are omitted"
+    "which gave no usable answer (component absent, too old or failing); "
+    "references are omitted"
 )
 
 

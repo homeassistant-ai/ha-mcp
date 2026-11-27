@@ -614,7 +614,7 @@ async def test_a_component_whose_keys_command_fails_points_at_the_log(
     _assert_keys_unread(
         await _trace_rejection(component_core_client, domain),
         domain,
-        "component's answer failed",
+        "component gave no keys",
     )
 
 

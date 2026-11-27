@@ -39,6 +39,7 @@ from ..utils.usage_logger import log_tool_call
 from .component_api import (
     ask_component,
     component_supports,
+    component_unasked_warning,
     component_unusable_warning,
     get_component_caps,
 )
@@ -107,14 +108,11 @@ async def _config_keys_from_core(
             return set(keys), None
         caps = await get_component_caps(client)
     except HomeAssistantError as exc:
-        return (
-            None,
-            f"The ha_mcp_tools component could not be asked ({exc}), so {without}.",
-        )
+        return None, component_unasked_warning(exc, without)
     if component_supports(caps, "config_keys"):
         return None, (
-            f"The ha_mcp_tools component's answer failed, so {without}; Home "
-            "Assistant's log has the reason."
+            f"The ha_mcp_tools component gave no keys, so {without}; Home "
+            "Assistant's log may say why."
         )
     return None, component_unusable_warning(caps, without)
 

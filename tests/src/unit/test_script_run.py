@@ -325,8 +325,9 @@ async def test_run_sequence_not_sent_is_an_error(tools: ConfigScriptTools) -> No
         # Nested in a building block, and under the legacy key.
         [{"if": [], "then": [{"service": "HA_MCP_TOOLS.write_file"}]}],
         [{"parallel": [{"action": "hassio.restore_full"}]}],
+        [{"service_template": "hassio.restore_full"}],
     ],
-    ids=["component", "component-nested", "snapshot-restore-nested"],
+    ids=["component", "component-nested", "snapshot-restore-nested", "legacy-key"],
 )
 async def test_run_sequence_holds_its_actions_to_the_service_guards(
     tools: ConfigScriptTools,
