@@ -233,7 +233,6 @@
     "oauth_not_serving": "O OAuth legado ainda não está servindo estes — reinicie o Home Assistant quando solicitado, para ativá-los.",
     "panel_hint": "Abra o [painel de configurações do HA-MCP](/ha-mcp) para gerenciamento de ferramentas e configurações do servidor.",
     "tools_module_installed": "Módulo de ferramentas de arquivo e YAML beta/avançado (opcional): Instalado",
-    "tools_module_not_installed": "Módulo de ferramentas de arquivo e YAML beta/avançado (opcional): Não instalado — pressione \"Adicionar entrada\" na página desta integração e escolha \"HA-MCP File & YAML Tools\" para adicioná-lo",
     "tools_module_not_loaded": "Módulo de ferramentas de arquivo e YAML beta/avançado (opcional): Instalado mas não carregado — ative ou recarregue a entrada \"HA-MCP File & YAML Tools\" na página desta integração",
     "version_line": "Componente {component_version} - Servidor ha-mcp {server_version} ({source})",
     "server_source_paired": "instalado com esta versão do componente",
