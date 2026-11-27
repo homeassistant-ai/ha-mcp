@@ -168,6 +168,7 @@ async def test_a_recorder_service_reports_how_it_waited(mcp_client: Client) -> N
             "auto_purge",
             "oldest_state",
         }
+        assert result["recorder"]["enabled"] is True
         assert "warnings" not in result
     else:
         assert any("may still be running" in warning for warning in result["warnings"])
