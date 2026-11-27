@@ -1,7 +1,7 @@
 """Optional access to the running Core's request contracts, never local replicas."""
 
 import logging
-from typing import Any, Literal
+from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
@@ -61,7 +61,7 @@ async def integration_commands(client: Any, domain: str) -> dict[str, Any]:
 
 
 async def energy_suggestions(
-    client: Any, changes: dict[Literal["dismiss", "restore"], list[str]] | None = None
+    client: Any, changes: dict[str, list[str]] | None = None
 ) -> dict[str, Any]:
     """The meters Settings > Energy suggests, computed by the installed frontend;
     ``changes`` dismisses or restores statistics first, as its panel does."""
