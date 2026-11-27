@@ -19,11 +19,30 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib.parse import urlparse, urlsplit
 
-from .const import (
-    DEFAULT_OAUTH_REDIRECT_ALLOWLIST,
-    MAX_OAUTH_CALLBACK_LENGTH,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
+# Standard library only and no relative imports: the webhook proxy app ships a
+# byte-identical copy that its app process loads outside Home Assistant.
+
+# Options key holding the list. Absent = DEFAULT_OAUTH_REDIRECT_ALLOWLIST; a
+# saved list, even an empty one, replaces it.
+OPT_OAUTH_REDIRECT_ALLOWLIST = "oauth_redirect_allowlist"
+# The common OAuth clients' published callbacks. Clients whose callback is
+# unique per app or connector need their own entry: ChatGPT apps on
+# chatgpt.com/connector/oauth/<id>, and Copilot Studio's per-connector
+# global.consent.azure-apim.net/redirect/<connector> URL.
+DEFAULT_OAUTH_REDIRECT_ALLOWLIST: tuple[str, ...] = (
+    "https://claude.ai/api/mcp/auth_callback",
+    # Anthropic's announced future callback domain.
+    "https://claude.com/api/mcp/auth_callback",
+    # Claude Code (any port, per the loopback rule).
+    "http://localhost/callback",
+    "http://127.0.0.1/callback",
+    "https://chatgpt.com/connector_platform_oauth_redirect",
+    # Gemini Enterprise.
+    "https://vertexaisearch.cloud.google.com/oauth-redirect",
 )
+# Bounds every writer of the list applies.
+MAX_OAUTH_CALLBACKS = 50
+MAX_OAUTH_CALLBACK_LENGTH = 2048
 
 _LOGGER = logging.getLogger(__name__)
 # The malformed stored value last warned about; /authorize is anonymous, so a
@@ -89,12 +108,14 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
 
 
 def _is_listable(redirect_uri: str) -> bool:
-    """The spec floor plus no userinfo: what the none-mode callback list accepts.
+    """The spec floor, no userinfo and the length bound: what the list accepts.
 
     A callback carrying credentials is never legitimate, and an exact match
     must not be able to let one through. Kept out of the shared floor so the
     legacy, ha_auth and DCR modes keep accepting what they always did.
     """
+    if len(redirect_uri) > MAX_OAUTH_CALLBACK_LENGTH:
+        return False
     if not _is_valid_redirect_uri(redirect_uri):
         return False
     parsed = urlparse(redirect_uri)
@@ -152,8 +173,7 @@ def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
     """Return ``(entries, invalid)``: trimmed, de-duplicated, in input order.
 
     An entry is invalid when no authorization request could use it: it fails
-    the same check as ``/authorize`` (:func:`_is_listable`), or it is longer
-    than ``MAX_OAUTH_CALLBACK_LENGTH``.
+    the same check as ``/authorize`` (:func:`_is_listable`).
     """
     entries: list[str] = []
     invalid: list[str] = []
@@ -161,9 +181,30 @@ def normalize_allowlist(values: Iterable[Any]) -> tuple[list[str], list[str]]:
         text = str(value).strip()
         if not text or text in entries or text in invalid:
             continue
-        valid = len(text) <= MAX_OAUTH_CALLBACK_LENGTH and _is_listable(text)
-        (entries if valid else invalid).append(text)
+        (entries if _is_listable(text) else invalid).append(text)
     return entries, invalid
+
+
+_UNPARSEABLE_CALLBACK = "<unparseable callback>"
+
+
+def loggable_callback(redirect_uri: str) -> str:
+    """``redirect_uri`` as scheme, host, port and path: the form safe to log.
+
+    Userinfo, query and fragment can carry a password or a token, so they are
+    dropped; a value that does not parse yields a fixed placeholder.
+    """
+    try:
+        parts = urlsplit(redirect_uri)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return _UNPARSEABLE_CALLBACK
+    if not parts.scheme or not host:
+        return _UNPARSEABLE_CALLBACK
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host if port is None else f"{host}:{port}"
+    return f"{parts.scheme}://{netloc}{parts.path}"
 
 
 def _loopback_key(uri: str) -> tuple[str, str, str] | None:

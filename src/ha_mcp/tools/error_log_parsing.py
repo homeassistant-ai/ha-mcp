@@ -102,9 +102,9 @@ def _instant_order(stamps: list[str]) -> Callable[[str], datetime]:
     """Order timestamps by instant, not text.
 
     Core 2026.11+ stamps carry the UTC offset, so the repeated hour when
-    daylight saving ends sorts wrong as text. Offset-less stamps (older Core,
-    or the lines before an upgrade) take the window's first offset: the zone
-    outlives a restart.
+    daylight saving ends sorts wrong as text. Offset-less stamps (the lines
+    written before the upgrade to 2026.11) take the window's first offset: the
+    zone outlives a restart.
     """
     offset = next(
         (o for s in stamps if (o := datetime.fromisoformat(s).utcoffset()) is not None),

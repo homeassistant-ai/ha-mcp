@@ -46,7 +46,6 @@ from custom_components.ha_mcp_tools.const import (
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_OAUTH_REGENERATE,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
@@ -57,6 +56,9 @@ from custom_components.ha_mcp_tools.const import (
     OPT_WEBHOOK_ID_OVERRIDE,
     TOOLS_ENTRY_TITLE,
     WEBHOOK_AUTH_HA,
+)
+from custom_components.ha_mcp_tools.oauth_redirect_allowlist import (
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
 )
 
 from ._config_flow_core import (

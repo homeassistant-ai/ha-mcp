@@ -1,6 +1,7 @@
 """Generic routes apply the snapshot backup controls (#2581).
 
-Service calls, backup/* WebSocket commands and Supervisor /backups requests
+Service calls, backup/* and hassio/update/config/update WebSocket commands and
+Supervisor /backups requests
 sent through ha_call_service or the Code Mode ws_send/api_post bridges that do
 what ha_manage_backup(scope="snapshot") does must honour enable_snapshot_actions
 and backup_read_only, and snapshot deletion must go through ha_manage_backup so
@@ -39,6 +40,7 @@ SNAPSHOT_SERVICES = [
 ]
 SNAPSHOT_WRITE_WS = [
     ("backup/generate", None),
+    ("hassio/update/config/update", {"core_backup_before_update": True}),
     ("Backup/Restore", {"backup_id": "abc12345", "agent_id": "backup.local"}),
     ("supervisor/api", {"endpoint": "/backups/new/full", "method": "post"}),
     (
@@ -88,7 +90,7 @@ async def backup_core(
     """Core's backup integration and Core's own ``supervisor/api``, in front of
     a Supervisor that lists no backups (``_supervisor_core``)."""
     assert await async_setup_component(hass, "backup", {})
-    load_supervisor_api(
+    await load_supervisor_api(
         hass,
         aioclient_mock,
         monkeypatch,

@@ -21,6 +21,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers import label_registry as lr
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import MockHAClientWebSocket
 
 from custom_components.ha_mcp_tools.websocket_api.constants import (
@@ -34,6 +35,12 @@ from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 from ._component_core import ws_call, ws_result
 from ._config_dir_yaml import setup_scenes
 from ._core_setup import add_test_entry
+
+
+@pytest.fixture
+async def _search(hass: HomeAssistant) -> None:
+    """Core's related search, which the removal asks for the scene's users."""
+    assert await async_setup_component(hass, "search", {})
 
 
 async def _removal_waits_on(client: HomeAssistantClient, scene_id: str) -> str:
@@ -50,6 +57,7 @@ async def _removal_waits_on(client: HomeAssistantClient, scene_id: str) -> str:
     return entity_id
 
 
+@pytest.mark.usefixtures("_search")
 async def test_a_scene_sharing_a_unique_id_with_a_light_resolves_to_the_scene(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
@@ -71,6 +79,7 @@ async def test_a_scene_sharing_a_unique_id_with_a_light_resolves_to_the_scene(
     )
 
 
+@pytest.mark.usefixtures("_search")
 async def test_a_scene_named_apart_from_its_key_resolves_by_unique_id(
     hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:

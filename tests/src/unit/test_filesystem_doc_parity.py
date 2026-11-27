@@ -8,9 +8,9 @@ must be documented in both the server tool docstrings
 the allowlist but a doc surface is forgotten -- exactly what happened for
 ``dashboards/`` and is being corrected here for ``blueprints/``.
 
-Self-contained on purpose: it parses the sources with ``ast`` / ``yaml`` and
-imports nothing from Home Assistant or fastmcp, so it runs in CI *and* locally
-without either installed.
+It parses the sources with ``ast`` / ``yaml`` and loads ``const.py`` by path,
+without the component package or fastmcp. ``const.py`` takes its file and
+folder names from Home Assistant, so Home Assistant must be installed.
 """
 
 import ast
@@ -27,7 +27,7 @@ _SERVICES_FILE = _COMPONENT_DIR / "services.yaml"
 
 
 def _load_const_standalone():
-    """Load ``const.py`` directly, bypassing the HA-dependent package __init__."""
+    """Load ``const.py`` directly, bypassing the package __init__."""
     spec = importlib.util.spec_from_file_location(
         "_ha_mcp_tools_const_parity", _COMPONENT_DIR / "const.py"
     )

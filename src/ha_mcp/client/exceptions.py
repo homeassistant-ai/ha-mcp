@@ -4,7 +4,11 @@ from typing import Any
 
 import httpx
 
-from .._vendor.websockets.exceptions import InvalidProxyStatus, InvalidStatus
+from .._vendor.websockets.exceptions import (
+    ConnectionClosed,
+    InvalidProxyStatus,
+    InvalidStatus,
+)
 from ..error_wording import config_resource_not_found
 
 
@@ -24,6 +28,21 @@ class HomeAssistantConnectionError(HomeAssistantError):
         return isinstance(
             cause, (TimeoutError, httpx.TimeoutException, HomeAssistantCommandTimeout)
         )
+
+
+class HomeAssistantResponseTooLarge(HomeAssistantConnectionError):
+    """A WebSocket closed because a message exceeded its size limit."""
+
+
+def websocket_close_error_type(
+    close: BaseException | None,
+) -> type[HomeAssistantConnectionError]:
+    """Either peer can close with 1009 when a message exceeds its size limit."""
+    if isinstance(close, ConnectionClosed) and any(
+        frame and frame.code == 1009 for frame in (close.rcvd, close.sent)
+    ):
+        return HomeAssistantResponseTooLarge
+    return HomeAssistantConnectionError
 
 
 class HomeAssistantNotReached(HomeAssistantConnectionError):
@@ -95,6 +114,21 @@ class HomeAssistantAPIError(HomeAssistantError):
         return self.status_code == 404 or (
             self.status_code == 400 and config_resource_not_found(self.response_data)
         )
+
+
+class SceneIdNotAnEntityError(HomeAssistantAPIError):
+    """``scene.<id>`` is no registered entity, while storage key ``<id>`` holds a
+    scene. A 404, so a backup snapshot reads the call's target as absent; the
+    scene tools report it as a refusal."""
+
+    def __init__(self, identifier: str, storage_key: str):
+        super().__init__(
+            f"{identifier} is no registered entity, but storage key "
+            f"'{storage_key}' holds a scene; pass '{storage_key}' for it",
+            status_code=404,
+        )
+        self.identifier = identifier
+        self.storage_key = storage_key
 
 
 def http_failure_status(error: BaseException) -> int | None:

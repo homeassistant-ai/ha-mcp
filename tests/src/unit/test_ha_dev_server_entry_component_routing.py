@@ -24,7 +24,7 @@ from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.ha_mcp_tools.const import DOMAIN
 from ha_mcp.client.rest_client import HomeAssistantClient
-from ha_mcp.tools import tools_dev
+from ha_mcp.tools import component_server_entry, tools_dev
 from ha_mcp.tools.component_api import get_component_caps, invalidate_caps
 from ha_mcp.tools.tools_dev import find_server_config_entry
 
@@ -53,7 +53,9 @@ def _open_flows(hass: HomeAssistant, entry_id: str) -> list[str]:
 
 
 def _spy_invalidate() -> Any:
-    return patch.object(tools_dev, "invalidate_caps", wraps=invalidate_caps)
+    return patch.object(
+        component_server_entry, "invalidate_caps", wraps=invalidate_caps
+    )
 
 
 async def _found_after_probing(

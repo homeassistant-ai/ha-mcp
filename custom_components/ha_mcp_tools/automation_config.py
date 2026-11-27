@@ -77,9 +77,7 @@ def core_parts() -> SimpleNamespace:
         },
         entity_registry=getattr(er, "async_get", None),
         issue_registry=getattr(ir, "async_get", None),
-        # Defined on the package through Core 2026.10 and in const from 2026.11.
-        component_key=getattr(automation, "DATA_COMPONENT", None)
-        or getattr(const, "DATA_COMPONENT", None),
+        component_key=getattr(const, "DATA_COMPONENT", None),
         references={
             name: getattr(automation, f"{name}_in_automation", None)
             for name in _REFERENCES

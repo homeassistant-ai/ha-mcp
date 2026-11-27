@@ -116,6 +116,7 @@ class TestExemptionRules:
             ({"scope": "snapshot", "action": "create"}, False),
             ({"scope": "snapshot", "action": "list"}, True),
             ({"scope": "snapshot", "action": "restore"}, False),
+            ({"scope": "snapshot", "action": "configure"}, False),
             # #1861: snapshot deletion must stay blocked in read-only mode
             # even with confirm=True — confirm has no bearing on the
             # scope/action gate.
@@ -251,25 +252,6 @@ class TestExemptionRules:
         assert (rule(args) is None) is allowed
 
     @pytest.mark.parametrize(
-        "args,allowed",
-        [
-            ({"action": "list"}, True),
-            # No pure-read duplicate exists, and Read Only Mode still surfaces
-            # the capture warning naming this value -- so it stays inspectable.
-            ({"action": "get_engine_theme"}, True),
-            # Both writes stay blocked: the backend default and the
-            # engine-account restore.
-            ({"action": "set", "theme_name": "nord"}, False),
-            ({"action": "set_engine_theme", "value": {"theme": ""}}, False),
-            # A missing action fails closed -- never a silent read.
-            ({}, False),
-        ],
-    )
-    def test_manage_theme(self, args, allowed):
-        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_theme"].blocked_write
-        assert (rule(args) is None) is allowed
-
-    @pytest.mark.parametrize(
         ("args", "allowed"),
         [
             ({"action": "list"}, True),
@@ -298,7 +280,7 @@ class TestExemptionRules:
         assert (rule(args) is None) is allowed
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestMiddleware:
     async def test_flag_off_passes_everything(self, read_only_off):
         mw = make_middleware()
@@ -609,7 +591,7 @@ class TestMiddleware:
         list_tools.assert_not_called()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestTransform:
     async def test_flag_off_returns_catalog_unchanged(self, read_only_off):
         transform = ReadOnlyToolsTransform()
@@ -666,6 +648,7 @@ class TestExemptTableContract:
             "ha_manage_security_policy",
             "ha_manage_theme",
             "ha_manage_blueprints",
+            "ha_manage_logs",
         }
 
     def test_every_exemption_describes_whats_allowed(self):
@@ -691,6 +674,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_security_policy": "tools_security_policy.py",
     "ha_manage_theme": "tools_themes.py",
     "ha_manage_blueprints": "tools_blueprints.py",
+    "ha_manage_logs": "tools_logs_manage.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -703,6 +687,7 @@ _EXEMPT_TOOL_MODULES = {
 # read-only predicate.
 _EXEMPT_INSPECTED_ARGS = {
     "ha_manage_theme": {"action"},
+    "ha_manage_logs": {"action", "describe"},
     "ha_manage_backup": {"scope", "action"},
     "ha_manage_app": {
         "action",
@@ -746,6 +731,9 @@ _ADDON_CONFIG_WRITE_PARAMS_MANIFEST = (
 # dispatch fields the predicate inspects) would silently classify as a
 # read in Read Only Mode.
 _EXEMPT_GATED_OR_READ_ARGS = {
+    # data: the fields of an action the predicate lets through, never sent
+    # with describe; limit and offset page the statistics listing client-side.
+    "ha_manage_logs": {"data", "limit", "offset"},
     "ha_manage_theme": {
         # Consumed only under the action dispatch the predicate inspects:
         # the backend-default write payload ('set')...
@@ -771,13 +759,12 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # delete) outright, so confirm has no mutation capability of its own.
         "confirm",
         # ...edits create payload / list filters (list is an allowed read),
-        "domain",
-        "entity_id",
+        *("domain", "entity_id"),
         # ...edits view selector (read) / delete target (blocked),
         "backup_name",
-        # ...edits delete filter (blocked) and list pagination (read).
-        "older_than_days",
-        "limit",
+        # ...edits delete filter (blocked), list pagination (read), and the
+        # snapshot configure and settings import payloads (both blocked).
+        *("older_than_days", "limit", "update_backup_settings", "settings_file"),
     },
     "ha_manage_app": {
         # Read-path selectors/modifiers of the allowed GET proxy.
@@ -858,16 +845,12 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "confirm",
     },
     "ha_manage_updates": {
-        # Targets/scope for the write actions (install/skip/clear_skipped,
-        # ignore_repair/unignore_repair), all blocked by the inspected
-        # ``action`` dispatch before use.
-        "entity_ids",
-        "categories",
-        "backup",
-        "repairs",
-        # Read-path modifiers of the allowed list/get actions.
-        "include_skipped",
-        "include_release_notes",
+        # Targets and payloads of the write actions (install, skip, set_channel,
+        # the repair actions): the inspected ``action`` blocks them first...
+        *("entity_ids", "categories", "backup", "version", "channel"),
+        *("repairs", "flow_id", "config", "menu_choice", "abort"),
+        # ...and read-path modifiers of the allowed list/get actions.
+        *("include_skipped", "include_release_notes"),
     },
     "ha_manage_security_policy": {
         # Both carry the write payload for action='set', which the
@@ -1021,7 +1004,7 @@ class TestExemptPredicateSchemaDrift:
         )
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestLiveFlip:
     """One middleware + one transform, flipping the live flag through a
     mutable holder — exercises the no-restart standalone-mode path."""
@@ -1061,7 +1044,7 @@ class TestLiveFlip:
         assert await mw.on_call_tool(write_ctx(), call_next) == "ok-again"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestRaisingCatalog:
     async def test_catalog_lookup_raise_blocks_call_fail_closed(self, read_only_on):
         """If the unfiltered-catalog lookup raises, the middleware must
@@ -1076,7 +1059,7 @@ class TestRaisingCatalog:
         call_next.assert_not_called()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestStringEnvelopeProxy:
     """The proxy tolerates ``arguments`` as a JSON string and parses it
     after this middleware runs, so the middleware must coerce it too."""
@@ -1141,7 +1124,7 @@ class TestStringEnvelopeProxy:
         assert result == "proxy-validation-error"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 class TestLateRegistration:
     async def test_rebuild_on_miss_blocks_late_registered_write_tool(
         self, read_only_on

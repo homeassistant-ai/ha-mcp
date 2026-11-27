@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "Werk de HA-MCP-integratie bij",
-      "description": "De geïnstalleerde ha-mcp-server vereist de HA-MCP-integratie {required} of nieuwer, maar je hebt {installed}. Werk de integratie bij via Instellingen > Systeem > Updates (in HACS, of de Marketplace op Home Assistant 2026.11+, open de HA-MCP-integratie en gebruik 'Update-informatie' (HACS) of 'Informatie vernieuwen' (Marketplace) als er nog geen update wordt getoond) en start Home Assistant opnieuw op. De server blijft ondertussen doordraaien, maar sommige newer functies werken mogelijk pas nadat de integratie is bijgewerkt."
+      "description": "De geïnstalleerde ha-mcp server vereist de HA-MCP integratie {required} of nieuwer, maar je hebt {installed}. Werk de integratie bij via Instellingen > Systeem > Updates (als er nog geen update wordt getoond, open dan de HA-MCP integratie in de Marketplace en gebruik 'Informatie vernieuwen') en start Home Assistant opnieuw op. De server blijft ondertussen draaien, maar sommige nieuwere functies werken mogelijk pas nadat de integratie is bijgewerkt."
     },
     "legacy_oauth_restart": {
       "title": "Herstart Home Assistant om de legacy OAuth-instellingen toe te passen",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "Wil je HA-MCP op één winkelvermelding behouden?",
-            "description": "HA-MCP staat als geïnstalleerd gemarkeerd vanuit beide {records}. Ze bevatten dezelfde integratie (de tweede is de distributiespiegel waarvan eerdere installaties afkomstig zijn). De Marketplace in Home Assistant 2026.11 zorgt ervoor dat slechts één vermelding eigenaar kan zijn van een integratie, waardoor geen van beide daar HA-MCP kan bijwerken; HACS blijft updaten, maar de upgrade naar 2026.11 zou HA-MCP laten vastlopen.\n\nIndienen behoudt **{keep}**, de vermelding in de standaardcatalogus die geen aangepaste repository nodig heeft, en markeert de andere vermelding als niet geïnstalleerd. Er wordt niets verwijderd: je HA-MCP-vermeldingen, instellingen en bestanden blijven precies zoals ze zijn, en vanaf nu verschijnen updates zoals gebruikelijk onder {keep}."
+            "description": "HA-MCP is gemarkeerd als geïnstalleerd vanuit beide {records}. Ze bevatten dezelfde integratie (de tweede is de distributiespiegel waar eerdere installaties vandaan kwamen). De Marketplace staat toe dat slechts één vermelding eigenaar is van een integratie, dus geen van beide kan HA-MCP bijwerken.\n\nIndienen behoudt **{keep}**, de vermelding in de standaardcatalogus die geen aangepaste repository nodig heeft, en markeert de andere vermelding als niet geïnstalleerd. Er wordt niets verwijderd: je HA-MCP invoer, instellingen en bestanden blijven precies zoals ze zijn, en voortaan verschijnen updates zoals gebruikelijk onder {keep}."
           }
         },
         "abort": {
           "already_resolved": "HA-MCP is nu geïnstalleerd vanuit één winkelvermelding; er valt niets te repareren.",
-          "store_unavailable": "De winkel (HACS of de Marketplace) is nog niet geladen, dus de vermeldingen kunnen niet worden gecontroleerd. Probeer het over een paar minuten opnieuw."
+          "store_unavailable": "De Marketplace is nog niet geladen, dus de vermeldingen kunnen niet worden gecontroleerd. Probeer het over een paar minuten opnieuw."
         }
       }
     }

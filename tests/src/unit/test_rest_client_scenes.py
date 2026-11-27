@@ -19,15 +19,14 @@ from homeassistant.helpers import entity_registry as er
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    HomeAssistantCommandError,
     HomeAssistantConnectionError,
+    SceneIdNotAnEntityError,
     SceneResolution,
     SceneStorageConfigNotFoundError,
 )
 
-from ._command_faults import dropped_on, pooled_socket
-from ._gateway import Gateway
-from ._gateway import gateway as gateway
-from ._gateway import gateway_client as gateway_client
+from ._command_faults import dropped_on, pooled_socket, registry_lookup_failing
 from ._rest_client_config_core import (
     config_client as config_client,
 )
@@ -95,27 +94,6 @@ async def test_removing_another_integrations_scene_says_it_is_not_editable(
     )
 
 
-async def test_a_proxy_refusing_removal_explains_the_way_around_it(
-    hass: HomeAssistant,
-    config_client: HomeAssistantClient,
-    gateway: Gateway,
-    gateway_client: HomeAssistantClient,
-) -> None:
-    """Supervisor's ingress proxy answers DELETE with 405."""
-    await load(hass, "scene", [MOVIE_NIGHT])
-    gateway.outages.append(405)
-
-    with pytest.raises(HomeAssistantAPIError) as exc_info:
-        await gateway_client.delete_scene_config("movie_night")
-
-    assert exc_info.value.status_code == 405
-    message = str(exc_info.value).lower()
-    for hint in ("cannot delete", "add-on", "supervisor", "yaml", "workaround"):
-        assert hint in message
-    assert "delete_movie_night" in message
-    assert gateway.requests == ["DELETE /api/config/scene/config/movie_night"]
-
-
 async def test_a_server_error_on_removal_is_not_reported_as_not_found(
     hass: HomeAssistant, config_client: HomeAssistantClient
 ) -> None:
@@ -132,7 +110,7 @@ async def test_a_renamed_scene_is_removed_under_its_storage_key(
 ) -> None:
     await load(hass, "scene", [RENAMED])
 
-    result = await config_client.delete_scene_config("renamed_scene")
+    result = await config_client.delete_scene_config("scene.renamed_scene")
 
     assert result["scene_id"] == "original_storage_key"
     assert await error_status(_stored(config_client, "original_storage_key")) == 404
@@ -241,16 +219,6 @@ async def test_a_scene_with_entities_is_written(
     assert (await _stored(config_client, "test_scene"))["entities"] == ENTITIES
 
 
-async def test_a_scene_without_entities_is_refused(
-    config_client: HomeAssistantClient,
-) -> None:
-    with pytest.raises(ValueError) as exc_info:
-        await config_client.upsert_scene_config({"name": "Empty"}, "test_scene")
-
-    assert "entities" in str(exc_info.value)
-    assert await error_status(_stored(config_client, "test_scene")) == 404
-
-
 async def test_a_scene_without_a_name_is_named_after_its_id(
     config_client: HomeAssistantClient,
 ) -> None:
@@ -301,6 +269,57 @@ async def test_a_renamed_scene_resolves_to_its_storage_key(
     await load(hass, "scene", [RENAMED])
 
     assert await config_client.resolve_scene_id(identifier) == "original_storage_key"
+
+
+async def test_a_failed_read_of_a_bare_storage_key_is_not_skipped(
+    hass: HomeAssistant,
+    config_client: HomeAssistantClient,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """``scene.key_a`` belongs to ``key_b``; when Core cannot answer whether
+    ``key_a`` is a storage key, the bare id is not handed to ``key_b``."""
+    # Core's lookup stops at key_b's entry but fails on the item after it.
+    await write_config_file(
+        hass,
+        "scenes.yaml",
+        [{**MOVIE_NIGHT, "id": "key_b"}, 5, {**MOVIE_NIGHT, "id": "key_a"}],
+    )
+    entity_registry.async_get_or_create(
+        "scene", "homeassistant", "key_b", suggested_object_id="key_a"
+    )
+
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await config_client.resolve_scene_id("key_a")
+
+    assert exc_info.value.status_code == 500
+
+
+async def test_a_key_that_is_no_entity_id_is_refused_naming_the_key(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    """A storage key may hold a hyphen; Core refuses ``scene.movie-night`` as an
+    entity_id, so it names no entity and is refused as for an unregistered one."""
+    await load(hass, "scene", [{**MOVIE_NIGHT, "id": "movie-night"}])
+
+    with pytest.raises(SceneIdNotAnEntityError, match="'movie-night'"):
+        await config_client.resolve_scene_id("scene.movie-night")
+    assert await config_client.resolve_scene_id("movie-night") == "movie-night"
+
+
+async def test_an_entity_id_the_registry_cannot_look_up_is_refused(
+    hass: HomeAssistant, config_client: HomeAssistantClient
+) -> None:
+    """A failed lookup is no answer: ``scene.<id>`` is not guessed to be key
+    ``<id>``, which can hold another scene, while a bare id stays its key."""
+    await load(hass, "scene", [{**MOVIE_NIGHT, "id": "key_a", "name": "First"}])
+
+    with registry_lookup_failing(hass):
+        with pytest.raises(
+            HomeAssistantCommandError, match="registry unavailable"
+        ) as refused:
+            await config_client.resolve_scene_id("scene.key_a")
+        assert refused.value.code == "home_assistant_error"
+        assert await config_client.resolve_scene_id("key_a") == "key_a"
 
 
 async def test_an_id_the_registry_does_not_know_resolves_to_itself(

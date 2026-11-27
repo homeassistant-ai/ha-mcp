@@ -394,15 +394,16 @@ def _graph_record(
     ever fetched, and the whole point is that it may be unfetchable (YAML-
     defined) or deprioritized past the budget. The per-bucket id fields mirror
     what the body-scan builders emit so a caller cannot tell the two apart by
-    shape.
+    shape; a script's ``script_id`` is its entity_id, which the script tools
+    take as given, where the body scan reports the storage key it read.
 
     ``resolve_scene_id`` is the scene branch's own storage-key resolver,
     injected rather than reimplemented. A scene's storage key is its registry
     ``unique_id``, which diverges from the entity slug for any scene renamed in
     the UI, and it is the key ``ha_config_get_scene`` /
-    ``ha_config_delete_scene`` take. Reusing the resolver keeps one tier order
-    and, when it does fall back to the slug, keeps the warning that makes the
-    unresolvable case visible (#1168).
+    ``ha_config_remove_scene`` take. Reusing the resolver keeps one tier order
+    and, when it finds no key and falls back to ``scene.<slug>``, keeps the
+    warning that makes the unresolvable case visible (#1168).
     """
     record: dict[str, Any] = {
         "entity_id": entity_id,
@@ -414,7 +415,7 @@ def _graph_record(
         "config": None,
     }
     if bucket == "scripts":
-        record["script_id"] = entity_id.removeprefix("script.")
+        record["script_id"] = entity_id
     elif bucket == "scenes":
         record["scene_id"] = resolve_scene_id(entity_id.removeprefix("scene."))
     return record

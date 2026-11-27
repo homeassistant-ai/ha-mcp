@@ -30,10 +30,16 @@ _POLL_INTERVAL_MAX_S = 5.0
 # The REST flow resource of each flow manager, keyed by the strings category
 # FlowRef.path starts with.
 _FLOW_RESOURCES = {
-    "config": "flow",
-    "options": "options/flow",
-    "config_subentries": "subentries/flow",
+    "config": "/config/config_entries/flow",
+    "options": "/config/config_entries/options/flow",
+    "config_subentries": "/config/config_entries/subentries/flow",
+    "issues": "/repairs/issues/fix",
 }
+
+
+def flow_url(flow: FlowRef, flow_id: str) -> str:
+    """The REST resource of ``flow_id`` in the flow manager ``flow`` belongs to."""
+    return f"{_FLOW_RESOURCES[flow.path.split('.')[0]]}/{flow_id}"
 
 
 async def wait_for_progress(
@@ -57,8 +63,7 @@ async def wait_for_progress(
     ``PROGRESS_BUDGET_S``. The flow is left open, and the error carries the
     ``flow_id`` to ask again with.
     """
-    resource = _FLOW_RESOURCES[flow.path.split(".")[0]]
-    url = f"/config/config_entries/{resource}/{flow_id}"
+    url = flow_url(flow, flow_id)
     deadline = clock() + PROGRESS_BUDGET_S
     interval = POLL_INTERVAL_S
     while step.get("type") in PROGRESS_STEP_TYPES:

@@ -184,12 +184,23 @@
   <button class="restart-btn" id="restartBtn" style="display:none" data-i18n="actions.restart_addon">Restart App (add-on)</button>
 </div>
 <div class="panel active" id="panel-tools" role="tabpanel" aria-labelledby="tab-tools" tabindex="0">
-  <div class="readonly-notice" data-i18n-html="notice.shared_settings">
-    Server-wide features (Tool Search, YAML config editing, filesystem
-    tools, etc.) appear in both the <strong>Server Settings</strong>
-    tab and the App (add-on) Configuration page; they're the same settings
-    either way. Either surface stays in sync with the other after the
-    App (add-on) restarts. Changes require HA-MCP to be restarted.
+  <div class="readonly-notice" id="sharedSettingsNotice">
+    <span data-i18n-html="notice.shared_settings">
+      Server-wide features (Tool Search, YAML config editing, filesystem tools, etc.) appear in both the
+      <strong>Server Settings</strong> tab and the app (add-on) Configuration page; they're the same settings
+      either way. Either surface stays in sync with the other after the app (add-on) restarts.
+      Changes require HA-MCP to be restarted.
+    </span>
+    <span hidden data-i18n-html="notice.embedded_settings">
+      Manage server-wide features such as Tool Search, YAML config editing, and filesystem tools in
+      <strong>Server Settings</strong>. Restart HA-MCP to apply changes. For connection settings and the
+      startup notification, open the integration page and select the gear next to <strong>HA-MCP Server</strong>.
+    </span>
+    <div>
+      <a id="integrationSettingsLink" role="link" aria-disabled="true" target="_blank" rel="noreferrer"
+         data-i18n="notice.integration_settings_link">Advanced integration settings</a>
+      <span data-i18n="notice.integration_settings_embedded_only">(embedded installations only)</span>
+    </div>
   </div>
   <div class="pin-notice show" id="pinNotice" data-i18n-html="notice.env_pins">
     Tools listed in the <code>DISABLED_TOOLS</code> or <code>PINNED_TOOLS</code>
@@ -256,6 +267,24 @@
     <h2 class="adv-section-title" data-i18n="server.sections.remote_access">Remote access</h2>
     <div id="oauthCallbacksBody" class="adv-section"></div>
   </div>
+
+  <section id="settingsTransfer" aria-labelledby="transferTitle" hidden>
+    <h2 id="transferTitle" class="adv-section-title" data-i18n="transfer.title">Export and import HA-MCP settings</h2>
+    <p class="feature-help" data-i18n="transfer.help">Move your server settings, tool choices, security policy, entity visibility and backup options between HA-MCP installations. The destination keeps its Home Assistant access token and Access switch. Cloud providers may assign a different public URL.</p>
+    <div class="ha-alert ha-alert-warning" role="note" id="transferSecrets">
+      <svg class="ha-alert-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12,2L1,21H23M12,6L19.53,19H4.47M11,10V14H13V10M11,16V18H13V16"/>
+      </svg>
+      <div class="ha-alert-body" data-i18n="transfer.secrets">A file exported from the HA-MCP Server in Home Assistant contains its webhook ID, secret path and any saved OAuth credentials in plain text. Anyone with that file may be able to access HA-MCP. Store it privately and import only a file you trust.</div>
+    </div>
+    <button type="button" id="transferExport" class="adv-save-btn" aria-describedby="transferSecrets" data-i18n="transfer.export">Download settings JSON</button>
+    <div class="list-editor-actions">
+      <label for="transferFile" data-i18n="transfer.file">Settings file to import</label>
+      <input type="file" id="transferFile" accept=".json,application/json">
+      <button type="button" id="transferImport" class="adv-save-btn" disabled data-i18n="transfer.import">Import settings</button>
+    </div>
+    <p id="transferStatus" class="feature-help" role="status" aria-live="polite"></p>
+  </section>
 
   <!-- Advanced settings sections. The "Connection
        (display only)" section was removed per user feedback — it

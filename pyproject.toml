@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "ha-mcp"
-version = "9.2.0"
+version = "9.3.0"
 description = "Configure and automate Home Assistant with Claude, ChatGPT, and other AI assistants."
 readme = "README.md"
 # Upper bound widened to <3.15 so the package installs on Home Assistant's
@@ -63,7 +63,7 @@ dependencies = [
     # Shared with the embedded HA process: admit Core's versions, including
     # compatible updates, instead of requiring it to keep our exact pin.
     # uv.lock selects standalone versions; HA's own constraints select
-    # the embedded versions. Check both the HACS minimum and current Core
+    # the embedded versions. Check both the hacs.json minimum and current Core
     # before raising these floors; standalone lock updates can move independently.
     # A vendored bump can raise them automatically; Fast Checks' Core constraint
     # check then fails one that excludes a version either Core pins exactly.
@@ -71,6 +71,7 @@ dependencies = [
     "pydantic[email]>=2.13.4,<3",
     "python-dotenv>=1.2.4,<2",
     "truststore>=0.10.4,<0.11",
+    "ulid-transform>=2.2.9,<3",
     # websockets is deliberately ABSENT from this list: ha-mcp ships its own
     # private copy (src/ha_mcp/_vendor/websockets, pinned in the vendor
     # requirements.txt and synced by scripts/vendor_websockets.py) and never
@@ -313,7 +314,9 @@ strict_config = true
 addopts = [
     "--verbose",
     "--tb=short",
-    "--maxfail=3",
+    # A module that fails to import is reported beside the failing tests
+    # instead of stopping the run before any test runs.
+    "--continue-on-collection-errors",
     "-ra",
     "--durations=10",
     # Core's test plugin (pytest-homeassistant, dev group) blocks sockets,
@@ -362,7 +365,7 @@ markers = [
     "floor: floor management tests",
     "zone: zone management tests",
     "group: entity group management tests",
-    "hacs: HACS (Home Assistant Community Store) tests",
+    "hacs: Marketplace (store tools) tests",
     "update_path: component (stable tag + working tree) x new-server in-process update-path e2e (dedicated lane; runs only with E2E_UPDATE_PATH=1; #1783/#1785)",
     "core: core tool tests (state, service, bulk control, history, templates)",
     "config: configuration management tests (helpers, labels)",
@@ -422,6 +425,9 @@ log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 # Treat warnings as errors to enforce clean tests
 filterwarnings = [
     "error",
+    # Under --continue-on-collection-errors syrupy warns that collection was
+    # incomplete; as an error it would replace pytest's failure summary.
+    "default:syrupy.*selected test.*missing from collected items:UserWarning",
     # Allow specific non-critical warnings that don't affect functionality
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
@@ -441,9 +447,9 @@ dev = [
     # --sync-lock). Both stay on the Core version of the
     # e2e image (tests/test_constants.py); Renovate bumps all three together.
     # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-    "homeassistant==2026.11.2",
+    "homeassistant==2026.11.3",
     # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-    "pytest-homeassistant==2026.11.2",
+    "pytest-homeassistant==2026.11.3",
     # Test infrastructure imports the SHARED websockets directly (the HAOS
     # runtime harness, the image bake, wait_helpers) to talk to Home
     # Assistant's own WebSocket API — that is test tooling driving HA, not
@@ -467,9 +473,9 @@ dev = [
     "pytest-rerunfailures>=15.0",
     # Real voluptuous-openapi for the embedded e2e LLM-API test: it converts
     # the REAL tool-schema catalog exactly like llm_api.py does at runtime.
-    # HA core shipped it through 2026.8; from 2026.9 the component manifest
-    # is what installs it. aiohttp, voluptuous and probatio (what core 2026.9
-    # converts with) come with homeassistant above.
+    # Core does not ship it; the component manifest is what installs it.
+    # aiohttp, voluptuous and probatio (what Core converts with) come with
+    # homeassistant above.
     "voluptuous-openapi>=0.4.1",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
@@ -500,7 +506,7 @@ dev = [
     "ha-silabs-firmware-client==0.4.0",
     "hass-nabucasa==2.8.1",
     "hassil==3.12.1",
-    "home-assistant-frontend==20261028.6",
+    "home-assistant-frontend==20261028.8",
     "home-assistant-intents==2026.10.27",
     "ical==14.3.1",
     "infrared-protocols==10.5.0",
@@ -538,9 +544,9 @@ hamcp-test-env = { path = "tests/test-env", editable = true }
 # Semantic versioning configuration
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-# The HACS component shares the server's version and pins the server build it
-# ships with, and the server's file and YAML tools need the component of its
-# own release, so each release commit stamps all four below as well as
+# The ha_mcp_tools component shares the server's version and pins the server
+# build it ships with, and the server's file and YAML tools need the component
+# of its own release, so each release commit stamps all four below as well as
 # project.version (#2427).
 version_variables = [
     "custom_components/ha_mcp_tools/manifest.json:version",

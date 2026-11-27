@@ -48,6 +48,48 @@
     "server.sections.beta": "Beta funksiyalar (təhlükəli)",
     "server.sections.developer": "Tərtibatçı",
     "server.sections.remote_access": "Uzaqdan giriş",
+    "transfer.title": "HA-MCP ayarlarını ixrac və idxal edin",
+    "transfer.help": "Server ayarlarını, alət seçimlərini, təhlükəsizlik siyasətini, obyekt görünürlüyünü və ehtiyat nüsxə seçimlərini HA-MCP quraşdırmaları arasında köçürün. Təyinat məntəqəsi özünün Home Assistant giriş tokenini və Access açarını saxlayır. Bulud təminatçıları fərqli ictimai URL təyin edə bilər.",
+    "transfer.secrets": "Home Assistant-dakı HA-MCP Server-dən ixrac edilmiş fayl onun veb-huk ID-sini, gizli yolunu və saxlanmış istənilən OAuth etimadnaməsini düz mətn şəklində ehtiva edir. Həmin fayla malik hər kəs HA-MCP-yə daxil ola bilər. Onu məxfi saxlayın və yalnız etibar etdiyiniz faylı idxal edin.",
+    "transfer.export": "Ayarların JSON faylını yükləyin",
+    "transfer.file": "İdxal ediləcək ayarlar faylı",
+    "transfer.import": "Ayarları idxal edin",
+    "transfer.confirm": "Bu quraşdırmanın HA-MCP ayarları bu fayldakılarla əvəz olunsun? Bu, cari ayarları istifadə edən müştərilərin əlaqəsini kəsə bilər.",
+    "transfer.confirm_connection": "Bu quraşdırmanın HA-MCP ayarları bu fayldakılarla əvəz olunsun? Fayl həmçinin yalnız HA-MCP yan panelinin tətbiq etdiyi HA-MCP Server-in bağlantı məxfiklərini daşıyır. Bu, cari ayarları istifadə edən müştərilərin əlaqəsini kəsə bilər.",
+    "transfer.exporting": "Yükləmə hazırlanır…",
+    "transfer.importing": "Ayarlar idxal edilir…",
+    "transfer.downloaded": "Ayarların yüklənməsi başladı.",
+    "transfer.imported": "Ayarlar idxal edildi. Bərpa edilmiş ayarları görmək üçün bu səhifəni yenidən yükləyin.",
+    "transfer.restart_server": "Ayarlar idxal edildi. Bərpa edilmiş ayarların tətbiqini başa çatdırmaq üçün HA-MCP-ni yenidən başladın.",
+    "transfer.connection_skipped": "Faylın bağlantı ayarları yalnız Home Assistant-dakı HA-MCP Server-ə şamil edilir, ona görə də bu server öz ayarlarını saxladı.",
+    "transfer.file_permissions_skipped": "Faylın File & YAML Tools icazələri tətbiq edilmədi, çünki həmin inteqrasiya girişi burada mövcud deyil.",
+    "transfer.file_permissions_unreachable_skipped": "Faylın File & YAML Tools icazələri tətbiq edilmədi: OAuth rejimində bu səhifənin onları dəyişdirmək üçün Home Assistant etimadnaməsi yoxdur. Onları Home Assistant-da Configure for File & YAML Tools bölməsində təyin edin.",
+    "transfer.export_file_permissions_unreachable": "Fayl File & YAML Tools icazələrini xaricdə buraxır: OAuth rejimində bu səhifənin onları oxumaq üçün Home Assistant etimadnaməsi yoxdur.",
+    "transfer.restart": "Ayarlar idxal edildi. Bərpa edilmiş ayarların tətbiqini başa çatdırmaq üçün Home Assistant-ı yenidən başladın.",
+    "transfer.too_large": "4 MiB və ya daha kiçik ayarlar faylı seçin.",
+    "transfer.export_too_large": "Bu ayarlar 4 MiB ixrac limitini üstələyir.",
+    "transfer.invalid_backup": "Etibarlı HA-MCP ayarları ixracı seçin.",
+    "transfer.allowed_paths_store_unavailable": "Home Assistant icazə verilən qovluqları oxuya və ya saxlaya bilmədi. Configure for File & YAML Tools bölməsini açın və qovluqları yenidən saxlayın, sonra yenidən cəhd edin. Əgər bu alınmasa, Home Assistant yaddaşını yoxlayın.",
+    "transfer.extra_yaml_keys_store_unavailable": "Home Assistant əlavə YAML açarlarını oxuya və ya saxlaya bilmədi. Configure for File & YAML Tools bölməsini açın və açarları yenidən saxlayın, sonra yenidən cəhd edin. Əgər bu alınmasa, Home Assistant yaddaşını yoxlayın.",
+    "transfer.tools_entry_busy": "File & YAML Tools statusunu dəyişir. Onun başa çatmasını gözləyin, sonra ayarları yenidən idxal edin.",
+    "transfer.tools_entry_unavailable": "File & YAML Tools aktivdir, lakin yüklənməyib. Devices & services bölməsini açın, istənilən quraşdırma xətasını həll edin, girişi yenidən yükləyin və idxalı yenidən sınayın.",
+    "transfer.rollback_incomplete": "İdxal uğursuz oldu və bəzi ayarlar bərpa ediləmadı. Yenidən cəhd etməzdən əvvəl Home Assistant jurnalını yoxlayın və təyinat ayarlarını nəzərdən keçirin.",
+    "transfer.extra_tools_entry": "Bu fayl yalnız server girişini ehtiva edir. File & YAML Tools daxil olan ehtiyat nüsxə seçin və ya həmin giriş olmadan təyinat məntəqəsindən istifadə edin.",
+    "transfer.tools_must_be_disabled": "File & YAML Tools mənbədə deaktiv edilmişdi. Home Assistant-da lazım gələrsə təyinat məntəqəsində həmin girişi əlavə edin, onu deaktiv edin və sonra yenidən idxal edin.",
+    "transfer.tools_must_be_enabled": "File & YAML Tools mənbədə aktiv edilmişdi. Home Assistant-da təyinat girişini aktivləşdirin, sonra yenidən idxal edin.",
+    "transfer.incompatible_version": "HA-MCP-nin bu versiyası həmin fayl formatını idxal edə bilməz. Hər iki quraşdırmada HA-MCP versiyasını yoxlayın.",
+    "transfer.webhook_in_use": "Bu Home Assistant-dakı başqa bir inteqrasiya artıq bu fayldakı veb-huk ID-sini istifadə edir. İdxal etməzdən əvvəl ziddiyyəti həll edin.",
+    "transfer.decision_pin_required": "Bu siyasət qərar PIN kodu tələb edir. Bu quraşdırmada Tool Security Policies vərəqində birini təyin edin, sonra faylı yenidən idxal edin.",
+    "transfer.server_unavailable": "HA-MCP serveri əlçatmazdır. İnteqrasiyanı yoxlayın və paneli yenidən açın.",
+    "transfer.session": "HA-MCP yan panelini Home Assistant administratoru kimi yenidən açın və yenidən cəhd edin.",
+    "transfer.restore_failed": "HA-MCP ayarların idxalını başa çatdıra bilmədi. Yenidən cəhd etməzdən əvvəl təyinat ayarlarını yoxlayın.",
+    "transfer.export_failed": "Ayarları yükləmək olmadı. Paneli yenidən açın və yenidən cəhd edin.",
+    "transfer.invalid_source_entries": "Cari inteqrasiya ayarları fayldan bərpa edilə bilməz. Quraşdırılıbsa Configure for HA-MCP Server və File & YAML Tools bölməsini açın, bağlantı və icazə ayarlarını yoxlayın, sonra yenidən ixrac edin.",
+    "transfer.invalid_server_settings": "HA-MCP bu quraşdırmadakı ayar fayllarından birini oxuya bilmədi. Home Assistant jurnalı faylın adını qeyd edir. Onu düzəldin və ya silin, sonra yenidən cəhd edin.",
+    "transfer.origin_denied": "Sorğu bu Home Assistant ünvanındakı HA-MCP yan panelindən gəlməyib. Paneli yan paneldən açın. Əks proksi (reverse proxy) orijinal Host başlıq sətrini ötürməlidir.",
+    "transfer.read_failed": "Seçilmiş faylı oxumaq olmadı. Faylı yenidən seçin.",
+    "transfer.permissions_changed": "İdxal edərkən File & YAML Tools icazələri dəyişdi, ona görə də idxal dayandırıldı və onları saxladı. Faylı yenidən idxal edin.",
+    "transfer.component_outdated": "Marketplace-də HA-MCP-ni yeniləyin və Home Assistant-ı yenidən başladın, sonra yenidən idxal edin: quraşdırılmış File & YAML Tools uğursuz icazə idxalını ləğv edə bilməz.",
     "server.sidecar.disable": "Parametrlər serverini həmişəlik söndür",
     "server.sidecar.disable_title": "Parametrlər interfeysini həmişəlik söndürür: bu serveri dayandırır VƏ ~/.ha-mcp/settings_ui_disabled faylını yaradır ki, gələcəkdə ha-mcp işə salınanda yenidən başlamasın. Yenidən aktivləşdirmək üçün həmin faylı silin.",
     "backups.loading": "Ehtiyat nüsxələrin vəziyyəti yüklənir…",
@@ -259,6 +301,8 @@
     "backup.fields.enable_auto_backup.help": "Hər yazma və ya silmə aləti çağırışı onu dəyişməzdən əvvəl obyektin surətini saxlayın. Bu söndürüldükdə, fayl və xam YAML alətləri (ha_write_file, ha_delete_file, ha_config_set_yaml) yazmaqdan imtina edir.",
     "backup.fields.enable_snapshot_actions.label": "Tam HA arxiv (snapshot) əməliyyatlarına icazə ver",
     "backup.fields.enable_snapshot_actions.help": "AI köməkçilərinə ha_manage_backup və ha_call_service daxilindəki ekvivalent ehtiyat nüsxə xidmətləri və əmrləri vasitəsilə tam Home Assistant ehtiyat nüsxələrini idarə etməyə icazə verin. Bunu söndürmək siyahıyaalma daxil olmaqla bütün ehtiyat nüsxə əməliyyatlarını bloklayır. Ehtiyat nüsxənin silinməsi yalnız ha_manage_backup vasitəsilə əlçatandır və həmçinin Ehtiyat nüsxənin silinməsinə icazə verilməsini tələb edir. Veb ayarları interfeysində şəxsin etdiyi ehtiyat nüsxələrin redaktəsi və ehtiyat nüsxə əməliyyatları əlçatan olaraq qalır.",
+    "backup.fields.enable_settings_transfer_actions.label": "ha_manage_backup-a ayarları ixrac və idxal etməyə icazə verin",
+    "backup.fields.enable_settings_transfer_actions.help": "Server Ayarları vərəqindəki İxrac və İdxal düymələrində olduğu kimi, süni intellekt köməkçilərinə bu serverin ayarlar faylını yükləməyə və ha_manage_backup vasitəsilə birini idxal etməyə icazə verin. İdxal yalnız insan üçün nəzərdə tutulmuş ayarları saxlayır və təhlükəsizlik siyasətini, obyekt görünürlüyünü və ya File & YAML Tools icazələrini dəyişdirmək həm də Dev tools təhlükəsizlik siyasəti girişini tələb edir. İdxal həmçinin faylda deyildiyi kimi tərtibatçı rejimini, alətləri və funksiyaları işə sala, eləcə də məxfi məlumatların gizlədilməsi, SSL yoxlanılması və IPv6 icazələr siyahısı kimi mühafizələri söndürə bilər, ona görə də süni intellekt köməkçisi idxal etdikdən sonra ayarlarınızı yoxlayın.",
     "backup.fields.backup_read_only.label": "Arxiv idarəetməsini yalnız oxunaqlı edin",
     "backup.fields.backup_read_only.help": "Ehtiyat nüsxə əməliyyatları aktiv olduqda AI köməkçilərinə redaktə ehtiyat nüsxələrini siyahıya almağa, baxmağa və müqayisə etməyə, həmçinin tam HA ehtiyat nüsxələrini siyahıya almağa icazə verin. ha_call_service-də ekvivalent ehtiyat nüsxə xidmətləri və əmrləri də daxil olmaqla əl ilə ehtiyat nüsxə yaratma, bərpa etmə (redaktə bərpaları daxil olmaqla) və silməni bloklayın. Avtomatik redaktədən əvvəlki ehtiyat nüsxələr davam edir. Veb ayarları interfeysində şəxsin etdiyi ehtiyat nüsxə əməliyyatları əlçatan olaraq qalır.",
     "backup.fields.auto_backup_throttle_minutes.label": "Avtomatik ehtiyat nüsxə məhdudiyyəti (dəqiqə)",
@@ -475,8 +519,8 @@
     "advanced.individual_fetch_batch_size.help": "Eyni vaxtda ID üzrə konfiqurasiya əldə etmələri. Ardıcıl HA serverlərində 1-ə doğru aşağı salın.",
     "advanced.enable_history_query_guardrails.label": "Tarixçə sorğuları üçün qoruyucu məhdudiyyətlər",
     "advanced.enable_history_query_guardrails.help": "Obyekt sayı və vaxt aralığı üzrə ehtiyatlı limitləri aşan qeydiyyatçı sorğularını rədd edir. Standart olaraq deaktivdir.",
-    "advanced.hacs_refresh_after_update.label": "Yeniləmədən sonra HACS-də komponenti yeniləyin",
-    "advanced.hacs_refresh_after_update.help": "Server yenilənməsindən sonra işə düşərkən HACS-dən (Home Assistant 2026.11+-də Marketplace) HA-MCP repentoriyasını yenidən yoxlamasını xahiş edin ki, növbəti fond yoxlamasını gözləmək əvəzinə uyğun gələn yeniləmə dərhal görsənsin. Varsayılan olaraq söndürülür; bunu əvvəldən edən qurğular onu açıq saxlayır.",
+    "advanced.hacs_refresh_after_update.label": "Yeniləmədən sonra Marketplace-də komponenti yeniləyin",
+    "advanced.hacs_refresh_after_update.help": "Server yeniləməsindən sonra işə salınarkən Marketplace-dən HA-MCP repentoriyasını yenidən yoxlamağı xahiş edin ki, növbəti fond yoxlamasını gözləmədən uyğun yeniləmə dərhal göstərilsin. Varsayılan olaraq söndürüb; bunu artıq etmiş qurulumlar onu açıq saxlayır.",
     "advanced.ha_tool_concurrency.label": "Home Assistant alətlərinin paralel icrası",
     "advanced.ha_tool_concurrency.help": "Bütün sessiyalar üzrə xarici Home Assistant alət çağırışlarında əlavə məhdudiyyət. Daxili REST, WebSocket və hər alət üzrə paylanma eynizmətliliyi (concurrency) dəyişməz qalır. 0 məhdudiyyətsiz davranışı qoruyur. Tutum üçün gözləyən çağırış 60 saniyədən sonra uğursuz olur.",
     "advanced.dashboard_screenshot_engine_url.label": "İdarə panelinin ekran görüntüsü mühərrikinin URL-i",
@@ -746,7 +790,7 @@
     },
     "ha_get_camera_image": {
       "title": "Kamera görüntüsünü al",
-      "description": "Home Assistant kamera obyektindən skrinşot şəkli əldə edin."
+      "description": "Home Assistant kamera və ya şəkil obyektindən anlıq şəkil əldə edin."
     },
     "ha_get_dashboard_screenshot": {
       "title": "İdarə panelinin ekran şəklini al",
@@ -761,8 +805,8 @@
       "description": "Obyekt reyestri qeydlərini və ya obyekt olmadıqda reyestr ayarlarını və istifadəyə verilmiş obyektləri əldə edin."
     },
     "ha_get_hacs_info": {
-      "title": "HACS məlumatlarını al",
-      "description": "HACS (Home Assistant Community Store) məlumatlarını alın — mağazada axtarış edin və ya repozitoriya haqqında ətraflı məlumat alın."
+      "title": "Marketplace Məlumatını Alın",
+      "description": "Home Assistant-ın Marketplace-dən (2026.11-ci ildə HACS-in çevrildiyi yer) məlumat əldə edin."
     },
     "ha_get_history": {
       "title": "Obyektin tarixçəsini və ya statistikasını al",
@@ -833,8 +877,12 @@
       "description": "Home Assistant Enerji Paneli seçimlərini idarə edin: şəbəkə / günəş /"
     },
     "ha_manage_hacs": {
-      "title": "HACS-ı idarə et",
-      "description": "HACS (Home Assistant Community Store) xidmətini idarə edin — quraşdırın/yeniləyin, çıxarın, fərdi repozitoriyalar əlavə edin və ya repozitoriya məlumatlarını yeniləyin."
+      "title": "Marketplace-i İdarə Edin",
+      "description": "Home Assistant-ın Marketplace-ini (2026.11-ci ildə HACS-in çevrildiyi yeri) idarə edin: repentoriyaları quraşdırın, yeniləyin, silin və əlavə edin."
+    },
+    "ha_manage_logs": {
+      "title": "Recorder, Statistika və Jurnalları İdarə Edin",
+      "description": "Home Assistant-ın recorder-ini, onun uzunmüddətli statistikasını və jurnallarını idarə edin."
     },
     "ha_manage_pipeline": {
       "title": "Assist emal ardıcıllığını idarə et",
@@ -854,7 +902,7 @@
     },
     "ha_manage_updates": {
       "title": "Yeniləmələri idarə et",
-      "description": "Home Assistant yeniləmələrini (siyahı, təfərrüatlar, quraşdırma, ötürmə) və Təmir problemlərini (ignore) idarə edin."
+      "description": "Home Assistant yeniləmələrini idarə edin (siyahıya alın, əldə edin, yeniləyin, quraşdırın, ötürün, clear_skipped, set_channel) və Repairs problemləri (ignore"
     },
     "ha_read_file": {
       "title": "Faylı oxu",

@@ -44,7 +44,10 @@ worktree references.
 E2E tests live in `tests/src/e2e/` (not `tests/e2e/`), use testcontainers,
 and require a running Docker daemon. Launch them from `tests/` so pytest
 loads the correct `conftest.py`. Unit tests in `tests/src/unit/` do not use
-Docker.
+Docker. Each E2E session first has the pinned Core write its recorder
+database (`tests/src/recorder_seed.py`), so start the suite where Core runs
+(Linux, macOS or WSL) on a Python whose SQLite is 3.40.1 or newer; uv's
+managed Python has one.
 
 For a fork branch, dispatch `gh workflow run pr.yml --repo OWNER/FORK --ref BRANCH`;
 for targeted HAOS tests, use `haos-e2e-tests.yml` instead with
@@ -73,9 +76,10 @@ CI runs them on two runners: each
 takes its share by test id from `UNIT_TEST_SHARD` (`1/2`, `2/2`;
 `tests/src/unit/_shards.py`), and the required `Unit Tests` check passes when
 both did. The beta Core unit job is split the same way.
-The root `pyproject.toml` sets `--maxfail=3`, so
-a report with three failures may be an early stop; use `--maxfail=0` only when
-the complete failure set is actually needed.
+Pytest reports the full failure set by default, collection errors included:
+`pyproject.toml` sets `--continue-on-collection-errors`, so a module that
+fails to import does not end the run. Pass `-x` to stop a focused run at its
+first failure.
 
 Both testcontainer lanes preinstall pip packages before Home Assistant's
 `/init` — the component's manifest requirements, and on the embedded lane the

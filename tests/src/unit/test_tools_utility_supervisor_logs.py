@@ -20,7 +20,6 @@ from homeassistant.components.recorder import Recorder
 from homeassistant.const import KEY_DATA_LOGGING
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -70,14 +69,6 @@ def error_log_file(hass: HomeAssistant, tmp_path: Path) -> Path:
 async def core_logs(hass: HomeAssistant, error_log_file: Path) -> None:
     """Core's ``system_log`` and ``logger``, which the other sources read."""
     await set_up_core_logs(hass)
-
-
-@pytest.fixture
-async def supervised_route(hass: HomeAssistant, core_route: Route) -> Route:
-    """``core_route`` on an install whose Core has ``hassio`` loaded."""
-    mock_integration(hass, MockModule("hassio"))
-    assert await async_setup_component(hass, "hassio", {})
-    return core_route
 
 
 async def read(client: HomeAssistantClient, **overrides: Any) -> dict[str, Any]:
@@ -481,7 +472,6 @@ class TestSlugOnAnotherSource:
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
     ):
-        mock_integration(hass, MockModule("frontend"))
         assert await async_setup_component(hass, "logbook", {})
 
         result = await read(core_client, source="logbook", slug="core_mosquitto")
@@ -511,7 +501,7 @@ class TestTheErrorLogWindow:
     @pytest.fixture(params=["app", "supervised"])
     def supervisor_route(self, request: pytest.FixtureRequest) -> Route:
         found: Route = request.getfixturevalue(
-            "app_route" if request.param == "app" else "supervised_route"
+            "app_route" if request.param == "app" else "core_route"
         )
         return found
 

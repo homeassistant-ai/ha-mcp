@@ -18,7 +18,6 @@ import pytest
 from homeassistant.components.recorder import Recorder
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant.common import MockModule, mock_integration
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -62,8 +61,6 @@ async def logbook(
     recorder_mock: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
     """Core's logbook on a recorder, as the tool reads it."""
-    # The logbook registers a sidebar panel, which needs the frontend build.
-    mock_integration(hass, MockModule("frontend"))
     assert await async_setup_component(hass, "logbook", {})
     await async_wait_recording_done(hass)
 

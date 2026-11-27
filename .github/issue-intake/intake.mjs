@@ -16,7 +16,7 @@ export const marker = "<!-- ha-mcp-intake:v1 ";
 export const triageCommand = /^\/triage (pause|resume|refresh)\s*$/;
 export const questions = {
   install_method:
-    "How is ha-mcp installed (HACS integration, app/add-on, Docker, uvx/pip, or another method)?",
+    "How is ha-mcp installed (Marketplace integration, app (add-on), Docker, uvx/pip, or another method)?",
   ha_mcp_version: "Which ha-mcp version are you using?",
   ha_version: "Which Home Assistant version are you using?",
   client: "Which AI client and client version are you using?",
@@ -227,12 +227,14 @@ export const isHuman = (user) => user?.type === "User" && user.login !== "ghhamc
 // The API allows an issue without a user; its author is then named "ghost",
 // the login GitHub gives a deleted account.
 export const authorLogin = (issue) => issue.user?.login ?? "ghost";
-const isMaintainer = (role) => ["maintain", "admin"].includes(role);
+export const isMaintainer = (role) => ["maintain", "admin"].includes(role);
 const timestamp = (item) => item.updated_at ?? item.created_at;
+export const compareEvents = (a, b) =>
+  a.created_at.localeCompare(b.created_at) || a.id - b.id;
 export const latestEvent = (events, predicate) =>
   events
     .filter(predicate)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
+    .sort(compareEvents)
     .at(-1);
 export const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const ignoredCommand = (comment, roles) =>

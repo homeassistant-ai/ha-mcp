@@ -8,23 +8,29 @@ entity_id changes in the entity registry, as a rename in the UI leaves it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import partial
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-from homeassistant.core import HomeAssistant
+from homeassistant.const import ATTR_DOMAIN, ATTR_SERVICE, EVENT_CALL_SERVICE
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import category_registry as cr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util.yaml import dump, load_yaml_dict
 
+from ha_mcp.backup_manager import BackupManager
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools import entity_registration, tools_config_scripts
-from ha_mcp.tools.entity_registration import resolve_entity_id_after_write
+from ha_mcp.tools.entity_registration import post_write_entity
+from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ha_mcp.tools.ws_waiters import wait_for_entity_registered
 
 from ._blueprint_actions_core import BEDTIME, SCRIPT_PATH
+from ._command_faults import before_handling, registry_lookup_failing, unanswered
 from ._config_dir_yaml import setup_from_configuration, write_config_files
 from ._tool_errors import rejected_call_body
 
@@ -96,8 +102,8 @@ def _resolutions() -> Any:
     """Spy on the post-write registry resolution; it still reads Core."""
     return patch.object(
         tools_config_scripts,
-        "resolve_entity_id_after_write",
-        wraps=resolve_entity_id_after_write,
+        "post_write_entity",
+        wraps=post_write_entity,
     )
 
 
@@ -337,12 +343,8 @@ async def test_get_puts_the_category_into_the_body(
 
 
 @pytest.mark.parametrize(
-    ("mode", "with_hash", "threaded_key"),
-    [
-        ("full_config", False, None),
-        ("full_config", True, KEY),
-        ("transform", True, KEY),
-    ],
+    ("mode", "with_hash"),
+    [("full_config", False), ("full_config", True), ("transform", True)],
     ids=["full_config", "full_config_with_hash", "transform"],
 )
 async def test_write_to_a_renamed_script_updates_its_storage_key(
@@ -352,12 +354,10 @@ async def test_write_to_a_renamed_script_updates_its_storage_key(
     entity_registry: er.EntityRegistry,
     mode: str,
     with_hash: bool,
-    threaded_key: str | None,
 ) -> None:
-    """A write by the renamed entity's name updates the script rather than
-    creating a second one under that name. A hash-checked write already
-    resolved the key and hands it over instead of looking it up again
-    (#1813)."""
+    """A write by the renamed entity's id updates the script rather than
+    creating a second one under that name. The tool resolved the key and
+    hands it over instead of looking it up again (#1813)."""
     renamed = await _rename(hass, entity_registry, "renamed_script")
     arguments = await _write_arguments(tools, mode, renamed)
     if with_hash and mode == "full_config":
@@ -376,8 +376,69 @@ async def test_write_to_a_renamed_script_updates_its_storage_key(
     assert list(stored) == [KEY]
     assert stored[KEY] != BODY
     args, kwargs = upserts.call_args
-    assert args[1] == "renamed_script"
-    assert kwargs["resolved_id"] == threaded_key
+    assert args[1] == renamed
+    assert kwargs["resolved_id"] == KEY
+
+
+async def test_a_transform_reads_its_hash_back_without_the_registry(
+    hass: HomeAssistant, tools: ConfigScriptTools
+) -> None:
+    """Once Core has the transformed script, its registry answers only errors:
+    the write that landed still succeeds, with the stored config's hash."""
+    current = await tools.ha_config_get_script(script_id=f"script.{KEY}")
+    saved: list[Event] = []
+
+    @callback
+    def reloads_scripts(data: Mapping[str, Any]) -> bool:
+        return bool(data[ATTR_DOMAIN] == "script" and data[ATTR_SERVICE] == "reload")
+
+    @callback
+    def note(event: Event) -> None:
+        # In the loop, not in the executor: seen before the readback's lookup.
+        saved.append(event)
+
+    hass.bus.async_listen(EVENT_CALL_SERVICE, note, reloads_scripts)
+
+    def fail_once_saved(msg: dict[str, Any]) -> None:
+        if saved:
+            raise HomeAssistantError("registry unavailable")
+
+    with before_handling(hass, "config/entity_registry/get", fail_once_saved):
+        result = await tools.ha_config_set_script(
+            script_id=f"script.{KEY}",
+            python_transform=TRANSFORM,
+            config_hash=current["config_hash"],
+            wait=False,
+        )
+
+    assert saved
+    assert result["success"] is True
+    stored = await tools.ha_config_get_script(script_id=KEY)
+    assert stored["config"]["mode"] == "single"
+    assert result["config_hash"] == stored["config_hash"]
+
+
+async def test_a_transform_returns_the_hash_of_the_config_core_stored(
+    tools: ConfigScriptTools,
+) -> None:
+    """Core stores a ``service:`` step as ``action:``: the transform returns the
+    hash of what Core stored, which the next hash-checked write must match."""
+    current = await tools.ha_config_get_script(script_id=KEY)
+
+    result = await tools.ha_config_set_script(
+        script_id=KEY,
+        python_transform=(
+            "config['sequence'].append({'service': 'homeassistant.update_entity',"
+            " 'target': {'entity_id': 'script.storage_key'}})"
+        ),
+        config_hash=current["config_hash"],
+        wait=False,
+        MandatoryBPS=False,
+    )
+
+    stored = await tools.ha_config_get_script(script_id=KEY)
+    assert "action" in stored["config"]["sequence"][-1]
+    assert result["config_hash"] == stored["config_hash"]
 
 
 async def test_write_without_alias_keeps_the_callers_name(
@@ -481,3 +542,382 @@ async def test_category_lands_on_a_renamed_scripts_current_entity(
     entry = entity_registry.async_get(renamed)
     assert entry is not None
     assert entry.categories == {"script": category_id}
+
+
+class TestCollidingIds:
+    """``key_a`` is renamed to ``script.first``, then ``key_b`` to ``script.key_a``:
+    the bare key ``key_a`` names A, the entity id ``script.key_a`` names B, and
+    ``script.key_b``, which no entity has, names B by its key (run and the
+    category guard that a ``script.<x>`` id is not taken as its entity)."""
+
+    @pytest.fixture(autouse=True)
+    async def _collide(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        scripts = {
+            "key_a": {"alias": "A", "sequence": [{"event": "ran_a"}]},
+            "key_b": {"alias": "B", "sequence": [{"event": "ran_b"}]},
+        }
+        await write_config_files(hass, {"scripts.yaml": dump(scripts)})
+        await hass.services.async_call("script", "reload", blocking=True)
+        entity_registry.async_update_entity(
+            "script.key_a", new_entity_id="script.first"
+        )
+        entity_registry.async_update_entity(
+            "script.key_b", new_entity_id="script.key_a"
+        )
+        await hass.async_block_till_done()
+
+    async def test_get_by_entity_id_reads_that_entitys_script(
+        self, tools: ConfigScriptTools
+    ) -> None:
+        got = await tools.ha_config_get_script(script_id="script.key_a")
+
+        assert (got["script_id"], got["config"]["alias"]) == ("key_b", "B")
+
+    @pytest.mark.parametrize(
+        ("script_id", "aliases", "kept"),
+        [
+            ("key_a", {"key_a": "New", "key_b": "B"}, "key_b"),
+            ("script.key_a", {"key_a": "A", "key_b": "New"}, "key_a"),
+        ],
+    )
+    async def test_set_and_remove_reach_the_named_script(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        script_id: str,
+        aliases: dict[str, str],
+        kept: str,
+    ) -> None:
+        await tools.ha_config_set_script(
+            script_id=script_id, config={**BODY, "alias": "New"}, wait=False
+        )
+        stored = await _stored(hass)
+        assert {key: body["alias"] for key, body in stored.items()} == aliases
+
+        removed = await tools.ha_config_remove_script(script_id=script_id)
+
+        assert set(await _stored(hass)) == {kept}
+        # The removal wait watched the deleted script's entity, not the other one.
+        assert "warnings" not in removed
+
+    @pytest.mark.parametrize(
+        ("script_id", "remove"),
+        [
+            ("script.key_a", True),
+            ("script.key_a", False),
+            ("script.first", False),
+            ("first", False),
+        ],
+    )
+    async def test_an_entity_id_the_registry_cannot_look_up_writes_nothing(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        script_id: str,
+        remove: bool,
+    ) -> None:
+        """A failed lookup is no answer: ``script.key_a`` is not key ``key_a``,
+        and neither ``script.first`` nor ``first``, key_a's entity slug, creates
+        key ``first``."""
+
+        call = (
+            tools.ha_config_remove_script(script_id=script_id, wait=False)
+            if remove
+            else tools.ha_config_set_script(
+                script_id=script_id, config={**BODY, "alias": "New"}, wait=False
+            )
+        )
+        with registry_lookup_failing(hass):
+            body = await rejected_call_body(call)
+
+        assert "registry unavailable" in body["error"]["message"]
+        stored = await _stored(hass)
+        assert {key: s["alias"] for key, s in stored.items()} == {
+            "key_a": "A",
+            "key_b": "B",
+        }
+
+    async def test_a_repeated_remove_by_key_leaves_the_other_script(
+        self, hass: HomeAssistant, tools: ConfigScriptTools
+    ) -> None:
+        """Once key_a is gone, script.key_a is still key_b's entity."""
+        await tools.ha_config_remove_script(script_id="key_a", wait=False)
+
+        body = await rejected_call_body(
+            tools.ha_config_remove_script(script_id="key_a")
+        )
+
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert any("'script.key_a'" in s for s in body["error"]["suggestions"])
+        assert set(await _stored(hass)) == {"key_b"}
+
+    @pytest.mark.parametrize("mode", ["config", "hashed", "transform"])
+    async def test_a_recreate_by_a_removed_key_leaves_the_other_script(
+        self, hass: HomeAssistant, tools: ConfigScriptTools, mode: str
+    ) -> None:
+        """Once key_a is gone, a set by key_a must not overwrite key_b, whose
+        entity is script.key_a."""
+        await tools.ha_config_remove_script(script_id="key_a", wait=False)
+        edit: dict[str, Any] = (
+            {"python_transform": TRANSFORM}
+            if mode == "transform"
+            else {"config": {**BODY, "alias": "A again"}}
+        )
+        if mode != "config":
+            got = await tools.ha_config_get_script(script_id="key_a")
+            edit["config_hash"] = got["config_hash"]
+
+        body = await rejected_call_body(
+            tools.ha_config_set_script(script_id="key_a", wait=False, **edit)
+        )
+
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert any("'script.key_a'" in s for s in body["error"]["suggestions"])
+        assert {k: s["alias"] for k, s in (await _stored(hass)).items()} == {
+            "key_b": "B"
+        }
+
+    async def test_restoring_a_removed_key_leaves_the_other_script(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        backup_manager: BackupManager,
+    ) -> None:
+        """A snapshot taken by the bare key key_a restores key_a, not key_b,
+        whose entity is script.key_a."""
+        path = await backup_manager.maybe_snapshot("script", "key_a", force=True)
+        assert path is not None
+        await tools.ha_config_remove_script(script_id="key_a", wait=False)
+
+        await backup_manager.restore_snapshot(path.name)
+
+        assert {k: s["alias"] for k, s in (await _stored(hass)).items()} == {
+            "key_a": "A",
+            "key_b": "B",
+        }
+
+    async def test_a_snapshot_by_entity_id_restores_that_entitys_script(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        backup_manager: BackupManager,
+    ) -> None:
+        """A snapshot taken as script.key_a holds key_b and restores it there."""
+        path = await backup_manager.maybe_snapshot("script", "script.key_a", force=True)
+        assert path is not None
+        await tools.ha_config_set_script(
+            script_id="script.key_a",
+            config={"alias": "Changed", "sequence": [{"event": "ran_b"}]},
+            wait=False,
+        )
+
+        await backup_manager.restore_snapshot(path.name)
+
+        assert {k: s["alias"] for k, s in (await _stored(hass)).items()} == {
+            "key_a": "A",
+            "key_b": "B",
+        }
+
+    async def test_a_removed_key_has_no_snapshot(
+        self, tools: ConfigScriptTools, backup_manager: BackupManager
+    ) -> None:
+        """A snapshot by the bare key key_a never holds key_b, whose entity is
+        script.key_a."""
+        await tools.ha_config_remove_script(script_id="key_a", wait=False)
+
+        assert (
+            await backup_manager.maybe_snapshot("script", "key_a", force=True) is None
+        )
+
+    @pytest.mark.parametrize(
+        ("script_id", "event"),
+        [("key_a", "ran_a"), ("script.key_a", "ran_b"), ("script.key_b", "ran_b")],
+    )
+    async def test_run_starts_the_named_script(
+        self, hass: HomeAssistant, tools: ConfigScriptTools, script_id: str, event: str
+    ) -> None:
+        fired: list[str] = []
+        for name in ("ran_a", "ran_b"):
+            hass.bus.async_listen(name, lambda e: fired.append(str(e.event_type)))
+
+        await tools.ha_config_set_script(script_id=script_id, run="start")
+        await hass.async_block_till_done()
+
+        assert fired == [event]
+
+    async def test_a_key_the_registry_cannot_look_up_runs_nothing(
+        self, hass: HomeAssistant, tools: ConfigScriptTools
+    ) -> None:
+        """A failed lookup is no answer: script.key_a, the entity id key_a
+        would have without its rename, is B."""
+        fired: list[str] = []
+        for name in ("ran_a", "ran_b"):
+            hass.bus.async_listen(name, lambda e: fired.append(str(e.event_type)))
+
+        with registry_lookup_failing(hass, "config/entity_registry/list"):
+            body = await rejected_call_body(
+                tools.ha_config_set_script(script_id="key_a", run="start")
+            )
+        await hass.async_block_till_done()
+
+        assert "registry unavailable" in body["error"]["message"]
+        assert "Nothing was started" in " ".join(body["error"]["suggestions"])
+        assert fired == []
+
+    async def test_an_unanswered_lookup_runs_nothing(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fired: list[str] = []
+        for name in ("ran_a", "ran_b"):
+            hass.bus.async_listen(name, lambda e: fired.append(str(e.event_type)))
+
+        async with unanswered(hass, "config/entity_registry/list", monkeypatch):
+            body = await rejected_call_body(
+                tools.ha_config_set_script(script_id="key_a", run="start")
+            )
+        await hass.async_block_till_done()
+
+        assert "Nothing was started" in " ".join(body["error"]["suggestions"])
+        assert fired == []
+
+    async def test_a_key_the_registry_cannot_look_up_is_removed_unverified(
+        self, hass: HomeAssistant, tools: ConfigScriptTools
+    ) -> None:
+        """The delete goes by the key; only the wait needs its entity."""
+        with registry_lookup_failing(hass, "config/entity_registry/list"):
+            result = await tools.ha_config_remove_script(script_id="key_a")
+
+        assert set(await _stored(hass)) == {"key_b"}
+        assert any("registry unavailable" in w for w in result["warnings"])
+
+    async def test_a_key_without_a_registry_entry_has_no_entity(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+    ) -> None:
+        """Core registers every loaded script under its key, so no entry is no
+        entity: script.key_a is B's, which neither runs nor lends its category."""
+        category_id = category_registry.async_create(
+            name="Lighting", scope="script"
+        ).category_id
+        entity_registry.async_update_entity(
+            "script.key_a", categories={"script": category_id}
+        )
+        entity_registry.async_remove("script.first")
+        await hass.async_block_till_done()
+        fired: list[str] = []
+        for name in ("ran_a", "ran_b"):
+            hass.bus.async_listen(name, lambda e: fired.append(str(e.event_type)))
+
+        body = await rejected_call_body(
+            tools.ha_config_set_script(script_id="key_a", run="start")
+        )
+        got = await tools.ha_config_get_script(script_id="key_a")
+        await hass.async_block_till_done()
+
+        assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert fired == []
+        assert got["config"]["alias"] == "A"
+        assert "category" not in got["config"]
+
+    @pytest.mark.parametrize("mode", WRITE_MODES)
+    async def test_a_write_the_registry_cannot_look_up_lends_no_category(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+        mode: str,
+    ) -> None:
+        """After the write a failed lookup is no answer: script.key_a is B's."""
+        category_id = category_registry.async_create(
+            name="Lighting", scope="script"
+        ).category_id
+        arguments = await _write_arguments(tools, mode, "key_a")
+
+        with registry_lookup_failing(hass, "config/entity_registry/list"):
+            result = await tools.ha_config_set_script(
+                script_id="key_a", category=category_id, **arguments
+            )
+
+        assert result["success"] is True
+        entry = entity_registry.async_get("script.key_a")
+        assert entry is not None and entry.categories == {}
+        # The skip warning alone: no step ran on another object's entity.
+        (warning,) = result["warnings"]
+        assert "registry unavailable" in warning
+        assert "wait" in warning and "category" in warning
+
+    @pytest.mark.parametrize(
+        ("script_id", "entity_id"),
+        [
+            ("key_a", "script.first"),
+            ("script.key_a", "script.key_a"),
+            ("script.key_b", "script.key_a"),
+        ],
+    )
+    async def test_get_reports_the_category_of_the_scripts_renamed_entity(
+        self,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+        script_id: str,
+        entity_id: str,
+    ) -> None:
+        category_id = category_registry.async_create(
+            name="Lighting", scope="script"
+        ).category_id
+        entity_registry.async_update_entity(
+            entity_id, categories={"script": category_id}
+        )
+
+        got = await tools.ha_config_get_script(script_id=script_id)
+
+        assert got["config"]["category"] == category_id
+
+    async def test_a_get_by_a_key_the_registry_cannot_look_up_reads_no_category(
+        self,
+        hass: HomeAssistant,
+        tools: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+        category_registry: cr.CategoryRegistry,
+    ) -> None:
+        """The config still reads, and B's category, on script.key_a, is not
+        reported for A."""
+        category_id = category_registry.async_create(
+            name="Lighting", scope="script"
+        ).category_id
+        entity_registry.async_update_entity(
+            "script.key_a", categories={"script": category_id}
+        )
+
+        with registry_lookup_failing(hass, "config/entity_registry/list"):
+            got = await tools.ha_config_get_script(script_id="key_a")
+
+        assert got["config"]["alias"] == "A"
+        assert "category" not in got["config"]
+        assert len(got["warnings"]) == 1
+        assert "registry unavailable" in got["warnings"][0]
+
+    async def test_the_id_search_reports_opens_that_script(
+        self, tools: ConfigScriptTools, core_client: HomeAssistantClient
+    ) -> None:
+        result = await SmartSearchTools(client=core_client).deep_search(
+            query="B", search_types=["script"], limit=10, exact_match=True
+        )
+        (match,) = [m for m in result["scripts"] if m["entity_id"] == "script.key_a"]
+        assert match["script_id"] == "key_b"
+
+        got = await tools.ha_config_get_script(script_id=match["script_id"])
+
+        assert got["config"]["alias"] == "B"

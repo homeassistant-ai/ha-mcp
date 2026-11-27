@@ -229,7 +229,7 @@ async def test_a_scene_gone_since_the_state_read_stays_a_failure(
     reason = result["partial_reason"]
     assert (
         "1 scene(s) not scanned (per-id fetch raised; "
-        "e.g. HTTP 404: Scene not found: vanished)" in reason
+        "e.g. HTTP 404: Scene not found: scene.vanished" in reason
     )
     assert "per-id config endpoint returned 404" not in reason
     assert "in the Home Assistant log" not in reason

@@ -48,6 +48,48 @@
     "server.sections.beta": "Funkcje beta (niebezpieczne)",
     "server.sections.developer": "Deweloper",
     "server.sections.remote_access": "Dostęp zdalny",
+    "transfer.title": "Eksport i import ustawień HA-MCP",
+    "transfer.help": "Przenoś ustawienia serwera, wybory narzędzi, zasady bezpieczeństwa, widoczność encji i opcje kopii zapasowej między instalacjami HA-MCP. Miejsce docelowe zachowuje swój token dostępu do Home Assistant oraz przełącznik dostępu. Dostawcy chmurowi mogą przypisać inny publiczny adres URL.",
+    "transfer.secrets": "Plik wyeksportowany z serwera HA-MCP w Home Assistant zawiera w czystym tekście jego identyfikator webhooka, poufną ścieżkę oraz wszelkie zapisane dane uwierzytelniające OAuth. Każdy, kto posiada ten plik, może uzyskać dostęp do HA-MCP. Przechowuj go w bezpiecznym miejscu i importuj tylko pliki, którym wierzysz.",
+    "transfer.export": "Pobierz plik JSON z ustawieniami",
+    "transfer.file": "Plik ustawień do zaimportowania",
+    "transfer.import": "Zaimportuj ustawienia",
+    "transfer.confirm": "Zastąpić ustawienia HA-MCP tej instalacji ustawieniami z tego pliku? Może to odłączyć klientów korzystających z bieżących ustawień.",
+    "transfer.confirm_connection": "Zastąpić ustawienia HA-MCP tej instalacji ustawieniami z tego pliku? Plik zawiera również sekrety połączenia serwera HA-MCP, które stosuje wyłącznie panel boczny HA-MCP. Może to odłączyć klientów korzystających z bieżących ustawień.",
+    "transfer.exporting": "Przygotowywanie pobierania…",
+    "transfer.importing": "Importowanie ustawień…",
+    "transfer.downloaded": "Rozpoczęto pobieranie ustawień.",
+    "transfer.imported": "Zaimportowano ustawienia. Odśwież tę stronę, aby zobaczyć przywrócone ustawienia.",
+    "transfer.restart_server": "Zaimportowano ustawienia. Uruchom ponownie HA-MCP, aby zakończyć stosowanie przywróconych ustawień.",
+    "transfer.connection_skipped": "Ustawienia połączenia z pliku dotyczą tylko serwera HA-MCP w Home Assistant, więc ten serwer zachował własne.",
+    "transfer.file_permissions_skipped": "Uprawnienia narzędzi File & YAML Tools z pliku nie zostały zastosowane, ponieważ ten wpis integracji nie jest tutaj dostępny.",
+    "transfer.file_permissions_unreachable_skipped": "Uprawnienia narzędzi File & YAML Tools z pliku nie zostały zastosowane: w trybie OAuth ta strona nie ma poświadczeń Home Assistant, aby je zmienić. Skonfiguruj je w sekcji Konfiguruj dla File & YAML Tools w Home Assistant.",
+    "transfer.export_file_permissions_unreachable": "Plik pomija uprawnienia narzędzi File & YAML Tools: w trybie OAuth ta strona nie ma poświadczeń Home Assistant, aby je odczytać.",
+    "transfer.restart": "Zaimportowano ustawienia. Uruchom ponownie Home Assistant, aby zakończyć stosowanie przywróconych ustawień.",
+    "transfer.too_large": "Wybierz plik ustawień o rozmiarze 4 MiB lub mniejszym.",
+    "transfer.export_too_large": "Te ustawienia przekraczają limit eksportu wynoszący 4 MiB.",
+    "transfer.invalid_backup": "Wybierz prawidłowy eksport ustawień HA-MCP.",
+    "transfer.allowed_paths_store_unavailable": "Home Assistant nie mógł odczytać ani zapisać dozwolonych katalogów. Otwórz sekcję Konfiguruj dla File & YAML Tools i zapisz katalogi ponownie, a następnie spróbuj ponownie. Jeśli to nie pomoże, sprawdź pamięć masową Home Assistant.",
+    "transfer.extra_yaml_keys_store_unavailable": "Home Assistant nie mógł odczytać ani zapisać dodatkowych kluczy YAML. Otwórz sekcję Konfiguruj dla File & YAML Tools i zapisz klucze ponownie, a następnie spróbuj ponownie. Jeśli to nie pomoże, sprawdź pamięć masową Home Assistant.",
+    "transfer.tools_entry_busy": "Narzędzia File & YAML Tools zmieniają stan. Poczekaj na zakończenie, a następnie zaimportuj ustawienia ponownie.",
+    "transfer.tools_entry_unavailable": "Narzędzia File & YAML Tools są włączone, ale nie zostały załadowane. Otwórz Urządzenia i usługi, rozwiąż ewentualny błąd konfiguracji, załaduj ponownie wpis i spróbuj zaimportować ponownie.",
+    "transfer.rollback_incomplete": "Import nie powiódł się i nie udało się przywrócić niektórych ustawień. Sprawdź logi Home Assistant i przeanalizuj ustawienia docelowe przed ponowną próbą.",
+    "transfer.extra_tools_entry": "Ten plik zawiera tylko wpis serwera. Wybierz kopię zapasową zawierającą narzędzia File & YAML Tools lub użyj miejsca docelowego bez tego wpisu.",
+    "transfer.tools_must_be_disabled": "Narzędzia File & YAML Tools zostały wyłączone w źródle. W razie potrzeby dodaj ten wpis w miejscu docelowym w Home Assistant, wyłącz go, a następnie zaimportuj ponownie.",
+    "transfer.tools_must_be_enabled": "Narzędzia File & YAML Tools zostały włączone w źródle. Włącz wpis docelowy w Home Assistant, a następnie zaimportuj ponownie.",
+    "transfer.incompatible_version": "Ta wersja HA-MCP nie może zaimportować tego formatu pliku. Sprawdź wersję HA-MCP na obu instalacjach.",
+    "transfer.webhook_in_use": "Inna integracja w tym Home Assistant używa już identyfikatora webhooka znajdującego się w tym pliku. Rozwiąż konflikt przed importem.",
+    "transfer.decision_pin_required": "Ta zasada wymaga kodu PIN decyzji. Ustaw go w karcie Zasad bezpieczeństwa narzędzi w tej instalacji, a następnie zaimportuj plik ponownie.",
+    "transfer.server_unavailable": "Serwer HA-MCP jest niedostępny. Sprawdź integrację i otwórz panel ponownie.",
+    "transfer.session": "Otwórz panel boczny HA-MCP jako administrator Home Assistant i spróbuj ponownie.",
+    "transfer.restore_failed": "HA-MCP nie mógł ukończyć importu ustawień. Sprawdź ustawienia docelowe przed ponowną próbą.",
+    "transfer.export_failed": "Nie udało się pobrać ustawień. Otwórz panel ponownie i spróbuj ponownie.",
+    "transfer.invalid_source_entries": "Bieżące ustawienia integracji nie mogą zostać przywrócone z pliku. Otwórz sekcję Konfiguruj dla serwera HA-MCP oraz narzędzi File & YAML Tools, jeśli są zainstalowane, sprawdź ustawienia połączenia i uprawnień, a następnie wyeksportuj ponownie.",
+    "transfer.invalid_server_settings": "HA-MCP nie mógł odczytać jednego ze swoich plików ustawień w tej instalacji. Logi Home Assistant wskazują nazwę pliku. Napraw go lub usuń, a następnie spróbuj ponownie.",
+    "transfer.origin_denied": "Żądanie nie pochodziło z panelu bocznego HA-MCP pod tym adresem Home Assistant. Otwórz panel z paska bocznego. Serwer proxy musi przekazywać oryginalny nagłówek Host.",
+    "transfer.read_failed": "Nie udało się odczytać wybranego pliku. Wybierz plik ponownie.",
+    "transfer.permissions_changed": "Uprawnienia narzędzi File & YAML Tools uległy zmianie podczas importu, więc import został wstrzymany i zachowano dotychczasowe ustawienia. Zaimportuj plik ponownie.",
+    "transfer.component_outdated": "Zaktualizuj HA-MCP w sklepie Marketplace i uruchom ponownie Home Assistant, a następnie zaimportuj ponownie: zainstalowane narzędzia File & YAML Tools nie mogą cofnąć nieudanego importu uprawnień.",
     "server.sidecar.disable": "Trwale wyłącz serwer ustawień",
     "server.sidecar.disable_title": "Trwale wyłącza interfejs użytkownika ustawień: zatrzymuje ten serwer ORAZ zapisuje ~/.ha-mcp/settings_ui_disabled, aby nie uruchamiał się ponownie przy przyszłych uruchomieniach ha-mcp. Usuń ten plik, aby ponownie włączyć.",
     "backups.loading": "Ładowanie stanu kopii zapasowej…",
@@ -259,6 +301,8 @@
     "backup.fields.enable_auto_backup.help": "Zapisuje migawkę encji przed jej zmianą przez każde wywołanie narzędzia zapisu lub usuwania. Gdy ta opcja jest wyłączona, narzędzia plików i surowego YAML-a (ha_write_file, ha_delete_file, ha_config_set_yaml) odmawiają zapisu.",
     "backup.fields.enable_snapshot_actions.label": "Zezwalaj na działania na pełnych migawkach Home Assistant",
     "backup.fields.enable_snapshot_actions.help": "Pozwala asystentom AI zarządzać pełnymi migawkami Home Assistant za pomocą ha_manage_backup oraz odpowiednich usług i poleceń tworzenia kopii zapasowych w ha_call_service. Wyłączenie tej opcji blokuje wszystkie działania na migawkach, w tym ich listowanie. Usuwanie migawek jest dostępne wyłącznie przez ha_manage_backup i wymaga także włączenia opcji Zezwól na usuwanie migawek. Edycja kopii zapasowych oraz działania na kopiach zapasowych wykonywane przez użytkownika w interfejsie ustawień webowych pozostają dostępne.",
+    "backup.fields.enable_settings_transfer_actions.label": "Zezwalaj narzędziu ha_manage_backup na eksport i import ustawień",
+    "backup.fields.enable_settings_transfer_actions.help": "Zezwalaj asystentom AI na pobieranie pliku ustawień tego serwera i importowanie go za pomocą ha_manage_backup, tak jak robią to przyciski Eksport i Import na karcie Ustawienia serwera. Import zachowuje ustawienia przeznaczone wyłącznie dla ludzi, a zmiana zasad bezpieczeństwa, widoczności encji lub uprawnień narzędzi File & YAML Tools wymaga również dostępu do zasad bezpieczeństwa narzędzi deweloperskich. Import może również włączyć tryb deweloperski, narzędzia i funkcje oraz wyłączyć zabezpieczenia, takie jak maskowanie sekretów, weryfikacja SSL i biała lista IPv6, zgodnie z opisem w pliku, dlatego sprawdź swoje ustawienia po tym, jak asystent AI dokona importu.",
     "backup.fields.backup_read_only.label": "Ustaw zarządzanie kopiami zapasowymi jako tylko do odczytu",
     "backup.fields.backup_read_only.help": "Pozwala asystentom AI na listowanie, przeglądanie i porównywanie (diff) kopii zapasowych edycji oraz listowanie pełnych migawek HA, gdy działania na migawkach są włączone. Blokuje ręczne tworzenie, przywracanie (w tym przywracanie edycji) i usuwanie kopii zapasowych, w tym odpowiadające im usługi i polecenia kopii zapasowych w ha_call_service. Automatyczne kopie zapasowe przed edycją są nadal tworzone. Działania na kopiach zapasowych wykonywane przez użytkownika w interfejsie ustawień webowych pozostają dostępne.",
     "backup.fields.auto_backup_throttle_minutes.label": "Ograniczenie częstotliwości automatycznych kopii zapasowych (w minutach)",
@@ -475,8 +519,8 @@
     "advanced.individual_fetch_batch_size.help": "Liczba jednocześnie pobieranych konfiguracji na identyfikator. Zmniejsz w stronę 1 na wolniejszych serwerach HA.",
     "advanced.enable_history_query_guardrails.label": "Zabezpieczenia zapytań historycznych",
     "advanced.enable_history_query_guardrails.help": "Odrzucaj zapytania rejestratora przekraczające zachowawcze limity encji i zakresu czasu. Domyślnie wyłączone.",
-    "advanced.hacs_refresh_after_update.label": "Odśwież komponent w HACS po aktualizacji",
-    "advanced.hacs_refresh_after_update.help": "Podczas uruchamiania po aktualizacji serwera poproś HACS (sklep Marketplace w Home Assistant 2026.11+) o ponowne sprawdzenie repozytorium HA-MCP, aby pasująca aktualizacja pojawiła się od razu zamiast czekać na kolejne sprawdzenie w tle. Domyślnie wyłączone; instalacje, które już to zrobiły, zachowują tę opcję włączoną.",
+    "advanced.hacs_refresh_after_update.label": "Odśwież komponent w Marketplace po aktualizacji",
+    "advanced.hacs_refresh_after_update.help": "Podczas uruchamiania po aktualizacji serwera poproś Marketplace o ponowne sprawdzenie repozytorium HA-MCP, aby pasująca aktualizacja pojawiła się od razu zamiast czekać na następne sprawdzenie w tle. Domyślnie wyłączone; instalacje, które już to zrobiły, zachowają to ustawienie włączone.",
     "advanced.ha_tool_concurrency.label": "Współbieżność narzędzi Home Assistant",
     "advanced.ha_tool_concurrency.help": "Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we wszystkich sesjach. Współbieżność wewnętrznych żądań REST, WebSocket oraz rozgałęzień na narzędzie pozostaje bez zmian. Wartość 0 oznacza brak limitu. Wywołanie oczekujące na wolne zasoby zakończy się niepowodzeniem po 60 sekundach.",
     "advanced.dashboard_screenshot_engine_url.label": "Adres URL silnika zrzutów ekranu pulpitu nawigacyjnego",
@@ -715,7 +759,7 @@
     },
     "ha_get_camera_image": {
       "title": "Pobierz obraz z kamery",
-      "description": "Pobierz zrzut obrazu z encji kamery Home Assistant."
+      "description": "Pobierz obraz migawki z kamery Home Assistant lub encji obrazu."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Pobierz zrzut ekranu pulpitu nawigacyjnego",
@@ -730,8 +774,8 @@
       "description": "Pobiera wpisy rejestru encji lub, bez podania encji, ustawienia rejestru i udostępnione encje."
     },
     "ha_get_hacs_info": {
-      "title": "Pobierz informacje HACS",
-      "description": "Pobierz dane HACS (Home Assistant Community Store) — przeszukaj sklep lub pobierz szczegóły repozytorium."
+      "title": "Pobierz informacje o Marketplace",
+      "description": "Pobierz dane z Home Assistant Marketplace, w co HACS przekształcił się w wersji 2026.11."
     },
     "ha_get_history": {
       "title": "Pobierz historię lub statystyki encji",
@@ -802,8 +846,12 @@
       "description": "Zarządzaj preferencjami panelu energii Home Assistant: sieć / fotowoltaika /"
     },
     "ha_manage_hacs": {
-      "title": "Zarządzaj HACS",
-      "description": "Zarządzaj HACS (Home Assistant Community Store) — instaluj/aktualizuj, usuwaj, dodawaj niestandardowe repozytoria lub odświeżaj repozytorium w"
+      "title": "Zarządzaj Marketplace",
+      "description": "Zarządzaj Home Assistant Marketplace (w co HACS przekształcił się w wersji 2026.11): instaluj, aktualizuj, usuwaj i dodawaj repozytoria."
+    },
+    "ha_manage_logs": {
+      "title": "Zarządzaj rejestratorem (Recorder), statystykami i logami",
+      "description": "Zarządzaj rejestratorem Home Assistant (recorder), jego statystykami długoterminowymi oraz logami."
     },
     "ha_manage_pipeline": {
       "title": "Zarządzaj potokiem Assist",
@@ -823,7 +871,7 @@
     },
     "ha_manage_updates": {
       "title": "Zarządzaj aktualizacjami",
-      "description": "Zarządzaj aktualizacjami Home Assistant (lista, szczegóły, instalacja, pominięcie) oraz problemami z naprawami (ignorowanie)."
+      "description": "Zarządzaj aktualizacjami Home Assistant (list, get, refresh, install, skip, clear_skipped, set_channel) oraz problemami w Naprawach (ignoruj"
     },
     "ha_read_file": {
       "title": "Czytaj plik",

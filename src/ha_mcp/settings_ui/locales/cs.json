@@ -48,6 +48,48 @@
     "server.sections.beta": "Beta funkce (nebezpečné)",
     "server.sections.developer": "Vývojář",
     "server.sections.remote_access": "Vzdálený přístup",
+    "transfer.title": "Export a import nastavení HA-MCP",
+    "transfer.help": "Přenášejte nastavení serveru, volby nástrojů, bezpečnostní politiku, viditelnost entit a možnosti zálohování mezi instalacemi HA-MCP. Cílová instalace si zachová svůj přístupový token Home Assistant a přepínač Access. Poskytovatelé cloudu mohou přiřadit jinou veřejnou URL.",
+    "transfer.secrets": "Soubor exportovaný ze serveru HA-MCP v Home Assistant obsahuje ID webhooku, tajnou cestu a veškerá uložená pověření OAuth v prostém textu. Kdokoli s tímto souborem může získat přístup k HA-MCP. Ukládejte jej v soukromí a importujte pouze soubor, kterému důvěřujete.",
+    "transfer.export": "Stáhnout JSON s nastavením",
+    "transfer.file": "Soubor s nastavením k importu",
+    "transfer.import": "Importovat nastavení",
+    "transfer.confirm": "Nahradit nastavení HA-MCP této instalace nastavením z tohoto souboru? Toto může odpojit klienty používající aktuální nastavení.",
+    "transfer.confirm_connection": "Nahradit nastavení HA-MCP této instalace nastavením z tohoto souboru? Soubor obsahuje také připojovací tajné klíče serveru HA-MCP, které používá pouze boční panel HA-MCP. Toto může odpojit klienty používající aktuální nastavení.",
+    "transfer.exporting": "Připravuje se stahování…",
+    "transfer.importing": "Importují se nastavení…",
+    "transfer.downloaded": "Stahování nastavení bylo zahájeno.",
+    "transfer.imported": "Nastavení byla importována. Obnovte tuto stránku, abyste viděli obnovená nastavení.",
+    "transfer.restart_server": "Nastavení byla importována. Restartujte HA-MCP pro dokončení použití obnovených nastavení.",
+    "transfer.connection_skipped": "Připojovací nastavení v souboru platí pouze pro server HA-MCP v Home Assistant, takže tento server si ponechal své vlastní.",
+    "transfer.file_permissions_skipped": "Oprávnění pro File & YAML Tools ze souboru nebyla použita, protože tato položka integrace zde není k dispozici.",
+    "transfer.file_permissions_unreachable_skipped": "Oprávnění pro File & YAML Tools ze souboru nebyla použita: v režimu OAuth tato stránka nemá pověření Home Assistant pro jejich změnu. Nastavte je v Konfigurovat pro File & YAML Tools v Home Assistant.",
+    "transfer.export_file_permissions_unreachable": "Soubor vynechává oprávnění pro File & YAML Tools: v režimu OAuth tato stránka nemá pověření Home Assistant pro jejich čtení.",
+    "transfer.restart": "Nastavení byla importována. Restartujte Home Assistant pro dokončení použití obnovených nastavení.",
+    "transfer.too_large": "Vyberte soubor nastavení o velikosti 4 MiB nebo menší.",
+    "transfer.export_too_large": "Tato nastavení překračují limit exportu 4 MiB.",
+    "transfer.invalid_backup": "Vyberte platný export nastavení HA-MCP.",
+    "transfer.allowed_paths_store_unavailable": "Home Assistant nemohl přečíst nebo uložit povolené adresáře. Otevřete Konfigurovat pro File & YAML Tools a znovu uložte adresáře, poté to zkuste znovu. Pokud to selže, zkontrolujte úložiště Home Assistant.",
+    "transfer.extra_yaml_keys_store_unavailable": "Home Assistant nemohl přečíst nebo uložit dodatečné klíče YAML. Otevřete Konfigurovat pro File & YAML Tools a znovu uložte klíče, poté to zkuste znovu. Pokud to selže, zkontrolujte úložiště Home Assistant.",
+    "transfer.tools_entry_busy": "File & YAML Tools mění stav. Počkejte, až dokončí, a poté znovu importujte nastavení.",
+    "transfer.tools_entry_unavailable": "File & YAML Tools jsou povoleny, ale nenačetly se. Otevřete Zařízení a služby, vyřešte případné chyby nastavení, znovu načtěte položku a zkuste import opakovat.",
+    "transfer.rollback_incomplete": "Import selhal a některá nastavení se nepodařilo obnovit. Zkontrolujte protokol Home Assistant a před opakováním zkontrolujte cílová nastavení.",
+    "transfer.extra_tools_entry": "Tento soubor obsahuje pouze položku serveru. Vyberte zálohu, která obsahuje File & YAML Tools, nebo použijte cíl bez této položky.",
+    "transfer.tools_must_be_disabled": "File & YAML Tools byly na zdroji zakázány. V Home Assistant přidejte tuto položku na cíli, pokud je to nutné, zakažte ji a poté znovu importujte.",
+    "transfer.tools_must_be_enabled": "File & YAML Tools byly na zdroji povoleny. Povolte cílovou položku v Home Assistant a poté znovu importujte.",
+    "transfer.incompatible_version": "Tato verze HA-MCP nemůže tento formát souboru importovat. Zkontrolujte verzi HA-MCP na obou instalacích.",
+    "transfer.webhook_in_use": "Jiná integrace v tomto Home Assistant již používá ID webhooku v tomto souboru. Před importem vyřešte tento konflikt.",
+    "transfer.decision_pin_required": "Tato politika vyžaduje PIN pro rozhodování. Nastavte jej na kartě Bezpečnostní politiky nástrojů na této instalaci a poté soubor znovu importujte.",
+    "transfer.server_unavailable": "Server HA-MCP je nedostupný. Zkontrolujte integraci a znovu otevřete panel.",
+    "transfer.session": "Otevřete boční panel HA-MCP jako administrátor Home Assistant a zkuste to znovu.",
+    "transfer.restore_failed": "HA-MCP nemohl dokončit import nastavení. Před opakováním zkontrolujte cílová nastavení.",
+    "transfer.export_failed": "Nepodařilo se stáhnout nastavení. Znovu otevřete panel a zkuste to znovu.",
+    "transfer.invalid_source_entries": "Aktuální nastavení integrace nelze obnovit ze souboru. Otevřete Konfigurovat pro HA-MCP Server a File & YAML Tools, pokud jsou nainstalovány, zkontrolujte nastavení připojení a oprávnění a poté exportujte znovu.",
+    "transfer.invalid_server_settings": "HA-MCP nemohl přečíst jeden ze svých souborů nastavení na této instalaci. Protokol Home Assistant uvádí název souboru. Opravte jej nebo smažte a zkuste to znovu.",
+    "transfer.origin_denied": "Požadavek nepřišel z bočního panelu HA-MCP na této adrese Home Assistant. Otevřete panel z postranního panelu. Reverzní proxy musí předávat původní hlavičku Host.",
+    "transfer.read_failed": "Nepodařilo se přečíst vybraný soubor. Vyberte soubor znovu.",
+    "transfer.permissions_changed": "Oprávnění pro File & YAML Tools se během importu změnila, takže import se zastavil a zachoval je. Importujte soubor znovu.",
+    "transfer.component_outdated": "Aktualizujte HA-MCP v Marketplace a restartujte Home Assistant, poté importujte znovu: nainstalované File & YAML Tools nedokážou vrátit zpět neúspěšný import oprávnění.",
     "server.sidecar.disable": "Trvale zakázat server nastavení",
     "server.sidecar.disable_title": "Trvale zakáže uživatelské rozhraní nastavení: zastaví tento server A zapíše ~/.ha-mcp/settings_ui_disabled, aby se nespustil při budoucích spuštěních ha-mcp. Pro opětovné povolení tento soubor smažte.",
     "backups.loading": "Načítání stavu zálohy…",
@@ -259,6 +301,8 @@
     "backup.fields.enable_auto_backup.help": "Uložit snímek entity před každým voláním nástroje pro zápis nebo smazání, které ji změní. Pokud je tato možnost vypnutá, nástroje pro práci se soubory a surovým YAML (ha_write_file, ha_delete_file, ha_config_set_yaml) odmítnou provést zápis.",
     "backup.fields.enable_snapshot_actions.label": "Povolit akce s úplnými snapshoty HA",
     "backup.fields.enable_snapshot_actions.help": "Umožnit asistentům AI spravovat úplné zálohy Home Assistant prostřednictvím ha_manage_backup a odpovídajících zálohovacích služeb a příkazů v ha_call_service. Vypnutím této možnosti zablokujete všechny akce se zálohami, včetně výpisu. Smazání zálohy je k dispozici pouze prostřednictvím ha_manage_backup a vyžaduje také povolení smazání zálohy. Úpravy záloh a akce se zálohami, které uživatel provádí v uživatelském rozhraní nastavení webu, zůstávají k dispozici.",
+    "backup.fields.enable_settings_transfer_actions.label": "Povolit ha_manage_backup exportovat a importovat nastavení",
+    "backup.fields.enable_settings_transfer_actions.help": "Umožnit AI asistentům stáhnout soubor nastavení tohoto serveru a importovat jej prostřednictvím ha_manage_backup, stejně jako to dělá tlačítko Export a Import na kartě Nastavení serveru. Import zachovává nastavení pouze pro lidi a změna bezpečnostní politiky, viditelnosti entit nebo oprávnění pro File & YAML Tools také vyžaduje přístup k bezpečnostní politice Vývojářských nástrojů. Import může také zapnout vývojářský režim, nástroje a funkce a vypnout ochrany, jako je redakce tajných údajů, ověřování SSL a seznam povolených IPv6, jak uvádí soubor, takže po importu provedeném AI asistentem zkontrolujte své nastavení.",
     "backup.fields.backup_read_only.label": "Nastavit správu záloh jako jen pro čtení",
     "backup.fields.backup_read_only.help": "Umožnit asistentům AI vypisovat, zobrazovat a porovnávat zálohy úprav a vypisovat úplné zálohy HA, když jsou povoleny akce se zálohami. Blokuje ruční vytváření záloh, obnovení (včetně obnovení úprav) a mazání, včetně odpovídajících zálohovacích služeb a příkazů v ha_call_service. Automatické zálohy před úpravami pokračují. Akce se zálohami, které uživatel provádí v uživatelském rozhraní nastavení webu, zůstávají k dispozici.",
     "backup.fields.auto_backup_throttle_minutes.label": "Omezení frekvence automatických záloh (minuty)",
@@ -475,8 +519,8 @@
     "advanced.individual_fetch_batch_size.help": "Souběžné načítání konfigurací podle ID. Snižte směrem k 1 na sériových serverech HA.",
     "advanced.enable_history_query_guardrails.label": "Ochrana historických dotazů",
     "advanced.enable_history_query_guardrails.help": "Zamítat dotazy do záznamu (recorder), které překračují konzervativní limity entit a časového rozsahu. Ve výchozím nastavení vypnuto.",
-    "advanced.hacs_refresh_after_update.label": "Po aktualizaci obnovit komponentu v HACS",
-    "advanced.hacs_refresh_after_update.help": "Při spuštění po aktualizaci serveru požádejte HACS (Marketplace v Home Assistant 2026.11+) o opětnou kontrolu repozitáře HA-MCP, aby se odpovídající aktualizace zobrazila ihned namísto čekání na další kontroly na pozadí. Ve výchozím nastavení vypnuto; instalace, které toto již provedly, to ponechají zapnuté.",
+    "advanced.hacs_refresh_after_update.label": "Aktualizovat komponentu v Marketplace po aktualizaci",
+    "advanced.hacs_refresh_after_update.help": "Při spuštění po aktualizaci serveru požádejte Marketplace o opětovnou kontrolu repozitáře HA-MCP, aby se odpovídající aktualizace zobrazila ihned namísto čekání na další kontroly na pozadí. Ve výchozím nastavení je vypnuto; instalace, které to již prováděly, si to ponechají zapnuté.",
     "advanced.ha_tool_concurrency.label": "Souběžnost nástrojů Home Assistant",
     "advanced.ha_tool_concurrency.help": "Volitelný limit pro vnější volání nástrojů Home Assistant napříč všemi relacemi. Vnitřní souběh pro REST, WebSocket a rozbočení pro jednotlivé nástroje zůstává nezměněn. 0 zachovává neomezené chování. Volání čekající na kapacitu selže po 60 sekundách.",
     "advanced.dashboard_screenshot_engine_url.label": "URL adresa enginu pro snímky obrazovky panelu",
@@ -715,7 +759,7 @@
     },
     "ha_get_camera_image": {
       "title": "Získat obraz z kamery",
-      "description": "Získá snímek z entity kamery v Home Assistant."
+      "description": "Získat snímek z kamery nebo entit obrazu v Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Získat snímek panelu",
@@ -730,8 +774,8 @@
       "description": "Získat položky registru entit, nebo bez entity nastavení registru a vystavené entit."
     },
     "ha_get_hacs_info": {
-      "title": "Získat informace o HACS",
-      "description": "Získat data HACS (Home Assistant Community Store) — prohledat obchod nebo načíst podrobnosti o repozitáři."
+      "title": "Získat informace o Marketplace",
+      "description": "Získat data z Marketplace v Home Assistant, kterým se HACS stal v 2026.11."
     },
     "ha_get_history": {
       "title": "Získat historii nebo statistiky entity",
@@ -802,8 +846,12 @@
       "description": "Spravuje předvolby panelu Energy v Home Assistant: síť / solární /"
     },
     "ha_manage_hacs": {
-      "title": "Spravovat HACS",
-      "description": "Spravovat HACS (Home Assistant Community Store) — instalovat/aktualizovat, odebrat, přidat vlastní repozitáře nebo obnovit repozitář v"
+      "title": "Spravovat Marketplace",
+      "description": "Spravovat Marketplace v Home Assistant (čím se HACS stal v 2026.11): instalovat, aktualizovat, odstraňovat a přidávat repozitáře."
+    },
+    "ha_manage_logs": {
+      "title": "Spravovat záznamník, statistiky a protokoly",
+      "description": "Spravovat záznamník v Home Assistant, jeho dlouhodobé statistiky a protokoly."
     },
     "ha_manage_pipeline": {
       "title": "Spravovat asistentskou pipeline",
@@ -823,7 +871,7 @@
     },
     "ha_manage_updates": {
       "title": "Spravovat aktualizace",
-      "description": "Spravuje aktualizace Home Assistant (seznam, podrobnosti, instalace, přeskočení) a problémy v Opravách (ignorování)."
+      "description": "Správa aktualizací Home Assistant (list, get, refresh, install, skip, clear_skipped, set_channel) a problémů Repairs (ignore"
     },
     "ha_read_file": {
       "title": "Číst soubor",

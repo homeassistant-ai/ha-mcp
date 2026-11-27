@@ -22,9 +22,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from ha_mcp._vendor import mcp_types as mt
+from ha_mcp._vendor.fastmcp.server.caching import CacheScope
 from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
     CallNext,
     Middleware,
@@ -38,6 +39,14 @@ if TYPE_CHECKING:
 
 CatalogMode = Literal["full", "search"]
 CATALOG_MODES: tuple[CatalogMode, ...] = ("full", "search")
+
+
+# SEP-2549 cache hint for every cacheable result. The catalog is the same for
+# every caller of an endpoint, and gateways read ``private`` (the SDK default)
+# as a per-user catalog. The TTL is FastMCP's smallest accepted value, so a
+# client or gateway honouring it never serves a stale catalog for long.
+CATALOG_CACHE_TTL_S: Final = 1
+CATALOG_CACHE_SCOPE: Final[CacheScope] = "public"
 
 _endpoint_mode: ContextVar[CatalogMode | None] = ContextVar(
     "ha_mcp_endpoint_catalog_mode", default=None

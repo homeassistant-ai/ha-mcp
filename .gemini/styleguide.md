@@ -81,7 +81,7 @@ Verify that safety annotations match actual tool behavior:
 - State-changing operations should have `idempotentHint: True` only if safe to
   retry; the hint is meaningful only when `readOnlyHint` is false
 - Tool with `openWorldHint: True` must reach an external,
-  third-party-authored world (HACS store, app (add-on) repositories, GitHub
+  third-party-authored world (Marketplace store, app (add-on) repositories, GitHub
   release feeds, arbitrary import URLs); a tool whose domain is the local Home
   Assistant instance should use `False`. It is open-world if its output
   carries externally-authored content back to the client, even when a local

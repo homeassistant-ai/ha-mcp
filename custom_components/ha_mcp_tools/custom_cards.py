@@ -1,8 +1,9 @@
 """Custom (``custom:``) cards, asked about themselves (issue #2632).
 
 A custom card ships as a JavaScript file registered as a dashboard resource
-(``/hacsfiles/...`` from HACS, ``/local/...`` from ``www``, which is where
-the Marketplace puts cards, under ``/local/community/``). Each file runs in
+(``/local/...`` from ``www``, where the Marketplace puts cards under
+``/local/community/``, and ``/hacsfiles/...``, the path Home Assistant keeps
+serving ``www/community`` on for YAML resources). Each file runs in
 its own QuickJS sandbox on top of linkedom, a DOM written for non-browser
 runtimes: no network, no filesystem. The card then answers through the same
 calls the dashboard makes: its editor's and its own ``setConfig`` reject a

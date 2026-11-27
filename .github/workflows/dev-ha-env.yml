@@ -187,7 +187,12 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
+      # setup-python's 3.14 links ubuntu-22.04's SQLite (3.37), older than Core's
+      # recorder accepts, and that recorder writes the session's database. uv's
+      # Python carries a current one.
+      - name: Set up Python
+        run: uv python install 3.14
       - name: Install test dependencies
         working-directory: src
         run: uv sync --all-extras --dev

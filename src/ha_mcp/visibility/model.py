@@ -34,6 +34,7 @@ class VisibilityWire(TypedDict):
     allow_labels: list[str]
     respect_assist_exposure: bool
     allowlist_authorization: NotRequired[bool]
+    enforce: NotRequired[bool]
 
 
 def wire_has_allowlist_dimensions(visibility: VisibilityWire) -> bool:

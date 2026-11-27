@@ -3,7 +3,8 @@
 Each answers a non-admin with a raised 401, which ``http.ban`` counts as a
 failed login, so a burst of them IP-bans the ha-mcp host (#2546). Verified
 against home-assistant/core ``api/__init__.py``,
-``config/{view,core,config_entries}.py`` and ``diagnostics/__init__.py``.
+``config/{view,core,config_entries}.py``, ``diagnostics/__init__.py`` and
+``repairs/websocket_api.py``.
 Not listed: routes that check entity permissions instead (e.g.
 ``GET /api/states/<id>``), the hassio proxy (its 401 is returned, not raised,
 so it is not counted), and admin-only services, which ``call_service`` sends
@@ -29,6 +30,8 @@ _ADMIN_ONLY_ROUTES: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = tuple(
         ({"POST"}, r"config/config_entries/entry/[^/]+/reload"),
         ({"POST"}, r"config/config_entries/(options/|subentries/)?flow"),
         ({"GET", "POST"}, r"config/config_entries/(options/|subentries/)?flow/[^/]+"),
+        ({"POST"}, r"repairs/issues/fix"),
+        ({"GET", "POST"}, r"repairs/issues/fix/[^/]+"),
     )
 )
 

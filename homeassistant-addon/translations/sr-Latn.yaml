@@ -160,6 +160,16 @@ configuration:
       kopija u ha_call_service. Automatske rezervne kopije pre izmena se nastavljaju.
       Radnje sa rezervnim kopijama koje korisnik obavlja u veb interfejsu podešavanja
       ostaju dostupne.
+  enable_settings_transfer_actions:
+    name: Dozvoli da ha_manage_backup izvozi i uvozi podešavanja
+    description: Dozvolite AI asistentima da preuzmu datoteku podešavanja ovog servera
+      i uvezu je preko ha_manage_backup, kao što to rade dugmad Export i Import na
+      kartici Server Settings. Uvoz zadržava podešavanja samo za ljude, a promena
+      bezbednosne politike, vidljivosti entiteta ili dozvola za File & YAML Tools
+      takođe zahteva pristup bezbednosnoj politici razvojnih alata. Uvoz takođe može
+      da uključi režim za programere, alate i funkcije, i da isključi zaštite kao
+      što su sakrivanje tajni, SSL potvrda i IPv6 dozvoljena lista, kao što datoteka
+      kaže, zato proverite podešavanja nakon što AI asistent uveze jedno.
   enable_snapshot_delete:
     name: Dozvoli brisanje snimaka
     description: Dozvolite ha_manage_backup da briše pune Home Assistant snimke. Snimak

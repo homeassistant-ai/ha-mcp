@@ -1300,7 +1300,7 @@ class TestCodeModeApiPostBlocklist:
     async def test_api_post_blocks_scene_config_write(self, mcp_client_with_code_mode):
         """POST /api/config/scene/config/* is blocked for the same reason
         as automation/script: bypasses ``ha_config_set_scene`` validation
-        (entities-must-be-dict shape check, reference validation,
+        (id guard, reference validation,
         hash-locking).
         """
         check = await _check_tool_available(mcp_client_with_code_mode)

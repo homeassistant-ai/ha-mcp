@@ -77,7 +77,6 @@ from .const import (
     EXPOSURE_FULL,
     EXPOSURE_TOOL_SEARCH,
     LLM_API_DOCS_URL,
-    MAX_OAUTH_CALLBACKS,
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_ACCESS_OFF_AFTER_RESTART,
     OPT_ADMIN_TOKEN_REPLACEMENT,
@@ -91,7 +90,6 @@ from .const import (
     OPT_OAUTH_ALLOW_ANY_CALLBACK,
     OPT_OAUTH_CLIENT_ID,
     OPT_OAUTH_CLIENT_SECRET,
-    OPT_OAUTH_REDIRECT_ALLOWLIST,
     OPT_OAUTH_REGENERATE,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
@@ -107,12 +105,14 @@ from .const import (
     WEBHOOK_AUTH_NONE,
 )
 from .oauth_redirect_allowlist import (
+    MAX_OAUTH_CALLBACKS,
+    OPT_OAUTH_REDIRECT_ALLOWLIST,
     effective_allowlist,
     normalize_allowlist,
     stored_allowlist,
 )
 from .server_pin import server_pins
-from .spec_dist import version_dist
+from .spec_dist import pip_spec_override, version_dist
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -231,6 +231,12 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             return self._create_tools_entry()
         return self.async_show_form(step_id="tools")
+
+    async def async_step_import(self, user_input: dict[str, Any]) -> ConfigFlowResult:
+        """Create the File & YAML Tools entry while restoring a sidebar backup."""
+        if user_input != {CONF_ENTRY_TYPE: ENTRY_TYPE_TOOLS}:
+            raise ValueError("Only the File & YAML Tools entry can be imported")
+        return await self.async_step_tools({})
 
     def _create_tools_entry(self) -> ConfigFlowResult:
         """Create the services (tools) config entry."""
@@ -373,7 +379,8 @@ class HaMcpToolsInfoOptionsFlow(OptionsFlow):
 
     def _tools_form_schema(self) -> vol.Schema:
         """Build the form schema with the current stored values as defaults."""
-        from . import _current_extra_dirs, _current_extra_yaml_keys
+        from . import _current_extra_dirs
+        from .extra_yaml_keys import _current_extra_yaml_keys
 
         current_dirs = _current_extra_dirs(self.hass)
         current_keys = _current_extra_yaml_keys(self.hass)
@@ -414,7 +421,8 @@ class HaMcpToolsInfoOptionsFlow(OptionsFlow):
             return self.async_show_form(
                 step_id="tools_info", data_schema=self._tools_form_schema()
             )
-        from . import _apply_allowed_paths, _apply_extra_yaml_keys
+        from . import _apply_allowed_paths
+        from .extra_yaml_keys import _apply_extra_yaml_keys
 
         await _apply_allowed_paths(self.hass, user_input.get("allowed_dirs", []))
         await _apply_extra_yaml_keys(self.hass, user_input.get("extra_yaml_keys", []))
@@ -512,7 +520,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     # override is suggested; the normalized "no override" state
                     # renders an EMPTY field — the help text says "Leave empty",
                     # and pre-filling DEFAULT_PIP_SPEC would show the stable dist
-                    # name even when a HACS pre-release pins ha-mcp-dev.
+                    # name even when a pre-release pins ha-mcp-dev.
                     description={
                         "suggested_value": suggested_values.get(OPT_PIP_SPEC, "")
                     },
@@ -768,17 +776,14 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         best-effort string ("unknown" / "not installed yet") rather than
         breaking the options form.
         """
-        opts = self.config_entry.options
-        override = str(opts.get(OPT_PIP_SPEC) or "").strip()
-        source = (
-            common["server_source_override"]
-            if override and override != DEFAULT_PIP_SPEC
-            else common["server_source_paired"]
-        )
+        override = pip_spec_override(self.config_entry.options)
+        source = common[
+            "server_source_override" if override else "server_source_paired"
+        ]
 
         component_version = common["version_unknown"]
         # The effective spec, as bring-up resolves it: the override, else the pin.
-        spec = override if override != DEFAULT_PIP_SPEC else ""
+        spec = override
         hass = getattr(self, "hass", None)
         if hass is not None:
             try:

@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "Ĝisdatigu la HA-MCP integriĝon",
-      "description": "La instalita ha-mcp servilo postulas la HA-MCP integriĝon {required} aŭ pli novan, sed vi havas {installed}. Ĝisdatigu la integriĝon de Agordoj > Sistemo > Ĝisdatigoj (en HACS, aŭ la Merkata Placo ĉe Home Assistant 2026.11+, malfermu la HA-MCP integriĝon kaj uzu 'Update information' (HACS) aŭ 'Refresh information' (Merkata Placo) se neniu ĝisdatigo estas ankoraŭ montrata) kaj rekomencu Home Assistant. La servilo daŭre funkcias dume, sed iuj pli novaj funkcioj eble ne funkcios ĝis kiam la integriĝo estas ĝisdatigita."
+      "description": "La instalita ha-mcp servilo postulas la HA-MCP integriĝon {required} aŭ pli novan, sed vi havas {installed}. Ĝisdatigu la integriĝon el Settings > System > Updates (se ĝisdatigo ankoraŭ ne montriĝas, malfermu la HA-MCP integriĝon en la Marketplace kaj uzu 'Refresh information') kaj rekomencu Home Assistant. La servilo daŭre funkcias dume, sed iuj pli novaj funkcioj eble ne funkcios ĝis la integriĝo estos ĝisdatigita."
     },
     "legacy_oauth_restart": {
       "title": "Rekomencu Home Assistant por apliki la heredajn OAuth-agordojn",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "Ĉu konservi HA-MCP en unu vendeja listo?",
-            "description": "HA-MCP estas markita instalita el ambaŭ {records}. Ili portas la saman integriĝon (la dua estas la distribua spegulo el kiu antaŭaj instaloj venis). La vendejo (Marketplace) en Home Assistant 2026.11 permesas ke nur unu listigo posedas integriĝon, do tie neniu el ili povas ĝisdatigi HA-MCP; HACS ankoraŭ ĝisdatigas, sed la ĝisdatigo al 2026.11 lasus HA-MCP blokita.\n\nSendado tenas **{keep}**, la listigon en la defaŭlta katalogo kiu ne bezonas propran deponejon, kaj markas la alian listigon kiel ne instalitan. Nenio estas forviŝita: viaj HA-MCP-eniroj, agordoj kaj dosieroj restas ekzakte kiel ili estas, kaj de nun ĝisdatigoj aperos sub {keep} kiel kutime."
+            "description": "HA-MCP estas markita instalita el ambaŭ {records}. Ili portas la saman integriĝon (la dua estas la distribua spegulo de kiu antaŭaj instaloj venis). La Marketplace permesas nur al unu listigo posedi integriĝon, do neniu el ili povas ĝisdatigi HA-MCP.\n\nSendado konservas **{keep}**, la listigon en la defaŭlta katalogo kiu ne bezonas propran deponejon, kaj markas la alian listigon kiel ne instalitan. Nenio estas forviŝita: viaj HA-MCP elementoj, agordoj kaj dosieroj restas ekzakte kiel ili estas, kaj de nun ĝisdatigoj aperas sub {keep} kiel kutime."
           }
         },
         "abort": {
           "already_resolved": "HA-MCP estas instalita el unu vendeja listo nun; nenio korektenda.",
-          "store_unavailable": "La vendejo (HACS aŭ la vendejo) ankoraŭ ne estas ŝargita, do la listoj ne povas esti kontrolitaj. Provu denove post kelkaj minutoj."
+          "store_unavailable": "La Marketplace ankoraŭ ne estas ŝargita, do la listigoj ne povas esti kontrolitaj. Provu denove post kelkaj minutoj."
         }
       }
     }

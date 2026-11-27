@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "Aktualizujte integraci HA-MCP",
-      "description": "Nainstalovaný server ha-mcp vyžaduje integraci HA-MCP {required} nebo novější, ale máte nainstalovanou verzi {installed}. Aktualizujte integraci v části Nastavení > Systém > Aktualizace (v HACS nebo v Marketplace v Home Assistantu 2026.11+ otevřete integraci HA-MCP a použijte možnost 'Update information' (v HACS) nebo 'Refresh information' (v Marketplace), pokud se aktualizace ještě nezobrazuje) a restartujte Home Assistanta. Server mezitím běží dál, ale některé novější funkce nemusí fungovat, dokud integraci neaktualizujete."
+      "description": "Nainstalovaný server ha-mcp vyžaduje integraci HA-MCP {required} nebo novější, ale máte nainstalovanou verzi {installed}. Aktualizujte integraci v nabídce Nastavení > Systém > Aktualizace (pokud se žádná aktualizace nezobrazuje, otevřete integraci HA-MCP v Marketplace a použijte možnost „Aktualizovat informace“) a restartujte Home Assistanta. Server mezitím běží dál, ale některé novější funkce nemusí do aktualizace integrace fungovat."
     },
     "legacy_oauth_restart": {
       "title": "Restartujte Home Assistanta pro použití nastavení legacy OAuth",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "Ponechat HA-MCP v jednom obchodě?",
-            "description": "HA-MCP je označen jako nainstalovaný z obou zdrojů ({records}). Obsahují stejnou integraci (druhý je distribuční zrcadlo, ze kterého pocházejí dřívější instalace). Obchod v Home Assistant 2026.11 umožňuje, aby integraci vlastnil pouze jeden záznam, takže tam ji ani jeden z nich nemůže aktualizovat; HACS ji sice stále aktualizuje, ale přechod na verzi 2026.11 by zanechal HA-MCP zaseknutý.\n\nOdesláním ponecháte **{keep}**, záznam ve výchozím katalogu, který nevyžaduje vlastní úložiště, a druhý záznam označíte jako nenainstalovaný. Nic se neodstraní: vaše položky, nastavení a soubory HA-MCP zůstanou přesně tak, jak jsou, a odteď se aktualizace budou zobrazovat pod {keep} jako obvykle."
+            "description": "HA-MCP je označen jako nainstalovaný ze dvou zdrojů: {records}. Obsahují stejnou integraci (druhý zdroj je distribuční zrcadlo, ze kterého pocházejí dřívější instalace). Marketplace umožňuje vlastnit integraci pouze jednomu záznamu, takže ani jeden z nich nemůže provést aktualizaci HA-MCP.\n\nOdesláním zachováte **{keep}**, což je záznam ve výchozím katalogu, který nevyžaduje vlastní úložiště, a druhý záznam označíte jako nenainstalovaný. Nic se neodstraní: vaše záznamy, nastavení a soubory HA-MCP zůstanou přesně tak, jak jsou, a aktualizace se od této chvíle budou standardně zobrazovat u položky {keep}."
           }
         },
         "abort": {
           "already_resolved": "HA-MCP je nyní nainstalován z jednoho obchodu; není co opravovat.",
-          "store_unavailable": "Obchod (HACS nebo Marketplace) ještě není načten, takže záznamy nelze zkontrolovat. Zkuste to za několik minut znovu."
+          "store_unavailable": "Marketplace ještě není načten, proto nelze záznamy ověřit. Zkuste to za několik minut znovu."
         }
       }
     }

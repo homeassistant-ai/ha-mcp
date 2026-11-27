@@ -218,11 +218,11 @@ volumes:
       deployInstr = `<div class="instruction-block">
           <h3 class="instruction-title">HA Custom Component (in-process server)</h3>
           <p class="text-slate-300 text-sm mb-3">Runs the full ha-mcp server inside Home Assistant. Works on every install type — Home Assistant OS, Supervised, Container, and Core.</p>
-          <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration" target="_blank" rel="noopener noreferrer" class="inline-block mb-3">
-            <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open HA-MCP in HACS" />
+          <a href="https://my.home-assistant.io/redirect/marketplace_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration" target="_blank" rel="noopener noreferrer" class="inline-block mb-3">
+            <img src="https://my.home-assistant.io/badges/marketplace_repository.svg" alt="Open HA-MCP in the Marketplace" />
           </a>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
-            <li>Install <strong>HA-MCP — Manage Home Assistant with AI</strong> from HACS, the Marketplace on Home Assistant 2026.11+ (or copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> into <code class="bg-slate-800 px-1 rounded">config/custom_components/</code>), then restart Home Assistant.</li>
+            <li>Install <strong>HA-MCP — Manage Home Assistant with AI</strong> from the Marketplace (or copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> into <code class="bg-slate-800 px-1 rounded">config/custom_components/</code>), then restart Home Assistant. Either way it needs <strong>Home Assistant 2026.11.0 or newer</strong>.</li>
             <li>Go to <strong>Settings → Devices &amp; Services → Add Integration</strong>, search <strong>HA-MCP</strong>, and choose <strong>HA-MCP Server</strong>.</li>
             <li>In the form, paste an <strong>Administrator access token</strong> (your profile → <strong>Security</strong> → <strong>Long-lived access tokens</strong> → <strong>Create token</strong>; your own works from anywhere if it leaks and the server's changes show under your name), or, safer, enter the user name and password of an account made just for HA-MCP under <strong>Settings → People</strong> with <strong>Local access only</strong> and <strong>Administrator</strong> on (never your own login), and HA-MCP creates its token. Then pick how clients may connect.Both options start off, so a client on another device needs one of them: <strong>Remote access through Home Assistant</strong> — start with <strong>Secret URL</strong> (the connect URL is the credential, nothing else to set up; switch to <strong>Home Assistant sign-in</strong> later if you want a login) — and/or <strong>Network access: Local network</strong> for clients on your LAN. Leaving both off keeps the server reachable only from the Home Assistant machine. Submit — creating the entry starts the server (the first start takes a little longer while it installs the package).</li>
             <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there).</li>
@@ -458,17 +458,13 @@ function pushStdioBridge(ctx, instructions) {
 
 function pushGeminiNotes(ctx, instructions) {
   const { isLocal } = ctx;
-  // Client-specific notes for HTTP-based connections.
-  // Gemini CLI: 405-on-GET caveat (a recurring confusion source — see #1027)
-  // and the Home Assistant built-in MCP integration as an alternative to
-  // running a separate ha-mcp container.
+  // Gemini CLI users can encounter a 405 when probing the endpoint with GET (#1027).
   if (state.client?.id === 'gemini-cli' && !isLocal) {
     instructions.push(`<div class="instruction-block border-blue-700/50 bg-blue-900/10">
         <h3 class="instruction-title text-blue-300">Gemini CLI Notes</h3>
         <p class="text-slate-300 text-sm mb-2"><strong>If client logs show <code>405 Method Not Allowed</code> on <code>GET /mcp</code>:</strong> the server is running in Streamable HTTP mode — switch from <code>url</code> to <code>httpUrl</code> in <code>~/.gemini/settings.json</code>. The config below already uses <code>httpUrl</code>.</p>
         <p class="text-slate-300 text-sm mb-2 mt-3">Entry point: <code>ha-mcp-web</code> (default) serves Streamable HTTP at <code>/mcp</code> on port 8086 — always pair it with the <code>httpUrl</code> key, not <code>url</code>.</p>
         <p class="text-slate-300 text-sm mb-2 mt-3"><strong>A direct browser/curl probe of <code>http://&lt;host&gt;:8086/mcp</code> also returns 405 by design</strong> — that is the <code>register_browser_landing</code> handler in <code>src/ha_mcp/__main__.py</code> confirming the server is up, not a fault. MCP clients use <code>POST</code>; this only shows up if a curl probe or browser hits the URL directly.</p>
-        <p class="text-slate-300 text-sm mt-3"><strong>Alternative: HA built-in MCP integration.</strong> If you have the <a href="https://www.home-assistant.io/integrations/mcp_server/" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Home Assistant MCP integration</a> enabled, you can skip <code>ha-mcp</code> entirely and point Gemini CLI at HA's <code>/api/mcp</code> endpoint with a long-lived access token in a <code>Bearer</code> header. HA core also serves the legacy SSE endpoint at <code>/mcp_server/sse</code> on the same host/port — same 405-on-GET caveat applies there.</p>
       </div>`);
   }
 }

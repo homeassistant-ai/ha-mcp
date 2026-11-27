@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 from urllib.parse import urlparse
 
+import app_options
+
 
 class IntegrationInstall(NamedTuple):
     """Result of `_install_integration`. NamedTuple so callers can't
@@ -1119,84 +1121,6 @@ def _shutdown_cleanup(reason: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _read_addon_options(config_file: Path) -> dict | None:
-    """Read the add-on options from ``config_file`` (``/data/options.json``).
-
-    Returns a dict of the parsed option values (defaults filled in for anything
-    absent), or None when the file is present but unreadable/corrupt — a
-    fail-closed signal the caller turns into a non-zero exit.
-    """
-    # Read config. Supervisor always writes /data/options.json, so the outer
-    # existence check stays best-effort for the (unreachable) absent-file case.
-    # A present-but-unreadable/corrupt file, however, is FATAL (fail closed
-    # below): we can't tell whether the user enabled OAuth, and silently
-    # falling back to the unauthenticated defaults would betray that intent.
-    remote_url = ""
-    mcp_server_url = ""
-    mcp_port = 9583
-    enable_oauth = False
-    oauth_client_id = ""
-    oauth_client_secret = ""
-    oauth_mode_option = ""
-    regenerate_oauth_creds = False
-    debug_logging = False
-    config: dict = {}
-
-    if config_file.exists():
-        try:
-            config = json.load(config_file.open())
-            remote_url = config.get("remote_url", "")
-            mcp_server_url = config.get("mcp_server_url", "")
-            mcp_port = config.get("mcp_port", 9583)
-            enable_oauth = bool(config.get("enable_oauth", False))
-            oauth_client_id = config.get("oauth_client_id", "")
-            oauth_client_secret = config.get("oauth_client_secret", "")
-            # Unset by default in config.yaml options (no default value), so an
-            # upgrader inherits nothing — the mode is resolved below.
-            oauth_mode_option = config.get("oauth_mode", "")
-            regenerate_oauth_creds = bool(config.get("regenerate_oauth_creds", False))
-            debug_logging = bool(config.get("debug_logging", False))
-        except (OSError, json.JSONDecodeError) as e:
-            # Fail closed: the add-on config is present but unreadable/corrupt,
-            # so the user's intent is unknown — including whether OAuth should
-            # be enforced. Continuing would leave enable_oauth at its False
-            # default, silently serving an unauthenticated proxy (URL-secrecy
-            # only) to a user who turned OAuth ON. Refuse to start instead.
-            log_error("")
-            log_error("=" * 70)
-            log_error(
-                f"  Could not read the add-on configuration ({type(e).__name__}): {e}"
-            )
-            log_error("")
-            log_error("  The add-on options file could not be parsed, so your")
-            log_error("  configured intent is unknown — including whether OAuth")
-            log_error("  should be enforced. Starting now could serve the webhook")
-            log_error("  WITHOUT the authentication you asked for, so the add-on is")
-            log_error("  refusing to start.")
-            log_error("")
-            log_error("  Restart the add-on to recover: the Supervisor rewrites")
-            log_error("  this file from your saved configuration on every start,")
-            log_error("  so a restart normally heals a corrupted copy. If the")
-            log_error("  error persists across restarts, re-save the add-on's")
-            log_error("  Configuration tab and check the system's storage.")
-            log_error("=" * 70)
-            log_error("")
-            return None
-
-    return {
-        "remote_url": remote_url,
-        "mcp_server_url": mcp_server_url,
-        "mcp_port": mcp_port,
-        "enable_oauth": enable_oauth,
-        "oauth_client_id": oauth_client_id,
-        "oauth_client_secret": oauth_client_secret,
-        "oauth_mode_option": oauth_mode_option,
-        "regenerate_oauth_creds": regenerate_oauth_creds,
-        "debug_logging": debug_logging,
-        "config": config,
-    }
-
-
 def _resolve_legacy_oauth_settings(
     oauth_mode: str,
     oauth_client_id: str,
@@ -1364,6 +1288,7 @@ def _build_proxy_config(
     oauth_client_secret: str,
     remote_url: str,
     debug_logging: bool,
+    callbacks: app_options.CallbackOptions,
 ) -> tuple[dict, str | None]:
     """Build the proxy config dict written for the mcp_proxy_dev integration.
 
@@ -1407,6 +1332,7 @@ def _build_proxy_config(
     # who leave it off.
     if debug_logging:
         proxy_config["debug_logging"] = True
+    proxy_config.update(app_options.callback_config(callbacks))
     return proxy_config, resolved_remote
 
 
@@ -1433,9 +1359,12 @@ def _write_proxy_config(proxy_config: dict) -> bool:
     return True
 
 
-def _install_integration_and_handle_restart() -> None:
+def _install_integration_and_handle_restart() -> bool:
     """Install/refresh the integration and run the first-install / version-change
-    restart flows (notifications, Repairs, and config-entry setup)."""
+    restart flows (notifications, Repairs, and config-entry setup).
+
+    Returns True while Home Assistant still runs the previous integration code.
+    """
     # Install the mcp_proxy_dev custom component
     first_install, version_changed = _install_integration()
 
@@ -1572,6 +1501,7 @@ def _install_integration_and_handle_restart() -> None:
                 "/services/persistent_notification/dismiss",
                 {"notification_id": stale},
             )
+    return version_changed
 
 
 def _enforce_oauth_or_disable(enable_oauth: bool) -> None:
@@ -1720,6 +1650,8 @@ def _log_startup_urls(
     oauth_client_id: str,
     oauth_client_secret: str,
     debug_logging: bool,
+    callbacks: app_options.CallbackOptions,
+    restart_pending: bool,
 ) -> None:
     """Log the local/remote MCP URLs and any OAuth / debug-logging hints."""
     # Log URLs. resolved_remote may already have been computed above for
@@ -1762,6 +1694,12 @@ def _log_startup_urls(
         log_info("    Use your own OAuth client).")
         log_info("    These values persist at /data/oauth_creds.json — same")
         log_info("    values across addon restarts.")
+    else:
+        summary = app_options.callback_summary(callbacks)
+        if restart_pending:
+            summary += " (applies once Home Assistant is restarted)"
+        log_info("")
+        log_info(f"  OAuth callbacks allowed to sign in: {summary}")
     if debug_logging:
         log_info("")
         log_info("  Inbound request debug logging is ON.")
@@ -1859,7 +1797,7 @@ def main() -> int:
         return 1
 
     data_dir = Path("/data")
-    options = _read_addon_options(Path("/data/options.json"))
+    options = app_options.read_app_options(Path("/data/options.json"), log_error)
     if options is None:
         return 1
     remote_url = options["remote_url"]
@@ -1872,6 +1810,9 @@ def main() -> int:
     regenerate_oauth_creds = options["regenerate_oauth_creds"]
     debug_logging = options["debug_logging"]
     config = options["config"]
+    callbacks = app_options.resolve_callback_options(
+        options, Path("/opt/mcp_proxy_dev"), log_error, log_warning
+    )
 
     oauth = _resolve_oauth_settings(
         enable_oauth,
@@ -1903,11 +1844,12 @@ def main() -> int:
         oauth_client_secret,
         remote_url,
         debug_logging,
+        callbacks,
     )
     if not _write_proxy_config(proxy_config):
         return 1
 
-    _install_integration_and_handle_restart()
+    restart_pending = _install_integration_and_handle_restart()
 
     # The integration's OAuth views serve only while the heartbeat is fresh,
     # and the stale-code probe below hits one of those views — touch it BEFORE
@@ -1930,6 +1872,8 @@ def main() -> int:
         oauth_client_id,
         oauth_client_secret,
         debug_logging,
+        callbacks,
+        restart_pending,
     )
 
     # Install SIGTERM/SIGINT handlers so a Supervisor "stop" shuts down through

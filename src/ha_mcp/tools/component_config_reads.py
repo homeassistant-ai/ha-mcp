@@ -5,9 +5,19 @@ component:
 
 - Entity resolution maps storage keys to live registry entity IDs.
   ``entity_registration.resolve_entity_id_after_write`` polls after scene/script
-  writes against one deadline. ``_resolve_scene_entity_id`` uses a single retry
-  before scene removal. The component's ``entity_lookup`` returns only matching
-  rows instead of a full registry/state listing. A hit is authoritative at once,
+  writes, and before a standalone activation of a stored scene key, against one
+  deadline and constructs no id when it finds none. When a scene's resolution
+  named no entity, ``_resolve_scene_entity_id`` uses a single retry for its
+  config read or before its removal.
+  ``entity_registration.lookup_entity_id`` is one strict lookup, which raises
+  on a failed read, for the script get, run and remove and for a standalone
+  scene activation by a bare id. ``scenes_with_id`` asks ``entity_lookup``,
+  for the REST client's ``_resolve_scene``, which ``homeassistant`` scene Core
+  registered under a bare id and whether Core loaded it (``loaded``, flag
+  ``entity_lookup_loaded``); without it that resolution falls back to the
+  registry entry of ``scene.<id>`` and the config API. The component's
+  ``entity_lookup`` returns only matching rows instead of a full
+  registry/state listing. A hit is authoritative at once,
   but an empty read can precede HA's asynchronous entity registration even when
   performed in-process, so post-write callers must continue polling.
 - The reference validator (``validate_config_references``) asks the
@@ -27,20 +37,24 @@ transport failure (``HomeAssistantConnectionError`` off ``send_command`` or from
 a failed (re)build of the pooled socket, or ``HomeAssistantAuthError``) to
 ``None`` too, NEVER propagating it: its consumers fall back to the legacy
 WebSocket registry bridge or REST state reads, which an escaping error would
-skip. The post-write resolver catches known API/transport failures and retains
-a best-effort entity ID; later wait and category operations report any
-verification or assignment failure. Removal resolvers retain their own error
-policies.
+skip. The post-write resolver returns None when its budget ends and raises on
+a failed registry read; ``entity_registration.post_write_entity`` turns either
+into a warning and skips the wait, category and activation steps, unless a
+script write by ``script.<x>`` whose key differs from ``<x>`` falls back to
+that entity. Removal resolvers retain their own error policies.
 
 **GET-path invariant:** the automation/script/scene *config-get* tools never
 read the config body through the component — its in-process ``raw_config``
 freshness lags the config file between a write and the next completed reload,
-so the body always comes from Core's REST config endpoint. The script and scene
-resolvers gate the whole component branch (caps probe included) behind
-``allow_component`` for removals, and the dedicated post-write resolver is never
-called from a config-get. The automation tools resolve through
-``component_automation.automation_lookup`` instead, which reads the registry,
-never the body.
+so the body always comes from Core's REST config endpoint. Registry rows may
+come from the component: the scene get resolves a bare id through
+``entity_lookup``, while the scene entity resolver gates its component branch
+(caps probe included) behind ``allow_component`` for removals, and the
+dedicated post-write resolver is never called from a config-get; the script
+config-get looks up the entity of its category with
+``entity_registration.lookup_entity_id``.
+The automation tools resolve through ``component_automation.automation_lookup``
+instead, which reads the registry, never the body.
 """
 
 from __future__ import annotations
@@ -54,6 +68,8 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from .component_api import (
+    ENTITY_LOOKUP_LOADED,
+    component_serves,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -77,7 +93,8 @@ async def fetch_entity_lookup_via_component(
 
     Returns the component's ``matches`` list — every entity-registry entry whose
     ``unique_id`` equals ``unique_id`` (each ``{entity_id, unique_id, platform,
-    domain, config_entry_id, categories, disabled_by, hidden_by}``), optionally
+    domain, config_entry_id, categories, disabled_by, hidden_by, loaded}``;
+    ``loaded`` behind the ``entity_lookup_loaded`` flag), optionally
     narrowed by the entity's own ``domain``. Multiple matches (one ``unique_id``
     across platforms) are all returned — the caller picks. An AUTHORITATIVE empty
     list (no registry entry with that unique_id) is kept distinct from the
@@ -130,9 +147,22 @@ async def fetch_entity_lookup_via_component(
     return matches
 
 
+async def scenes_with_id(client: Any, scene_id: str) -> list[dict[str, Any]] | None:
+    """The ``homeassistant`` scenes Core registered under ``scene_id``, each
+    with ``loaded``; None when the component does not answer or lacks
+    ``entity_lookup_loaded``, also when a scene row of the answer lacks
+    ``loaded`` (an older component on a connection opened after the check)."""
+    if not await component_serves(client, ENTITY_LOOKUP_LOADED):
+        return None
+    matches = await fetch_entity_lookup_via_component(client, scene_id, domain="scene")
+    if matches is None:
+        return None
+    rows = [m for m in matches if m.get("platform") == "homeassistant"]
+    return None if any("loaded" not in m for m in rows) else rows
+
+
 _INSTALL_HINT = (
-    "install the ha_mcp_tools component via HACS (the Marketplace on Home "
-    "Assistant 2026.11+) and restart Home Assistant"
+    "install the ha_mcp_tools component via the Marketplace and restart Home Assistant"
 )
 
 
@@ -197,8 +227,7 @@ async def fetch_config_references_via_component(
         )
     outdated = _unavailable(
         "references were not checked: the installed ha_mcp_tools component "
-        "predates the reference check; update it via HACS (the Marketplace on "
-        "Home Assistant 2026.11+)"
+        "predates the reference check; update it via the Marketplace"
     )
     if not component_supports(caps, CONFIG_REFERENCES):
         return outdated

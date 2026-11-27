@@ -220,7 +220,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -283,14 +283,14 @@ jobs:
           # Inputs are data, intentionally word-split into pytest arguments.
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 \
+            -n2 --dist loadscope -v --tb=short \
             -m "not addon_disruptive" $PYTEST_ARGS || parallel=$?
           # Exit 5 is an empty selection: a -k can pick only disruptive tests,
           # or none. Either phase may be empty, not both.
           [ "${parallel:-0}" -eq 0 ] || [ "$parallel" -eq 5 ] || exit "$parallel"
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n0 -v --tb=short --maxfail=0 \
+            -n0 -v --tb=short \
             -m addon_disruptive $PYTEST_ARGS || serial=$?
           [ "${serial:-0}" -eq 0 ] || [ "$serial" -eq 5 ] || exit "$serial"
           if [ "${parallel:-0}" -eq 5 ] && [ "${serial:-0}" -eq 5 ]; then
@@ -307,9 +307,9 @@ jobs:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
-          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit)
-          # so HACS repo adds don't hit the unauthenticated shared-IP
-          # GitHub rate limit — the recurring HACS-install flake.
+          # Feeds _conftest_haos.py's Marketplace token injection (qcow2 pre-boot
+          # edit) so the Marketplace's GitHub calls don't hit the unauthenticated
+          # shared-IP GitHub rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HAOS + app diagnostics from booted qcow2 (always)
@@ -381,7 +381,7 @@ jobs:
             cat "$outdir/config.yaml" || true
           done
           ls -laR /tmp/haos-inaddon-beta-diagnostics/ || true
-          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
+          # The Marketplace token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.
@@ -502,7 +502,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -523,15 +523,13 @@ jobs:
         # the self-referential haos_only embedded smoke module skips automatically.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
-        # other HAOS lanes (#1350); --maxfail=0 overrides
-        # pyproject.toml's --maxfail=3
-        # so triage sees the full failure surface.
+        # other HAOS lanes (#1350).
         run: |
           cd tests
           # Inputs are data, intentionally word-split into pytest arguments.
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
+            -n2 --dist loadscope -v --tb=short $PYTEST_ARGS
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-beta-test-image.qcow2
@@ -542,9 +540,9 @@ jobs:
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
-          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit) so HACS
-          # repo adds don't hit the unauthenticated shared-IP GitHub rate limit —
-          # the recurring HACS-install flake.
+          # Feeds _conftest_haos.py's Marketplace token injection (qcow2 pre-boot
+          # edit) so the Marketplace's GitHub calls don't hit the unauthenticated
+          # shared-IP GitHub rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HA diagnostics from booted qcow2 (always)
@@ -599,7 +597,7 @@ jobs:
             cat "$outdir/config-dir-listing.txt" || true
           done
           ls -laR /tmp/haos-embedded-beta-diagnostics/ || true
-          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
+          # The Marketplace token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.

@@ -8,7 +8,7 @@ import re
 from collections.abc import AsyncIterator
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit, urlunsplit
 
 import pytest
 
@@ -174,11 +174,14 @@ async def test_none_mode_authorize_refuses_a_redirect_the_server_cannot_serializ
         "code_challenge": CHALLENGE,
         "code_challenge_method": "S256",
     }
+    # A callback on the shipped allowlist, so only the backslash is refused.
+    allowlist = proxy.module("oauth_redirect_allowlist")
+    listed = allowlist.DEFAULT_OAUTH_REDIRECT_ALLOWLIST[0]
+    parts = urlsplit(listed)
+    unserializable = urlunsplit(parts._replace(netloc=f"{parts.netloc}\\@evil.example"))
 
-    refused = await proxy.authorize(
-        **query, redirect_uri="https://client.example\\@evil.example/cb"
-    )
-    accepted = await proxy.authorize(**query, redirect_uri="https://client.example/cb")
+    refused = await proxy.authorize(**query, redirect_uri=unserializable)
+    accepted = await proxy.authorize(**query, redirect_uri=listed)
 
     assert refused.status == 400
     assert (await refused.json())["error_description"] == "invalid redirect_uri"

@@ -7,7 +7,7 @@ Thank you for your interest in contributing!
 1. **Fork and clone** the repository
 2. **Install**: `uv sync --group dev`. Two of Home Assistant's integration requirements build from source, so this needs a C++ compiler (`g++` on Debian and Ubuntu, the Xcode command-line tools on macOS).
 3. **Install hooks**: `uv run lefthook install`
-4. **Test**: `uv run pytest tests/src/e2e/ -n2 --dist loadscope -v` (requires Docker)
+4. **Test**: `uv run pytest tests/src/e2e/ -n2 --dist loadscope -v` (requires Docker; the [test commands](docs/agents/development.md#test-commands) list what else the host needs)
 5. **Make changes** and commit
 6. **Open Pull Request**
 
@@ -38,7 +38,7 @@ uv run ast-grep scan               # AST lint (error handling patterns)
 uv run python scripts/error_wording.py  # No decision by an error's wording
 ```
 
-On every commit, hooks run `ruff check --fix` (lint), `ast-grep scan` (AST lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). When issue-intake files change, they also run the issue-intake tests; when settings UI, consent form or site files change, they run the JSDOM-based UI tests. On pull requests the **Fast Checks** CI job re-runs the lint, AST lint and type checks, plus `ruff format --check` on changed Python files, the `uv.lock` sync check, the HA-core constraint-alignment check, the docs-size check, the check that no test is exempted from the real-Core checks, the check that no public name is used only by the tests, the check that no test reaches a private name through a string, the check that no production code decides by the wording of an error, and HACS and Hassfest validation. Unit tests run in the separate **Unit Tests** job.
+On every commit, hooks run `ruff check --fix` (lint), `ast-grep scan` (AST lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). When issue-intake files change, they also run the issue-intake tests; when settings UI, consent form or site files change, they run the JSDOM-based UI tests. On pull requests the **Fast Checks** CI job re-runs the lint, AST lint and type checks, plus `ruff format --check` on changed Python files, the `uv.lock` sync check, the HA-core constraint-alignment check, the docs-size check, the check that no test is exempted from the real-Core checks, the check that no public name is used only by the tests, the check that no test reaches a private name through a string, the check that no test stands in for a real integration under its name, the check that no production code decides by the wording of an error, and HACS and Hassfest validation. Unit tests run in the separate **Unit Tests** job.
 
 ## 🔄 Migrating from pre-commit to lefthook
 
@@ -78,7 +78,7 @@ take over the PR (push to it or supersede it) or close it.
 
 ## 🏗️ Stuck?
 
-- Open an [Issue](../../issues). Bug and agent-behavior reports need the whole report the `ha_report_issue` tool generates, run in the session where the problem happened, or a `### Why there is no ha_report_issue report` section saying why there is none ("N/A" is accepted). Without either, the issue is labeled `missing bug report output` and closed after 24 hours. For a feature request, ask your agent to do what you want first and run the tool when it cannot: the report helps find gaps.
+- Open an [Issue](../../issues). Bug and agent-behavior reports need the whole report the `ha_report_issue` tool generates, run in the session where the problem happened, or a `### Why there is no ha_report_issue report` section saying why there is none ("N/A" is accepted). Without either, the issue is labeled `missing bug report output` and closed after 24 hours. If a maintainer applies `missing bug report output (Override)`, add the generated report to the issue or a comment within 24 hours to keep it open. Adding it after automatic closure reopens the issue. For a feature request, ask your agent to do what you want first and run the tool when it cannot: the report helps find gaps.
 - See **[AGENTS.md](AGENTS.md)** for additional tips.
 
 Thank you for contributing! 🎉

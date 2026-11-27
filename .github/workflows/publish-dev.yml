@@ -56,7 +56,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Generate dev version
         id: version
@@ -73,7 +73,7 @@ jobs:
           echo "Dev version: $DEV_VERSION (sha: $SHORT_SHA)"
           echo "$DEV_VERSION" > dev-version.txt
 
-      # The mirror sync pins the HACS pre-release to exactly this build, so it
+      # The mirror sync pins the component pre-release to exactly this build, so it
       # reads the number from here rather than recomputing it.
       - name: Hand the dev version to the mirror sync
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -104,7 +104,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Temporarily set package name and version for dev build
         run: |
@@ -174,7 +174,7 @@ jobs:
 
   create-prerelease:
     name: Create GitHub pre-release
-    # HACS installs this tag, and Home Assistant then installs its pin from
+    # The Marketplace installs this tag, and Home Assistant then installs its pin from
     # PyPI: only master's build is the dev pre-release (a branch dispatch
     # computes master's number), and only once PyPI serves it.
     needs: [prepare, publish-pypi-dev]
@@ -190,7 +190,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # HACS installs a pre-release from the commit its tag names, so that
+      # The Marketplace installs a pre-release from the commit its tag names, so that
       # commit must carry the component stamped with this build's version and
       # its ha-mcp-dev pin (#2763). The stamp goes on a commit of its own that
       # only the tag references; master is untouched.

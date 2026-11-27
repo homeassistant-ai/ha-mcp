@@ -280,6 +280,17 @@ configuration:
       bərpa etmə (redaktə bərpaları daxil olmaqla) və silməni bloklayın. Avtomatik
       redaktədən əvvəlki ehtiyat nüsxələr davam edir. Veb ayarları interfeysində şəxsin
       etdiyi ehtiyat nüsxə əməliyyatları əlçatan olaraq qalır.
+  enable_settings_transfer_actions:
+    name: ha_manage_backup-a ayarları ixrac və idxal etməyə icazə verin
+    description: Server Ayarları vərəqindəki İxrac və İdxal düymələrində olduğu kimi,
+      süni intellekt köməkçilərinə bu serverin ayarlar faylını yükləməyə və ha_manage_backup
+      vasitəsilə birini idxal etməyə icazə verin. İdxal yalnız insan üçün nəzərdə
+      tutulmuş ayarları saxlayır və təhlükəsizlik siyasətini, obyekt görünürlüyünü
+      və ya File & YAML Tools icazələrini dəyişdirmək həm də Dev tools təhlükəsizlik
+      siyasəti girişini tələb edir. İdxal həmçinin faylda deyildiyi kimi tərtibatçı
+      rejimini, alətləri və funksiyaları işə sala, eləcə də məxfi məlumatların gizlədilməsi,
+      SSL yoxlanılması və IPv6 icazələr siyahısı kimi mühafizələri söndürə bilər,
+      ona görə də süni intellekt köməkçisi idxal etdikdən sonra ayarlarınızı yoxlayın.
   enable_snapshot_delete:
     name: Anlıq nüsxələrin silinməsinə icazə ver
     description: ha_manage_backup-a tam Home Assistant ehtiyat nüsxələrini silməyə

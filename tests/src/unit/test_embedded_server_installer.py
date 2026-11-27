@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.requirements import pip_kwargs
 
 from custom_components.ha_mcp_tools import embedded_server as es
 from custom_components.ha_mcp_tools.const import (
@@ -53,11 +54,6 @@ async def install_pin(
     mgr, _ = await new_manager(hass, options=options)
     await package_step(mgr)
     return package_index.installs[0].args
-
-
-def use_pip_kwargs(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> None:
-    """Home Assistant's pip arguments for this Core version: ``config/deps`` or none."""
-    monkeypatch.setattr(es, "pip_kwargs", lambda _config_dir: kwargs)
 
 
 # -- the install command -----------------------------------------------------
@@ -114,15 +110,16 @@ async def test_a_url_without_a_name_is_reinstalled_for_every_known_distribution(
 
 
 async def test_home_assistants_constraints_and_download_timeout_are_threaded(
-    hass: HomeAssistant, package_index: PackageIndex, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant, package_index: PackageIndex
 ) -> None:
-    use_pip_kwargs(monkeypatch, constraints="/hacons.txt", timeout=5)
+    core = pip_kwargs()
     await install_pin(hass, package_index)
 
     [install] = package_index.installs
-    assert flag_values(install.args, "--constraint") == ["/hacons.txt"]
-    assert int(install.env["HTTP_TIMEOUT"]) > 5, "a cold install pulls the fastmcp tree"
-    assert "--target" not in install.args
+    assert flag_values(install.args, "--constraint") == [core["constraints"]]
+    assert int(install.env["HTTP_TIMEOUT"]) > core["timeout"], (
+        "a cold install pulls the fastmcp tree"
+    )
 
 
 async def test_the_install_is_time_bounded(
@@ -134,18 +131,6 @@ async def test_the_install_is_time_bounded(
     assert package_index.installs[0].kwargs["timeout"] > 0
 
 
-async def test_a_dependency_target_directory_is_installed_into(
-    hass: HomeAssistant,
-    package_index: PackageIndex,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    use_pip_kwargs(monkeypatch, target=str(tmp_path))
-    args = await install_pin(hass, package_index)
-
-    assert flag_values(args, "--target") == [str(tmp_path)]
-
-
 async def test_a_non_virtualenv_install_goes_to_the_user_site(
     hass: HomeAssistant,
     package_index: PackageIndex,
@@ -153,7 +138,6 @@ async def test_a_non_virtualenv_install_goes_to_the_user_site(
     tmp_path: Path,
 ) -> None:
     """uv has no ``--user``; the branch a real Home Assistant Core install takes."""
-    use_pip_kwargs(monkeypatch)
     monkeypatch.setattr(es, "is_virtual_env", lambda: False)
     monkeypatch.setattr(site, "getusersitepackages", lambda: str(tmp_path))
     monkeypatch.delenv("UV_SYSTEM_PYTHON", raising=False)
@@ -170,7 +154,6 @@ async def test_an_explicit_uv_python_selection_skips_the_user_site(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    use_pip_kwargs(monkeypatch)
     monkeypatch.setattr(es, "is_virtual_env", lambda: False)
     monkeypatch.setattr(site, "getusersitepackages", lambda: str(tmp_path))
     monkeypatch.setenv("UV_SYSTEM_PYTHON", "1")
@@ -282,9 +265,8 @@ async def test_a_failure_that_names_no_extra_index_is_not_retried(
 
 
 async def test_the_other_distribution_is_uninstalled_from_this_interpreter(
-    hass: HomeAssistant, package_index: PackageIndex, monkeypatch: pytest.MonkeyPatch
+    hass: HomeAssistant, package_index: PackageIndex
 ) -> None:
-    use_pip_kwargs(monkeypatch)
     pin(hass, PIN)
     package_index.dists.update({STABLE: INDEX_VERSION, DEV: "8.6.0.dev1"})
     mgr, _ = await new_manager(hass)
@@ -302,21 +284,6 @@ async def test_the_other_distribution_is_uninstalled_from_this_interpreter(
         sys.executable,
         DEV,
     ]
-
-
-async def test_the_uninstall_targets_the_dependency_directory_the_install_uses(
-    hass: HomeAssistant, package_index: PackageIndex, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    use_pip_kwargs(monkeypatch, target="/config/deps")
-    pin(hass, PIN)
-    package_index.dists.update({STABLE: INDEX_VERSION, DEV: "8.6.0.dev1"})
-    mgr, _ = await new_manager(hass)
-
-    await package_step(mgr)
-
-    [args] = package_index.uninstall_args
-    assert flag_values(args, "--target") == ["/config/deps"]
-    assert "--python" not in args
 
 
 @pytest.mark.parametrize(

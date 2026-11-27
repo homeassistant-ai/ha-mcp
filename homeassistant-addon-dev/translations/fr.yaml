@@ -292,6 +292,18 @@ configuration:
       équivalents dans ha_call_service. Les sauvegardes automatiques préalables aux
       modifications continuent. Les actions de sauvegarde effectuées par une personne
       dans l'interface des paramètres web restent disponibles.
+  enable_settings_transfer_actions:
+    name: Autoriser ha_manage_backup à exporter et importer les paramètres
+    description: Permettre aux assistants IA de télécharger le fichier de paramètres
+      de ce serveur et d'en importer un via ha_manage_backup, comme le font les boutons
+      Exporter et Importer de l'onglet Paramètres du serveur. Une importation conserve
+      les paramètres réservés aux humains, et la modification de la politique de sécurité,
+      de la visibilité des entités ou des autorisations des outils de fichiers et
+      YAML nécessite également un accès à la politique de sécurité des outils de développement.
+      Une importation peut également activer le mode développeur, les outils et les
+      fonctionnalités, et désactiver des protections telles que le masquage des secrets,
+      la vérification SSL et la liste blanche IPv6, tel qu'indiqué dans le fichier.
+      Vérifiez donc vos paramètres après qu'un assistant IA en a importé un.
   enable_snapshot_delete:
     name: Autoriser la suppression d'instantanés
     description: Permet à ha_manage_backup de supprimer des instantanés complets de

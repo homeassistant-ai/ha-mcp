@@ -422,7 +422,7 @@ class TestDashboardSplitIncludeConfig:
     ) -> None:
         """``include_config=True`` forces the legacy dashboard walk (the doc
         search carries no bodies), which is where the body comes from."""
-        await _automations(hass)
+        await _automations(hass, "Kitchen lights")
         await _lovelace(hass)
         await _storage_dashboard(client, "kitchen-view", _KITCHEN_VIEW)
 
@@ -430,6 +430,9 @@ class TestDashboardSplitIncludeConfig:
 
         (record,) = resp["dashboards"]
         assert record["config"] == _KITCHEN_VIEW
+        (automation,) = resp["automations"]
+        assert automation["config"] is None
+        assert "ha_config_get_yaml" in automation["config_hint"]
 
 
 class TestDashboardSplitPartialSemantics:

@@ -6,7 +6,6 @@ has created or updated the helper.
 """
 
 import asyncio
-import logging
 from functools import partial
 from typing import Any
 
@@ -34,8 +33,6 @@ from .registry import (
     validate_registry_ids,
 )
 from .schemas import _attach_helper_skill, _helper_response
-
-logger = logging.getLogger(__name__)
 
 _OPEN_STEP_TYPES = ("form", "menu")
 
@@ -347,12 +344,9 @@ async def _handle_set_config_subentry(
     flow_id: str | None = None,
     menu_choice: str | None = None,
     abort: bool = False,
-    show_advanced_options: bool = False,
 ) -> dict[str, Any]:
     """One step of a config subentry's flow: its create flow, or with
-    ``subentry_id`` its reconfigure flow. ``show_advanced_options`` goes to
-    the call that starts the flow; only Home Assistant before 2026.6 reads
-    it."""
+    ``subentry_id`` its reconfigure flow."""
     action = _subentry_action(action, subentry_id)
     context = {"helper_type": "config_subentry", "action": action}
     entry_id = validate_identifier_not_empty(
@@ -393,7 +387,6 @@ async def _handle_set_config_subentry(
         entry_id,
         subentry_type,
         subentry_id=subentry_id,
-        show_advanced_options=show_advanced_options,
     )
 
     async def advance() -> tuple[str, dict[str, Any], int]:

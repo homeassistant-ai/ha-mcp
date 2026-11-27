@@ -12,13 +12,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from .component_api import ask_component
+from .component_api import ask_component, component_serves
+
+# A component that reads Repairs fix flows advertises this beside flow_record.
+_REPAIRS_FLOW_RECORD = "flow_record_repairs"
 
 
 async def flow_record(client: Any, manager: str, flow_id: str) -> dict[str, Any] | None:
-    """Core's record of ``flow_id`` in its ``config``, ``options`` or
-    ``subentries`` flow manager: ``found``, and when found the flow's
-    ``handler``, ``source``, ``entry_id`` and ``subentry_id``."""
+    """Core's record of ``flow_id`` in its ``config``, ``options``,
+    ``subentries`` or ``repairs`` flow manager: ``found``, and when found the
+    flow's ``handler``, ``source``, ``entry_id``, ``subentry_id`` and
+    ``issue_id``."""
+    if manager == "repairs" and not await component_serves(
+        client, _REPAIRS_FLOW_RECORD
+    ):
+        return None
     return await ask_component(client, "flow_record", manager=manager, flow_id=flow_id)
 
 

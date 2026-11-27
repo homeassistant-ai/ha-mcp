@@ -133,11 +133,26 @@ the info handshake carries no capability entry:
   serializes a form it shows, and the step that follows it, read from the
   loaded flow handler on every call. A form or next step Core computes from
   earlier answers is marked, not evaluated. See ``flow_outline.py``.
-* ``ha_mcp_tools/flow_record`` — what a config, options or subentry flow in
-  progress was started for (its handler, source and entry anchors), read from
-  the flow manager that holds it. Core's flow endpoints do not report it, and
-  the server binds a ``flow_id`` it did not open itself (it restarted) to a
+* ``ha_mcp_tools/flow_record`` — what a config, options, subentry or Repairs
+  fix flow in progress was started for (its handler, source, entry and issue
+  anchors), read from the flow manager that holds it. Core's flow endpoints
+  do not report it, and the server binds a ``flow_id`` it did not open itself
+  (it restarted, or Core opened the flow, as it opens a reauth flow) to a
   call's target with it. See ``flow_record.py``.
+* ``ha_mcp_tools/update_entities`` — every update state, restored ones
+  included, with its integration, the names of its ``UpdateEntityFeature``
+  flags and, for a loaded hassio entity, the kind its Core class gives it,
+  which no state or REST answer carries. See ``update_entities.py``.
+* ``ha_mcp_tools/config_file_items`` — the scripts, scenes and automations
+  whose definition draws on a given config file, from the configuration loaded
+  the way Core loads it. See ``config_file_items.py``.
+* ``ha_mcp_tools/recorder_status`` — the recorder's purge settings and oldest
+  state, and whether it records an entity, which Core's API does not serve;
+  with ``wait``, held until the recorder has finished its work. See
+  ``recorder_status.py``.
+* ``ha_mcp_tools/scene_ignored_domains`` — the domains the scene editor leaves
+  out of a picked device's entities, read from the installed frontend build,
+  the only place the list exists. See ``scene_editor.py``.
 * ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set
@@ -173,10 +188,15 @@ the info handshake carries no capability entry:
   ``visibility_warnings`` carried by the response so filtering is not silently
   incomplete.
 * ``ha_mcp_tools/server_entry`` — the component locates its OWN server config
-  entry (``entry.data[CONF_ENTRY_TYPE] == server``, the one marker key it reads
-  from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
-  pip_spec from ``entry.options``), so ``ha_dev_manage_server`` need not probe
-  every ``ha_mcp_tools``-domain entry's options-flow schema from the outside.
+  entry (``entry.data[CONF_ENTRY_TYPE] == server``) and returns
+  ``{entry_id, pip_spec, install_pending}`` (pip_spec from ``entry.options``;
+  install_pending, gated by ``server_entry_install_pending``, compares the spec
+  bring-up resolves with the one the component recorded after its last
+  completed, non-deferred package step, ``_server_entry_prep``), so
+  ``ha_dev_manage_server`` need not probe every ``ha_mcp_tools``-domain entry's
+  options-flow schema from the outside. The type marker and that record are
+  the two ``entry.data`` keys this package reads, the data-minimization
+  exception: neither is returned, install_pending is only a boolean or null.
 * ``ha_mcp_tools/server_entry_update`` — the WRITE counterpart of ``server_entry``:
   applies a ``channel`` / ``pip_spec`` delta to the server entry via
   ``hass.config_entries.async_update_entry`` DIRECTLY (what core's finish-flow
@@ -274,8 +294,9 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/entity_lookup`` — registry entries whose ``unique_id`` matches
   (optionally narrowed by ``domain`` / ``platform``), returned as
   ``{matches: [{entity_id, unique_id, platform, domain, config_entry_id,
-  categories, disabled_by, hidden_by}]}``. Multiple matches across platforms are
-  all returned; the server picks. The in-process read is authoritative
+  categories, disabled_by, hidden_by, loaded}]}``, ``loaded`` whether the
+  domain's entity component holds the entity (flag ``entity_lookup_loaded``).
+  Multiple matches across platforms are all returned; the server picks. The in-process read is authoritative
   immediately (no registry-write settle retry).
 * ``ha_mcp_tools/registries`` — the area / floor / label / category registries as
   the rows Core's ``config/<x>_registry/list`` sends (Core's own serializers,
@@ -293,7 +314,8 @@ the info handshake carries no capability entry:
 completed reload (no version marker distinguishes a fresh body from a stale one),
 so a get racing a reload returned a pre-edit body. ``ha_config_get_{automation,
 script}`` stay on the legacy REST path (which reads the fresh config file);
-scenes were already legacy-only. A file-reading redesign may return (issue #1813).
+scenes were already legacy-only. YAML source support is planned for the dedicated
+get tools (issue #2632).
 
 Design notes that are load-bearing:
 
@@ -303,12 +325,11 @@ Design notes that are load-bearing:
   manifest version is reported for display only.
 * **Data minimization.** Flow-helper indexing reads ``ConfigEntry.options`` /
   ``title`` only — **never** ``ConfigEntry.data`` (integration credentials).
-* **YAML config bodies are never emitted.** automation/script/scene bodies are
-  indexed for *matching*, but a matched item's ``config`` body is returned only
-  when it is storage/editor-backed AND ``include_config`` is set. YAML-loaded
-  items return identity/metadata only (their ``raw_config`` may carry resolved
-  ``!secret`` plaintext). Body emission for YAML belongs to a future file-based
-  tool.
+* **Search result bodies come from saved editor definitions.** Search matches
+  automations, scripts and scenes against their loaded configuration. When
+  requested, automation and script bodies come from the editor file with YAML
+  tags preserved. A package match directs callers to ``ha_config_get_yaml``
+  for the source. Scenes return metadata only.
 * **Resolved secrets are scrubbed from the match corpus.** Because YAML bodies
   (and flow-helper options) can hold ``!secret`` values resolved to plaintext,
   a body leaf that exactly equals a ``secrets.yaml`` value is dropped before
@@ -358,6 +379,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .. import (
     automation_config,
+    config_file_items,
     config_references,
     core_contract,
     dashboard_cards_ws,
@@ -365,7 +387,10 @@ from .. import (
     flow_outline,
     flow_record,
     helper_collections,
+    recorder_status,
+    scene_editor,
     todo_items,
+    update_entities,
 )
 from .bulk import _bulk_call_service_prep, _do_bulk_call_service
 from .call_event import _do_call_event
@@ -430,6 +455,7 @@ from .system import (
     _do_server_entry_update,
     _do_system_snapshot,
     _do_template_diagnose,
+    _server_entry_prep,
     _server_entry_update_prep,
     _template_diagnose_prep,
     do_info,
@@ -520,7 +546,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         # Core's live trace store: one in-process pass matches a run's own
         # context or a triggering parent context across every stored item.
         (_trace_context_schema(), _do_trace_context, _trace_context_prep),
-        (_server_entry_schema(), _do_server_entry, None),
+        (_server_entry_schema(), _do_server_entry, _server_entry_prep),
         # The WRITE counterpart of server_entry: the deferred ``async_update_entry``
         # scheduling is inherently async, so it lives in ``_server_entry_update_prep``
         # and ``_do_server_entry_update`` is a pure formatter (same seam as the
@@ -550,10 +576,14 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *entity_restore.command_specs(vol, er),
         *core_contract.command_specs(vol),
         *todo_items.command_specs(vol),
+        *update_entities.command_specs(vol),
         *flow_record.command_specs(vol),
         *flow_outline.command_specs(vol),
+        *scene_editor.command_specs(vol),
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
+        *config_file_items.command_specs(vol),
+        *recorder_status.command_specs(vol),
         *dashboard_cards_ws.command_specs(vol),
         *_oauth_callback_specs(),
     ]

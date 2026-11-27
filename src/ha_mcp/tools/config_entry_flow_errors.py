@@ -6,13 +6,15 @@ the reconfigure outcome vocabulary those errors carry.
 """
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, NoReturn
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
+from .config_entry_flow_introspect import menu_choices
 from .flow_translations import fetch_flow_strings, flow_text, strings_unread_warning
 from .helpers import raise_tool_error
 
@@ -23,20 +25,29 @@ logger = logging.getLogger(__name__)
 class FlowRef:
     """Where a flow's strings live: ``component.<domain>.<path>``.
 
-    ``path`` is ``config`` (config and reconfigure flows), ``options`` or
-    ``config_subentries.<type>``. An options or subentry flow can name its
+    ``path`` is ``config`` (config and reconfigure flows), ``options``,
+    ``config_subentries.<type>`` or ``issues.<key>.fix_flow`` (a Repairs
+    issue's fix flow). An options or subentry flow can name its
     entry's ``entry_id`` and leave ``domain`` ``None``: the error, abort and
     progress texts then read the domain from the entry, while
-    ``describe_form`` shows no help text.
+    ``describe_form`` shows no help text. ``placeholders`` fill a text under
+    the step's own ``description_placeholders``, as the frontend fills a fix
+    flow's texts with its issue's.
     """
 
     domain: str | None
     path: str
     entry_id: str | None = None
+    placeholders: Mapping[str, Any] | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
-        if self.path.split(".")[0] not in {"config", "options", "config_subentries"}:
-            raise ValueError(f"Not a config entry flow path: {self.path!r}")
+        if self.path.split(".")[0] not in {
+            "config",
+            "options",
+            "config_subentries",
+            "issues",
+        }:
+            raise ValueError(f"Not a flow path: {self.path!r}")
 
 
 async def _flow_texts(
@@ -56,11 +67,13 @@ async def _flow_texts(
     if flow is None or not keys:
         return {}
     domain, path = flow.domain, flow.path
-    if isinstance(step.get("translation_domain"), str):
-        # The reason belongs to another integration. A subentry abort reads
-        # it under that integration's config strings, as the frontend's dev
-        # branch does; the release Core 2026.8.0 pins reads
-        # config_subentries.<type>.abort instead.
+    # A fix flow's texts stay under the issue's domain, as the frontend reads
+    # them; elsewhere a translation_domain says the reason belongs to another
+    # integration, and a subentry abort reads it under that integration's
+    # config strings, as the frontend does.
+    if isinstance(step.get("translation_domain"), str) and not path.startswith(
+        "issues."
+    ):
         domain = step["translation_domain"]
         if kind == "abort" and path.startswith("config_subentries."):
             path = "config"
@@ -83,7 +96,10 @@ async def _flow_texts(
     strings = await fetch_flow_strings(client, domain, path.split(".")[0])
     if strings is None:
         return {"warnings": [strings_unread_warning(domain)]}
-    placeholders = step.get("description_placeholders")
+    placeholders = {
+        **(flow.placeholders or {}),
+        **(step.get("description_placeholders") or {}),
+    }
     texts = {
         name: flow_text(strings, domain, f"{path}.{kind}.{key}", placeholders)
         for name, key in keys.items()
@@ -358,6 +374,42 @@ async def progress_action_text(
         "progress",
         {"progress_action_text": current_step.get("progress_action")},
     )
+
+
+_MENU_TEXTS = {
+    "menu_options": "menu_option_labels",
+    "menu_option_descriptions": "menu_option_descriptions",
+}
+
+
+async def step_texts(
+    client: Any, flow: FlowRef | None, step: dict[str, Any]
+) -> dict[str, Any]:
+    """Core's ``title``, ``description`` and ``submit`` label of a form or menu
+    step, and a menu's option labels and descriptions, as the frontend shows
+    them; a text Core ships no string for is left out."""
+    step_id = step.get("step_id")
+    if not isinstance(step_id, str):
+        return {}
+    keys = {name: f"{step_id}.{name}" for name in ("title", "description", "submit")}
+    options = menu_choices(step) if step.get("type") == "menu" else []
+    for group in _MENU_TEXTS:
+        keys.update({f"{group}.{o}": f"{step_id}.{group}.{o}" for o in options})
+    texts = await _flow_texts(client, flow, step, "step", keys)
+    for group, name in _MENU_TEXTS.items():
+        found = {
+            o: texts.pop(f"{group}.{o}") for o in options if f"{group}.{o}" in texts
+        }
+        if found:
+            texts[name] = found
+    supplied = step.get("menu_options")
+    if options and isinstance(supplied, dict):
+        # A flow may label its options itself ({step_id: label}); the frontend
+        # shows those labels and looks up no translation for them.
+        texts["menu_option_labels"] = {
+            o: label for o in options if isinstance(label := supplied[o], str)
+        }
+    return texts
 
 
 async def raise_flow_abort(

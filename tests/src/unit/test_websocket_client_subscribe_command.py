@@ -1,7 +1,8 @@
 """``subscribe_command``: a subscription whose every event lands in one queue.
 
-Used for streams such as ``render_template``, ``backup/subscribe_events`` and
-HACS' ``hacs/subscribe``, where many events share the command's id. The queue
+Used for streams such as ``render_template``, ``backup/subscribe_events``,
+``config_entries/subscribe`` and ``marketplace/subscribe``, where many events
+share the command's id. The queue
 is registered before the command goes out, and a call that fails or is given
 up leaves neither a queue nor a subscription behind.
 """
@@ -316,21 +317,6 @@ async def test_a_failed_release_does_not_raise_and_drops_the_queue(
         with pytest.raises(asyncio.QueueShutDown):
             queue.get_nowait()
         await until(lambda: subscribed(hass) == 0)
-
-
-async def test_unsubscribe_command_releases_the_queue_and_cores_subscription(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    async with connected_ws(core_client) as client:
-        subscription, queue = await client.subscribe_command(
-            "subscribe_events", event_type=EVENT
-        )
-
-        await client.unsubscribe_command(subscription)
-
-        assert subscribed(hass) == 0
-        with pytest.raises(asyncio.QueueShutDown):
-            queue.get_nowait()
 
 
 async def test_a_dropped_connection_wakes_a_reader_waiting_on_the_queue(

@@ -85,7 +85,7 @@ def build_requested_payload(
     to read an argument in full.
 
     ``matched_rule`` is present exactly when a rule gated this call. The
-    policy's two fail-safes (``evaluator.evaluate``) gate a call without a
+    policy's three fail-safes (``evaluator.evaluate``) gate a call without a
     matching rule, and under an allow list a call is gated because no rule
     approved it; then there is none to name.
     """
@@ -96,7 +96,7 @@ def build_requested_payload(
         "created_at": entry.created_at.isoformat(),
     }
     if single_use:
-        # A dynamic-selector request is bound to the one call that created
+        # A dynamic-target request is bound to the one call that created
         # it and dies when that call stops waiting, which is sooner than
         # its TTL: announcing ``expires_at`` here would promise minutes
         # where there are seconds. ``_raise_pending_error`` omits the

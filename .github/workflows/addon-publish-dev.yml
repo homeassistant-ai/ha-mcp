@@ -69,14 +69,14 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Generate dev version
         id: version
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           # Same script as publish-dev.yml, so the dev app reports the same
-          # version as the PyPI/Docker/HACS builds of this commit.
+          # version as the PyPI/Docker/component builds of this commit.
           DEV_VERSION=$(scripts/dev_version.sh)
 
           echo "dev_version=$DEV_VERSION" >> "$GITHUB_OUTPUT"

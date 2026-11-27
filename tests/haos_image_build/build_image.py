@@ -3,8 +3,8 @@
 
 The script boots a vanilla HAOS qcow2 inside QEMU/KVM, runs first-user
 onboarding to obtain OAuth credentials, registers the ha-mcp app (add-on)
-repository, installs the apps listed in ``ADDONS``, performs the HACS
-bootstrap, then powers HAOS off and emits an uncompressed qcow2 image.
+repository, installs the apps listed in ``ADDONS``, then powers HAOS off and
+emits an uncompressed qcow2 image.
 
 Invoke from a Linux host with /dev/kvm available — both the local developer
 flow and the build-haos-test-image.yml workflow follow the same path. The
@@ -54,7 +54,7 @@ STABLE_HAOS_VERSION = "18.4"
 # renovate: datasource=custom.ha-supervisor-stable depName=home-assistant/supervisor
 STABLE_SUPERVISOR_VERSION = "2026.11.0"
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-STABLE_CORE_VERSION = "2026.11.2"
+STABLE_CORE_VERSION = "2026.11.3"
 
 HAOS_VERSION = os.environ.get("HAOS_BUILD_OS_VERSION", STABLE_HAOS_VERSION)
 if re.fullmatch(r"[0-9]+\.[0-9]+(?:\.rc[0-9]+)?", HAOS_VERSION) is None:
@@ -183,16 +183,6 @@ ADDONS: tuple[Addon, ...] = (
     Addon(
         repo="https://github.com/hassio-addons/repository", name="MQTT IO", start=False
     ),
-)
-
-# Get HACS addon — bootstraps HACS into /config/custom_components/.
-# Has to start so it can do its one-shot install before we restart HA Core.
-# Explicit ``start=True`` for visual symmetry with the ADDONS tuple
-# entries; matches Addon's field default but reads more obviously.
-GET_HACS_ADDON = Addon(
-    repo="https://github.com/hacs/addons",
-    name="Get HACS",
-    start=True,
 )
 
 # Advanced SSH & Web Terminal — used by the inaddon CI tier for network
@@ -2259,7 +2249,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
         )
 
 
-def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
+def bake_test_state(qcow2: Path) -> None:
     """Inject tests/initial_test_state into the qcow2 via libguestfs.
 
     Runs *after* HAOS has been shut down so the qcow2 isn't in use. Uses
@@ -2283,8 +2273,8 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
     LOG.info("Baking seed state into qcow2 via libguestfs from %s", initial_state_path)
     workdir = Path(tempfile.mkdtemp(prefix="haos-bake-"))
     try:
-        # Stage the seed under a temp dir so we can normalise the recorder
-        # DB and inject custom components before tarring (see below).
+        # Stage the seed under a temp dir so we can inject custom components
+        # before tarring (see below).
         staging = workdir / "config"
         shutil.copytree(initial_state_path, staging)
 
@@ -2331,7 +2321,7 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
             ce_data = json.loads(ce_path.read_text())
             # Shape guard: silently creating ``data.entries`` on a malformed
             # file would near-empty-wipe core.config_entries on the next
-            # write — losing the seed integrations (HACS, demo, etc.).
+            # write — losing the seed integrations (Marketplace, demo, etc.).
             # If the storage schema ever bumps and breaks this expectation,
             # fail loudly so we update the bake instead of shipping a
             # broken image.
@@ -2388,29 +2378,6 @@ def bake_test_state(qcow2: Path) -> None:  # noqa: PLR0915
                 }
             )
         )
-
-        # Recorder DB normalisation. initial_test_state ships
-        # home-assistant_v2.db in WAL journal mode but WITHOUT the
-        # companion .wal/.shm files — when HAOS opens it, SQLite finds
-        # the main DB inconsistent (last shutdown didn't checkpoint) and
-        # logs "database disk image is malformed", which crashes the
-        # recorder executor. VACUUM INTO a new file produces a single-
-        # file, journal-mode, fully consistent DB with the same data —
-        # no WAL dependency.
-        db_src = staging / "home-assistant_v2.db"
-        if db_src.exists():
-            import sqlite3
-
-            vacuumed = workdir / "home-assistant_v2.db"
-            con = sqlite3.connect(str(db_src))
-            try:
-                con.execute(f"VACUUM INTO '{vacuumed}'")
-            finally:
-                con.close()
-            shutil.move(str(vacuumed), str(db_src))
-            LOG.info(
-                "Vacuumed recorder DB → %s (size %d B)", db_src, db_src.stat().st_size
-            )
 
         seed_tar = workdir / "seed.tar"
         # --owner=0 --group=0 + --numeric-owner forces the archived files
@@ -2498,35 +2465,6 @@ def install_addons(ws: HAWebSocket) -> dict[str, str]:
     return installed
 
 
-def install_hacs(ws: HAWebSocket, base_url: str) -> None:
-    """Install HACS via the Get HACS app (add-on).
-
-    The supported HAOS path registers the Get HACS repository, installs and
-    runs the app, and writes HACS into ``/config/custom_components``. A Core
-    restart loads the component. ``bake_test_state`` later overlays the seeded
-    HACS config entry used by the emitted image's runtime canary.
-
-    HACS-driven custom-component churn is the largest source of E2E flake
-    the testcontainer suite cannot reproduce (#1281), so it must be in the
-    pre-baked image rather than installed per-test-run.
-    """
-    LOG.info("Installing HACS via Get HACS addon")
-    _install_one(ws, GET_HACS_ADDON)
-    # /core/restart kicks every WebSocket connection as part of the restart,
-    # so our recv() raises ConnectionClosedOK before any response arrives.
-    # That's the success signal — the restart got initiated.
-    LOG.info("Restarting HA Core so HACS custom component loads")
-    from websockets.exceptions import ConnectionClosed
-
-    try:
-        ws.supervisor_api("/core/restart", method="post", timeout=300.0)
-    except ConnectionClosed:
-        LOG.info("WS closed during core restart (expected)")
-    wait_http_ok(f"{base_url}/manifest.json", timeout=300.0)
-    # Reconnect for any subsequent supervisor_api calls (e.g. stop_qemu).
-    ws.reconnect()
-
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -2567,7 +2505,6 @@ def build(work_dir: Path, output: Path) -> None:
                 core_version=CORE_VERSION,
             )
             install_addons(ws)
-            install_hacs(ws, base_url)
             install_ha_mcp_dev_addon(ws)
             # Webhook-proxy must install AFTER the dev addon so its
             # Supervisor auto-discovery (slug-suffix match on _ha_mcp_dev)

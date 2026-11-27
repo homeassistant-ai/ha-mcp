@@ -48,6 +48,48 @@
     "server.sections.beta": "Béta funkciók (veszélyes)",
     "server.sections.developer": "Fejlesztő",
     "server.sections.remote_access": "Távoli elérés",
+    "transfer.title": "HA-MCP beállítások exportálása és importálása",
+    "transfer.help": "Áthelyezheti a kiszolgáló beállításait, eszközválasztásait, biztonsági házirendjét, entitások láthatóságát és biztonsági mentési beállításait a különböző HA-MCP-telepítések között. A célhely megtartja a Home Assistant hozzáférési tokenjét és a Hozzáférési kapcsolót. A felhőszolgáltatók eltérő nyilvános URL-címet rendelhetnek hozzá.",
+    "transfer.secrets": "A Home Assistantban található HA-MCP szerverről exportált fájl sima szövegben tartalmazza a webhookazonosítóját, a titkos elérési útját és az összes elmentett OAuth-hitelesítő adatot. Bárki, akinél ott van a fájl, hozzáférhet a HA-MCP-hez. Tárolja biztonságos helyen, és csak olyan fájlt importáljon, amelyben megbízik.",
+    "transfer.export": "Beállítások JSON letöltése",
+    "transfer.file": "Importálandó beállításfájl",
+    "transfer.import": "Beállítások importálása",
+    "transfer.confirm": "Lecseréli ennek a telepítésnek a HA-MCP beállításait a fájlban lévőkre? Ez leválaszthatja a jelenlegi beállításokat használó klienseket.",
+    "transfer.confirm_connection": "Lecseréli ennek a telepítésnek a HA-MCP beállításait a fájlban lévőkre? A fájl a HA-MCP szerver kapcsolatokhoz szükséges titkos adatait is tartalmazza, amelyeket csak a HA-MCP oldalsáv panel alkalmaz. Ez leválaszthatja a jelenlegi beállításokat használó klienseket.",
+    "transfer.exporting": "Letöltés előkészítése…",
+    "transfer.importing": "Beállítások importálása…",
+    "transfer.downloaded": "A beállítások letöltése elindult.",
+    "transfer.imported": "A beállítások importálva. Töltse újra ezt az oldalt a visszaállított beállítások megtekintéséhez.",
+    "transfer.restart_server": "A beállítások importálva. Indítsa újra a HA-MCP-t a visszaállított beállítások alkalmazásának befejezéséhez.",
+    "transfer.connection_skipped": "A fájl kapcsolati beállításai csak a Home Assistantban lévő HA-MCP szerverre vonatkoznak, így ez a szerver megtartotta a sajátjait.",
+    "transfer.file_permissions_skipped": "A fájl Fájl- és YAML-eszközök engedélyei nem lettek alkalmazva, mert az az integrációs bejegyzés itt nem érhető el.",
+    "transfer.file_permissions_unreachable_skipped": "A fájl Fájl- és YAML-eszközök engedélyei nem lettek alkalmazva: OAuth módban ez az oldal nem rendelkezik Home Assistant hitelesítő adatokkal ezek módosításához. Állítsa be őket a Home Assistant Fájl- és YAML-eszközök konfigurálásában.",
+    "transfer.export_file_permissions_unreachable": "A fájl kihagyja a Fájl- és YAML-eszközök engedélyeit: OAuth módban ez az oldal nem rendelkezik Home Assistant hitelesítő adatokkal ezek beolvasásához.",
+    "transfer.restart": "A beállítások importálva. Indítsa újra a Home Assistantot a visszaállított beállítások alkalmazásának befejezéséhez.",
+    "transfer.too_large": "Válasszon egy legfeljebb 4 MiB méretű beállításfájlt.",
+    "transfer.export_too_large": "Ezek a beállítások túllépik a 4 MiB-os exportálási korlátot.",
+    "transfer.invalid_backup": "Válasszon egy érvényes HA-MCP beállítás-exportot.",
+    "transfer.allowed_paths_store_unavailable": "A Home Assistant nem tudta beolvasni vagy menteni az engedélyezett könyvtárakat. Nyissa meg a Fájl- és YAML-eszközök konfigurálását, mentse el újra a könyvtárakat, majd próbálja újra. Ha ez nem sikerül, ellenőrizze a Home Assistant tárolóját.",
+    "transfer.extra_yaml_keys_store_unavailable": "A Home Assistant nem tudta beolvasni vagy menteni az extra YAML-kulcsokat. Nyissa meg a Fájl- és YAML-eszközök konfigurálását, mentse el újra a kulcsokat, majd próbálja újra. Ha ez nem sikerül, ellenőrizze a Home Assistant tárolóját.",
+    "transfer.tools_entry_busy": "A Fájl- és YAML-eszközök állapota változik. Várja meg, amíg befejeződik, majd importálja újra a beállításokat.",
+    "transfer.tools_entry_unavailable": "A Fájl- és YAML-eszközök engedélyezve vannak, de nem töltődtek be. Nyissa meg az Eszközök és szolgáltatások oldalt, hárítson el minden beállítási hibát, töltse újra a bejegyzést, és próbálja meg újra az importálást.",
+    "transfer.rollback_incomplete": "Az importálás sikertelen volt, és néhány beállítást nem sikerült visszaállítani. Újrapróbálás előtt ellenőrizze a Home Assistant naplóját és tekintse át a célbeállításokat.",
+    "transfer.extra_tools_entry": "Ez a fájl csak a szerverbejegyzést tartalmazza. Válasszon olyan biztonsági mentést, amely tartalmazza a Fájl- és YAML-eszközöket, vagy használjon olyan célhelyet, amely nem rendelkezik azzal a bejegyzéssel.",
+    "transfer.tools_must_be_disabled": "A Fájl- és YAML-eszközök le voltak tiltva a forráson. Ha szükséges, adja hozzá azt a bejegyzést a célhelyen a Home Assistantban, tiltsa le, majd importálja újra.",
+    "transfer.tools_must_be_enabled": "A Fájl- és YAML-eszközök engedélyezve voltak a forráson. Engedélyezze a célbejegyzést a Home Assistantban, majd importálja újra.",
+    "transfer.incompatible_version": "A HA-MCP ezen verziója nem tudja importálni ezt a fájlformátumot. Ellenőrizze a HA-MCP verzióját mindkét telepítésen.",
+    "transfer.webhook_in_use": "A Home Assistant egy másik integrációja már használja a fájlban lévő webhookazonosítót. Importálás előtt oldja meg a ütközést.",
+    "transfer.decision_pin_required": "Ez a házirend döntési PIN-kódot igényel. Állítson be egyet ezen a telepítésen az Eszközök biztonsági házirendje fülön, majd importálja újra a fájlt.",
+    "transfer.server_unavailable": "A HA-MCP szerver nem érhető el. Ellenőrizze az integrációt, és nyissa meg újra a panelt.",
+    "transfer.session": "Nyissa meg újra a HA-MCP oldalsáv panelt Home Assistant-adminisztrátorként, majd próbálja újra.",
+    "transfer.restore_failed": "A HA-MCP nem tudta befejezni a beállítások importálását. Újrapróbálás előtt ellenőrizze a célbeállításokat.",
+    "transfer.export_failed": "A beállításokat nem sikerült letölteni. Nyissa meg újra a panelt, és próbálja újra.",
+    "transfer.invalid_source_entries": "A jelenlegi integrációs beállítások nem állíthatók vissza fájlból. Nyissa meg a HA-MCP szerver és (ha telepítve van) a Fájl- és YAML-eszközök konfigurálását, ellenőrizze a kapcsolatot és a engedélybeállításokat, majd exportálja újra.",
+    "transfer.invalid_server_settings": "A HA-MCP nem tudta beolvasni valamelyik beállításfájlját ezen a telepítésen. A Home Assistant naplója tartalmazza a fájl nevét. Javítsa ki vagy törölje, majd próbálja újra.",
+    "transfer.origin_denied": "A kérés nem a HA-MCP oldalsáv paneljéről érkezett ehhez a Home Assistant címhez. Nyissa meg a panelt az oldalsávból. Egy fordított proxynak (reverse proxy) továbbítania kell az eredeti Host fejlécet.",
+    "transfer.read_failed": "A kiválasztott fájlt nem sikerült beolvasni. Válassza ki a fájlt újra.",
+    "transfer.permissions_changed": "A Fájl- és YAML-eszközök engedélyei megváltoztak az importálás közben, ezért az importálás leállt és megtartotta őket. Importálja újra a fájlt.",
+    "transfer.component_outdated": "Frissítse a HA-MCP-t a piactéren, és indítsa újra a Home Assistantot, majd importálja újra: a telepített Fájl- és YAML-eszközök nem tudják visszavonni a sikertelen engedélyimportálást.",
     "server.sidecar.disable": "Beállítási kiszolgáló végleges letiltása",
     "server.sidecar.disable_title": "Véglegesen letiltja a beállítási felületet: leállítja ezt a kiszolgálót, ÉS létrehozza a ~/.ha-mcp/settings_ui_disabled fájlt, így az a jövőbeni ha-mcp indítások során nem indul újra. Az újbóli engedélyezéshez törölje ezt a fájlt.",
     "backups.loading": "Biztonsági mentési állapot betöltése…",
@@ -259,6 +301,8 @@
     "backup.fields.enable_auto_backup.help": "Pillanatkép mentése egy entitásról minden olyan írási vagy törlési eszközhívás előtt, amely módosítja azt. Amíg ez ki van kapcsolva, a fájl- és nyers-YAML eszközök (ha_write_file, ha_delete_file, ha_config_set_yaml) elutasítják az írást.",
     "backup.fields.enable_snapshot_actions.label": "Teljes HA pillanatkép-műveletek engedélyezése",
     "backup.fields.enable_snapshot_actions.help": "Lehetővé teszi az MI-asszisztensek számára a teljes Home Assistant pillanatképek kezelését a ha_manage_backup eszközön, valamint a ha_call_service-ben lévő egyenértékű biztonsági mentési szolgáltatásokon és parancsokon keresztül. Ennek kikapcsolása letilt minden pillanatkép-műveletet, beleértve a listázást is. A pillanatképek törlése csak a ha_manage_backup használatával érhető el, és a „Pillanatkép törlésének engedélyezése” beállítást is igényli. A biztonsági mentések szerkesztése és a webes beállítási felületen végzett biztonsági mentési műveletek továbbra is elérhetők maradnak.",
+    "backup.fields.enable_settings_transfer_actions.label": "A ha_manage_backup engedélyezése a beállítások exportálásához és importálásához",
+    "backup.fields.enable_settings_transfer_actions.help": "Lehetővé teszi a mesterséges intelligencia asszisztensek számára, hogy letöltsék a szerver beállításfájlját, és a ha_manage_backup segítségével importáljanak egyet, ahogyan a Szerverbeállítások fül Exportálás és Importálás gombjai is teszik. Az importálás megőrzi a kizárólag emberi használatra szánt beállításokat, és a biztonsági házirend, az entitások láthatósága vagy a Fájl- és YAML-eszközök engedélyeinek módosításához szintén szükség van a Fejlesztői eszközök biztonsági házirendjének hozzáférésére. Az importálás bekapcsolhatja a fejlesztői módot, az eszközöket és a funkciókat, valamint kikapcsolhatja az olyan védelmeket, mint a titkos adatok elrejtése, az SSL-ellenőrzés és az IPv6 engedélyezési lista (a fájl utasításai szerint), ezért ellenőrizze a beállításokat, miután egy mesterséges intelligencia asszisztens importált egyet.",
     "backup.fields.backup_read_only.label": "Biztonsági mentés kezelésének csak olvashatóvá tétele",
     "backup.fields.backup_read_only.help": "Lehetővé teszi az MI-asszisztensek számára a szerkesztési biztonsági mentések listázását, megtekintését és különbség-összehasonlítását, valamint a teljes HA pillanatképek listázását, ha a pillanatkép-műveletek engedélyezve vannak. Blokkolja a kézi biztonsági mentés létrehozását, visszaállítását (beleértve a szerkesztési visszaállításokat) és törlését, ideértve a ha_call_service-ben lévő egyenértékű biztonsági mentési szolgáltatásokat és parancsokat is. Az automatikus szerkesztés előtti biztonsági mentések továbbra is működnek. A webes beállítási felületen egy személy által végzett biztonsági mentési műveletek továbbra is elérhetők maradnak.",
     "backup.fields.auto_backup_throttle_minutes.label": "Automatikus biztonsági mentés korlátozása (perc)",
@@ -475,8 +519,8 @@
     "advanced.individual_fetch_batch_size.help": "Párhuzamos konfiguráció-lekérések azonosítónként. Lassabb HA-szervereken csökkentse 1 felé.",
     "advanced.enable_history_query_guardrails.label": "Előzmény-lekérdezési védőkorlátok",
     "advanced.enable_history_query_guardrails.help": "Elutasítja azokat az adatrögzítő (recorder) lekérdezéseket, amelyek túllépik a konzervatív entitás- és időtartam-kereteket. Alapértelmezés szerint ki van kapcsolva.",
-    "advanced.hacs_refresh_after_update.label": "A komponens frissítése a HACS-ban frissítés után",
-    "advanced.hacs_refresh_after_update.help": "A szerver frissítése utáni indításkor kérje meg a HACS-ot (a Home Assistant 2026.11+-ös verziójának Piacterét), hogy ellenőrizze újra a HA-MCP adattárat, így a hozzá tartozó frissítés azonnal megjelenik a következő háttér-ellenőrzésre való várakozás helyett. Alapértelmezés szerint ki van kapcsolva; azok a telepítések, amelyek ezt már megteték, bekapcsolva tartják.",
+    "advanced.hacs_refresh_after_update.label": "A komponens frissítése a Piactéren egy frissítés után",
+    "advanced.hacs_refresh_after_update.help": "Indításkor egy szerverfrissítés után kérje meg a Piacteret, hogy ellenőrizze újra a HA-MCP tárolót, így a hozzá tartozó frissítés azonnal megjelenik a következő háttérellenőrzésre való várakozás helyett. Alapértelmezés szerint ki van kapcsolva; a korábban ezt használó telepítések bekapcsolva hagyják.",
     "advanced.ha_tool_concurrency.label": "Home Assistant eszközök egyidejűsége",
     "advanced.ha_tool_concurrency.help": "Opcionális korlátozás a külső Home Assistant eszközhívásokra az összes munkamenetben. A belső REST, WebSocket és eszközönkénti elosztott egyidejűség változatlan marad. A 0 korlátlan viselkedést biztosít. A kapacitásra várakozó hívás 60 másodperc után meghiúsul.",
     "advanced.dashboard_screenshot_engine_url.label": "Vezérlőpult képernyőkép-készítő motornak URL-je",
@@ -715,7 +759,7 @@
     },
     "ha_get_camera_image": {
       "title": "Kamerakép lekérése",
-      "description": "Pillanatkép lekérése egy Home Assistant kameraentitástól."
+      "description": "Pillanatkép készítése egy Home Assistant kameráról vagy képegységről."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Képernyőkép lekérése a vezérlőpultról",
@@ -730,8 +774,8 @@
       "description": "Entitás-regisztrációs bejegyzések lekérése, vagy entitás nélkül a regisztrációs beállítások és az elérhetővé tett entitások lekérése."
     },
     "ha_get_hacs_info": {
-      "title": "HACS-információk lekérése",
-      "description": "HACS-adatok (Home Assistant Community Store) lekérése – áruházban való keresés vagy tároló részleteinek lekérése."
+      "title": "Piactér információinak lekérése",
+      "description": "Adatok lekérése a Home Assistant Piacteréről (amivé a HACS vált 2026.11-ben)."
     },
     "ha_get_history": {
       "title": "Entitáselőzmények vagy statisztikák lekérése",
@@ -802,8 +846,12 @@
       "description": "A Home Assistant energiavezérlőpult beállításainak kezelése: hálózat / napelem /"
     },
     "ha_manage_hacs": {
-      "title": "HACS kezelése",
-      "description": "HACS (Home Assistant Community Store) kezelése – telepítés/frissítés, eltávolítás, egyéni tárolók hozzáadása vagy tároló frissítése"
+      "title": "Piactér kezelése",
+      "description": "A Home Assistant Piacterének (amivé a HACS vált 2026.11-ben) kezelése: tárolók telepítése, frissítése, eltávolítása és hozzáadása."
+    },
+    "ha_manage_logs": {
+      "title": "Rendszernapló, statisztikák és naplók kezelése",
+      "description": "A Home Assistant rendszernaplójának, hosszú távú statisztikáinak és naplóinak kezelése."
     },
     "ha_manage_pipeline": {
       "title": "Assist folyamat kezelése",
@@ -823,7 +871,7 @@
     },
     "ha_manage_updates": {
       "title": "Frissítések kezelése",
-      "description": "Home Assistant frissítések kezelése (listázás, részletek, telepítés, kihagyás) és javítási problémák (figyelmen kívül hagyása)."
+      "description": "Manage Home Assistant updates (list, get, refresh, install, skip, clear_skipped, set_channel) and Repairs issues (ignore"
     },
     "ha_read_file": {
       "title": "Fájl olvasása",

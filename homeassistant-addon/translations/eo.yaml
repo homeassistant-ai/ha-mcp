@@ -156,6 +156,16 @@ configuration:
       momentfotoj, inkluzive de la ekvivalentaj momentfotaj servoj kaj komandoj en
       ha_call_service. Aŭtomataj antaŭredaktaj momentfotoj daŭras. La momentfotaj
       agoj kiujn homo faras en la retejaj agordaj agordoj restas disponeblaj.
+  enable_settings_transfer_actions:
+    name: Permesi al ha_manage_backup eksporti kaj importi agordojn
+    description: Permesi al AI-asistantoj elŝuti la agordan dosieron de ĉi tiu servilo
+      kaj importi unu per ha_manage_backup, kiel la butonoj Eksporti kaj Importi en
+      la langeto Servilaj agordoj faras. Importado konservas la agordojn nur por homoj,
+      kaj ŝanĝi la sekurecan politikon, entan videblecon aŭ permesojn de File & YAML
+      Tools ankaŭ postulas aliron al la sekureca politiko de programilaj iloj. Importado
+      ankaŭ povas ŝalti programilan reĝimon, ilojn kaj funkciojn, kaj malŝalti protektojn
+      kiel sekretan kaŝadon, SSL-kontroladon kaj la IPv6-permesliston, kiel diras
+      la dosiero, do kontrolu viajn agordojn post kiam AI-asistanto importas unu.
   enable_snapshot_delete:
     name: Permesi forigon de momentfotoj
     description: Permesi al ha_manage_backup forigi plenajn momentfotojn de Home Assistant.

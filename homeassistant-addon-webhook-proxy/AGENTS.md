@@ -20,7 +20,10 @@ with every `mcp_proxy` token rewritten to `mcp_proxy_dev` (this also renames the
 the HA config-entry domain, and `/config/custom_components/mcp_proxy`). `/data/*` files
 (webhook id, OAuth creds) are already isolated per app. CI test
 `tests/src/unit/test_webhook_proxy_dev_isolation.py` fails if any bare `mcp_proxy` token
-leaks into the dev tree.
+leaks into the dev tree. `homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_redirect_allowlist.py`
+is a byte-identical copy of `custom_components/ha_mcp_tools/oauth_redirect_allowlist.py`,
+kept equal by `tests/src/unit/test_oauth_redirect_allowlist.py`: edit the source and
+copy it over. The promote workflow brings the stable copy level.
 
 ## Dev-first, promote-only
 **A PR never edits the stable tree directly in regular operation.** The

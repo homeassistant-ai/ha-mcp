@@ -22,13 +22,15 @@ If you *do* run the app, you don't also need `uvx` — that would be a second, s
 
 | Feature | Built-in HA MCP | ha-mcp |
 |---------|-----------------|--------|
-| Tools | ~15 basic tools | 86 comprehensive tools |
+| Tools | ~15 basic tools | 87 comprehensive tools |
 | Focus | Device control | Full system administration |
 | Automations | Limited | Create, edit, debug, trace |
 | Dashboards | No | Full dashboard management |
 | Cameras | No | Screenshot and analysis |
 
-Built-in = operate devices. ha-mcp = administer your system.
+Using Home Assistant’s built-in MCP server (`/api/mcp` or `/api/mcp/<api-id>`) to connect an external client to ha-mcp is unsupported. The ha-mcp tools listed under **Settings → System → AI** are intended for Home Assistant conversation agents, including Assist chat and voice.
+
+If you installed the ha-mcp app, use the MCP server URL from the app logs. For the embedded server, copy the connect URL from the **HA-MCP Server** entry’s **Configure** screen. For Docker and other installations, follow the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
 
 ### How do I open the ha-mcp settings page?
 
@@ -462,7 +464,7 @@ Beta status: the OAuth flow is built against the MCP 2025-06-18 spec and tested 
 
 ChatGPT connectors require a URL reachable from the public internet. If your Home Assistant sits behind a firewall or CGNAT and you don't want to expose it, the community-maintained [OpenAI Tunnel for HA-MCP](https://github.com/norpol/hass-codex-tunnel-mcp) integration by [@norpol](https://github.com/norpol) is an outbound-only alternative:
 
-- It downloads, verifies, and supervises OpenAI's [`tunnel-client`](https://github.com/openai/tunnel-client) as a Home Assistant subprocess (installed as a HACS custom repository; Linux `amd64`/`aarch64` on HA OS / Supervised initially).
+- It downloads, verifies, and supervises OpenAI's [`tunnel-client`](https://github.com/openai/tunnel-client) as a Home Assistant subprocess (installed as a Marketplace custom repository; Linux `amd64`/`aarch64` on HA OS / Supervised initially).
 - The client connects your MCP server URL to an OpenAI-hosted tunnel, so ChatGPT, Codex, and other OpenAI products can reach it — no port forwarding, reverse proxy, or public URL needed.
 - Create a tunnel on the [Tunnels page](https://platform.openai.com/settings/organization/tunnels) and a runtime API key with **Tunnels Read** and **Tunnels Use** permissions on the [API keys page](https://platform.openai.com/settings/organization/api-keys), point the integration at your local ha-mcp URL, and add the ChatGPT connector using the same tunnel ID.
 
@@ -707,11 +709,7 @@ Template helper edit backups and restores also require the component, using eith
 
 ### How do I install it?
 
-**Using HACS (recommended, Home Assistant 2026.8–2026.10):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or open **HACS**, search for **HA-MCP**, and **Download**. The main repository is already in the default catalog.
-
-**Using the Marketplace (Home Assistant 2026.11 or newer):** Open **Settings → Marketplace**, accept its first-run warning, search for **HA-MCP**, and **Install**. HA-MCP is in the default catalog; installing it and receiving updates do not require a GitHub connection or a custom repository. The repository link above also opens its Marketplace page.
-
-On Home Assistant 2026.7, use the manual install below and select **HA-MCP File & YAML Tools** with an external server. The in-process server requires 2026.8.0 or newer. Earlier Home Assistant versions cannot load the integration.
+**Using the Marketplace (recommended, Home Assistant 2026.11 or newer):** open [this Marketplace repository link](https://my.home-assistant.io/redirect/marketplace_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration), or open **Settings → Marketplace**, accept its first-run warning, search for **HA-MCP**, and **Install**. HA-MCP is in the default catalog; installing it and receiving updates do not require a GitHub connection or a custom repository.
 
 After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
 
@@ -728,16 +726,16 @@ Yes. The component is required, but the tools are also gated by feature flags fo
 
 The split is deliberate: YAML *reads* sit behind the filesystem flag, and only YAML *edits* need `ENABLE_YAML_CONFIG_EDITING`.
 
-The integration itself is in the HACS / Marketplace default catalog: search for **HA-MCP** (no feature flag required). On the Marketplace, first read and accept the warning in its UI; catalog installs and updates do not require a GitHub connection. Home Assistant keeps that acceptance per user, and HA-MCP may connect as a different user than you (the app connects as Supervisor), so after you have read the warning the agent asks you and accepts it for HA-MCP's own user. A GitHub connection is still needed if you choose a custom repository such as the `homeassistant-ai/ha-mcp-integration` distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
+The integration itself is in the Marketplace default catalog: search for **HA-MCP** (no feature flag required). First read and accept the warning in the Marketplace UI; catalog installs and updates do not require a GitHub connection. Home Assistant keeps that acceptance per user, and HA-MCP may connect as a different user than you (the app connects as Supervisor), so after you have read the warning the agent asks you and accepts it for HA-MCP's own user. A GitHub connection is still needed if you choose a custom repository such as the `homeassistant-ai/ha-mcp-integration` distribution mirror. Then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
 
 ### The store says "The ha_mcp_tools directory belongs to …" and HA-MCP will not update
 
 Two store records, `homeassistant-ai/ha-mcp` and the distribution mirror
 `homeassistant-ai/ha-mcp-integration`, are both marked installed, and both own
-`custom_components/ha_mcp_tools`. HACS allowed a download of the second one on
-top of the first (older ha-mcp servers suggested exactly that); the Marketplace
-in Home Assistant 2026.11 refuses to update either record, and refuses to
-uninstall one while any HA-MCP entry exists, disabled ones included.
+`custom_components/ha_mcp_tools`. Older stores allowed a download of the second
+one on top of the first (older ha-mcp servers suggested exactly that); the
+Marketplace refuses to update either record, and refuses to uninstall one while
+any HA-MCP entry exists, disabled ones included.
 
 Open **Settings → System → Repairs**. A current HA-MCP integration shows
 **HA-MCP is installed from two store listings**; submitting it keeps
@@ -754,7 +752,7 @@ either:
    dialog.
 2. Keep the entries: with Core stopped (`ha core stop` in a terminal app), set
    `"installed": false` on the duplicate record in
-   `/config/.storage/marketplace.repositories` (`hacs.repositories` on HACS),
+   `/config/.storage/marketplace.repositories`,
    start Core, then update the kept record.
 
 A mirror install that was never doubled needs none of this: it keeps updating
@@ -768,15 +766,93 @@ could be listed in the default catalog. The `homeassistant-ai/ha-mcp-integration
 mirror is still supported: it receives the same releases, and an install from
 it keeps updating from it.
 
-Two things differ on the Marketplace in Home Assistant 2026.11:
+Two things to know in the Marketplace:
 
 - The mirror is a custom repository, so its background update checks need a
   connected GitHub account and run every 48 hours. The catalog listing needs no
   GitHub connection and refreshes every six hours.
 - The store lists HA-MCP twice, once per repository, and refuses to install the
   second listing over the first ("The ha_mcp_tools directory belongs to …").
-  That refusal is expected, because one listing owns an integration. Keep the
-  one you have.
+  That refusal is expected, because one listing owns an integration.
+
+To move to the catalog listing, use versions on both sides that offer settings
+transfer in the **HA-MCP** sidebar panel.
+
+1. As a Home Assistant administrator, open **HA-MCP → Server Settings** and
+   select **Download settings JSON**.
+   Keep the downloaded JSON private. It includes the credentials used for
+   the server's connect URL.
+2. Open **Settings → Devices & services** and delete each HA-MCP integration
+   entry, including **HA-MCP Server** and **File & YAML Tools** if present.
+3. In Marketplace, uninstall the `homeassistant-ai/ha-mcp-integration`
+   mirror. Install the catalog listing, `homeassistant-ai/ha-mcp`, and restart
+   Home Assistant when prompted.
+4. Add the **HA-MCP Server** integration entry. In its sidebar panel, open
+   **Server Settings**, choose the JSON under **Settings file to import**, and
+   select **Import settings**. If the panel asks you to restart Home Assistant,
+   do so to apply the restored settings. Reopen the panel and try an existing
+   client with its saved URL.
+
+The backup includes tool states, security policies, entity visibility, server
+and feature settings, automatic backup settings, and the File & YAML Tools
+allowed directories and extra YAML keys. Backup snapshots stay on the source
+instance, and the destination keeps its own **Access** switch.
+Import recreates an enabled **File & YAML Tools** entry when needed. If the
+source had that entry disabled, add the **File & YAML Tools** entry on the
+destination and disable it before importing.
+If the source had no tools entry, import into a destination with only the server
+entry.
+The backup never carries Home Assistant credentials: on a different Home
+Assistant instance, setting up the **HA-MCP Server** entry asks for that
+instance's administrator token or login. A change of hostname or cloudhook can
+change the public URL.
+If you use PIN-based approval events, set a decision PIN on the destination
+before importing their policy.
+
+### Can I move my settings between the app, Docker, standalone and the in-process server?
+
+Yes. Every HA-MCP settings page has **Server Settings → Download settings
+JSON** and **Import settings**: the **HA-MCP** sidebar panel of the in-process
+server, the app's (add-on's) page, and the standalone or Docker server's
+`/settings` page. A file from any of them imports into any other, for example
+from a standalone server into the in-process server.
+
+Tool states, security policies, entity visibility, feature, server and
+automatic backup settings saved on the settings page move with the file. A value
+set by an environment variable (for example `READ_ONLY_MODE` on a Docker
+server) is not in the file: set it on the destination and check it after the
+import. In the app, the settings it keeps as app options are read from and
+written to its Configuration.
+
+An export from the in-process server records its File & YAML Tools entry. Its
+import into another in-process server recreates a missing enabled entry,
+restores the permissions into a disabled one when the source's was disabled
+(add and disable it on the destination first), and stops if the destination
+has an entry the source did not. The app, Docker and standalone servers read
+and write the permissions only through an enabled entry: their file carries
+none when the source's entry was disabled or missing, and then leaves the
+destination's entry as it is. In OAuth mode their settings page cannot reach
+the permissions at all and says so; set them in **Configure** for File & YAML
+Tools.
+
+The connection (webhook ID, secret path, OAuth credentials) belongs to the
+in-process server's entry: only an export from that entry carries it, and only
+that entry imports it. Any other server keeps its own connection and says so
+after the import. Restart HA-MCP when the import asks for it.
+
+To let your AI assistant move settings for you, turn on **Allow ha_manage_backup
+to export and import settings** in the **Backups** tab of each server's settings
+page. The assistant can then export from one server with
+`ha_manage_backup(scope="settings", action="export")` and import the result on
+another with `ha_manage_backup(scope="settings", action="import",
+settings_file=...)`. Read Only Mode and Backup Read Only each block the import;
+the export stays available. It never moves the connection, keeps the
+destination's human-only settings, and changing security policies, entity
+visibility or File & YAML Tools permissions also needs **Dev tools security
+policy access**. An import can also turn on developer mode, tools and features,
+and turn off protections such as secret redaction, SSL verification and the IPv6
+allowlist, as the file says, so check your settings after the assistant imports
+one.
 
 ### Do I still need the app or the webhook proxy if I use the custom component?
 
@@ -957,7 +1033,20 @@ dimension. What it covers:
 - **Other content reads are refused on contact.** An ordinary dashboard config,
   template result, automation/script body, trace, log, or file read whose output
   would surface a hidden entity_id is refused with a generic
-  `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id.
+  `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id. The id
+  counts wherever it stands in the output, also run together with other
+  characters (`12sensor.foo`). A longer word is exempt when it is another
+  entity's own id (`binary_sensor.foo`), or text from the call's own arguments
+  that the result or an error repeats. A leftover reference in a dashboard or
+  an automation, such as `sensor.foo_old` to an entity that no longer exists,
+  is therefore refused while `sensor.foo` is hidden. A hidden entity's friendly
+  name counts too, as a phrase of its own, so a list of names and states is
+  refused like a list of ids. A name does not count where it is, or is part
+  of, a visible entity's, a device's or an area's name (a lock named after its
+  device would otherwise close every listing of that device, so that lock's
+  name and state are returned), nor where the output repeats an argument of the
+  call that held it. A name of a single word is not
+  scanned for: it cannot be told from ordinary text.
 - **Writes naming a hidden entity are concealed too.** The inbound argument scan
   applies to *every* tool, including service calls: a `ha_call_service` targeting
   a hidden entity_id is concealed as not-found, so an agent cannot confirm the
@@ -974,14 +1063,20 @@ dimension. What it covers:
   with `domain: script` and that key as `service`, is concealed as not-found
   too. A script or automation body that calls `script.<storage key>`, a raw
   `trace/*` command or result naming the key, and an `ha_read_file` /
-  `ha_config_get_yaml` read of a file that defines a hidden item are refused.
-  A file defines one through a top-level key of `scripts.yaml`, an `id` in
-  `scenes.yaml` / `automations.yaml`, or a `script:` / `scene:` /
-  `automation:` section elsewhere (a package). The whole file is checked,
-  even when only a `tail_lines` or `yaml_path` slice is asked for. A helper
-  that merely shares a hidden script's key stays readable. Because keys and
-  ids now count, enforce mode can also refuse a read that only shares a
-  hidden entity's key or id.
+  `ha_config_get_yaml` read or `ha_write_file(edits=)` edit of a file that
+  defines a hidden item are refused. A file defines one when Home Assistant's
+  loader takes part of the item's definition from it: `scripts.yaml`,
+  `scenes.yaml` and `automations.yaml`, a package, or any file pulled in with
+  `!include` or `!include_dir_*`. The whole file counts, even when only a
+  `tail_lines` or `yaml_path` slice is asked for. A copy Home Assistant does
+  not load stays readable. A file that holds a single value, or no text at all
+  (only numbers, booleans or nulls), can stay readable too: `!include` names
+  the included value after the including file, and `!include_dir_merge_list`
+  keeps only each file's items. Core's log files and `secrets.yaml` are not
+  checked. If the configuration does not load, or the component cannot be
+  reached or lacks the check, these reads and edits are refused. Elsewhere,
+  because keys and ids now count, enforce mode can also refuse a read that
+  only shares a hidden entity's key or id.
   An automation's bare `identifier` is only ever read as its config `id`.
 
 What it deliberately **refuses** (their output cannot be text-scanned): sandbox
@@ -990,17 +1085,21 @@ code execution via `ha_manage_custom_tool` (`code` / `run_saved` — pure
 (`ha_get_dashboard_screenshot`, `ha_config_get_dashboard` with
 `include_screenshot`, or `ha_config_set_dashboard` with `return_screenshot`).
 
-One image surface is deliberately **exempt**: `ha_get_camera_image`. A camera
-the filter does not hide returns physical-world imagery — a photograph, not a
-rendering of Home Assistant entity data — so its frames are not gated (a hidden
-camera is concealed like any other entity). The residual case is a visible
-camera whose view happens to include a display showing a hidden entity's state;
-if a camera can see something sensitive, hide the camera too (denylist or its
-area).
+`ha_get_camera_image` checks whether the requested camera or image entity is
+visible. Home Assistant serves its pixels without scanning them for hidden
+entity data. A camera might show a sensitive display, and an image entity can
+render another entity's data directly, for example in a chart or map. Hide the
+camera or image entity too (by denylist or area) when its output is sensitive.
 
 `ha_get_skill_guide` and `ha_search_tools` are always **exempt**: they return
 bundled docs and tool schemas, never Home Assistant data, and their examples can
-name an entity_id you have hidden. The developer-mode `ha_dev_*` tools are
+name an entity_id you have hidden. The best-practices text on a write tool's
+result or error (the bundled guide and the checker's warnings) is exempt too,
+because its fixed examples can name such an entity_id. One of the checker's
+warnings, on the order of keys in a `variables` block, also repeats key names
+from the config it checks: when the tool builds that config from what is stored
+(`python_transform`, `take_control_of_blueprint`), a key can name a hidden
+entity_id, and that warning returns it unscanned. The developer-mode `ha_dev_*` tools are
 exempt too: developer mode is a development and testing override that can
 change settings and replace the running server, and it may bypass entity
 visibility, so a stored security-policy rule naming a hidden entity_id is
@@ -1040,9 +1139,9 @@ concealed — rather than broad decluttering dimensions.
 
 **Honest residual limits.** This is a strong barrier against *incidental*
 exposure, not a cryptographic guarantee. A Jinja template (or code) that *derives*
-a hidden entity's state without ever naming its entity_id — e.g.
-`{{ states | selectattr('state','eq','on') | list | count }}` — cannot be caught
-by a text scan. Treat enforce mode as robust protection against an agent stumbling
+a hidden entity's state without ever naming its entity_id or its friendly name — e.g.
+`{{ states | selectattr('state','eq','on') | list | count }}`, or a list of bare
+states — cannot be caught by a text scan. Treat enforce mode as robust protection against an agent stumbling
 onto hidden entities, not as a boundary against an adversarial prompt author who
 is deliberately trying to exfiltrate a hidden entity's state.
 
@@ -1092,8 +1191,8 @@ How the wait looks depends on the client:
 
 Nested calls inside custom scripts always use the blocking wait, because
 resuming a script could repeat earlier actions. Selector-based bulk calls
-can only use their own approval within the original wait window; a fresh
-call requires a fresh approval.
+and scene writes with `capture_devices` can only use their own approval
+within the original wait window; a fresh call requires a fresh approval.
 
 A rule in **Tool Security Policies** holds the call and shows it in the
 settings UI, which only helps while that tab is open. Every held request is
@@ -1112,12 +1211,18 @@ automation:
         data:
           title: "Approval needed: {{ trigger.event.data.tool_name }}"
           message: "{{ trigger.event.data.args }}"
+          data:
+            # Opens the panel on the tab and card this request names.
+            # clickAction is Android, url is iOS; the app ignores the other.
+            clickAction: "/ha-mcp?tab=tool-security-policies&token={{ trigger.event.data.token }}"
+            url: "/ha-mcp?tab=tool-security-policies&token={{ trigger.event.data.token }}"
 ```
 
 The event data carries `token`, `tool_name`, `args`, `created_at` and
 `expires_at`, plus `matched_rule` whenever a rule matched the call. A policy
 can also gate a call no rule matched — through one of the fail-safes for raw
-WebSocket commands and for selector-based bulk calls — and then there is no
+WebSocket commands, for selector-based bulk calls and for scene writes with
+`capture_entities` or `capture_devices` — and then there is no
 rule to name and the key is absent.
 
 Two things to know about `args`: each value is capped, so a long one is
@@ -1130,12 +1235,14 @@ The announcement is one best-effort attempt per held request, not a
 delivery guarantee. If firing the event fails or times out it is logged as
 a warning and the request still waits in the settings UI; nothing re-sends
 it. A retry of the same call joins the same held request and is not
-announced a second time — one request, one notification. Only a request
+announced a second time — one request, one notification — except for the
+single-use requests below, where each fresh call gets its own. Only a request
 that is replaced by a new one is announced again, with the new token; the
 token from the previous event is dead by then.
 
-A selector-based `ha_bulk_control` request is announced with `single_use:
-true` and **no** `expires_at`. It is bound to the one call that created it
+A selector-based `ha_bulk_control` request, and a `ha_config_set_scene`
+request with `capture_devices`, is announced with `single_use: true` and
+**no** `expires_at`. It is bound to the one call that created it
 and is gone once that call stops waiting, which is well before the policy's
 TTL — approving it later does nothing, and the agent has to call the tool
 again.

@@ -3,10 +3,12 @@
     "name": "HA-MCP — Manage Home Assistant with AI",
     "after_dependencies": [
         "backup",
+        "blueprint",
         "cloud",
         "config",
         "energy",
         "frontend",
+        "hassio",
         "http",
         "logbook",
         "lovelace",
@@ -33,7 +35,7 @@
         "mcp>=1.24.0",
         "ruamel.yaml>=0.18.0",
         "voluptuous-openapi>=0.4.1",
-        "ha-mcp==9.2.0"
+        "ha-mcp==9.3.0"
     ],
-    "version": "9.2.0"
+    "version": "9.3.0"
 }

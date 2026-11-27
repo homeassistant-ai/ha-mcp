@@ -12,8 +12,11 @@ import logging
 
 import pytest
 
+from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
+
 # Import test utilities
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.topology import component_surface_available
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -71,7 +74,11 @@ class TestUpdateManagement:
                     "title",
                     "installed_version",
                     "latest_version",
+                    "update_available",
+                    "platform",
                     "category",
+                    "features",
+                    "can_install",
                 ]
                 for field in expected_fields:
                     assert field in first_update, (
@@ -335,6 +342,13 @@ class TestUpdateToolsEdgeCases:
                 f"Update counts differ significantly: {count1} vs {count2}"
             )
 
+            # A check for updates answers with the same listing.
+            refreshed = await mcp.call_tool_success(
+                "ha_manage_updates", {"action": "refresh"}
+            )
+            assert "updates_available" in refreshed and "categories" in refreshed
+            assert isinstance(refreshed["refreshed"], int), refreshed
+
             logger.info("Consistency test passed")
 
     async def test_system_version_fields_presence(self, mcp_client):
@@ -504,6 +518,31 @@ class TestIncludeReleaseNotes:
         logger.info("include_release_notes test passed")
 
 
+@pytest.mark.updates
+@pytest.mark.component_topology
+async def test_update_features_come_from_the_component(mcp_client):
+    """Which updates can be installed is read from Home Assistant's feature
+    flags through the component; without it the rows say it is unknown
+    and warnings names the component."""
+    async with MCPAssertions(mcp_client) as mcp:
+        result = await mcp.call_tool_success(
+            "ha_manage_updates", {"include_skipped": True}
+        )
+
+    updates = result.get("updates", [])
+    warnings = result.get("warnings", [])
+    if component_surface_available():
+        assert not any(COMPONENT_INSTALL_HINT in w for w in warnings), warnings
+        for update in updates:
+            assert isinstance(update["features"], list), update
+            assert isinstance(update["can_install"], bool), update
+    else:
+        assert any(COMPONENT_INSTALL_HINT in w for w in warnings), result
+        for update in updates:
+            assert update["features"] is None, update
+            assert update["can_install"] is None, update
+
+
 async def test_update_tools_discovery(mcp_client):
     """
     Test: Verify update tools are discoverable and registered.
@@ -555,22 +594,15 @@ class TestUpdatesGetNegativeInputs:
     update entities, but do not call ha_manage_updates with an entity_id that
     has no matching update.
 
-    Methodology: source-verified against tools_updates.py. _get_update_details
-    fetches the entity state via REST; a 404 from /api/states/<entity_id>
-    raises HomeAssistantAPIError("API error: 404 - Entity not found.").
-    The except-Exception branch in ha_manage_updates matches "404" / "not found"
-    in the error message and raises ErrorCode.ENTITY_NOT_FOUND. Live-probed
-    against a real HA instance: GET /api/states/update.<nonexistent> returns
-    HTTP 404 with body {"message": "Entity not found."}.
+    The update reader (update_entities.py) raises ENTITY_NOT_FOUND when the
+    component lists no such update, or without the component on Core's 404
+    for the entity's state.
     """
 
     async def test_get_updates_nonexistent_entity_id(self, mcp_client):
         """
         Test: ha_manage_updates(entity_id="update.<nonexistent>") returns a
         structured error with code ENTITY_NOT_FOUND, not success=True.
-
-        Source path: REST 404 → HomeAssistantAPIError → except-Exception
-        in ha_manage_updates → ENTITY_NOT_FOUND.
         """
         async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_failure(
@@ -599,6 +631,39 @@ class TestManageUpdates:
                 {"action": "uninstall", "entity_ids": ["update.some_update"]},
                 expected_error="Invalid action",
             )
+
+    async def test_install_of_an_up_to_date_update_needs_a_version(self, mcp_client):
+        """Demo's update with nothing pending (installed equals latest) offers
+        install at a chosen version: without one Home Assistant refuses the
+        item; with its installed version it reinstalls it."""
+        entity_id = "update.demo_no_update"
+        async with MCPAssertions(mcp_client) as mcp:
+            current = await mcp.call_tool_success(
+                "ha_manage_updates", {"action": "get", "entity_ids": [entity_id]}
+            )
+            assert current["installed_version"] == current["latest_version"], current
+
+            refused = await mcp.call_tool_failure(
+                "ha_manage_updates",
+                {"action": "install", "entity_ids": [entity_id]},
+            )
+            [item] = refused["results"]
+            assert (item["success"], item["entity_id"]) == (False, entity_id), refused
+            assert item["ha_error_code"] == "home_assistant_error", refused
+
+            installed = await mcp.call_tool_success(
+                "ha_manage_updates",
+                {
+                    "action": "install",
+                    "entity_ids": [entity_id],
+                    "version": current["installed_version"],
+                },
+            )
+            [item] = installed["results"]
+            assert (item["success"], item["version"]) == (
+                True,
+                current["installed_version"],
+            ), installed
 
     async def test_install_requires_exactly_one_scope(self, mcp_client):
         """install must reject entity_ids+categories together, and neither."""
@@ -646,16 +711,18 @@ class TestManageUpdates:
             )
 
     async def test_install_all_with_no_pending_updates(self, mcp_client):
-        """Category install with nothing pending succeeds with zero targets."""
+        """A category install with nothing pending in it succeeds with zero targets."""
         async with MCPAssertions(mcp_client) as mcp:
-            result = await mcp.call_tool_success(
-                "ha_manage_updates",
-                {"action": "install", "categories": ["addons", "hacs"]},
-            )
-            assert result["action"] == "install"
-            assert result["requested"] == result["succeeded"] + result["failed"]
-            assert isinstance(result["results"], list)
-            if result["requested"] == 0:
+            listing = await mcp.call_tool_success("ha_manage_updates", {})
+            # Which categories are empty depends on the lane: the app lane has
+            # the server's own app pending under "addons".
+            empty = [c for c in ("addons", "hacs") if c not in listing["categories"]]
+            if empty:
+                result = await mcp.call_tool_success(
+                    "ha_manage_updates", {"action": "install", "categories": empty}
+                )
+                assert result["action"] == "install"
+                assert (result["requested"], result["results"]) == (0, [])
                 assert "note" in result
 
     async def test_skip_nonexistent_entity_reports_item_failure(self, mcp_client):

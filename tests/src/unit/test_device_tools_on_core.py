@@ -3,20 +3,17 @@
 ``ha_get_device`` and ``ha_remove_device`` read Core's device and entity
 registries and its config entries through the server's own client, so every
 row, list and refusal here is Core's. Where a test needs an answer this Core
-cannot give (Core before 2026.9 without ``remove``, a composite device that
-2026.8's migration split, a refused read), it patches one Core function or
-pops the ``remove`` command, and Core still writes the reply.
+cannot give (a composite device that 2026.8's migration split, a refused
+read), it patches one Core function, and Core still writes the reply.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 import attr
 import pytest
-from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
@@ -270,13 +267,12 @@ async def test_refused_split_read_fails_the_not_found(
     assert "split_ids" not in error
 
 
-async def test_core_without_remove_passes_the_fallbacks_refusal_on(
+async def test_a_refused_remove_fails_in_cores_words_and_the_device_stays(
     hass: HomeAssistant, tools: RegistryTools
 ) -> None:
-    """On Core without ``remove``, a refused ``remove_config_entry`` fails the
-    call in Core's words, with Core's code, and the device stays."""
+    """A refused ``remove`` fails the call in Core's words, with Core's code,
+    and points at disabling the device instead."""
     dev = _device(hass, "hue", identifiers={("hue", "0xAABB")})
-    hass.data[websocket_api.DOMAIN].pop("config/device_registry/remove")
 
     error = await rejected_call_body(tools.ha_remove_device(device_id=dev.id))
 
@@ -291,8 +287,8 @@ async def test_core_without_remove_passes_the_fallbacks_refusal_on(
 async def test_remove_removes_the_device_with_cores_remove(
     hass: HomeAssistant, tools: RegistryTools, core_client: HomeAssistantClient
 ) -> None:
-    """On Core with ``config/device_registry/remove``, that command removes the
-    device and the deprecated ``remove_config_entry`` is never sent."""
+    """``config/device_registry/remove`` removes the device; the deprecated
+    ``remove_config_entry`` alias is never sent."""
     dev = await removable_device(hass)
 
     with sent_messages(core_client) as spy:
@@ -303,27 +299,6 @@ async def test_remove_removes_the_device_with_cores_remove(
     sent = [c.args[0]["type"] for c in spy.call_args_list]
     assert "config/device_registry/remove" in sent
     assert "config/device_registry/remove_config_entry" not in sent
-
-
-async def test_core_without_remove_detaches_the_devices_entry(
-    hass: HomeAssistant, tools: RegistryTools, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Core before 2026.9 has no ``config/device_registry/remove``; the tool
-    detaches the device's config entry with ``remove_config_entry`` instead,
-    which removes the device. This Core is given no ``remove`` command, and
-    the expected unknown-command answer logs no error."""
-    dev = await removable_device(hass)
-    hass.data[websocket_api.DOMAIN].pop("config/device_registry/remove")
-
-    result = await tools.ha_remove_device(device_id=dev.id)
-
-    assert result["success"] is True
-    assert dr.async_get(hass).async_get(dev.id) is None
-    assert not [
-        r
-        for r in caplog.records
-        if r.name.startswith("ha_mcp") and r.levelno >= logging.ERROR
-    ]
 
 
 @pytest.mark.parametrize(

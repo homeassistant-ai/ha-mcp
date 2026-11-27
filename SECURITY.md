@@ -149,10 +149,17 @@ surface a hidden entity_id are refused on contact. A hidden script, scene or
 automation addressed by its bare storage key or config `id` (the registry
 `unique_id`) rather than its entity_id is concealed the same way, including
 its traces. A `script.<storage key>` service call is concealed, and a config
-body or result that names one is refused. A config-file read is refused when
-the whole file defines a hidden script, scene or automation (judged on the full
-file, whatever slice was asked for). Those
-enforced paths fail closed when registry data cannot be loaded.
+body or result that names one is refused. A config-file read or edit is
+refused when the file holds part of a hidden script, scene or automation's
+definition as Home Assistant's loader reads the configuration, `!include`,
+`!include_dir_*` and packages included (judged per file, whatever slice was
+asked for). A copy Home Assistant does not load defines nothing and stays
+readable. A file that holds a single value, or no text at all (only numbers,
+booleans or nulls), can stay readable too: `!include` names the included value
+after the including file, and `!include_dir_merge_list` keeps only each file's
+items. Core's log files and `secrets.yaml` are not checked. Those enforced
+paths fail closed when registry data or the configuration cannot be loaded, or
+the component cannot be reached or lacks the check.
 
 One shape-bounded exception preserves an allowed entity's state: JSON
 `ha_get_state` results omit fields, mapping keys, list items, or related records
@@ -171,7 +178,14 @@ values.
 
 `ha_get_skill_guide` and `ha_search_tools` are never scanned: they return
 bundled docs and tool schemas, whose examples can name an entity_id that is also
-hidden. The developer-mode `ha_dev_*` tools are not scanned either: developer
+hidden. The best-practices text attached to a write tool's result or error (the
+bundled guide and the checker's warnings) is not scanned either; the rest of
+that result or error is. One of the checker's warnings, on the order of keys in
+a `variables` block, repeats key names from the config it checks. A write whose
+arguments name a hidden entity_id is refused before it runs, but when the tool
+builds the config from what is stored (`python_transform`,
+`take_control_of_blueprint`), a key can name a hidden entity_id that the
+arguments never named, and that warning returns it unscanned. The developer-mode `ha_dev_*` tools are not scanned either: developer
 mode is a development and testing override that can change settings and replace
 the running server, and its reads (a stored security-policy rule, for example)
 can return a hidden entity_id.
@@ -186,14 +200,22 @@ all other calls fail closed.
 
 This is a strong barrier against an agent *incidentally* surfacing a hidden
 entity, not a cryptographic guarantee: enforcement scans for the hidden
-entity_id, so a Jinja template or sandbox-adjacent computation that *derives* a
-hidden entity's state without naming its entity_id cannot be caught. On enforced
+entity_id and for the hidden entity's friendly name, so a Jinja template or
+sandbox-adjacent computation that *derives* a hidden entity's state without
+naming its entity_id or its name cannot be caught. The name scan has two gaps
+of its own. A name of a single word is not scanned for. A name does not count
+where it is, or is part of, a visible entity's, a device's or an area's name:
+a hidden entity named exactly like its device, the default for a device's main
+entity such as a lock without an entity name of its own, is therefore returned
+by name with its state. Give such an entity a name of its own to have the name
+scanned for. On enforced
 scannable paths, a matching hidden entity's data is not returned. Existence
 concealment is best-effort: per-tool not-found shapes vary, so a prober comparing
-errors may infer that an id is hidden rather than absent. The boundary covers
-Home Assistant entity data, not physical-world imagery: a visible camera stays
-readable (`ha_get_camera_image`) and could incidentally show a display that
-renders a hidden entity's state — hide that camera when its view is sensitive.
+errors may infer that an id is hidden rather than absent. Enforcement checks the entity requested by
+`ha_get_camera_image`. Pixels from a visible camera or image entity stay
+readable. A camera can show a sensitive display, and an image entity can render
+another entity's data directly in a chart, map, or template image. Hide the
+camera or image entity itself when its output is sensitive.
 Enforce mode is not a defense against an adversarial prompt author deliberately
 trying to exfiltrate a hidden entity's state, nor a substitute for Home
 Assistant's permission model; restrict what the configured token can reach in
@@ -397,9 +419,19 @@ sidebar that reverse-proxies the server's web settings UI over Home Assistant's
 own HTTP. Because a browser cannot attach a Bearer token to a panel view, access
 is gated by a short-lived, HttpOnly session cookie that an authenticated
 **administrator** obtains through Home Assistant, and every proxied request
-re-validates that the session still maps to an active admin. The loopback secret
-path is never exposed to the browser and no token or secret is placed in a URL;
-the proxy returns 503 whenever the server is not running.
+re-validates that the session still maps to an active admin. The proxy never
+sends the loopback secret path to the browser and places no token or secret in a
+URL; it returns 503 whenever the server is not running. The one deliberate
+exception is the administrator's settings export: its JSON download carries the
+webhook ID, the secret path and any legacy OAuth credentials, which the panel
+states before the download. The export and import routes accept only
+same-origin requests from that admin session.
+
+One value that does travel in a URL is a pending approval token, when a
+notification link names a card (`/ha-mcp?tab=tool-security-policies&token=…`). It
+is not a credential: without the administrator session the policy endpoints
+answer 401, and the same token is already carried by
+`ha_mcp_approval_requested` and by the `USER_APPROVAL_REQUIRED` error.
 
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)
 
@@ -454,6 +486,13 @@ this app's — including the static `client_id`/`client_secret` as the sole
 boundary, admin-equivalent access, self-issued HMAC bearers, and revocation by
 credential rotation plus a restart. Only one of the two may own the root
 `/authorize` and `/token` routes per Home Assistant instance.
+
+With OAuth off, the app's anonymous auto-approve endpoint redirects only to a
+callback on the allowlist set in the app's options, with the same matching
+rules as the in-process `none` mode above; **Allow any OAuth callback URL**
+turns the list off. This holds from dev-channel version 3.0.6.dev3 and the
+stable release that promotes it, after Home Assistant is restarted; earlier
+versions redirect to any spec-valid callback.
 
 ## Scope
 
@@ -540,6 +579,15 @@ and carries a larger attack surface than the standard LLAT setup.
   for direct access, and at the bare root for Home Assistant ingress, where the
   routes admit only the Supervisor peer (`172.30.32.2`) and 403 every other
   caller.
+  The settings page's import is reachable through a tool too: once a person
+  turns on `enable_settings_transfer_actions`, `ha_manage_backup(scope="settings",
+  action="import")` applies a settings file an agent passes, including one it
+  wrote. It keeps the human-only settings and needs
+  `dev_tools_security_policy_access` for the tool-security policy, the
+  `enable_tool_security_policies` switch, entity visibility and File & YAML
+  Tools permissions, but it can turn other feature flags on or off, such as
+  `redact_secrets`, `verify_ssl` and `ipv6_allowed_networks`. Read Only Mode
+  and Backup Read Only still block it. The toggle is off by default.
 
 If you choose to run OAuth mode, restrict the consent endpoint to trusted
 networks and place it behind a TLS-terminating reverse proxy.

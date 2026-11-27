@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "更新 HA-MCP 集成",
-      "description": "已安装的 ha-mcp 服务器需要 {required} 或更新版本的 HA-MCP 集成，但您当前安装的是 {installed}。请前往“设置”>“系统”>“更新”更新集成（如果在 HACS 或 Home Assistant 2026.11+ 的商店中未显示更新，请打开 HA-MCP 集成并使用“更新信息” (HACS) 或“刷新信息” (Marketplace)），然后重启 Home Assistant。服务器在此期间将继续运行，但在更新集成之前，某些新功能可能无法正常使用。"
+      "description": "已安装的 ha-mcp 服务器需要 HA-MCP 集成 {required} 或更新版本，但当前版本为 {installed}。请前往“设置”>“系统”>“更新”更新集成（如果暂未显示更新，请在应用商店中打开 HA-MCP 集成并使用“刷新信息”），然后重启 Home Assistant。在此期间服务器将继续运行，但在更新集成之前，某些新功能可能无法正常使用。"
     },
     "legacy_oauth_restart": {
       "title": "重启 Home Assistant 以应用旧版 OAuth 设置",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "将 HA-MCP 保留在一个商店列表中？",
-            "description": "HA-MCP 被标记为从 {records} 同时安装。它们包含相同的集成（第二个是早期安装所使用的分发镜像）。Home Assistant 2026.11 中的应用商店只允许一个条目拥有一个集成，因此两者都无法在那里更新 HA-MCP；HACS 仍然可以更新，但升级到 2026.11 会导致 HA-MCP 无法更新。\n\n提交将保留 **{keep}**（即默认目录中无需自定义存储库的条目），并标记另一个条目为未安装。不会删除任何内容：您的 HA-MCP 条目、设置和文件将完全保持原样，并且从此以后更新将照常显示在 {keep} 下。"
+            "description": "HA-MCP 被标记为同时从 {records} 安装。它们包含相同的集成（第二个是早期安装使用的分发镜像）。应用商店只允许一个条目拥有一个集成，因此它们都无法更新 HA-MCP。\n\n提交将保留 **{keep}**（默认目录中不需要自定义仓库的条目），并标记另一个条目为未安装。不会删除任何内容：您的 HA-MCP 条目、设置和文件将保持原样，此后更新将正常显示在 {keep} 下。"
           }
         },
         "abort": {
           "already_resolved": "HA-MCP 现在仅从一个商店列表安装；无需修复。",
-          "store_unavailable": "商店（HACS 或应用商店）尚未加载，因此无法检查列表。请几分钟后重试。"
+          "store_unavailable": "应用商店尚未加载，因此无法检查条目。请在几分钟后重试。"
         }
       }
     }

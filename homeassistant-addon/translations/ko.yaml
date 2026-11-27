@@ -106,6 +106,13 @@ configuration:
     description: AI 어시스턴트가 편집 백업을 나열, 보기 및 비교(diff)하고, 스냅샷 작업이 활성화된 경우 전체 HA 스냅샷을
       나열할 수 있도록 허용합니다. ha_call_service의 동등한 백업 서비스 및 명령을 포함하여 수동 백업 생성, 복원(편집 복원 포함)
       및 삭제를 차단합니다. 자동 편집 전 백업은 계속 유지됩니다. 웹 설정 UI에서 사람이 수행하는 백업 작업은 계속 사용할 수 있습니다.
+  enable_settings_transfer_actions:
+    name: ha_manage_backup이 설정을 내보내고 가져오도록 허용
+    description: 서버 설정 탭의 내보내기 및 가져오기 버튼과 마찬가지로, AI 어시스턴트가 ha_manage_backup을 통해 이
+      서버의 설정 파일을 다운로드하고 가져올 수 있도록 허용합니다. 가져오기를 수행해도 사람 전용 설정은 유지되지만, 보안 정책, 엔티티 가시성
+      또는 File & YAML Tools 권한을 변경하려면 개발자 도구 보안 정책 액세스 권한도 필요합니다. 또한 파일 내용에 따라 가져오기를
+      통해 개발자 모드, 도구, 기능이 켜지거나 비밀 정보 마스킹, SSL 인증, IPv6 허용 목록 등의 보호 기능이 꺼질 수 있으므로 AI
+      어시스턴트가 가져온 후에는 설정을 확인하세요.
   enable_snapshot_delete:
     name: 스냅숏 삭제 허용
     description: ha_manage_backup이 전체 Home Assistant 스냅샷을 삭제할 수 있도록 허용합니다. 실수로 변경한

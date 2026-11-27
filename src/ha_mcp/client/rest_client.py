@@ -47,6 +47,7 @@ from .exceptions import (
 from .exceptions import (
     HomeAssistantError as HomeAssistantError,
 )
+from .exceptions import SceneIdNotAnEntityError, websocket_close_error_type
 from .models import ErrorLogPage
 from .service_identifiers import service_rest_path
 from .supervisor_client import make_supervisor_httpx_client
@@ -96,28 +97,35 @@ _ADMIN_ONLY_401_MESSAGE = (
 class SceneResolution:
     """Outcome of resolving a scene identifier via the entity registry.
 
-    ``registry_hit`` records whether ``config/entity_registry/get`` returned a
-    usable ``unique_id`` - i.e. the entity actually EXISTS. It is the signal that
-    separates a genuinely-missing scene from one that exists but is not editable
-    through HA's scene config API (a Hue/vendor scene, or a raw-YAML scene): both
-    resolve fine yet 404 on ``config/scene/config/{id}``, because that endpoint is
-    backed only by the managed ``scenes.yaml`` (issue #1971). ``platform`` carries
-    the registry entry's integration domain (``"hue"``, ``"homeassistant"``, …)
-    for error-message enrichment only - it never drives the classification, since
-    a raw-YAML scene is ``platform="homeassistant"`` yet still 404s.
+    ``registry_hit``: the storage key came from the registry entry of the scene's
+    own entity, so the entity EXISTS (a bare id that won as a storage key carries
+    False). It tells a missing scene from one HA's scene config API cannot edit
+    (a Hue/vendor or raw-YAML scene: both 404 on ``config/scene/config/{id}``,
+    which reads only ``scenes.yaml``, #1971). ``platform``, the entry's
+    integration domain, only enriches messages: a raw-YAML scene is
+    ``"homeassistant"`` yet still 404s. ``entity_id``: the entity the component's
+    ``entity_lookup`` named (None on the registry path); ``disabled``: whether
+    it is disabled; ``leftover``: the component named only entries Core no
+    longer loads, ``scene.<id>`` among them (a removed YAML scene);
+    ``id_unchecked``: a bare id that fell back to itself, no component answer
+    checking it (none, no ``entity_lookup_loaded``, no reply, no ``loaded``).
     """
 
     storage_key: str
     registry_hit: bool
     platform: str | None
+    entity_id: str | None = None
+    disabled: bool = False
+    leftover: bool = False
+    id_unchecked: bool = False
 
 
 class SceneStorageConfigNotFoundError(HomeAssistantAPIError):
     """A scene entity resolved in the registry, but ``config/scene/config/{id}``
     (backed by ``scenes.yaml``) has no matching entry.
 
-    The entity EXISTS; it is simply not an editable Home Assistant storage scene
-    (Hue/vendor scene, or a raw-YAML scene). Raised instead of a bare 404 so the
+    The entity EXISTS (``disabled``: only as a registry entry); it is simply not
+    an editable Home Assistant storage scene (Hue/vendor or raw-YAML). Raised instead of a bare 404 so the
     tools layer can surface ``CONFIG_NOT_FOUND`` rather than the misleading
     ``ENTITY_NOT_FOUND``/``RESOURCE_NOT_FOUND`` (issue #1971). Subclasses
     ``HomeAssistantAPIError`` so existing ``except HomeAssistantAPIError`` sites
@@ -130,10 +138,12 @@ class SceneStorageConfigNotFoundError(HomeAssistantAPIError):
         *,
         platform: str | None = None,
         storage_key: str | None = None,
+        disabled: bool = False,
     ):
         self.scene_id = scene_id
         self.platform = platform
         self.storage_key = storage_key
+        self.disabled = disabled
         msg = f"Scene not found in editable storage: {scene_id}"
         if storage_key and storage_key != scene_id:
             msg += f" (resolved storage key: {storage_key})"
@@ -1649,17 +1659,12 @@ class HomeAssistantClient:
         subentry_type: str,
         *,
         subentry_id: str | None = None,
-        show_advanced_options: bool | None = None,
     ) -> dict[str, Any]:
         """Start a config subentry create or reconfigure flow."""
-        # HA 2026.6+ treats show_advanced_options as a no-op; keep passing it
-        # for older HA versions until the server-side property is removed.
         # HA requires the handler as [parent_entry_id, subentry_type].
         payload: dict[str, Any] = {"handler": [entry_id, subentry_type]}
         if subentry_id is not None:
             payload["subentry_id"] = subentry_id
-        if show_advanced_options is not None:
-            payload["show_advanced_options"] = show_advanced_options
 
         logger.debug(
             "Starting config subentry flow for entry %s and type %s",
@@ -1829,16 +1834,15 @@ class HomeAssistantClient:
             return result
         except _NO_ANSWER_ERRORS as e:
             # One error channel for "no answer came back" (#1947): the caller
-            # decides the policy. ``send_command`` re-raises the original
-            # ``ConnectionClosed`` / ``ConnectionResetError`` to keep writes
-            # at-most-once, so those arrive untranslated.
+            # decides the policy. A raw close during send can carry the same
+            # size error as a close observed by the socket reader.
             # A caller that waits zero seconds sent a command Core never answers.
             log = logger.debug if message.get("_wait_timeout") == 0 else logger.error
             log(f"WebSocket transport failed ({message.get('type')}): {e}")
             if isinstance(e, HomeAssistantConnectionError):
                 # Re-raised unchanged so subtypes and the traceback survive.
                 raise
-            raise HomeAssistantConnectionError(str(e)) from e
+            raise websocket_close_error_type(e)(str(e)) from e
         except Exception as e:  # noqa: BLE001  # an answer or local bug is an envelope
             # Home Assistant's own answer (or a proxy's), or a local bug.
             error_str = str(e)
@@ -1946,53 +1950,37 @@ class HomeAssistantClient:
             await ws_client.release_subscription(sub_id)
 
     async def _resolve_script_id(self, identifier: str) -> str:
-        """
-        Resolve a script identifier to its storage key via the entity registry.
+        """Resolve a script identifier to its storage key.
 
-        Scripts may be renamed in the HA UI, changing the entity_id but keeping
-        the original storage key. This method looks up the entity registry via
-        WebSocket to find the actual storage key (unique_id).
-
-        Unlike automations (which expose their storage key in state attributes),
-        scripts require a WebSocket entity registry lookup.
-
-        Args:
-            identifier: Script ID (with or without 'script.' prefix)
-
-        Returns:
-            The storage key for the configuration API
+        A UI rename changes the entity_id but keeps the storage key, which the
+        registry holds as the entity's ``unique_id``. ``script.<x>`` names that
+        entity, or key ``<x>`` when the registry names none; a failed lookup of
+        it raises (:meth:`_registry_entry`). A bare id that is itself a
+        storage key names that script, not another one whose entity is
+        ``script.<id>``: the config is read when the registry key of
+        ``script.<id>`` differs from the bare id, and a failure of that read
+        other than a 404 propagates.
         """
         bare_id = identifier.removeprefix("script.")
-        entity_id = f"script.{bare_id}"
-        try:
-            result = await self.send_websocket_message(
-                {"type": "config/entity_registry/get", "entity_id": entity_id}
-            )
-            if result.get("success") is not False:
-                unique_id = result.get("result", {}).get("unique_id")
-                if unique_id:
-                    if unique_id != bare_id:
-                        logger.debug(
-                            f"Resolved script entity_id {entity_id} to storage key {unique_id}"
-                        )
-                    return str(unique_id)
-        except HomeAssistantConnectionError:
-            # A dead transport must not become a silent guess: the fallback
-            # below assumes the storage key equals the bare entity_id, which is
-            # exactly what a UI rename breaks. Guessing it on a write path
-            # writes a NEW object under the wrong key instead of updating the
-            # renamed one, so let the caller fail loud (#1947).
-            raise
-        except Exception:
-            logger.debug(
-                f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
-                exc_info=True,  # Log full traceback for better debugging
-            )
+        unique_id = (await self._registry_entry("script", identifier) or {}).get(
+            "unique_id"
+        )
+        qualified = identifier != bare_id
+        # Another key only from script.<bare_id>'s entry: the script tools'
+        # entity_registration.script_entity_id and post_write_entity rely on it.
+        if unique_id and (
+            qualified
+            or unique_id == bare_id
+            or not await self._config_exists("script", bare_id)
+        ):
+            return str(unique_id)
         return bare_id
 
-    async def get_script_config(self, script_id: str) -> dict[str, Any]:
-        """Get Home Assistant script configuration by script_id."""
-        resolved_id = await self._resolve_script_id(script_id)
+    async def get_script_config(
+        self, script_id: str, resolved_id: str | None = None
+    ) -> dict[str, Any]:
+        """A script's config by script_id; ``resolved_id`` is a known key."""
+        resolved_id = resolved_id or await self._resolve_script_id(script_id)
         try:
             endpoint = f"config/script/config/{resolved_id}"
             response = await self._request("GET", endpoint)
@@ -2018,9 +2006,9 @@ class HomeAssistantClient:
     ) -> dict[str, Any]:
         """Create or update Home Assistant script configuration.
 
-        ``resolved_id``, when provided, is the already-resolved storage key used
-        as the write target (the caller ran :meth:`_resolve_script_id`),
-        skipping the redundant entity-registry lookup. ``script_id`` stays the
+        ``resolved_id``, when provided, is the storage key written under,
+        unresolved: a key the caller resolved with :meth:`_resolve_script_id`,
+        or a bare key that must not be resolved (a backup restore). ``script_id`` stays the
         CALLER's identifier and is used only to default a missing ``alias`` — a
         renamed script (whose storage key differs from the entity slug the
         caller passed) keeps its caller-facing name rather than resetting the
@@ -2038,7 +2026,7 @@ class HomeAssistantClient:
             # ``write_id``) so a renamed script's user-visible name is preserved
             # instead of being reset to the storage key.
             if "alias" not in config:
-                config["alias"] = script_id
+                config["alias"] = script_id.removeprefix("script.")
 
             # Validate that either sequence or use_blueprint is present
             if "sequence" not in config and "use_blueprint" not in config:
@@ -2053,15 +2041,15 @@ class HomeAssistantClient:
                 "success": True,
                 "script_id": write_id,
                 "result": response.get("result", "ok"),
-                "operation": "created" if response.get("result") == "ok" else "updated",
             }
         except Exception as e:
             logger.error(f"Failed to upsert script config for {script_id}: {e}")
             raise
 
     async def delete_script_config(self, script_id: str) -> dict[str, Any]:
-        """Delete Home Assistant script configuration."""
-        resolved_id = await self._resolve_script_id(script_id)
+        """A bare id is deleted under that key unresolved; script.<x> resolves."""
+        bare = not script_id.startswith("script.")
+        resolved_id = script_id if bare else await self._resolve_script_id(script_id)
         try:
             endpoint = f"config/script/config/{resolved_id}"
             response = await self._request("DELETE", endpoint)
@@ -2098,67 +2086,92 @@ class HomeAssistantClient:
     async def _resolve_scene(self, identifier: str) -> SceneResolution:
         """Resolve a scene identifier to its storage key AND registry metadata.
 
-        Backs :meth:`resolve_scene_id`. Returns the storage key together with
-        ``registry_hit`` (did the entity actually resolve?) and ``platform`` - the
-        two signals a bare storage key throws away. Callers that hit a config-API
-        404 need ``registry_hit`` to tell "entity missing" from "entity exists but
-        has no editable storage config", and ``platform`` to name the owning
-        integration in the resulting error (issue #1971).
-
-        Args:
-            identifier: Scene ID (with or without ``scene.`` prefix)
-
-        Returns:
-            A :class:`SceneResolution`. On any lookup failure it falls back to the
-            bare id with ``registry_hit=False`` - a write path must not treat the
-            guessed bare id as a confirmed resolve.
+        Backs :meth:`resolve_scene_id`. With the component, a bare id first
+        names the scene Core registered under it, loaded or disabled, wherever
+        its YAML defines it; an entry Core no longer loads (a removed YAML
+        scene) names nothing. Then a bare id that is a storage key wins over
+        another scene whose entity is ``scene.<id>``, else names that scene;
+        ``scene.<id>`` raises SceneIdNotAnEntityError when no such entity exists
+        but key ``<id>`` holds a scene. Otherwise the registry decides; a
+        failed registry or config read raises.
         """
+        # Local import: component_config_reads imports this module.
+        from ..tools.component_config_reads import scenes_with_id
+
         bare_id = identifier.removeprefix("scene.")
-        entity_id = f"scene.{bare_id}"
+        qualified = identifier != bare_id
+        rows = None if qualified else await scenes_with_id(self, bare_id)
+        for row in rows or []:
+            disabled = bool(row.get("disabled_by"))
+            if row["loaded"] or disabled:
+                return SceneResolution(
+                    bare_id, True, "homeassistant", row["entity_id"], disabled
+                )
+        own = f"scene.{bare_id}".lower()  # Core keeps entity_ids lowercase
+        if any(row["entity_id"] == own for row in rows or []):
+            return SceneResolution(bare_id, False, None, leftover=True)
+        entry = await self._registry_entry("scene", identifier)
+        unchecked = not qualified and rows is None
+        fallback = SceneResolution(bare_id, False, None, id_unchecked=unchecked)
+        if entry and entry.get("unique_id"):
+            key, platform = str(entry["unique_id"]), entry.get("platform")
+            disabled = bool(entry.get("disabled_by"))
+            registered = SceneResolution(key, True, platform, disabled=disabled)
+            if qualified or key == bare_id:
+                return registered
+            stored = await self._config_exists("scene", bare_id)
+            return fallback if stored else registered
+        if qualified and entry is None and await self._config_exists("scene", bare_id):
+            raise SceneIdNotAnEntityError(identifier, bare_id)
+        return fallback
+
+    async def _registry_entry(
+        self, domain: str, identifier: str
+    ) -> dict[str, Any] | None:
+        """The registry entry of ``<domain>.<id>``, None when the registry has
+        none or Core refuses ``<domain>.<id>`` as an entity_id.
+
+        Any other failure is no answer, and a guess could reach another object:
+        it raises, except for a bare id that is a storage key, which names that
+        object anyway. A dead transport propagates too, so a renamed object's
+        update is not written under a guessed key (#1947).
+        """
+        bare_id = identifier.removeprefix(f"{domain}.")
+        entity_id = f"{domain}.{bare_id}"
+        answers = frozenset({"not_found", "invalid_format"})
+        result = await self.send_websocket_message(
+            {"type": "config/entity_registry/get", "entity_id": entity_id},
+            expected_error_codes=answers,
+        )
+        if result.get("success") is not False:
+            entry: dict[str, Any] = result.get("result") or {}
+            return entry
+        if result.get("error_code") in answers or (
+            identifier == bare_id and await self._config_exists(domain, bare_id)
+        ):
+            return None
+        raise HomeAssistantCommandError.from_reply(
+            result, f"Could not look up {entity_id}: {result.get('error')}"
+        )
+
+    async def _config_exists(self, domain: str, storage_key: str) -> bool:
+        """Whether Core's config API holds a ``domain`` config under ``storage_key``."""
         try:
-            result = await self.send_websocket_message(
-                {"type": "config/entity_registry/get", "entity_id": entity_id}
-            )
-            if result.get("success") is not False:
-                entry = result.get("result") or {}
-                unique_id = entry.get("unique_id")
-                if unique_id:
-                    if unique_id != bare_id:
-                        logger.debug(
-                            f"Resolved scene entity_id {entity_id} to storage key {unique_id}"
-                        )
-                    return SceneResolution(
-                        storage_key=str(unique_id),
-                        registry_hit=True,
-                        platform=entry.get("platform"),
-                    )
-        except HomeAssistantConnectionError:
-            # A dead transport must not become a silent guess: the fallback
-            # below assumes the storage key equals the bare entity_id, which is
-            # exactly what a UI rename breaks. Guessing it on a write path
-            # writes a NEW object under the wrong key instead of updating the
-            # renamed one, so let the caller fail loud (#1947).
+            await self._request("GET", f"config/{domain}/config/{storage_key}")
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                return False
             raise
-        except Exception:
-            logger.debug(
-                f"Entity registry lookup failed for {entity_id}, using bare id: {bare_id}",
-                exc_info=True,
-            )
-        return SceneResolution(storage_key=bare_id, registry_hit=False, platform=None)
+        return True
 
     async def resolve_scene_id(self, identifier: str) -> str:
         """
-        Resolve a scene identifier to its storage key via the entity registry.
+        Resolve a scene identifier to its storage key (:meth:`_resolve_scene`).
 
         Scenes may be renamed in the HA UI, changing the entity_id but keeping
-        the original storage key. Like :meth:`_resolve_script_id`, this returns
-        the bare storage key and needs a WebSocket entity registry lookup because
-        the state attributes do not surface it; the parity ends there, since the
-        underlying :meth:`_resolve_scene` additionally carries registry metadata
-        (``registry_hit``/``platform``) that the script resolver has no analogue for.
-
-        Thin wrapper over :meth:`_resolve_scene` for callers that only need the
-        storage key (e.g. the write path); the read/delete paths use the richer
+        the original storage key; the registry also holds a scene that has no
+        state (a disabled one). Thin wrapper for callers that only need the
+        key (e.g. the write path); the read/delete paths use the richer
         :class:`SceneResolution` directly.
 
         Args:
@@ -2170,21 +2183,16 @@ class HomeAssistantClient:
         return (await self._resolve_scene(identifier)).storage_key
 
     async def _scene_state_exists(self, storage_key: str) -> bool:
-        """Return True if ``scene.<storage_key>`` exists in the state machine.
-
-        An ``id``-less YAML scene has no registry ``unique_id`` (so
-        ``registry_hit`` is False) yet still registers a state-machine entity.
-        This one-shot existence check separates that real-but-not-storage scene
-        from a genuinely-absent one after a config-API 404 (issue #1971). A 404
-        here is a clean "absent"; a transport failure propagates (fail loud).
-        """
+        """Whether ``scene.<storage_key>`` has a state: an ``id``-less YAML scene
+        has one but no registry entry (#1971). A 404 is False; another failure
+        raises."""
         try:
             await self.get_entity_state(f"scene.{storage_key}")
-            return True
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
                 return False
             raise
+        return True
 
     async def _raise_scene_config_404(
         self,
@@ -2194,23 +2202,21 @@ class HomeAssistantClient:
     ) -> NoReturn:
         """Translate a scene config-API 404 into the right exception.
 
-        When the registry resolve succeeded (``registry_hit``), the entity exists
-        and the 404 means "no editable storage config" → raise
-        :class:`SceneStorageConfigNotFoundError` carrying the platform. On a
-        registry miss the entity may still be an ``id``-less YAML scene, which has
-        no registry ``unique_id`` yet exists in the state machine: a state hit
-        upgrades the 404 to the same not-storage-scene case with ``platform=None``
-        (issue #1971). Only a state miss too is the historic genuinely-absent bare
-        404. The state check is skipped when ``resolution`` is None (the internal
-        ``_resolved`` re-fetch fast path, where a 404 is a genuine disappearance).
-        Always raises.
+        A ``registry_hit``, or a state (:meth:`_scene_state_exists`) on a miss
+        that is no ``leftover``, is a scene without editable storage config
+        (:class:`SceneStorageConfigNotFoundError`, issue #1971); else the 404 is
+        a missing scene. ``resolution`` None (the ``_resolved`` re-fetch) skips
+        the state check: a 404 there is a disappearance.
         """
         if resolution is not None:
             if resolution.registry_hit:
                 raise SceneStorageConfigNotFoundError(
-                    scene_id, platform=resolution.platform, storage_key=resolved_id
+                    resolution.entity_id or scene_id,
+                    platform=resolution.platform,
+                    storage_key=resolved_id,
+                    disabled=resolution.disabled,
                 )
-            if await self._scene_state_exists(resolved_id):
+            if not resolution.leftover and await self._scene_state_exists(resolved_id):
                 raise SceneStorageConfigNotFoundError(
                     scene_id, platform=None, storage_key=resolved_id
                 )
@@ -2297,14 +2303,6 @@ class HomeAssistantClient:
             if "name" not in config:
                 config["name"] = scene_id.removeprefix("scene.")
 
-            # Validate required field. ``entities`` is a dict keyed by entity_id,
-            # not a list — distinct from script ``sequence`` and automation ``action``.
-            if "entities" not in config:
-                raise ValueError(
-                    "Scene configuration must include an 'entities' field "
-                    "(a dict keyed by entity_id)"
-                )
-
             response = await self._request("POST", endpoint, json=config)
 
             # Issue #1168 R3 blocker 4: HA's POST /config/scene/config/<id>
@@ -2334,7 +2332,8 @@ class HomeAssistantClient:
         the full outcome through - the endpoint uses its ``storage_key`` while
         ``scene_id`` stays the caller's slug for messages, and its ``registry_hit``
         drives the config-404 classification (issue #1971) with no extra lookup.
-        Otherwise the id is resolved here.
+        Otherwise the id is resolved here: a bare id can reach another key, which
+        ``ha_config_remove_scene`` refuses before it calls.
         """
         if resolution is not None:
             resolved_id = resolution.storage_key
@@ -2354,19 +2353,4 @@ class HomeAssistantClient:
         except HomeAssistantAPIError as e:
             if e.config_not_found:
                 await self._raise_scene_config_404(scene_id, resolved_id, resolution)
-            elif e.status_code == 405:
-                raise HomeAssistantAPIError(
-                    f"Cannot delete scene '{scene_id}': The HTTP DELETE method is blocked. "
-                    f"This typically occurs when running ha-mcp as a Home Assistant add-on, because "
-                    f"the Supervisor ingress proxy only allows GET and POST requests. "
-                    f"It may also occur if the scene is defined in YAML configuration files. "
-                    f"WORKAROUNDS: "
-                    f"(1) Use ha-mcp via pip, Docker, or as an external MCP server instead of the add-on. "
-                    f"(2) Use a long-lived access token to connect directly to Home Assistant's API. "
-                    f"(3) If the scene is YAML-defined, edit the configuration file directly. "
-                    f"(4) As a fallback, rename the scene with a 'DELETE_' prefix "
-                    f"(e.g., 'DELETE_{scene_id}') so you can identify and manually delete it later "
-                    f"via the Home Assistant UI (Settings > Automations & Scenes > Scenes).",
-                    status_code=405,
-                ) from e
             raise

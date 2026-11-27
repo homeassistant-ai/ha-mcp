@@ -28,6 +28,7 @@ import anyio
 from .._vendor import websockets
 from .._vendor.websockets.exceptions import ConnectionClosed
 from ..config import get_global_settings
+from .exceptions import websocket_close_error_type
 from .rest_client import (
     HomeAssistantAuthError,
     HomeAssistantCommandError,
@@ -329,10 +330,8 @@ class HomeAssistantWebSocketClient:
         """Background task to handle incoming WebSocket messages."""
         if not self.websocket:
             raise HomeAssistantConnectionError("WebSocket not connected")
-        # None means a clean exit (the async-for loop simply ended); the
-        # except blocks below fill this in so pending futures — and the
-        # log — carry *why* the connection went away instead of a bare
-        # "WebSocket connection closed" that gave no lead on #1721.
+        error_type = HomeAssistantConnectionError
+        # Keep the close details for callers waiting on a pending command.
         close_reason: str | None = None
         try:
             async for message in self.websocket:
@@ -345,29 +344,25 @@ class HomeAssistantWebSocketClient:
                 except Exception as e:  # noqa: BLE001
                     logger.error(f"Error processing message: {e}")
         except ConnectionClosed as e:
-            # Prefer the frame we received (the peer closed on us); fall
-            # back to the frame we sent (we failed the connection
-            # ourselves, e.g. an over-max_size frame produces a sent
-            # Close(1009, ...) with no frame received at all).
+            error_type = websocket_close_error_type(e)
+            # A frame exceeding max_size sends Close(1009) locally; the peer
+            # may never send a close frame back. Preserve that local reason.
             close = e.rcvd if e.rcvd is not None else e.sent
+            close_reason = "connection dropped without a close frame"
             if close is not None:
                 verb = "received" if e.rcvd is not None else "sent"
                 close_reason = f"{verb} close code {close.code}"
                 if close.reason:
                     close_reason = f"{close_reason} ({close.reason})"
-            else:
-                close_reason = "connection dropped without a close frame"
 
-            log_message = f"WebSocket connection closed ({close_reason})"
-            if close is None or close.code not in (1000, 1001):
-                logger.warning(log_message)
-            else:
-                logger.info(log_message)
+            normal_close = close is not None and close.code in (1000, 1001)
+            log = logger.info if normal_close else logger.warning
+            log("WebSocket connection closed (%s)", close_reason)
         except Exception as e:  # noqa: BLE001
             close_reason = str(e)
             logger.error(f"WebSocket message handler error: {e}")
         finally:
-            self._state.mark_disconnected(close_reason)
+            self._state.mark_disconnected(close_reason, error_type=error_type)
 
     async def _process_message(self, data: dict[str, Any]) -> None:
         """Process incoming WebSocket message."""
@@ -411,7 +406,7 @@ class HomeAssistantWebSocketClient:
     ) -> None:
         """Handle an incoming event message."""
         if message_id is not None:
-            # Continuous subscriptions take priority: a single ``hacs/subscribe``
+            # Continuous subscriptions take priority: a single ``marketplace/subscribe``
             # can deliver many events sharing one id and the one-shot
             # ``_event_responses`` future would only catch the first.
             # Events delivered to a subscription queue do NOT also
@@ -956,7 +951,7 @@ class HomeAssistantWebSocketClient:
 
         For commands that establish a long-lived stream sharing the
         command's ``id`` for every event (HA's ``subscribe_events``,
-        HACS' ``hacs/subscribe`` with a ``signal`` field, etc.).
+        the Marketplace's ``marketplace/subscribe`` with a ``signal`` field, etc.).
         ``subscribe_events`` has its own dedicated entrypoint above
         because it has additional callers wired to the legacy
         event-type handler registry; use this method for everything
@@ -969,8 +964,8 @@ class HomeAssistantWebSocketClient:
         Returns:
             (subscription_id, queue) — ``await queue.get()`` yields each
             incoming ``{"id": N, "type": "event", "event": ...}`` payload.
-            Cancel the subscription via :meth:`unsubscribe_command`, or
-            :meth:`release_subscription` from a ``finally``.
+            Cancel the subscription via :meth:`release_subscription`, from
+            a ``finally``.
         """
         if not self._state.is_ready:
             raise HomeAssistantConnectionError("WebSocket not authenticated")
@@ -1033,11 +1028,12 @@ class HomeAssistantWebSocketClient:
     async def release_subscription(self, subscription_id: int) -> None:
         """Release a :meth:`subscribe_command` subscription from a ``finally``.
 
-        Unlike :meth:`unsubscribe_command` this never raises and survives the
-        caller's cancellation: a failed or timed-out release must not replace
-        the result the caller already has, and a cancelled caller must still
-        release, or Home Assistant keeps the subscription for the life of the
-        socket.
+        A release that fails or times out raises nothing here: it must not
+        replace the result the caller already has. The release also outlives a
+        cancellation that reaches the caller through an anyio cancel scope, the
+        shape this is called under (:meth:`_run_cleanup`); a plain
+        ``asyncio.Task.cancel()`` still cancels it. Without the release Home
+        Assistant keeps the subscription for the life of the socket.
         """
         self._state.unregister_subscription_queue(subscription_id)
         socket = self.websocket
@@ -1088,45 +1084,6 @@ class HomeAssistantWebSocketClient:
         if self.websocket is not socket:
             return
         await self._release_abandoned_subscription(subscription_id)
-
-    async def unsubscribe_command(
-        self,
-        subscription_id: int,
-        *,
-        unsubscribe_type: str = "unsubscribe_events",
-    ) -> None:
-        """Tear down a subscription opened via :meth:`subscribe_command`.
-
-        HACS' ``hacs/subscribe`` slots into HA's standard
-        ``connection.subscriptions`` map, so ``unsubscribe_events`` cancels
-        it the same way it cancels a native ``subscribe_events`` stream
-        — ``unsubscribe_type`` is exposed only for the rare case a
-        protocol introduces its own teardown command.
-        """
-        # Always drop the local queue first so any in-flight ``get()``
-        # call wakes immediately, even if the HA-side teardown errors.
-        self._state.unregister_subscription_queue(subscription_id)
-
-        if not self._state.is_ready:
-            logger.debug(
-                "unsubscribe_command(%s) skipped: WebSocket not ready",
-                subscription_id,
-            )
-            return
-        try:
-            await self.send_command(unsubscribe_type, subscription=subscription_id)
-        except (OSError, ConnectionClosed, HomeAssistantConnectionError) as e:
-            logger.debug(
-                "unsubscribe_command(%s): transport lost during cleanup: %s",
-                subscription_id,
-                e,
-            )
-        except HomeAssistantCommandError as e:
-            logger.warning(
-                "unsubscribe_command(%s) rejected by HA: %s",
-                subscription_id,
-                e,
-            )
 
     def add_event_handler(
         self,
@@ -1315,7 +1272,7 @@ class WebSocketManager:
         # Key on the EFFECTIVE verification mode: a caller passing the
         # resolved settings default (send_websocket_message) must share
         # the pooled connection with callers that omit the argument
-        # (listener, HACS, installer) — only a genuine override such as
+        # (listener, store, installer) — only a genuine override such as
         # verify_ssl=False gets its own isolated connection.
         key = (
             f"{self._client_key(ws_url, ws_token)}"

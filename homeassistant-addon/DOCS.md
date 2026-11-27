@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This app enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 86+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This app enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 87+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -318,6 +318,21 @@ and snapshot list when snapshot actions are enabled. Blocks manual create,
 restore (including edit restores), and delete. Automatic pre-edit backups
 continue.
 
+### enable_settings_transfer_actions
+
+**Default:** `false`
+
+**Allow ha_manage_backup to export and import settings.** Lets AI assistants
+download this server's settings file with
+`ha_manage_backup(scope="settings", action="export")` and import one with
+`action="import"` and the exported file as `settings_file`, as the settings
+page's Export and Import buttons do. An import keeps the human-only settings, and changing the security
+policy, entity visibility or File & YAML Tools permissions also needs Dev tools
+security policy access. An import can also turn on developer mode, tools and
+features, and turn off protections such as secret redaction, SSL verification
+and the IPv6 allowlist, as the file says, so check your settings after an AI
+assistant imports one.
+
 `enable_snapshot_actions` and `backup_read_only` restrict AI calls to `ha_manage_backup` and the equivalent
 backup services and commands sent through `ha_call_service`
 (`hassio.backup_*`, `hassio.restore_*`, `backup.create*`, `backup/` snapshot
@@ -373,7 +388,7 @@ Requires app restart to take effect; clients see the new text after they reconne
 
 **Default:** `false`
 
-Replaces the full tool catalog (~86 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~87 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if your client has its own built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code).** The two search layers conflict — running both at once does not work — and the client's built-in tool search is the better choice there anyway. Leave this off in those clients. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.
 
@@ -430,7 +445,7 @@ In a require-approval list, a sub-condition also holds when one item of a list a
 
 **Allow list.** By default a matching rule requires approval and every other call runs. Setting **Approval mode** to **Require approval unless a rule matches (allow list)** reverses that: the rules list the calls that run without approval, and every other call, reads included, needs approval. Only tool search and managing pending approvals stay exempt. An allow list matches strictly, so neither a case variant nor one listed value among unlisted ones can ride an approval: a condition must hold with exact case, for every value a wildcard path (`args.operations.*.entity_id`) or a list argument reaches, every branch of a wildcard path must hold the field (so a batch operation without it, or an argument that lacks it, needs approval; a plain value such as the `domain` string lacks every field, so `args.*.entity_id` approves no `ha_call_service` call that can run), and an object argument matches only by equals or is one of. Regex and contains still match substrings, so anchor a regex with `^…$`, and does NOT equal / is NOT one of approve everything they do not name. A string value at a condition's path that contains a comma or has leading or trailing whitespace matches no condition except is present, whatever the argument, because Home Assistant splits and strips entity IDs given that way. Approvals given under an allow list are never remembered: each one covers a single call. A rule constrains only the arguments it names, so an approval for `entity_id` equals `lock.shed` also covers a call that adds `area_id` or another target argument. To approve one exact call, match the whole argument object instead: path `args`, is one of, and a list of the approved argument objects.
 
-**Matching object keys.** A path ending in `*~` reaches the keys of an object argument instead of its values. A scene names the entities it sets as keys (`{"lock.front_door": "unlocked"}`), so for `ha_config_set_scene` the path `args.config.entities.*~` with regex `^(lock|siren|alarm_control_panel)\.` gates every scene that includes one of them, where `args.config.entities.*` would only reach the target states. Under an allow list every key must satisfy the condition, and an empty or missing `entities` needs approval. `*~` must be the last segment of a path. Such a rule covers only scene definitions written through `ha_config_set_scene`: a `python_transform` edit, `activate=True` on an existing scene, and `scene.apply` or `scene.create` through `ha_call_service` each need a rule of their own.
+**Matching object keys.** A path ending in `*~` reaches the keys of an object argument instead of its values. A scene names the entities it sets as keys (`{"lock.front_door": "unlocked"}`), so for `ha_config_set_scene` the path `args.config.entities.*~` with regex `^(lock|siren|alarm_control_panel)\.` gates every scene whose `config` includes one of them, where `args.config.entities.*` would only reach the target states. Under an allow list every key must satisfy the condition, and an empty or missing `entities` needs approval. `*~` must be the last segment of a path. Such a rule covers only scene definitions written through `ha_config_set_scene`'s `config`: a `python_transform` edit, `activate=True` on an existing scene, and `scene.apply` or `scene.create` through `ha_call_service` each need a rule of their own. The entity IDs in `capture_entities` count as keys of `config.entities`, lowercased as Home Assistant stores them; the rule sees those IDs, not the states captured for them. In a require-approval list a condition on those keys also holds when it holds for the arguments as the call gave them; under an allow list it must hold with the captured IDs added. The captured states, the `entity_only` mark the tool adds to `config.metadata` for a captured entity not already in the call's `config.entities`, and the entities of a device in `capture_devices` are read or written only after the check. So in a require-approval list any rule for `ha_config_set_scene` or for every tool (`*`) whose path can reach `config.entities`, `config.metadata` or the keys of `config` requires approval for every call with a non-empty `capture_entities` or `capture_devices`, whatever its other conditions, and under an allow list such a rule never approves one. Two exceptions: with `capture_entities` alone, a path ending at the entity keys (`config.entities.*~` or `*.entities.*~`) is judged with the captured IDs added, as above; and a rule on the whole argument object (path `args`) is judged as written, like any other call.
 
 If you edit `tool_policy.json` by hand, spell every field exactly: an unknown field (a typo such as `rule_efect`) makes the policy fail to load, and every tool call is then refused until the file is fixed.
 
@@ -721,7 +736,7 @@ If the app is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 86+ MCP tools for controlling Home Assistant:
+The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -753,7 +768,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_config_set_calendar_event` — Create a new event in a calendar, or update an existing one.
 
 ### Camera
-- `ha_get_camera_image` — Get a snapshot image from a Home Assistant camera entity.
+- `ha_get_camera_image` — Get a snapshot image from a Home Assistant camera or image entity.
 
 ### Dashboard
 - `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get rendered images of a Home Assistant Lovelace dashboard view.
@@ -795,8 +810,8 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_config_set_group` — Create or update a service-based Home Assistant entity group via the group.set service.
 
 ### HACS
-- `ha_get_hacs_info` — Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
-- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
+- `ha_get_hacs_info` — Get data from Home Assistant's Marketplace, what HACS became in 2026.11.
+- `ha_manage_hacs` — Manage Home Assistant's Marketplace (what HACS became in 2026.11): install, update, remove and add repositories.
 
 ### Helper Entities
 - `ha_config_list_helpers` — List Home Assistant helpers of a specific type with their configurations.
@@ -807,6 +822,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_get_automation_traces` — Get execution traces for automations and scripts to debug issues.
 - `ha_get_history` — Get historical data from Home Assistant's recorder.
 - `ha_get_logs` — Get Home Assistant logs from various sources.
+- `ha_manage_logs` — Manage Home Assistant's recorder, its long-term statistics and its logs.
 
 ### Integrations
 - `ha_get_integration` — Get integration (config entry) information with pagination.
@@ -853,7 +869,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.
 - `ha_manage_security_policy` — Manage the tool security policy that gates high-stakes tool calls behind user approval.
 - `ha_manage_theme` — Manage Home Assistant frontend themes.
-- `ha_manage_updates` — Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore).
+- `ha_manage_updates` — Manage Home Assistant updates (list, get, refresh, install, skip, clear_skipped, set_channel) and Repairs issues (ignore, unignore, fix).
 - `ha_reload_core` — Execute a Home Assistant configuration reload without a full restart.
 - `ha_restart` — Execute a Home Assistant restart.
 

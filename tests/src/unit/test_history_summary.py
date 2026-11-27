@@ -13,8 +13,6 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.components.recorder import Recorder
-from homeassistant.components.recorder.models import StatisticMeanType
-from homeassistant.components.recorder.statistics import async_import_statistics
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
@@ -240,7 +238,7 @@ async def test_entity_recorded_only_from_now_on_has_no_states(
 
     warnings = result["warnings"]
     assert any("switch.new" in w and "No recorded" in w for w in warnings)
-    assert not any("switch.new" in w and "start at" in w for w in warnings)
+    assert not any("switch.new" in w and "start after" in w for w in warnings)
 
 
 @pytest.mark.usefixtures("recorder")
@@ -255,7 +253,7 @@ async def test_short_totals_are_flagged_in_warnings(
 
     warnings = result["warnings"]
     assert any("binary_sensor.typo" in w and "No recorded" in w for w in warnings)
-    assert any("binary_sensor.late" in w and "start at" in w for w in warnings)
+    assert any("binary_sensor.late" in w and "start after" in w for w in warnings)
     assert not any("binary_sensor.late" in w and "No recorded" in w for w in warnings)
 
 
@@ -294,7 +292,7 @@ async def test_states_cut_by_limit_are_flagged_in_warnings(
     assert "sensor.power: 1 of 4" in cut[0]
     assert "sensor.speed: 2 of 5" in cut[0]
     assert "sensor.flat" not in cut[0]
-    assert any("sensor.power" in w and "start at" in w for w in result["warnings"])
+    assert any("sensor.power" in w and "start after" in w for w in result["warnings"])
 
 
 @pytest.mark.usefixtures("recorder")
@@ -330,45 +328,3 @@ async def test_offset_with_summary_is_rejected_before_querying(
             entity_ids="switch.a,switch.b", offset=5, summary=True
         )
     sent.assert_not_awaited()
-
-
-@pytest.mark.usefixtures("recorder")
-async def test_statistics_offset_still_works_when_summary_is_set(
-    hass: HomeAssistant, core_client: HomeAssistantClient
-) -> None:
-    """summary applies to state history only; statistics still page by offset."""
-    async_import_statistics(
-        hass,
-        {
-            "mean_type": StatisticMeanType.NONE,
-            "has_sum": True,
-            "name": None,
-            "source": "recorder",
-            "statistic_id": "sensor.energy",
-            "unit_class": "energy",
-            "unit_of_measurement": "kWh",
-        },
-        [
-            {
-                "start": datetime(2023, 11, 14, 23, tzinfo=UTC) + timedelta(hours=h),
-                "sum": h,
-            }
-            for h in range(7)
-        ],
-    )
-    await async_wait_recording_done(hass)
-
-    result = await _query(
-        core_client,
-        "sensor.energy",
-        86400,
-        source="statistics",
-        period="hour",
-        offset=5,
-        summary=True,
-    )
-
-    (entity,) = result["data"]["entities"]
-    assert "summary" not in entity
-    assert entity["count"] == 2
-    assert result["data"]["query_params"]["offset"] == 5

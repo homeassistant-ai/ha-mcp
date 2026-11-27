@@ -33,7 +33,8 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-from aiohasupervisor.models import AddonState
+from aiohasupervisor.models import AddonState, InstalledAddon
+from aiohasupervisor.models.addons import AddonsList
 from aiohttp import web
 from homeassistant import loader
 from homeassistant.core import HomeAssistant
@@ -89,11 +90,13 @@ class Supervisor:
         if not self.reachable:
             return None
         if path == "/addons":
-            return (
-                {"addons": [self.model_fields(item) for item in self.addons]}
-                if self.lists_addons
-                else None
-            )
+            if not self.lists_addons:
+                return None
+            addons = [
+                InstalledAddon.from_dict(self.model_fields(item))
+                for item in self.addons
+            ]
+            return AddonsList(addons=addons).to_dict()
         slug = path.removeprefix("/addons/").removesuffix("/info")
         if not path.endswith("/info") or slug not in self.info:
             return None

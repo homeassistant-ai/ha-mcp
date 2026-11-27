@@ -452,7 +452,7 @@ def _surface_connect_urls(
     # with the panel option off the /ha-mcp route does not exist and the link
     # would 404.
     panel_line = (
-        "Manage it from the [HA-MCP settings panel](/ha-mcp) in the sidebar.\n\n"
+        "Manage server behavior from the [HA-MCP settings panel](/ha-mcp) in the sidebar.\n\n"
         if bool(entry.options.get(OPT_ENABLE_SIDEBAR_PANEL, True))
         else ""
     )
@@ -465,13 +465,11 @@ def _surface_connect_urls(
     message = (
         "The HA-MCP Server is now running inside Home Assistant.\n\n"
         f"{panel_line}"
-        "The connect URL is shown on the entry's Configure screen "
-        "(Settings - Devices & Services - “HA-MCP — Manage Home Assistant with AI” - "
-        "HA-MCP Server - Configure), which only administrators can open, "
-        "because the URL is the credential.\n\n"
-        f"{auth_note}\n\n"
-        "To disable this notification, uncheck the startup notification box "
-        "on that same configuration screen.\n"
+        "To manage the component and its connections, open the "
+        f"[integration configuration screen](/config/integrations/integration/{DOMAIN}) "
+        "and select the gear next to **HA-MCP Server**. There you can find the "
+        "connection URL, change connection settings, or turn off **Startup notification**.\n\n"
+        f"{auth_note}\n"
     )
     persistent_notification.async_create(
         hass,
@@ -593,7 +591,7 @@ async def _async_check_component_compat(
     (``MIN_COMPONENT_VERSION``). Each component release pins the server it was
     built with, so only a pip-spec override can install a server that expects
     a newer component. When it does, surface a WARNING repair issue pointing
-    at the HACS component update; clear it once the component is new enough.
+    at the component update; clear it once the component is new enough.
 
     Advisory only — it must never block or fail server startup, so an
     unexpected error is logged (visible, not silent) and swallowed rather than
@@ -632,8 +630,8 @@ async def _async_check_component_compat(
     if outdated:
         _LOGGER.warning(
             "The installed ha-mcp server requires the HA-MCP integration %s or "
-            "newer, but %s is running; update the integration via HACS (the "
-            "Marketplace on Home Assistant 2026.11+).",
+            "newer, but %s is running; update the integration via the "
+            "Marketplace.",
             required,
             own,
         )

@@ -283,6 +283,16 @@ def validate_identifier_not_empty(
     )
 
 
+# Opens the error suggestion that carries the best-practice checker's warnings;
+# on gated write tools the visibility scan leaves that suggestion out, as it does
+# the result's warnings.
+BP_WARNINGS_SUGGESTION_PREFIX = "Config had best-practice issues that may be related: "
+
+
+def bp_warnings_suggestion(bp_warnings: list[str]) -> str:
+    return BP_WARNINGS_SUGGESTION_PREFIX + "; ".join(bp_warnings)
+
+
 WHITESPACE_CLEARS_NOTE = (
     "A whitespace-only value acts like '', for clients that cannot send an "
     "empty string."
@@ -601,17 +611,15 @@ async def get_entity_state_or_none(
 
 
 def ws_failure_code(result: dict[str, Any]) -> ErrorCode:
-    """Map Core's WS error code: ``invalid_format``, ``invalid_info`` (a
-    registry refusing an update, e.g. a rename into another domain),
+    """Map Core's WS error code: every ``invalid_<what>`` (``invalid_format``;
+    ``invalid_info``, a registry refusing an update such as a rename into
+    another domain; the recorder's ``invalid_start_time``),
     ``service_validation_error`` and ``not_supported`` (e.g. ``todo/item/move``
     on a list without reordering) refuse the caller's input; ``not_found`` is an
     item Core does not hold (e.g. a YAML-configured helper)."""
     code = result.get("error_code")
-    if code in (
-        "invalid_format",
-        "invalid_info",
-        "service_validation_error",
-        "not_supported",
+    if code in ("service_validation_error", "not_supported") or (
+        isinstance(code, str) and code.startswith("invalid_")
     ):
         return ErrorCode.VALIDATION_INVALID_PARAMETER
     if code == "not_found":

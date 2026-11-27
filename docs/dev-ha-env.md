@@ -106,23 +106,39 @@ Run it **from your fork only**. The job refuses to run in
    state through `HA:`'s REST API routes around the tools under test, so a
    gap in them goes unnoticed.
 5. Iterate the way you would update ha-mcp on any Home Assistant. The run
-   stays on the commit it started from; the standalone and embedded servers
-   run in developer mode:
-   - Embedded server: push, then call
-     `ha_dev_manage_server(action="update_source",
-     pip_spec="ha-mcp @ git+https://github.com/<you>/ha-mcp@<commit>")`.
-     The server reinstalls and comes back within a few minutes;
-     `ha_dev_manage_server(action="info")` shows the spec it runs. The run
-     starts from a wheel built from your branch's checkout.
-   - Component: add your fork to HACS once with
-     `ha_manage_hacs(action="add_repository", repository="<you>/ha-mcp",
-     category="integration")`, redownload your branch with
-     `ha_manage_hacs(action="download", repository_id=<id>, version="<branch>")`,
-     then restart Core with `ha_restart`. Right after a push, HACS can still
-     fetch the previous commit: wait a minute and read a changed `.py` file
-     with `ha_read_file` before restarting. The component keeps its pending
-     version number across dev builds, so HACS's `installed_version` (the
-     branch) is what names the build.
+   starts on `track_ref`'s commit; the standalone and embedded servers run in
+   developer mode, and the run starts from a wheel built from your branch's
+   checkout.
+   - Component and embedded server: push, then load the new commit in this
+     order:
+     1. Download your branch through the Marketplace. On a new run, the
+        Marketplace refuses this until its first-run warning is accepted for
+        the user the server connects as: read the warning in Settings >
+        Marketplace, and if you accept it, call
+        `ha_manage_hacs(action="accept_warning", confirm=True)`. Add your fork
+        once with
+        `ha_manage_hacs(action="add_repository", repository="<you>/ha-mcp",
+        category="integration")`, then redownload the branch with
+        `ha_manage_hacs(action="download", repository_id=<id>, version="<branch>")`.
+        Right after a push, the Marketplace can still fetch the previous
+        commit: wait a minute and read a changed `.py` file with
+        `ha_read_file` before going on. The component keeps its pending
+        version number across dev builds, so the Marketplace's installed
+        version (the branch) is what names the build.
+     2. Restart Core with `ha_restart`, then wait until
+        `ha_dev_manage_server(action="info")` answers.
+     3. Point the embedded server at the same commit with
+        `ha_dev_manage_server(action="update_source",
+        pip_spec="ha-mcp @ git+https://github.com/<you>/ha-mcp@<commit>")`.
+        The download replaces only the component; the embedded server keeps
+        the spec it was installed from until this step.
+     4. Confirm the install took: once the server answers again, which takes
+        up to a few minutes, `info` shows
+        `component_server_entry.install_pending: false`. If it answers with
+        `true`, the install was deferred or failed and the new build is not
+        running; `info` warns how to apply it. If the embedded server does
+        not answer again, its install or start failed: see the boot-failure
+        note below.
    - App: install your branch's build as a second app and update it like
      any app. Stage the checkout as an app repository and push it to a
      branch of your fork:
@@ -143,18 +159,35 @@ Run it **from your fork only**. The job refuses to run in
      the same `/tmp/app-repo`), push, run
      `ha_manage_app(action="check_updates")`, and update the app from
      Settings → Apps: an app cannot update itself through its own MCP.
-   - Standalone server: start a new run on the new commit.
+   - Standalone server (`server=standalone` or `oauth`): push the commit to
+     the run's ref in your fork:
+     ```bash
+     git push -f git@github.com:<you>/ha-mcp <commit>:refs/dev-ha-env/<run-id>
+     ```
+     The runner checks the ref every ten seconds and restarts the server on
+     the commit, with its dependencies synced, at the same `MCP:` URL; Home
+     Assistant and its state stay as they are. A request sent during the
+     switch can fail with a 502, so retry it. Read the outcome with
+     `ha_get_logs(source="error_log", search="dev-ha-env")`: "the standalone
+     server now runs <commit>", or an error naming the step that failed,
+     with the end of the server's output if it did not start, and that the
+     previous commit runs again. The outcome is usually there within 20
+     seconds of the push, later when new dependencies have to be downloaded;
+     a server that does not start can take two minutes more. A commit is
+     tried once; push another one to switch again, back to the start commit
+     included. This replaces only the server: load a component change
+     through steps 1 and 2 above.
 
-   The job log's `STATUS` lines show the commit the run started from and any
-   boot error. If the embedded server fails at boot, Home Assistant stays up
-   but the server's own tools are gone: log in to `HA:` as `mcp` / `mcp`,
-   open the HA-MCP integration's server entry under
+   The job log's `STATUS` lines show the commit the run started from, each
+   standalone switch, and any boot error. If the embedded server fails at
+   boot, Home Assistant stays up but the server's own tools are gone: log
+   in to `HA:` as `mcp` / `mcp`, open the HA-MCP integration's server entry under
    Settings → Devices & services, and put the fixed spec in Configure →
    "Developer: ha-mcp package override".
 
    The instance is a normal HA you can change. On HAOS, change the Core
    version from Settings → System → Updates, or run
-   `ha core update --version 2026.10.0` in the Advanced SSH app's terminal;
+   `ha core update --version 2026.11.0` in the Advanced SSH app's terminal;
    apps, integrations and the component install and uninstall as usual. IPv6
    is under Settings → System → Network; the HAOS VM's LAN address is in
    `fec0::/64`. Docker
@@ -165,6 +198,8 @@ Run it **from your fork only**. The job refuses to run in
    ```bash
    gh run cancel <run-id> -R <you>/ha-mcp
    ```
+   If you switched the standalone server, delete the run's ref as well:
+   `git push git@github.com:<you>/ha-mcp :refs/dev-ha-env/<run-id>`.
 
 Anyone who has a tunnel URL has admin on that instance through the public test
 credentials. Don't share the URLs, and don't put anything real in it.

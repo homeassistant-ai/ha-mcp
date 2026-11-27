@@ -48,6 +48,48 @@
     "server.sections.beta": "Fonctionnalités bêta (dangereuses)",
     "server.sections.developer": "Développeur",
     "server.sections.remote_access": "Accès distant",
+    "transfer.title": "Exporter et importer les paramètres HA-MCP",
+    "transfer.help": "Déplacez vos paramètres de serveur, choix d'outils, politique de sécurité, visibilité des entités et options de sauvegarde entre différentes installations de HA-MCP. La destination conserve son jeton d'accès Home Assistant et son commutateur d'accès. Les fournisseurs cloud peuvent attribuer une URL publique différente.",
+    "transfer.secrets": "Un fichier exporté depuis le serveur HA-MCP dans Home Assistant contient son ID de webhook, son chemin secret et tous les identifiants OAuth enregistrés en texte clair. Toute personne disposant de ce fichier peut potentiellement accéder à HA-MCP. Conservez-le de manière confidentielle et n'importez que des fichiers auxquels vous faites confiance.",
+    "transfer.export": "Télécharger le JSON des paramètres",
+    "transfer.file": "Fichier de paramètres à importer",
+    "transfer.import": "Importer les paramètres",
+    "transfer.confirm": "Remplacer les paramètres HA-MCP de cette installation par ceux de ce fichier ? Cela risque de déconnecter les clients utilisant les paramètres actuels.",
+    "transfer.confirm_connection": "Remplacer les paramètres HA-MCP de cette installation par ceux de ce fichier ? Le fichier contient également les secrets de connexion du serveur HA-MCP, qui ne sont appliqués que par le panneau latéral HA-MCP. Cela risque de déconnecter les clients utilisant les paramètres actuels.",
+    "transfer.exporting": "Préparation du téléchargement…",
+    "transfer.importing": "Importation des paramètres…",
+    "transfer.downloaded": "Téléchargement des paramètres démarré.",
+    "transfer.imported": "Paramètres importés. Rechargez cette page pour afficher les paramètres restaurés.",
+    "transfer.restart_server": "Paramètres importés. Redémarrez HA-MCP pour terminer l'application des paramètres restaurés.",
+    "transfer.connection_skipped": "Les paramètres de connexion du fichier s'appliquent uniquement au serveur HA-MCP dans Home Assistant, ce serveur a donc conservé les siens.",
+    "transfer.file_permissions_skipped": "Les autorisations des outils de fichiers et YAML du fichier n'ont pas été appliquées car cette entrée d'intégration n'est pas disponible ici.",
+    "transfer.file_permissions_unreachable_skipped": "Les autorisations des outils de fichiers et YAML du fichier n'ont pas été appliquées : en mode OAuth, cette page ne dispose pas des identifiants Home Assistant pour les modifier. Définissez-les dans Configurer pour les outils de fichiers et YAML dans Home Assistant.",
+    "transfer.export_file_permissions_unreachable": "Le fichier omet les autorisations des outils de fichiers et YAML : en mode OAuth, cette page ne dispose pas des identifiants Home Assistant pour les lire.",
+    "transfer.restart": "Paramètres importés. Redémarrez Home Assistant pour terminer l'application des paramètres restaurés.",
+    "transfer.too_large": "Choisissez un fichier de paramètres de 4 MiB ou moins.",
+    "transfer.export_too_large": "Ces paramètres dépassent la limite d'exportation de 4 MiB.",
+    "transfer.invalid_backup": "Choisissez un export de paramètres HA-MCP valide.",
+    "transfer.allowed_paths_store_unavailable": "Home Assistant n'a pas pu lire ou enregistrer les répertoires autorisés. Ouvrez Configurer pour les outils de fichiers et YAML et enregistrez à nouveau les répertoires, puis réessayez. Si le problème persiste, vérifiez le stockage de Home Assistant.",
+    "transfer.extra_yaml_keys_store_unavailable": "Home Assistant n'a pas pu lire ou enregistrer les clés YAML supplémentaires. Ouvrez Configurer pour les outils de fichiers et YAML et enregistrez à nouveau les clés, puis réessayez. Si le problème persiste, vérifiez le stockage de Home Assistant.",
+    "transfer.tools_entry_busy": "Les outils de fichiers et YAML changent d'état. Attendez la fin de l'opération, puis importez à nouveau les paramètres.",
+    "transfer.tools_entry_unavailable": "Les outils de fichiers et YAML sont activés mais n'ont pas été chargés. Ouvrez Appareils et services, résolvez toute erreur de configuration, rechargez l'entrée et réessayez l'importation.",
+    "transfer.rollback_incomplete": "L'importation a échoué et certains paramètres n'ont pas pu être restaurés. Consultez le journal de Home Assistant et vérifiez les paramètres de destination avant de réessayer.",
+    "transfer.extra_tools_entry": "Ce fichier contient uniquement l'entrée du serveur. Choisissez une sauvegarde qui inclut les outils de fichiers et YAML, ou utilisez une destination sans cette entrée.",
+    "transfer.tools_must_be_disabled": "Les outils de fichiers et YAML étaient désactivés sur la source. Dans Home Assistant, ajoutez cette entrée sur la destination si nécessaire, désactivez-la, puis réimportez.",
+    "transfer.tools_must_be_enabled": "Les outils de fichiers et YAML étaient activés sur la source. Activez l'entrée de destination dans Home Assistant, puis réimportez.",
+    "transfer.incompatible_version": "Cette version de HA-MCP ne peut pas importer ce format de fichier. Vérifiez la version de HA-MCP sur les deux installations.",
+    "transfer.webhook_in_use": "Une autre intégration sur ce Home Assistant utilise déjà l'ID de webhook présent dans ce fichier. Résolvez le conflit avant d'importer.",
+    "transfer.decision_pin_required": "Cette politique nécessite un code PIN de décision. Définissez-en un dans l'onglet Politiques de sécurité des outils de cette installation, puis réimportez le fichier.",
+    "transfer.server_unavailable": "Le serveur HA-MCP est indisponible. Vérifiez l'intégration et rouvrez le panneau.",
+    "transfer.session": "Rouvrez le panneau latéral HA-MCP en tant qu'administrateur Home Assistant et réessayez.",
+    "transfer.restore_failed": "HA-MCP n'a pas pu terminer l'importation des paramètres. Vérifiez les paramètres de destination avant de réessayer.",
+    "transfer.export_failed": "Impossible de télécharger les paramètres. Rouvrez le panneau et réessayez.",
+    "transfer.invalid_source_entries": "Les paramètres d'intégration actuels ne peuvent pas être restaurés à partir d'un fichier. Ouvrez Configurer pour le serveur HA-MCP et les outils de fichiers et YAML si installés, vérifiez les paramètres de connexion et d'autorisation, puis réexportez.",
+    "transfer.invalid_server_settings": "HA-MCP n'a pas pu lire l'un de ses fichiers de paramètres sur cette installation. Le journal de Home Assistant indique le nom du fichier. Corrigez-le ou supprimez-le, puis réessayez.",
+    "transfer.origin_denied": "La requête ne provient pas du panneau latéral HA-MCP à cette adresse Home Assistant. Ouvrez le panneau à partir de la barre latérale. Un proxy inverse doit transmettre l'en-tête Host d'origine.",
+    "transfer.read_failed": "Impossible de lire le fichier sélectionné. Sélectionnez à nouveau le fichier.",
+    "transfer.permissions_changed": "Les autorisations des outils de fichiers et YAML ont changé pendant l'importation ; l'importation s'est donc arrêtée et les a conservées. Importez à nouveau le fichier.",
+    "transfer.component_outdated": "Mettez à jour HA-MCP dans le Marketplace et redémarrez Home Assistant, puis réimportez : les outils de fichiers et YAML installés ne peuvent pas annuler l'échec de l'importation des autorisations.",
     "server.sidecar.disable": "Désactiver définitivement le serveur de paramètres",
     "server.sidecar.disable_title": "Désactive définitivement l'interface des paramètres : arrête ce serveur ET écrit ~/.ha-mcp/settings_ui_disabled pour qu'il ne redémarre pas lors des futurs lancements de ha-mcp. Supprimez ce fichier pour réactiver.",
     "backups.loading": "Chargement de l'état des sauvegardes…",
@@ -259,6 +301,8 @@
     "backup.fields.enable_auto_backup.help": "Enregistre un instantané d'une entité avant que chaque appel d'outil d'écriture ou de suppression ne la modifie. Tant que cette option est désactivée, les outils de fichiers et de YAML brut (ha_write_file, ha_delete_file, ha_config_set_yaml) refusent d'écrire.",
     "backup.fields.enable_snapshot_actions.label": "Autoriser les actions d'instantané complet de Home Assistant",
     "backup.fields.enable_snapshot_actions.help": "Permet aux assistants IA de gérer des instantanés complets de Home Assistant via ha_manage_backup et les services et commandes de sauvegarde équivalents dans ha_call_service. Désactiver cette option bloque toutes les actions d'instantané, y compris le listage. La suppression d'instantanés n'est disponible que via ha_manage_backup et nécessite également l'autorisation de suppression d'instantanés. La modification des sauvegardes et les actions de sauvegarde effectuées par une personne dans l'interface des paramètres web restent disponibles.",
+    "backup.fields.enable_settings_transfer_actions.label": "Autoriser ha_manage_backup à exporter et importer les paramètres",
+    "backup.fields.enable_settings_transfer_actions.help": "Permettre aux assistants IA de télécharger le fichier de paramètres de ce serveur et d'en importer un via ha_manage_backup, comme le font les boutons Exporter et Importer de l'onglet Paramètres du serveur. Une importation conserve les paramètres réservés aux humains, et la modification de la politique de sécurité, de la visibilité des entités ou des autorisations des outils de fichiers et YAML nécessite également un accès à la politique de sécurité des outils de développement. Une importation peut également activer le mode développeur, les outils et les fonctionnalités, et désactiver des protections telles que le masquage des secrets, la vérification SSL et la liste blanche IPv6, tel qu'indiqué dans le fichier. Vérifiez donc vos paramètres après qu'un assistant IA en a importé un.",
     "backup.fields.backup_read_only.label": "Rendre la gestion des sauvegardes en lecture seule",
     "backup.fields.backup_read_only.help": "Permet aux assistants IA de lister, d'afficher et de comparer les sauvegardes de modification, ainsi que de lister les instantanés complets de Home Assistant lorsque les actions d'instantané sont activées. Bloque la création, la restauration (y compris les restaurations de modification) et la suppression manuelles des sauvegardes, y compris les services et commandes de sauvegarde équivalents dans ha_call_service. Les sauvegardes automatiques préalables aux modifications continuent. Les actions de sauvegarde effectuées par une personne dans l'interface des paramètres web restent disponibles.",
     "backup.fields.auto_backup_throttle_minutes.label": "Limitation de la sauvegarde automatique (minutes)",
@@ -475,8 +519,8 @@
     "advanced.individual_fetch_batch_size.help": "Récupérations de configuration simultanées par identifiant. Réduisez vers 1 sur les serveurs Home Assistant sériels.",
     "advanced.enable_history_query_guardrails.label": "Limites de requêtes d'historique",
     "advanced.enable_history_query_guardrails.help": "Rejette les requêtes d'historique qui dépassent les budgets prudents d'entités et de plages horaires. Désactivé par défaut.",
-    "advanced.hacs_refresh_after_update.label": "Actualiser le composant dans HACS après une mise à jour",
-    "advanced.hacs_refresh_after_update.help": "Au démarrage après une mise à jour du serveur, demandez à HACS (le Marketplace sur Home Assistant 2026.11+) de revérifier le dépôt HA-MCP, afin que sa mise à jour correspondante s'affiche immédiatement au lieu d'attendre la prochaine vérification en arrière-plan. Désactivé par défaut ; les installations qui l'ont déjà fait le maintiennent activé.",
+    "advanced.hacs_refresh_after_update.label": "Rafraîchir le composant dans le Marketplace après une mise à jour",
+    "advanced.hacs_refresh_after_update.help": "Au démarrage après une mise à jour du serveur, demander au Marketplace de revérifier le dépôt HA-MCP pour que sa mise à jour correspondante s'affiche immédiatement au lieu d'attendre la prochaine vérification en arrière-plan. Désactivé par défaut ; les installations qui l'utilisaient déjà le gardent actif.",
     "advanced.ha_tool_concurrency.label": "Concurrence des outils Home Assistant",
     "advanced.ha_tool_concurrency.help": "Limite facultative sur les appels d'outils Home Assistant externes pour toutes les sessions. La concurrence interne pour REST, WebSocket et la répartition par outil reste inchangée. 0 conserve un comportement illimité. Un appel en attente de capacité échoue après 60 secondes.",
     "advanced.dashboard_screenshot_engine_url.label": "URL du moteur de capture d'écran du tableau de bord",
@@ -746,7 +790,7 @@
     },
     "ha_get_camera_image": {
       "title": "Obtenir l'image de la caméra",
-      "description": "Récupère une image instantanée d'une entité caméra Home Assistant."
+      "description": "Obtenir une image instantanée à partir d'une caméra Home Assistant ou d'une entité image."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Obtenir une capture d'écran du tableau de bord",
@@ -761,8 +805,8 @@
       "description": "Obtenir les entrées du registre des entités, ou sans entité, les paramètres du registre et les entités exposées."
     },
     "ha_get_hacs_info": {
-      "title": "Obtenir les informations HACS",
-      "description": "Parcourt le store HACS ou récupère les informations d'un dépôt."
+      "title": "Obtenir les informations du Marketplace",
+      "description": "Obtenir des données du Marketplace de Home Assistant, ce que HACS est devenu en 2026.11."
     },
     "ha_get_history": {
       "title": "Obtenir l'historique ou les statistiques",
@@ -833,8 +877,12 @@
       "description": "Gère les préférences du tableau de bord Énergie de Home Assistant : réseau / solaire /"
     },
     "ha_manage_hacs": {
-      "title": "Gérer HACS",
-      "description": "Gérer HACS (Home Assistant Community Store) — installer/mettre à jour, supprimer, ajouter des dépôts personnalisés, ou actualiser un dépôt dans"
+      "title": "Gérer le Marketplace",
+      "description": "Gérer le Marketplace de Home Assistant (ce que HACS est devenu en 2026.11) : installer, mettre à jour, supprimer et ajouter des dépôts."
+    },
+    "ha_manage_logs": {
+      "title": "Gérer l'enregistreur, les statistiques et les journaux",
+      "description": "Gérer l'enregistreur de Home Assistant, ses statistiques à long terme et ses journaux."
     },
     "ha_manage_pipeline": {
       "title": "Gérer le pipeline Assist",
@@ -854,7 +902,7 @@
     },
     "ha_manage_updates": {
       "title": "Gérer les mises à jour",
-      "description": "Gère les mises à jour de Home Assistant (liste, détails, installation, ignorer) et les problèmes de Réparations (ignorer)."
+      "description": "Gérer les mises à jour de Home Assistant (list, get, refresh, install, skip, clear_skipped, set_channel) et les problèmes de Repairs (ignore"
     },
     "ha_read_file": {
       "title": "Lire le fichier",

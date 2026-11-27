@@ -427,10 +427,14 @@ async def _ws_wait_for_condition(
         await _ws_cleanup(ws_client, attached_handlers, sub_ids, handler)
 
 
+# How long a write's state wait gives a new entity to become queryable.
+REGISTER_TIMEOUT = 10.0
+
+
 async def wait_for_entity_registered(
     client: Any,
     entity_id: str,
-    timeout: float = 10.0,
+    timeout: float = REGISTER_TIMEOUT,
     poll_interval: float = 0.3,
 ) -> bool:
     """

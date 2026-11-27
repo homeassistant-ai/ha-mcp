@@ -1,6 +1,6 @@
 """E2E failures must carry the Home Assistant log that explains them.
 
-A tool call that fails with a webhook 502, or a HACS entry that never loads,
+A tool call that fails with a webhook 502, or a config entry that never loads,
 names its cause only in the Home Assistant container log. Without these hooks
 that log is lost when the session container is removed.
 
@@ -151,14 +151,15 @@ async def test_timed_out_entries_gate_shows_the_home_assistant_log_in_the_summar
         token=core_client.token,
     )
     session.container.logs.return_value = (
-        b"Setup failed for custom integration 'hacs'\n"
+        b"Error setting up entry Marketplace for marketplace\n"
     )
     monkeypatch.setattr(readiness, "time", _MinuteHand())
     generator = session.fixture()
 
-    # Worker side: HACS never loads, the gate gives up and the session goes on.
+    # Worker side: the Marketplace never loads, the gate gives up and the
+    # session goes on.
     async with running_home_assistant(hass):
-        MockConfigEntry(domain="hacs", title="HACS").add_to_hass(hass)
+        MockConfigEntry(domain="marketplace", title="Marketplace").add_to_hass(hass)
         await hass.async_add_executor_job(next, generator)
     generator.close()
     await hass.async_add_executor_job(session.request.finalize)
@@ -177,5 +178,5 @@ async def test_timed_out_entries_gate_shows_the_home_assistant_log_in_the_summar
     readiness.pytest_terminal_summary(terminal, 0, None)
 
     summary = "\n".join(lines)
-    assert "hacs:not_loaded" in summary
-    assert "Setup failed for custom integration 'hacs'" in summary
+    assert "marketplace:not_loaded" in summary
+    assert "Error setting up entry Marketplace for marketplace" in summary

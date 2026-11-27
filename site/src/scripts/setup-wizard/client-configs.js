@@ -370,7 +370,7 @@ export function buildClientConfig(ctx, instructions) {
             <div class="mt-2 text-slate-400"><strong>Custom headers &amp; secret interpolation:</strong> Use <code class="bg-slate-800 px-1 rounded">{env:VAR}</code> in header values — OpenCode reads the env var at runtime without storing it in the file. Example: <code class="bg-slate-800 px-1 rounded">"Authorization": "Bearer {env:HA_TOKEN}"</code>.</div>
             <div class="mt-2 text-slate-400"><strong>Suppressing auto-OAuth:</strong> OpenCode handles OAuth via Dynamic Client Registration automatically on remote endpoints. Add <code class="bg-slate-800 px-1 rounded">"oauth": false</code> to the server entry to opt out.</div>
             <div class="mt-2 text-slate-400"><strong>Tool namespacing:</strong> ha-mcp tools appear as <code class="bg-slate-800 px-1 rounded">home-assistant_*</code> in OpenCode. You can enable or disable the namespace per-agent via OpenCode's per-agent namespace toggles.</div>
-            <div class="mt-2 text-slate-400"><strong>Context size:</strong> ha-mcp adds 86 tools to the prompt context, which is non-trivial. Consider using a dedicated OpenCode agent for HA-heavy workflows to keep other agents lean.</div>
+            <div class="mt-2 text-slate-400"><strong>Context size:</strong> ha-mcp adds 87 tools to the prompt context, which is non-trivial. Consider using a dedicated OpenCode agent for HA-heavy workflows to keep other agents lean.</div>
           </div>
         </div>`);
     }

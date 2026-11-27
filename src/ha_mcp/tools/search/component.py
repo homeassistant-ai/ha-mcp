@@ -59,18 +59,16 @@ logger = logging.getLogger(__name__)
 def _normalize_component_config_record(
     bucket: str, rec: dict[str, Any], include_config: bool
 ) -> dict[str, Any]:
-    """Map one component config-bucket record onto the exact legacy key set.
+    """Map one component config-bucket record into the MCP search response.
 
     The component speaks HA-native vocabulary (automations/scripts carry an
     ``alias``, scenes a ``name``, storage ids ride an ``id`` key, and records
-    add ``source``/``kind``/``object_id`` metadata). The legacy deep-search
+    add ``kind``/``object_id`` metadata). The legacy deep-search
     records that agents, tests, and downstream consumers key on use
     ``friendly_name`` plus per-bucket id keys (``script_id``/``scene_id``) —
     so normalize here, at the single seam, rather than teaching the component
-    the MCP envelope's vocabulary. Extra component fields are dropped to keep
-    the legacy key set, except ``options_withheld``, which marks a custom
-    helper whose options the component did not read; enrichment
-    (e.g. ``source: yaml``) can be added to BOTH paths together later.
+    the MCP envelope's vocabulary. Keep the component's explanations for
+    missing editor bodies and withheld helper options.
 
     ``config`` key semantics mirror the legacy pipeline's include_config pop:
     present (possibly ``None`` for YAML/name-only matches) when
@@ -114,6 +112,8 @@ def _normalize_component_config_record(
         if config is None and "options" in rec:
             config = rec.get("options")
         out["config"] = config if config else None
+        if "config_hint" in rec:
+            out["config_hint"] = rec["config_hint"]
     return out
 
 
@@ -464,26 +464,29 @@ async def _scrub_component_config_buckets(
 ) -> None:
     """Omit component config-body records referencing a hidden entity (enforce mode).
 
-    The component's ``search_visibility`` wire applies the hide dimensions to
-    ENTITY results only; its config-body records (automations/scripts/scenes/
-    helpers/dashboards) can still reference a hidden entity, and the enforcement
-    middleware's outbound scan would then refuse the whole search on contact
+    With the wire's ``enforce`` the component omits the automation, script,
+    scene and helper records that reference a hidden entity itself, before it
+    counts and pages them. This scrub covers what reaches the response another
+    way (the dashboards leg, a body under ``include_config``): the enforcement
+    middleware's outbound scan would otherwise refuse the whole search on contact
     instead of the issue-#2015 "collection reads omit" contract. Mirror of the
     legacy path's scrub (``_deep._scrub_results_for_enforce``), applied after
     ``_shape_component_search_response``. Totals are decremented by the dropped
     count — the component's corpus-side match count cannot be recomputed
     server-side. No-op unless enforce mode is active.
     """
-    from ...visibility.enforcement import active_hidden_regex, scrub_records
+    from ...visibility.enforcement import active_hidden_matcher, scrub_records
 
-    regex = await active_hidden_regex(client)
-    if regex is None:
+    matcher = await active_hidden_matcher(
+        client, [response.get(bucket) for bucket in _CONFIG_BUCKETS]
+    )
+    if matcher is None:
         return
     dropped = 0
     for bucket in _CONFIG_BUCKETS:
         records = response.get(bucket)
         if records:
-            kept = scrub_records(records, regex)
+            kept = scrub_records(records, matcher)
             dropped += len(records) - len(kept)
             response[bucket] = kept
     if not dropped:
@@ -692,6 +695,9 @@ class ComponentSearchMixin(LegacySearchMixin):
           - no allowlist dimensions → ``(True, <wire dict>)``: the nine-key wire;
             with no allow dimensions the two precedences agree.
           - allowlist active without the capability → ``(False, None)``.
+          - enforce mode → the wire also carries ``enforce: True``, on which the
+            component omits the config records that reference a hidden entity;
+            a component without ``search_visibility_enforce`` → ``(False, None)``.
         - config could not be loaded → ``(False, None)``: the legacy path applies
           the filter server-side before the counts/pagination (fail-closed to
           legacy, matching ``visibility_state_and_wire``'s fail-closed pairing).
@@ -700,11 +706,16 @@ class ComponentSearchMixin(LegacySearchMixin):
         gate and its wire form, instead of the active check and the wire fetch
         each hitting the (memoized) config read separately.
         """
-        active, visibility = await visibility_state_and_wire()
+        active, visibility, enforce = await visibility_state_and_wire()
         if not active:
             return True, None
         if not component_supports(caps, "search_visibility") or visibility is None:
             return False, None
+        if enforce:
+            if not component_supports(caps, "search_visibility_enforce"):
+                return False, None
+            enforcing: VisibilityWire = {**visibility, "enforce": True}
+            visibility = enforcing
         if component_supports(caps, "search_visibility_allowlist_authorization"):
             authorized: VisibilityWire = {**visibility, "allowlist_authorization": True}
             return True, authorized

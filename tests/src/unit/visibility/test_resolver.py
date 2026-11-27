@@ -305,7 +305,7 @@ def test_an_unknown_category_alone_activates_nothing() -> None:
 
 def _active(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> bool:
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    active, _wire = asyncio.run(visibility_state_and_wire())
+    active, _wire, _enforce = asyncio.run(visibility_state_and_wire())
     return active
 
 

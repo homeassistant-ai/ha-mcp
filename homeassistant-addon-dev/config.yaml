@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server (Dev)"
 description: "Development channel - AI assistant integration via MCP (unstable)"
-version: "9.3.0.dev3649"
+version: "9.4.0.dev3747"
 slug: "ha_mcp_dev"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 stage: experimental
@@ -57,6 +57,7 @@ options:
   auto_backup_retain_per_entity: 100
   enable_snapshot_actions: true
   backup_read_only: false
+  enable_settings_transfer_actions: false
   enable_snapshot_delete: false
   snapshot_delete_min_age_days: 7
   disabled_tools: ""
@@ -90,6 +91,7 @@ schema:
   auto_backup_retain_per_entity: int(1,10000)?
   enable_snapshot_actions: bool?
   backup_read_only: bool?
+  enable_settings_transfer_actions: bool?
   enable_snapshot_delete: bool?
   snapshot_delete_min_age_days: int(0,365)?
   disabled_tools: str?

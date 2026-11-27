@@ -43,10 +43,10 @@ from urllib.parse import urlparse
 
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
-from homeassistant.loader import async_get_integration
 from homeassistant.requirements import (
     RequirementsNotFound,
     async_process_requirements,
+    pip_kwargs,
 )
 from homeassistant.util.package import is_virtual_env
 from packaging.requirements import InvalidRequirement, Requirement
@@ -68,7 +68,6 @@ from .const import (
     MIN_EMBEDDED_HOME_ASSISTANT_VERSION,
     OPT_BIND_HOST,
     OPT_ENABLE_LLM_API,
-    OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
     SERVER_CONFIG_SUBDIR,
@@ -93,15 +92,20 @@ from .embedded_worker_teardown import (
     teardown_worker_loop,
 )
 from .loopback_url import derive_loopback_url
-from .pip_compat import pip_kwargs
 from .purged_modules import release_purged_modules
 from .server_credentials import (
     CredentialNeeded,
     async_release_credentials,
     async_server_access_token,
 )
-from .server_pin import server_dist, server_pins
-from .spec_dist import provides_server, spec_dist_name, version_dist
+from .server_pin import server_dist
+from .spec_dist import (
+    async_paired_server_requirement,
+    pip_spec_override,
+    provides_server,
+    spec_dist_name,
+    version_dist,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -199,7 +203,7 @@ def _install_log_filters_if_available() -> None:
     """Attach the shared MCP SDK/fastmcp log-noise filters, if this ha-mcp has them.
 
     Mirrors the ``register_browser_landing`` guard just above ``_serve``'s call
-    site: the installed server version is user-controlled (the HACS component
+    site: the installed server version is user-controlled (the component
     release, a pip-spec override), so an older ha-mcp without ``ha_mcp.log_filters`` must
     keep serving -- the filters are simply absent there, as they are today.
 
@@ -262,13 +266,7 @@ class EmbeddedServerManager:
             self._server_url, self._loopback_verify_ssl = derive_loopback_url(hass)
         # An explicit pip-spec override (PR / pre-release testing) wins over the
         # server requirement this component release pins in its manifest.
-        # DEFAULT_PIP_SPEC in the field means "no override" (the options flow
-        # also normalizes it away on save; this guard keeps legacy/direct
-        # entries correct too).
-        raw_pip_spec = str(options.get(OPT_PIP_SPEC) or "").strip()
-        self._pip_spec_override: str = (
-            raw_pip_spec if raw_pip_spec and raw_pip_spec != DEFAULT_PIP_SPEC else ""
-        )
+        self._pip_spec_override: str = pip_spec_override(options)
         # The ha-mcp requirement in this component release's manifest. Home
         # Assistant installs it before setup, like any integration requirement;
         # read in async_start (the loader lookup is async).
@@ -356,7 +354,7 @@ class EmbeddedServerManager:
         if self._paired_spec is None and not self._pip_spec_override:
             _LOGGER.warning(
                 "This component's manifest pins no ha-mcp server; running "
-                "whichever ha-mcp is installed. Reinstall from HACS or the Marketplace"
+                "whichever ha-mcp is installed. Reinstall from the Marketplace"
             )
         self._pip_spec = self._resolve_pip_spec()
 
@@ -477,8 +475,8 @@ class EmbeddedServerManager:
         An explicit override wins (any pip requirement string — a version pin,
         a GitHub tarball URL, a ``file://`` wheel — for PR or pre-release
         testing). Otherwise the requirement this component release pins in its
-        manifest, so the server that runs is the one HACS delivered with the
-        component. A hand-edited manifest without a pin falls back to the bare
+        manifest, so the server that runs is the one the Marketplace delivered
+        with the component. A hand-edited manifest without a pin falls back to the bare
         ``ha-mcp`` distribution.
         """
         if self._pip_spec_override:
@@ -709,7 +707,7 @@ class EmbeddedServerManager:
           version cannot prove (a cleared override that installed the same
           version string, issue #1914 — see _async_remove_replaced_source),
         * the other server distribution is installed beside the target (a
-          component 2.x dev-channel install, a HACS pre-release swapping
+          component 2.x dev-channel install, a pre-release swapping
           ``ha-mcp`` for ``ha-mcp-dev`` or back, or an override on the other
           one). It is removed first, and because both distributions own the
           same ``ha_mcp`` files, that removal deletes the target's files too,
@@ -1098,7 +1096,7 @@ class EmbeddedServerManager:
         cache.
 
         Mirrors how ``homeassistant.requirements`` builds its pip invocation
-        (HA's own constraints file + ``config/deps`` target where applicable) so
+        (HA's own constraints file) so
         the resolver honors Home Assistant's constraints, with one deliberate
         difference from ``install_package(upgrade=True)``: that maps to uv's
         EAGER ``--upgrade``, which re-resolves the whole dependency graph to
@@ -1113,7 +1111,7 @@ class EmbeddedServerManager:
         already matches: removing the other server distribution deletes the
         ``ha_mcp`` files both of them own.
         """
-        kwargs = pip_kwargs(self._hass.config.config_dir)
+        kwargs = pip_kwargs()
         timeout = max(int(kwargs.get("timeout") or 0), _PIP_INSTALL_TIMEOUT_SECONDS)
         installed = await self._async_run_tracked_install_job(
             partial(
@@ -1122,7 +1120,6 @@ class EmbeddedServerManager:
                 target_dist=self._target_dist(),
                 reinstall=reinstall,
                 constraints=kwargs.get("constraints"),
-                target=kwargs.get("target"),
                 timeout=timeout,
             )
         )
@@ -1138,7 +1135,7 @@ class EmbeddedServerManager:
             )
 
     async def _async_remove_distribution(self, dist_name: str) -> bool:
-        """Remove a distribution from the same target used for installation.
+        """Remove a distribution from Home Assistant's interpreter environment.
 
         Tracked like the install: an uninstall mutates the same package files.
         Returns whether the uninstall subprocess reported success; callers
@@ -1146,15 +1143,9 @@ class EmbeddedServerManager:
         cleanup) or fatal (the replaced-source removal, whose failure would
         silently void the reinstall — see ``_async_remove_replaced_source``).
         """
-        target = pip_kwargs(self._hass.config.config_dir).get("target")
-        if target is None:
-            result = await self._async_run_tracked_install_job(
-                partial(_uninstall_distribution, dist_name)
-            )
-        else:
-            result = await self._async_run_tracked_install_job(
-                partial(_uninstall_distribution, dist_name, target=target)
-            )
+        result = await self._async_run_tracked_install_job(
+            partial(_uninstall_distribution, dist_name)
+        )
         return bool(result)
 
     def _store_installed_spec(self) -> None:
@@ -1552,7 +1543,7 @@ class EmbeddedServerManager:
         # with the friendly landing page (405 + setup guidance) instead of a
         # bare "Method Not Allowed" — both on the direct URL and through the
         # ingress webhook. Guard only the import: the installed server version
-        # is user-controlled (the HACS component release, a pip-spec override), so an older
+        # is user-controlled (the component release, a pip-spec override), so an older
         # ha-mcp without this module must keep serving; the landing is simply
         # absent there, as it is today.
         try:
@@ -1973,14 +1964,13 @@ def _running_ha_mcp_version(preferred_dist: str) -> str | None:
     return imported_version
 
 
-def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> bool:
+def _uninstall_distribution(dist_name: str) -> bool:
     """Uninstall a distribution by name (blocking), best-effort.
 
     Mirrors ``homeassistant.util.package.install_package``'s invocation style —
-    ``<python> -m uv pip ...`` with no shell. An explicit dependency target is
-    used when Home Assistant installs into ``config/deps``; otherwise ``--python``
-    selects Home Assistant's interpreter environment. A failure is logged but
-    not raised; the caller treats the cleanup as best-effort.
+    ``<python> -m uv pip ...`` with no shell; ``--python`` selects Home
+    Assistant's interpreter environment. A failure is logged but not raised;
+    the caller treats the cleanup as best-effort.
     """
     args = [
         sys.executable,
@@ -1988,12 +1978,10 @@ def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> boo
         "uv",
         "pip",
         "uninstall",
+        "--python",
+        sys.executable,
+        dist_name,
     ]
-    if target is not None:
-        args += ["--target", os.path.abspath(target)]
-    else:
-        args += ["--python", sys.executable]
-    args.append(dist_name)
     try:
         result = subprocess.run(
             args,
@@ -2022,13 +2010,12 @@ def _force_install_package(
     target_dist: str | None,
     reinstall: bool = False,
     constraints: str | None,
-    target: str | None,
     timeout: int | None,
 ) -> bool:
     """Install ``spec``, touching ONLY our own distribution (blocking).
 
     Mirrors ``homeassistant.util.package.install_package``'s uv invocation
-    (index strategy, constraints, target, the uv --user workaround, and the
+    (index strategy, constraints, the uv --user workaround, and the
     HTTP_TIMEOUT env) but never its eager ``--upgrade``, which re-resolves
     EVERY dependency to the newest allowed version and replaces packages the
     Home Assistant image already ships (#2135/#2146). The replacement flag
@@ -2044,7 +2031,6 @@ def _force_install_package(
         target_dist=target_dist,
         reinstall=reinstall,
         constraints=constraints,
-        target=target,
         env=env,
     )
     _LOGGER.info("Installing the in-process server package: %s", spec)
@@ -2214,7 +2200,6 @@ def _uv_install_args(
     target_dist: str | None,
     reinstall: bool = False,
     constraints: str | None,
-    target: str | None,
     env: dict[str, str],
 ) -> list[str]:
     """Build the ``uv pip install`` argv (mirrors install_package's shape)."""
@@ -2234,9 +2219,7 @@ def _uv_install_args(
     args += _scoped_install_flags(spec, target_dist, reinstall=reinstall)
     if constraints is not None:
         args += ["--constraint", constraints]
-    if target:
-        args += ["--target", os.path.abspath(target)]
-    elif (
+    if (
         not is_virtual_env()
         # install_package's _UV_ENV_PYTHON_VARS, mirrored: an explicit uv
         # python selection means uv already installs to the right place.
@@ -2331,18 +2314,6 @@ def _spec_satisfied_by(spec: str, installed_version: str) -> bool:
     if requirement.url:
         return False
     return requirement.specifier.contains(installed_version, prereleases=True)
-
-
-async def async_paired_server_requirement(hass: HomeAssistant) -> str | None:
-    """Return the server requirement this component release pins, or None.
-
-    Every component release HACS delivers pins the ``ha-mcp`` (pre-release:
-    ``ha-mcp-dev``) build it was released with in ``manifest.json``'s ``requirements``, which Home
-    Assistant installs before setting the integration up. A copy taken from
-    master pins the last release; only a hand-edited manifest carries none.
-    """
-    integration = await async_get_integration(hass, DOMAIN)
-    return next(iter(server_pins(integration.requirements)), None)
 
 
 def _exact_pinned_version(spec: str) -> str | None:

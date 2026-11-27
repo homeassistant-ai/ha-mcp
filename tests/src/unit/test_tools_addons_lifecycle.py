@@ -316,6 +316,7 @@ class TestCheckUpdates:
     async def test_a_failed_reload_stays_a_failure(self, core_route: Route) -> None:
         core_route.supervisor.answer("GET", "/store", _store())
         core_route.supervisor.refuse("POST", "/store/reload", "connection refused")
+        core_route.supervisor.answer("GET", "/supervisor/info", supervisor_info())
 
         body = await rejected_call_body(
             manage(core_route.client, action="check_updates")
@@ -492,6 +493,12 @@ class TestRepositories:
         core_route.supervisor.refuse(
             "DELETE", f"{REPOSITORIES}/x", "App core_foo not found"
         )
+        still_listed = Repository(
+            slug="x", name="Test apps", source=REPO_URL, url=REPO_URL, maintainer="Test"
+        )
+        core_route.supervisor.answer(
+            "GET", "/store", StoreInfo(repositories=[still_listed], addons=[]).to_dict()
+        )
 
         await rejected_call_body(
             manage(core_route.client, action="remove_repository", repository="x")
@@ -527,9 +534,12 @@ class TestRepositories:
     async def test_a_failed_repository_action_gets_repository_advice(
         self, core_route: Route, action: str, message: str, advice: str
     ) -> None:
+        """A refused repository action still gets repository advice when the
+        store cannot be read back."""
         path = REPOSITORIES if action == "add_repository" else f"{REPOSITORIES}/abc123"
         method = "POST" if action == "add_repository" else "DELETE"
         core_route.supervisor.refuse(method, path, message)
+        core_route.supervisor.refuse("GET", "/store", "store unavailable")
         repository = REPO_URL if action == "add_repository" else "abc123"
 
         body = await rejected_call_body(

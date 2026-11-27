@@ -69,7 +69,11 @@ async def test_snapshot_temp_is_exclusively_created_private_before_writing(
     creations: list[tuple[Path, int, int]] = []
 
     def open_file(path: Any, flags: int, mode: int = 0o777, **kwargs: Any) -> int:
-        if flags & os.O_CREAT and _in(manager.backup_dir, path):
+        if (
+            flags & os.O_CREAT
+            and _in(manager.backup_dir, path)
+            and Path(os.fsdecode(path)).suffix == ".tmp"
+        ):
             creations.append((Path(os.fsdecode(path)), flags, mode))
             assert mode == 0o600
             assert flags & os.O_EXCL
@@ -126,18 +130,19 @@ class _FailedWrite:
         self.stream.close()
 
 
-def _fail_replace(
+def _fail_publication(
     monkeypatch: pytest.MonkeyPatch, directory: Path, message: str
 ) -> None:
     """Make moving a finished temp file into ``directory`` fail."""
-    native_replace = os.replace
+    operation = "rename" if os.name == "nt" else "link"
+    native_publish = getattr(os, operation)
 
-    def replace(src: Any, dst: Any, *args: Any, **kwargs: Any) -> None:
+    def publish(src: Any, dst: Any, *args: Any, **kwargs: Any) -> None:
         if _in(directory, src):
             raise OSError(message)
-        native_replace(src, dst, *args, **kwargs)
+        native_publish(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(os, operation, publish)
 
 
 def _fail_stream(
@@ -164,7 +169,7 @@ def _fail_stream(
     monkeypatch.setattr(os, "fdopen", fdopen)
 
 
-@pytest.mark.parametrize("failure", ["fdopen", "write", "replace"])
+@pytest.mark.parametrize("failure", ["fdopen", "write", "publish"])
 async def test_failed_snapshot_removes_only_its_temporary_file(
     manager: bm.BackupManager,
     template_entry: ConfigEntry,
@@ -175,8 +180,8 @@ async def test_failed_snapshot_removes_only_its_temporary_file(
     directory.mkdir(parents=True)
     retained = directory / "retained.yaml"
     retained.write_text("retained", encoding="utf-8")
-    if failure == "replace":
-        _fail_replace(monkeypatch, directory, "replace failed")
+    if failure == "publish":
+        _fail_publication(monkeypatch, directory, "publish failed")
     else:
         _fail_stream(monkeypatch, directory, failure)
 
@@ -185,7 +190,11 @@ async def test_failed_snapshot_removes_only_its_temporary_file(
             "helper_template", template_entry.entry_id, force=True, mandatory=True
         )
 
-    assert list(directory.iterdir()) == [retained]
+    assert [
+        path
+        for path in directory.iterdir()
+        if path.name != ".snapshot-publication.lock"
+    ] == [retained]
     assert retained.read_text(encoding="utf-8") == "retained"
 
 
@@ -362,7 +371,7 @@ async def test_template_safety_failure_keeps_reason_and_safe_diagnostic(
         monkeypatch.setattr(Path, "mkdir", mkdir)
     else:
         expected_detail = "No space left on device"
-        _fail_replace(monkeypatch, restoring.backup_dir, expected_detail)
+        _fail_publication(monkeypatch, restoring.backup_dir, expected_detail)
 
     with (
         caplog.at_level(logging.WARNING),

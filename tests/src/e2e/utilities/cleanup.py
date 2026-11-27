@@ -202,11 +202,10 @@ class TestEntityCleaner:
     async def _cleanup_script(self, entity_id: str) -> bool:
         """Clean up a script entity."""
         try:
-            # Extract script ID from entity ID
-            script_id = entity_id.replace("script.", "")
-
+            # A bare id would delete only under that storage key, so a renamed
+            # script is removed by its entity_id.
             delete_result = await self.client.call_tool(
-                "ha_config_remove_script", {"script_id": script_id}
+                "ha_config_remove_script", {"script_id": entity_id}
             )
 
             delete_data = parse_mcp_result(delete_result)

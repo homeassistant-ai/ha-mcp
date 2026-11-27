@@ -13,7 +13,7 @@ Home Assistant also registers every script as a ``script.<storage key>``
 service, so ``ha_call_service`` with ``domain: script`` is checked the same way,
 and ``script.<storage key>`` joins the terms the embedded scans match. Traces
 are keyed by storage key too, so trace records are checked against it (config
-files are checked in ``config_files``).
+files are checked in ``tools/config_file_visibility``).
 
 The argument check is scoped to these identifier arguments, so the same word
 appearing in template text or a message never triggers it.

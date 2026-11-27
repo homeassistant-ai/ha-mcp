@@ -118,37 +118,14 @@ def summarize_states(
     }
 
 
-def summary_warnings(
-    result: dict[str, list[dict[str, Any]]],
-    summaries: dict[str, dict[str, Any]],
-    window_start_ts: float,
-) -> list[str]:
-    """Name the entities whose totals cover less than the requested window or list only some of their states."""
-    missing: list[str] = []
-    late: list[str] = []
-    cut: list[str] = []
-    for entity_id, summary in summaries.items():
-        states = result.get(entity_id)
-        if not states:
-            missing.append(entity_id)
-        elif states[0]["lu"] > window_start_ts:
-            late.append(entity_id)
-        if left_out := summary["distinct_states"] - len(summary["states"]):
-            cut.append(f"{entity_id}: {left_out} of {summary['distinct_states']}")
+def summary_warnings(summaries: dict[str, dict[str, Any]]) -> list[str]:
+    """Name the entities whose summary lists only some of their states."""
+    cut = [
+        f"{entity_id}: {left_out} of {summary['distinct_states']}"
+        for entity_id, summary in summaries.items()
+        if (left_out := summary["distinct_states"] - len(summary["states"]))
+    ]
     warnings = []
-    if missing:
-        warnings.append(
-            f"No recorded states for: {', '.join(missing)} in this window. Check "
-            "the entity IDs, the time range and that the recorder includes them; "
-            "their summaries count nothing."
-        )
-    if late:
-        warnings.append(
-            f"Totals for {', '.join(late)} start at the first recorded state, "
-            "after start_time: Core returned no earlier state (entity added "
-            "later, older history purged, or core_options "
-            "{'include_start_time_state': false})."
-        )
     if cut:
         warnings.append(
             "limit left the shortest states out of summary.states, per entity: "

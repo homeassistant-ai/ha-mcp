@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -36,12 +36,17 @@ def search_config_surface(
     *,
     match_all: bool,
     exact: bool,
-    include_config: bool,
     partial_reasons: list[str],
     diagnostics: dict[str, int],
+    saved_bodies: dict[str, dict[str, Any]] | None,
     secret_values: frozenset[str] = frozenset(),
+    omit: Callable[[Any], bool] | None = None,
 ) -> list[dict[str, Any]]:
-    """Score one config domain's loaded entities (raw_config indexed, not emitted for YAML)."""
+    """Score one config domain's loaded entities (raw_config indexed, not emitted for YAML).
+
+    ``omit`` is the enforcing search's test for a record that names a hidden
+    entity (``hidden_reference._hidden_reference_test``); such a record is left out.
+    """
     component = hass.data.get(domain) if getattr(hass, "data", None) else None
     entities = getattr(component, "entities", None)
     if entities is None:
@@ -50,13 +55,13 @@ def search_config_surface(
         )
         return []
 
+    name_key = "name" if domain == SEARCH_TYPE_SCENE else "alias"
     results: list[dict[str, Any]] = []
     for entity in entities:
         entity_id = getattr(entity, "entity_id", None)
         if not entity_id:
             continue
         name, item_id, config_dict = _extract_config(domain, entity)
-        source = _classify_source(item_id)
 
         if match_all:
             score: int | None = 100
@@ -74,36 +79,35 @@ def search_config_surface(
             if scored is None:
                 continue
             score, match_in_name, match_in_config = scored
+        # Search matches the running configuration. Return the editor's saved
+        # definition by ID; Core can normalize action syntax during loading.
+        config_out = saved_bodies.get(item_id) if saved_bodies and item_id else None
+        if omit is not None and omit((entity_id, name, config_dict, config_out)):
+            continue
 
-        # Scenes never emit a component-served body: a HomeAssistantScene holds no
-        # raw storage dict (its states are runtime State objects), so config stays
-        # None and config_dict is used only as the faithful match corpus.
-        config_out: dict[str, Any] | None = None
-        if (
-            domain != SEARCH_TYPE_SCENE
-            and include_config
-            and source == "storage"
-            and config_dict is not None
-        ):
-            if _too_large(config_dict):
+        missing_editor_body = saved_bodies is not None and config_out is None
+        if config_out is not None:
+            if _too_large(config_out):
                 partial_reasons.append(f"{domain} {entity_id} body omitted (too large)")
+                config_out = None
             else:
-                config_out = config_dict
+                config_out = _scrub_secret_values(config_out, secret_values)
 
         rec: dict[str, Any] = {
             "id": item_id,
             "entity_id": entity_id,
-            "source": source,
+            name_key: name,
             "score": score,
             "match_in_name": match_in_name,
             "match_in_config": match_in_config,
             "config": config_out,
         }
-        # Scenes carry a "name"; automations/scripts carry an "alias".
-        if domain == SEARCH_TYPE_SCENE:
-            rec["name"] = name
-        else:
-            rec["alias"] = name
+        if missing_editor_body:
+            rec["config_hint"] = (
+                "Search could not find a saved editor definition for this match. "
+                "For a YAML package, use ha_config_get_yaml on the package file "
+                "if that tool is available."
+            )
         results.append(rec)
     return results
 
@@ -179,21 +183,6 @@ def _scene_match_corpus(scene_config: Any) -> dict[str, Any] | None:
     if entity_ids:
         out["entities"] = sorted(entity_ids)
     return out or None
-
-
-def _classify_source(item_id: str | None) -> str:
-    """Classify an automation/script/scene as storage- or YAML-backed.
-
-    HA addresses editor-managed items by their ``id`` (the entity's
-    ``unique_id``); the config editor's ``/config/<domain>/config/<id>`` REST
-    path — and its edit link — key off exactly that id, and 404 for items with
-    no id. So an id-bearing item is treated as ``storage`` (body emittable under
-    ``include_config``); an id-less item is ``yaml`` and its body is never
-    emitted from search (its ``raw_config`` may carry resolved ``!secret``
-    plaintext). This is the conservative rule: the safe error is toward
-    withholding a body, not leaking one.
-    """
-    return "storage" if item_id else "yaml"
 
 
 def _too_large(config_dict: dict[str, Any]) -> bool:
@@ -287,12 +276,14 @@ def _search_helpers(
     secret_values: frozenset[str] = frozenset(),
     flow_domains: frozenset[str] = FLOW_HELPER_DOMAINS,
     custom_domains: frozenset[str] = frozenset(),
+    omit: Callable[[Any], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Index collection helpers (states) + flow helpers (config-entry options).
 
     An entry of a custom-only domain is matched on its title only and emitted with
     ``options: None`` and ``options_withheld`` (see
-    ``flow_domains._flow_helper_domains``).
+    ``flow_domains._flow_helper_domains``). ``omit`` leaves out a helper that
+    names a hidden entity (see :func:`search_config_surface`).
     """
     results: list[dict[str, Any]] = []
 
@@ -332,6 +323,8 @@ def _search_helpers(
             if scored is None:
                 continue
             score, match_in_name, match_in_config = scored
+        if omit is not None and omit((entity_id, name, body)):
+            continue
         results.append(
             {
                 "entity_id": entity_id,
@@ -356,6 +349,7 @@ def _search_helpers(
             secret_values=secret_values,
             flow_domains=flow_domains,
             custom_domains=custom_domains,
+            omit=omit,
         )
     )
     return results
@@ -371,6 +365,7 @@ def _search_flow_helpers(
     secret_values: frozenset[str],
     flow_domains: frozenset[str],
     custom_domains: frozenset[str],
+    omit: Callable[[Any], bool] | None,
 ) -> list[dict[str, Any]]:
     """Index flow helpers: config entries, options + title ONLY, never data."""
     results: list[dict[str, Any]] = []
@@ -409,6 +404,8 @@ def _search_flow_helpers(
             if scored is None:
                 continue
             score, match_in_name, match_in_config = scored
+        if omit is not None and omit((title, options)):
+            continue
         record: dict[str, Any] = {
             "entity_id": None,
             "helper_type": domain,

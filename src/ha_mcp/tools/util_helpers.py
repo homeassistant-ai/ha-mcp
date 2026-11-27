@@ -144,9 +144,8 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
 # lat-long). Both raw WebSocket surfaces enforce it through `raw_ws_refusal()`
 # below, so they stay in lockstep. Registry deletion on HA Core is `remove`
 # (not `delete`) for devices and entities; ha_remove_device / ha_remove_entity
-# emit it. Device `remove_config_entry` stays blocked: every Core that has it
-# removes devices through it, as the only command before 2026.9 and as a
-# deprecated alias of `remove` until Core drops it in 2027.9.
+# emit it. Device `remove_config_entry` stays blocked: Core keeps it as a
+# deprecated alias of `remove` until 2027.9.
 BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
     {
         "config/core/update",
@@ -492,20 +491,17 @@ def merge_visibility_warnings(
     return response
 
 
-async def list_visible_registry_ids(
-    client: Any, domain: str, *, bare: bool = False
-) -> list[str]:
+async def list_visible_registry_ids(client: Any, domain: str) -> list[str]:
     """Best-effort list of up to 10 visible ``domain`` entity IDs from the registry.
 
-    Populates the ``available_*_ids`` hint of a RESOURCE_NOT_FOUND error. With
-    ``bare`` the ``<domain>.`` prefix is stripped, for tools that take the bare
-    storage-key form. Entities hidden by enforce mode are dropped so the hint
+    Populates the ``available_*_ids`` hint of a RESOURCE_NOT_FOUND error.
+    Ids the enforce-mode outbound scan matches are dropped so the hint
     neither leaks a hidden ID nor trips the outbound scan. Returns an empty list
     on any failure: the caller treats absence as "no IDs to report" rather than
     failing the structured error raise. The cap lives here so a new call site
     can't bloat the error payload.
     """
-    from ..visibility.enforcement import active_hidden_entity_ids
+    from ..visibility.enforcement import active_hidden_matcher
 
     try:
         result = await client.send_websocket_message(
@@ -517,13 +513,15 @@ async def list_visible_registry_ids(
     entries = result.get("result", []) if isinstance(result, dict) else result
     if not isinstance(entries, list):
         return []
-    hidden = await active_hidden_entity_ids(client)
+    # The matcher also covers ``script.<hidden storage key>``, which another
+    # script's entity_id can be.
+    hidden = await active_hidden_matcher(client)
     prefix = f"{domain}."
     return [
-        entity_id.removeprefix(prefix) if bare else entity_id
+        entity_id
         for entry in entries
         if isinstance(entry, dict)
         and isinstance(entity_id := entry.get("entity_id"), str)
         and entity_id.startswith(prefix)
-        and entity_id not in hidden
+        and not (hidden and hidden.embeds(entity_id))
     ][:10]

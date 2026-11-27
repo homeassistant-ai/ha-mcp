@@ -48,6 +48,48 @@
     "server.sections.beta": "Beta funkcije (opasno)",
     "server.sections.developer": "Programer",
     "server.sections.remote_access": "Udaljeni pristup",
+    "transfer.title": "Izvoz i uvoz HA-MCP podešavanja",
+    "transfer.help": "Prenesite podešavanja servera, izbore alata, bezbednosnu politiku, vidljivost entiteta i opcije rezervnih kopija između HA-MCP instalacija. Odredište zadržava svoj Home Assistant pristupni token i prekidač za pristup. Cloud provajderi mogu dodeliti drugačiji javni URL.",
+    "transfer.secrets": "Datoteka izvezena iz HA-MCP Server u Home Assistant sadrži njen ID veb-koda, tajnu putanju i sve sačuvane OAuth akreditive u običnom tekstu. Svako sa tom datotekom može imati pristup za HA-MCP. Čuvajte je privatno i uvozite samo datoteku kojoj verujete.",
+    "transfer.export": "Preuzmi JSON sa podešavanjima",
+    "transfer.file": "Datoteka podešavanja za uvoz",
+    "transfer.import": "Uvezi podešavanja",
+    "transfer.confirm": "Da zamenim HA-MCP podešavanja ove instalacije onima iz ove datoteke? Ovo može prekinuti vezu sa klijentima koji koriste trenutna podešavanja.",
+    "transfer.confirm_connection": "Da zamenim HA-MCP podešavanja ove instalacije onima iz ove datoteke? Datoteka takođe sadrži tajne veze HA-MCP Server, koje primenjuje samo bočna traka HA-MCP. Ovo može prekinuti vezu sa klijentima koji koriste trenutna podešavanja.",
+    "transfer.exporting": "Priprema preuzimanja…",
+    "transfer.importing": "Uvoz podešavanja…",
+    "transfer.downloaded": "Preuzimanje podešavanja je počelo.",
+    "transfer.imported": "Podešavanja su uvezena. Osvežite ovu stranicu da biste videli vraćena podešavanja.",
+    "transfer.restart_server": "Podešavanja su uvezena. Ponovo pokrenite HA-MCP da biste dovršili primenu vraćenih podešavanja.",
+    "transfer.connection_skipped": "Podešavanja veze u datoteci se primenjuju samo na HA-MCP Server u Home Assistant, tako da je ovaj server zadržao sopstvena.",
+    "transfer.file_permissions_skipped": "Dozvole za File & YAML Tools iz datoteke nisu primenjene zato što taj unos integracije nije dostupan ovde.",
+    "transfer.file_permissions_unreachable_skipped": "Dozvole za File & YAML Tools iz datoteke nisu primenjene: u OAuth režimu ova stranica nema Home Assistant akreditive da ih promeni. Podesite ih u Configure for File & YAML Tools u Home Assistant.",
+    "transfer.export_file_permissions_unreachable": "Datoteka izostavlja dozvole za File & YAML Tools: u OAuth režimu ova stranica nema Home Assistant akreditive da ih pročita.",
+    "transfer.restart": "Podešavanja su uvezena. Ponovo pokrenite Home Assistant da biste dovršili primenu vraćenih podešavanja.",
+    "transfer.too_large": "Izaberite datoteku podešavanja veličine 4 MiB ili manje.",
+    "transfer.export_too_large": "Ova podešavanja premašuju limit izvoza od 4 MiB.",
+    "transfer.invalid_backup": "Izaberite važeći izvoz HA-MCP podešavanja.",
+    "transfer.allowed_paths_store_unavailable": "Home Assistant nije mogao da pročita ili sačuva dozvoljene fascikle. Otvorite Configure for File & YAML Tools i ponovo sačuvajte fascikle, pa pokušajte ponovo. Ako to ne uspe, proverite skladište za Home Assistant.",
+    "transfer.extra_yaml_keys_store_unavailable": "Home Assistant nije mogao da pročita ili sačuva dodatne YAML ključeve. Otvorite Configure for File & YAML Tools i ponovo sačuvajte ključeve, pa pokušajte ponovo. Ako to ne uspe, proverite skladište za Home Assistant.",
+    "transfer.tools_entry_busy": "File & YAML Tools menja stanje. Sačekajte da se završi, pa ponovo uvezite podešavanja.",
+    "transfer.tools_entry_unavailable": "File & YAML Tools je omogućen ali nije učitan. Otvorite Devices & services, rešite bilo kakvu grešku pri podešavanju, ponovo učitajte unos i pokušajte uvoz ponovo.",
+    "transfer.rollback_incomplete": "Uvoz nije uspeo i neka podešavanja nisu mogla biti vraćena. Proverite zapisnik za Home Assistant i pregledajte odredišna podešavanja pre ponovnog pokušaja.",
+    "transfer.extra_tools_entry": "Ova datoteka sadrži samo unos servera. Izaberite rezervnu kopiju koja uključuje File & YAML Tools, ili koristite odredište bez tog unosa.",
+    "transfer.tools_must_be_disabled": "File & YAML Tools je bio onemogućen na izvoru. U Home Assistant dodajte taj unos na odredištu ako je potrebno, onemogućite ga, pa uvezite ponovo.",
+    "transfer.tools_must_be_enabled": "File & YAML Tools je bio omogućen na izvoru. Omogućite odredišni unos u Home Assistant, pa uvezite ponovo.",
+    "transfer.incompatible_version": "Ova verzija HA-MCP ne može da uveze taj format datoteke. Proverite verziju HA-MCP na obe instalacije.",
+    "transfer.webhook_in_use": "Druga integracija na ovom Home Assistant već koristi ID veb-koda u ovoj datoteci. Rešite sukob pre uvoza.",
+    "transfer.decision_pin_required": "Ova politika zahteva PIN za odluke. Podesite ga na kartici Tool Security Policies na ovoj instalaciji, pa ponovo uvezite datoteku.",
+    "transfer.server_unavailable": "HA-MCP server nije dostupan. Proverite integraciju i ponovo otvorite panel.",
+    "transfer.session": "Ponovo otvorite bočnu traku HA-MCP kao Home Assistant administrator i pokušajte ponovo.",
+    "transfer.restore_failed": "HA-MCP nije mogao da dovrši uvoz podešavanja. Proverite odredišna podešavanja pre ponovnog pokušaja.",
+    "transfer.export_failed": "Preuzimanje podešavanja nije uspelo. Ponovo otvorite panel i pokušajte ponovo.",
+    "transfer.invalid_source_entries": "Trenutna podešavanja integracije ne mogu se vratiti iz datoteke. Otvorite Configure for HA-MCP Server i File & YAML Tools ako su instalirani, proverite podešavanja veze i dozvola, pa izveзите ponovo.",
+    "transfer.invalid_server_settings": "HA-MCP nije mogao da pročita jednu od svojih datoteka sa podešavanjima na ovoj instalaciji. Zapisnik za Home Assistant navodi datoteku. Popravite je ili obrišite, pa pokušajte ponovo.",
+    "transfer.origin_denied": "Zahtev nije došao sa bočne trake HA-MCP na ovoj Home Assistant adresi. Otvorite panel sa bočne trake. Reverzni proksi mora proslediti originalno zaglavlje Host.",
+    "transfer.read_failed": "Čitanje izabrane datoteke nije uspelo. Izaberite datoteku ponovo.",
+    "transfer.permissions_changed": "Dozvole za File & YAML Tools su se promenile tokom uvoza, pa je uvoz zaustavljen i zadržane su. Ponovo uvezite datoteku.",
+    "transfer.component_outdated": "Ažurirajte HA-MCP u Marketplace i ponovo pokrenite Home Assistant, pa uvezite ponovo: instalirani File & YAML Tools ne može da opozove neuspešan uvoz dozvola.",
     "server.sidecar.disable": "Trajno onemogući server podešavanja",
     "server.sidecar.disable_title": "Trajno onemogućava korisnički interfejs podešavanja: zaustavlja ovaj server I upisuje ~/.ha-mcp/settings_ui_disabled tako da se ne pokreće ponovo pri budućim pokretanjima ha-mcp-a. Izbrišite tu datoteku da biste ga ponovo omogućili.",
     "backups.loading": "Učitavanje stanja rezervnih kopija…",
@@ -259,6 +301,8 @@
     "backup.fields.enable_auto_backup.help": "Sačuvajte snimak entiteta pre nego što ga izmeni poziv alata za upis ili brisanje. Dok je ovo isključeno, alati za datoteke i sirovi YAML (ha_write_file, ha_delete_file, ha_config_set_yaml) odbijaju upis.",
     "backup.fields.enable_snapshot_actions.label": "Dozvoli radnje sa potpunim HA snimcima",
     "backup.fields.enable_snapshot_actions.help": "Dozvolite AI asistentima da upravljaju potpunim Home Assistant snimcima preko ha_manage_backup i ekvivalentnih usluga i komandi za rezervne kopije u ha_call_service. Isključivanje ovoga blokira svaku radnju sa snimcima, uključujući i prikazivanje liste. Brisanje snimaka je dostupno samo preko ha_manage_backup i takođe zahteva dozvolu za brisanje snimaka. Rezervne kopije izmena i radnje sa rezervnim kopijama koje korisnik obavlja u veb interfejsu podešavanja ostaju dostupne.",
+    "backup.fields.enable_settings_transfer_actions.label": "Dozvoli da ha_manage_backup izvozi i uvozi podešavanja",
+    "backup.fields.enable_settings_transfer_actions.help": "Dozvolite AI asistentima da preuzmu datoteku podešavanja ovog servera i uvezu je preko ha_manage_backup, kao što to rade dugmad Export i Import na kartici Server Settings. Uvoz zadržava podešavanja samo za ljude, a promena bezbednosne politike, vidljivosti entiteta ili dozvola za File & YAML Tools takođe zahteva pristup bezbednosnoj politici razvojnih alata. Uvoz takođe može da uključi režim za programere, alate i funkcije, i da isključi zaštite kao što su sakrivanje tajni, SSL potvrda i IPv6 dozvoljena lista, kao što datoteka kaže, zato proverite podešavanja nakon što AI asistent uveze jedno.",
     "backup.fields.backup_read_only.label": "Učini upravljanje rezervnim kopijama samo za čitanje",
     "backup.fields.backup_read_only.help": "Dozvolite AI asistentima da listaju, pregledaju i upoređuju rezervne kopije izmena, kao i da listaju pune HA snimke kada su radnje sa snimcima omogućene. Blokirajte ručno kreiranje rezervnih kopija, vraćanje u prethodno stanje (uključujući vraćanje izmena) i brisanje, uključujući ekvivalentne usluge i komande rezervnih kopija u ha_call_service. Automatske rezervne kopije pre izmena se nastavljaju. Radnje sa rezervnim kopijama koje korisnik obavlja u veb interfejsu podešavanja ostaju dostupne.",
     "backup.fields.auto_backup_throttle_minutes.label": "Ograničenje učestalosti automatskih rezervnih kopija (u minutima)",
@@ -475,8 +519,8 @@
     "advanced.individual_fetch_batch_size.help": "Istovremena preuzimanja konfiguracija po ID-ju. Smanjite ka 1 na serijskim HA serverima.",
     "advanced.enable_history_query_guardrails.label": "Zaštitne mere za upite istorije",
     "advanced.enable_history_query_guardrails.help": "Odbij upite u bazu beleženja koji premašuju konzervativne budžete entiteta i vremenskog opsega. Isključeno podrazumevano.",
-    "advanced.hacs_refresh_after_update.label": "Osveži komponentu u HACS-u nakon ažuriranja",
-    "advanced.hacs_refresh_after_update.help": "Prilikom pokretanja nakon ažuriranja servera, zatražite od HACS-a (Marketplace na Home Assistant 2026.11+) da ponovo proveri HA-MCP repozitorijum, tako da se odgovarajuće ažuriranje odmah prikaže umesto čekanja na sledeću pozadinsku proveru. Isključeno podrazumevano; instalacije koje su ovo već radile drže to uključeno.",
+    "advanced.hacs_refresh_after_update.label": "Osveži komponentu na Marketplace-u nakon ažuriranja",
+    "advanced.hacs_refresh_after_update.help": "Pri pokretanju nakon ažuriranja servera, zatražite od Marketplace-a da ponovo proveri HA-MCP skladište, tako da se odgovarajuće ažuriranje odmah prikaže umesto da se čeka sledeća pozadinska provera. Podrazumevano je isključeno; instalacije koje su ovo već radile zadržavaju uključeno.",
     "advanced.ha_tool_concurrency.label": "Istovremenost Home Assistant alata",
     "advanced.ha_tool_concurrency.help": "Opciono ograničenje spoljnih poziva Home Assistant alata kroz sve sesije. Interni REST, WebSocket i istovremenost razgranavanja po alatima ostaju nepromenjeni. 0 zadržava neograničeno ponašanje. Poziv koji čeka na kapacitet ne uspeva nakon 60 sekundi.",
     "advanced.dashboard_screenshot_engine_url.label": "URL mehanizma za snimke ekrana kontrolne table",
@@ -715,7 +759,7 @@
     },
     "ha_get_camera_image": {
       "title": "Preuzmi sliku sa kamere",
-      "description": "Preuzmite snimak ekrana sa entiteta Home Assistant kamere."
+      "description": "Preuzmite sliku snimka sa kamere ili entiteta slike u sistemu Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Preuzmi snimak ekrana kontrolne table",
@@ -730,8 +774,8 @@
       "description": "Dobijanje unosa iz registra entiteta, ili bez entiteta podešavanja registra i izloženih entiteta."
     },
     "ha_get_hacs_info": {
-      "title": "Preuzmi HACS informacije",
-      "description": "Preuzmite podatke sa HACS-a (Home Assistant Community Store) — pretražite prodavnicu ili preuzmite detalje o repozitorijumu."
+      "title": "Preuzmi informacije o Marketplace-u",
+      "description": "Preuzmite podatke sa Home Assistant Marketplace-a, u šta je HACS prerastao u verziji 2026.11."
     },
     "ha_get_history": {
       "title": "Preuzmi istoriju entiteta ili statistiku",
@@ -802,8 +846,12 @@
       "description": "Upravljajte željama Home Assistant energetske kontrolne table: mreža / solarna energija /"
     },
     "ha_manage_hacs": {
-      "title": "Upravljaj HACS-om",
-      "description": "Upravljajte HACS-om (Home Assistant Community Store) — instalirajte/ažurirajte, uklonite, dodajte prilagođene repozitorijume ili osvežite repozitorijum u"
+      "title": "Upravljaj Marketplace-om",
+      "description": "Upravljajte Home Assistant Marketplace-om (u šta je HACS prerastao u verziji 2026.11): instalirajte, ažurirajte, uklonite i dodajte skladišta."
+    },
+    "ha_manage_logs": {
+      "title": "Upravljaj sistemom Recorder, statistikom i zapisima",
+      "description": "Upravljajte Home Assistant komponentom Recorder, njenom dugoročnom statistikom i zapisima (logovima)."
     },
     "ha_manage_pipeline": {
       "title": "Upravljaj Assist cevovodom",
@@ -823,7 +871,7 @@
     },
     "ha_manage_updates": {
       "title": "Upravljaj ažuriranjima",
-      "description": "Upravljajte Home Assistant ažuriranjima (lista, detalji, instalacija, preskakanje) i problemima popravki (ignorisanje)."
+      "description": "Upravljaj ažuriranjima za Home Assistant (lista, preuzimanje, osvežavanje, instalacija, preskakanje, clear_skipped, set_channel) i problemima za popravku (ignore"
     },
     "ha_read_file": {
       "title": "Pročitaj fajl",

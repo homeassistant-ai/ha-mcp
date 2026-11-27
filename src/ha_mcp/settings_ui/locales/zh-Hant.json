@@ -48,6 +48,48 @@
     "server.sections.beta": "測試版功能（具風險）",
     "server.sections.developer": "開發人員",
     "server.sections.remote_access": "遠端存取",
+    "transfer.title": "匯出與匯入 HA-MCP 設定",
+    "transfer.help": "在不同的 HA-MCP 安裝之間移動您的伺服器設定、工具選擇、安全性原則、實體能見度與備份選項。目標安裝會保留其 Home Assistant 存取權杖與存取開關。雲端供應商可能會指派不同的公開 URL。",
+    "transfer.secrets": "從 Home Assistant 中的 HA-MCP Server 匯出的檔案包含其 webhook ID、密碼路徑以及任何以純文字儲存的 OAuth 憑證。任何擁有該檔案的人都可能存取 HA-MCP。請私密儲存並僅匯入您信任的檔案。",
+    "transfer.export": "下載設定 JSON",
+    "transfer.file": "要匯入的設定檔案",
+    "transfer.import": "匯入設定",
+    "transfer.confirm": "要以此檔案中的設定取代此安裝的 HA-MCP 設定嗎？這可能會使使用目前設定的用戶端中斷連線。",
+    "transfer.confirm_connection": "要以此檔案中的設定取代此安裝的 HA-MCP 設定嗎？該檔案還包含 HA-MCP Server 的連線密碼，這僅適用於 HA-MCP 側邊欄面板。這可能會使使用目前設定的用戶端中斷連線。",
+    "transfer.exporting": "正在準備下載…",
+    "transfer.importing": "正在匯入設定…",
+    "transfer.downloaded": "已開始下載設定。",
+    "transfer.imported": "設定已匯入。請重新載入此頁面以查看還原的設定。",
+    "transfer.restart_server": "設定已匯入。請重新啟動 HA-MCP 以完成套用還原的設定。",
+    "transfer.connection_skipped": "檔案的連線設定僅適用於 Home Assistant 中的 HA-MCP Server，因此此伺服器保留了自身的設定。",
+    "transfer.file_permissions_skipped": "未套用檔案的 File & YAML Tools 權限，因為此處無法使用該整合項目。",
+    "transfer.file_permissions_unreachable_skipped": "未套用檔案的 File & YAML Tools 權限：在 OAuth 模式下，此頁面沒有 Home Assistant 憑證可資更改。請在 Home Assistant 的「設定 File & YAML Tools」中進行設定。",
+    "transfer.export_file_permissions_unreachable": "該檔案未包含 File & YAML Tools 權限：在 OAuth 模式下，此頁面沒有 Home Assistant 憑證可資讀取。",
+    "transfer.restart": "設定已匯入。請重新啟動 Home Assistant 以完成套用還原的設定。",
+    "transfer.too_large": "請選擇 4 MiB 或更小的設定檔案。",
+    "transfer.export_too_large": "這些設定超過 4 MiB 的匯出限制。",
+    "transfer.invalid_backup": "請選擇有效的 HA-MCP 設定匯出檔。",
+    "transfer.allowed_paths_store_unavailable": "Home Assistant 無法讀取或儲存允許的目錄。請開啟「設定 File & YAML Tools」並再次儲存目錄，然後重試。如果仍失敗，請檢查 Home Assistant 儲存空間。",
+    "transfer.extra_yaml_keys_store_unavailable": "Home Assistant 無法讀取或儲存額外的 YAML 金鑰。請開啟「設定 File & YAML Tools」並再次儲存金鑰，然後重試。如果仍失敗，請檢查 Home Assistant 儲存空間。",
+    "transfer.tools_entry_busy": "File & YAML Tools 正在更改狀態。請等待其完成，然後再次匯入設定。",
+    "transfer.tools_entry_unavailable": "File & YAML Tools 已啟用但尚未載入。請開啟「裝置與服務」、解決任何安裝錯誤、重新載入項目，然後再次嘗試匯入。",
+    "transfer.rollback_incomplete": "匯入失敗，部分設定無法還原。請在重試前檢查 Home Assistant 日誌並檢閱目標設定。",
+    "transfer.extra_tools_entry": "此檔案僅包含伺服器項目。請選擇包含 File & YAML Tools 的備份，或使用沒有該項目的目標。",
+    "transfer.tools_must_be_disabled": "File & YAML Tools 在來源上已停用。若有需要，請在 Home Assistant 的目標上新增該項目、予以停用，然後再次匯入。",
+    "transfer.tools_must_be_enabled": "File & YAML Tools 在來源上已啟用。請在 Home Assistant 中啟用目標項目，然後再次匯入。",
+    "transfer.incompatible_version": "此版本的 HA-MCP 無法匯入該檔案格式。請檢查兩個安裝上的 HA-MCP 版本。",
+    "transfer.webhook_in_use": "此 Home Assistant 上的另一個整合已使用此檔案中的 webhook ID。請在匯入前解決衝突。",
+    "transfer.decision_pin_required": "此原則需要決策 PIN 碼。請在此安裝的「工具安全性原則」分頁中設定一個，然後再次匯入檔案。",
+    "transfer.server_unavailable": "HA-MCP 伺服器無法使用。請檢查整合並重新開啟面板。",
+    "transfer.session": "請以 Home Assistant 管理員身分重新開啟 HA-MCP 側邊欄面板並重試。",
+    "transfer.restore_failed": "HA-MCP 無法完成匯入設定。請在重試前檢查目標設定。",
+    "transfer.export_failed": "無法下載設定。請重新開啟面板並重試。",
+    "transfer.invalid_source_entries": "無法從檔案還原目前的整合設定。請開啟「設定 HA-MCP Server」與「File & YAML Tools」（如果已安裝），檢查連線與權限設定，然後再次匯出。",
+    "transfer.invalid_server_settings": "HA-MCP 無法讀取此安裝上的其中一個設定檔案。Home Assistant 日誌會列出該檔案名稱。請修正或刪除它，然後重試。",
+    "transfer.origin_denied": "要求並非來自此 Home Assistant 位址的 HA-MCP 側邊欄面板。請從側邊欄開啟面板。反向代理伺服器必須傳遞原始的 Host 標頭。",
+    "transfer.read_failed": "無法讀取所選檔案。請再次選取檔案。",
+    "transfer.permissions_changed": "File & YAML Tools 權限在匯入時已更改，因此匯入已停止並保留了原有權限。請再次匯入檔案。",
+    "transfer.component_outdated": "請在 Marketplace 中更新 HA-MCP 並重新啟動 Home Assistant，然後再次匯入：已安裝的 File & YAML Tools 無法復原失敗的權限匯入。",
     "server.sidecar.disable": "永久停用設定伺服器",
     "server.sidecar.disable_title": "永久停用設定 UI：停止此伺服器並寫入 ~/.ha-mcp/settings_ui_disabled，以便在未來的 ha-mcp 啟動時不會重新衍生。刪除該檔案以重新啟用。",
     "backups.loading": "正在載入備份狀態…",
@@ -259,6 +301,8 @@
     "backup.fields.enable_auto_backup.help": "在每次寫入或刪除工具呼叫變更實體之前，儲存實體的快照。當此功能關閉時，檔案與原始 YAML 工具（ha_write_file、ha_delete_file、ha_config_set_yaml）將拒絕寫入。",
     "backup.fields.enable_snapshot_actions.label": "允許完整的 Home Assistant 快照操作",
     "backup.fields.enable_snapshot_actions.help": "允許 AI 助理透過 ha_manage_backup 以及 ha_call_service 中的對應備份服務和指令來管理完整的 Home Assistant 快照。關閉此功能會封鎖所有快照動作，包括列出快照。刪除快照僅能透過 ha_manage_backup 進行，且需要啟用「允許刪除快照」。使用者在網頁設定介面中進行的備份編輯與備份動作仍然可用。",
+    "backup.fields.enable_settings_transfer_actions.label": "允許 ha_manage_backup 匯出與匯入設定",
+    "backup.fields.enable_settings_transfer_actions.help": "允許 AI 助理下載此伺服器的設定檔案，並透過 ha_manage_backup 匯入檔案，就如同「伺服器設定」分頁上的「匯出」與「匯入」按鈕一樣。匯入會保留僅限人類使用的設定，而更改安全性原則、實體能見度或 File & YAML Tools 權限也需要「開發人員工具」安全性原則存取權限。根據檔案內容，匯入也可能會開啟開發人員模式、工具與功能，並關閉諸如密碼隱藏、SSL 驗證與 IPv6 允許清單等保護措施，因此請在 AI 助理匯入後檢查您的設定。",
     "backup.fields.backup_read_only.label": "將備份管理設為唯讀",
     "backup.fields.backup_read_only.help": "允許 AI 助理列出、檢視及比對（diff）編輯備份，並在啟用快照動作時列出完整的 HA 快照。封鎖手動建立備份、還原（包含編輯還原）與刪除，包含 ha_call_service 中的對應備份服務和指令。自動編輯前備份將繼續運作。使用者在網頁設定介面中進行的備份動作仍然可用。",
     "backup.fields.auto_backup_throttle_minutes.label": "自動備份節流（分鐘）",
@@ -475,8 +519,8 @@
     "advanced.individual_fetch_batch_size.help": "每個 ID 的並行設定擷取數。在序列式 HA 伺服器上請調低至接近 1。",
     "advanced.enable_history_query_guardrails.label": "歷史記錄查詢安全護欄",
     "advanced.enable_history_query_guardrails.help": "拒絕超出保守實體與時間範圍預算的記錄器查詢。預設為停用。",
-    "advanced.hacs_refresh_after_update.label": "更新後在 HACS 中重新整理元件",
-    "advanced.hacs_refresh_after_update.help": "在伺服器更新後的啟動時，要求 HACS（Home Assistant 2026.11+ 上的 Marketplace）重新檢查 HA-MCP 套件庫，以便立即顯示其符合的更新，而不需要等待下一次背景檢查。預設為關閉；已經這樣做的安裝會保持開啟。",
+    "advanced.hacs_refresh_after_update.label": "更新後在市集中重新整理元件",
+    "advanced.hacs_refresh_after_update.help": "在伺服器更新後的啟動時，要求市集重新檢查 HA-MCP 套件庫，以便立即顯示對應的更新，而無需等待下一次背景檢查。預設為關閉；先前已啟用此功能的安裝將保持開啟狀態。",
     "advanced.ha_tool_concurrency.label": "Home Assistant 工具並行數",
     "advanced.ha_tool_concurrency.help": "跨所有會話的外層 Home Assistant 工具呼叫的選用限制。內部 REST、WebSocket 及每個工具的分支（fan-out）並行性保持不變。0 表示維持無限制行為。等待容量的呼叫將在 60 秒後失敗。",
     "advanced.dashboard_screenshot_engine_url.label": "儀表板截圖引擎 URL",
@@ -715,7 +759,7 @@
     },
     "ha_get_camera_image": {
       "title": "取得相機影像",
-      "description": "從 Home Assistant 相機實體取得快照影像。"
+      "description": "從 Home Assistant 相機或圖片實體取得快照圖片。"
     },
     "ha_get_dashboard_screenshot": {
       "title": "取得儀表板螢幕截圖",
@@ -730,8 +774,8 @@
       "description": "取得實體註冊表項目，若未指定實體則取得註冊表設定與公開的實體。"
     },
     "ha_get_hacs_info": {
-      "title": "取得 HACS 資訊",
-      "description": "取得 HACS (Home Assistant Community Store) 資料 — 搜尋商店或擷取儲存庫詳細資訊。"
+      "title": "取得市集資訊",
+      "description": "從 Home Assistant 的市集（即 HACS 在 2026.11 演變而成的名稱）取得資料。"
     },
     "ha_get_history": {
       "title": "取得實體歷史記錄或統計資料",
@@ -802,8 +846,12 @@
       "description": "管理 Home Assistant 能源儀表板偏好設定：電網 / 太陽能 /"
     },
     "ha_manage_hacs": {
-      "title": "管理 HACS",
-      "description": "管理 HACS (Home Assistant Community Store) — 安裝/更新、移除、新增自訂儲存庫，或重新整理儲存庫中的"
+      "title": "管理市集",
+      "description": "管理 Home Assistant 的市集（即 HACS 在 2026.11 演變而成的名稱）：安裝、更新、移除與新增套件庫。"
+    },
+    "ha_manage_logs": {
+      "title": "管理記錄器、統計資料與日誌",
+      "description": "管理 Home Assistant 的記錄器、長期統計資料與其日誌。"
     },
     "ha_manage_pipeline": {
       "title": "管理語音助理管線",
@@ -823,7 +871,7 @@
     },
     "ha_manage_updates": {
       "title": "管理更新",
-      "description": "管理 Home Assistant 更新（列出、詳細資訊、安裝、略過）與修復問題（忽略）。"
+      "description": "管理 Home Assistant 更新 (list, get, refresh, install, skip, clear_skipped, set_channel) 與修復問題 (ignore"
     },
     "ha_read_file": {
       "title": "讀取檔案",

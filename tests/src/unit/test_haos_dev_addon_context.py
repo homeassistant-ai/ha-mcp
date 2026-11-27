@@ -9,8 +9,10 @@ error" from Supervisor.
 from __future__ import annotations
 
 import importlib
+import subprocess
 import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -93,3 +95,96 @@ def test_the_dev_env_runs_its_embedded_server_in_developer_mode(
     _load_dev_env_holder(monkeypatch)
 
     assert flags["enable_dev_mode"] is True
+
+
+class _SwitchedInstance:
+    """Stands in for the holder's Instance: records which commits it ran."""
+
+    backend = "container"
+
+    def __init__(self, failing: dict[str, Exception]) -> None:
+        self.failing = failing
+        self.ran: list[str] = []
+        self.ha_messages: list[tuple[str, str]] = []
+
+    def run_commit(self, sha: str) -> None:
+        self.ran.append(sha)
+        if sha in self.failing:
+            raise self.failing[sha]
+
+    def ha_log(self, level: str, message: str) -> None:
+        self.ha_messages.append((level, message))
+
+
+_START, _NEXT, _LATER = "a" * 40, "b" * 40, "c" * 40
+
+
+def test_a_standalone_switch_that_fails_runs_the_previous_commit_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holder: Any = _load_dev_env_holder(monkeypatch)
+    sync_failed = subprocess.CalledProcessError(1, ["uv", "sync"])
+    inst = _SwitchedInstance({_NEXT: sync_failed})
+
+    assert holder.switch_server(inst, _START, _NEXT) == _START
+
+    assert inst.ran == [_NEXT, _START]
+    level, message = inst.ha_messages[-1]
+    assert level == "error"
+    assert "CalledProcessError" in message
+    assert f"runs {_START} again" in message
+
+
+def test_a_commit_that_does_not_start_reports_the_end_of_the_server_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holder: Any = _load_dev_env_holder(monkeypatch)
+    monkeypatch.setattr(holder, "server_log_tail", lambda: "ImportError: boom")
+    no_answer = RuntimeError("standalone server did not answer")
+    inst = _SwitchedInstance({_NEXT: no_answer, _START: no_answer})
+
+    assert holder.switch_server(inst, _START, _NEXT) == _START
+
+    level, message = inst.ha_messages[-1]
+    assert level == "error"
+    assert message.count("ImportError: boom") == 1
+    assert f"nor go back to {_START}" in message
+
+
+def test_the_holder_follows_the_ref_the_docs_tell_agents_to_push(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """docs/dev-ha-env.md, step 5: each commit pushed to refs/dev-ha-env/<run-id>
+    is tried once, also when it fails."""
+    monkeypatch.setenv("GITHUB_RUN_ID", "4242")
+    holder: Any = _load_dev_env_holder(monkeypatch)
+    monkeypatch.setattr(holder, "SWITCH_POLL_SECONDS", 0)
+    docs = (_REPO_ROOT / "docs" / "dev-ha-env.md").read_text(encoding="utf-8")
+    assert ":refs/dev-ha-env/<run-id>" in docs
+    assert holder.SWITCH_REF == "refs/dev-ha-env/4242"
+
+    class _Polled(Exception):
+        pass
+
+    polls = iter([_START, "", _NEXT, _NEXT, _LATER, _LATER])
+
+    def ls_remote(*args: str) -> str:
+        assert args == ("ls-remote", "origin", "refs/dev-ha-env/4242")
+        sha = next(polls, None)
+        if sha is None:
+            raise _Polled
+        return f"{sha}\trefs/dev-ha-env/4242" if sha else ""
+
+    monkeypatch.setattr(holder, "git", ls_remote)
+    switches: list[tuple[str, str]] = []
+
+    def switch(inst: object, current: str, wanted: str) -> str:
+        switches.append((current, wanted))
+        return current if wanted == _LATER else wanted
+
+    monkeypatch.setattr(holder, "switch_server", switch)
+
+    with pytest.raises(_Polled):
+        holder.follow_switch_ref(object(), _START, float("inf"))
+
+    assert switches == [(_START, _NEXT), (_NEXT, _LATER)]

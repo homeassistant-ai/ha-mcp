@@ -73,6 +73,7 @@ from .config_write_helpers import (
     note_reload_outcome,
 )
 from .helpers import (
+    bp_warnings_suggestion,
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
@@ -735,10 +736,7 @@ class AutomationConfigTools:
                 "Use ha_get_skill_guide for automation examples",
             ]
             if bp_warnings:
-                suggestions.append(
-                    "Config had best-practice issues that may be related: "
-                    + "; ".join(bp_warnings)
-                )
+                suggestions.append(bp_warnings_suggestion(bp_warnings))
             error = exception_to_structured_error(
                 e,
                 context={"automation_id": entity_id},

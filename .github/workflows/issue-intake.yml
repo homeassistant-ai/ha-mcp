@@ -24,7 +24,8 @@ permissions:
 jobs:
   # Labels a new bug report, or one a non-maintainer reopened, that has neither
   # an ha_report_issue report nor a reason why there is none; report-gate.yml
-  # closes it after 24 hours. Adding either clears the label and reopens an
+  # closes it after 24 hours. Maintainers can require generated output by label.
+  # On ordinary intake, adding either clears the label and reopens an
   # issue the gate closed. An issue transferred in is only asked, once. Admission
   # waits for it so a closed issue is not documented and a reopened one is.
   gate:
@@ -33,7 +34,8 @@ jobs:
       !github.event.issue.pull_request &&
       github.event.sender.type == 'User' && github.actor != 'ghhamcp' &&
       ((github.event_name == 'issues' && contains(fromJSON('["opened","edited","reopened"]'), github.event.action)) ||
-       (github.event_name == 'issues' && github.event.action == 'labeled' && contains(fromJSON('["enhancement","documentation"]'), github.event.label.name)) ||
+       (github.event_name == 'issues' && github.event.action == 'labeled' && contains(fromJSON('["enhancement","documentation","missing bug report output (Override)"]'), github.event.label.name)) ||
+       (github.event_name == 'issues' && github.event.action == 'unlabeled' && github.event.label.name == 'missing bug report output (Override)') ||
        (github.event_name == 'issue_comment' && contains(fromJSON('["created","edited"]'), github.event.action)))
     runs-on: ubuntu-latest
     timeout-minutes: 4
@@ -58,7 +60,7 @@ jobs:
         run: node .github/issue-intake/gate.mjs gate-check
       - name: Create scoped publication token
         id: app-token
-        if: contains(fromJSON('["label","clear","exempt","reopen","request"]'), steps.check.outputs.action)
+        if: contains(fromJSON('["label","clear","exempt","reopen","request","require","withdraw"]'), steps.check.outputs.action)
         timeout-minutes: 1
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:

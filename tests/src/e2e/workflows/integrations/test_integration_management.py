@@ -268,6 +268,46 @@ class TestIntegrationManagement:
         # Only an open flow can be aborted.
         assert aborted and aborted.get("success") is True, aborted
 
+    async def test_a_setup_step_carries_cores_texts(self, mcp_client, ha_client):
+        """group's config flow opens on a menu: the step comes back with the
+        description and option labels the HA dialog shows, read here from
+        Core's own translations."""
+        translations = await ha_client.send_websocket_message(
+            {
+                "type": "frontend/get_translations",
+                "language": "en",
+                "category": "config",
+                "integration": ["group"],
+            }
+        )
+        resources = translations["result"]["resources"]
+        prefix = "component.group.config.step.user."
+
+        flow_id = None
+        async with MCPAssertions(mcp_client) as mcp:
+            try:
+                step = await mcp.call_tool_success(
+                    "ha_set_integration", {"domain": "group"}
+                )
+                flow_id = step.get("flow_id")
+            finally:
+                if flow_id:
+                    await safe_call_tool(
+                        mcp_client,
+                        "ha_set_integration",
+                        {"domain": "group", "flow_id": flow_id, "abort": True},
+                    )
+
+        assert step["flow_type"] == "menu", step
+        assert step["description"] == resources[f"{prefix}description"], step
+        labels = {
+            option: resources[key]
+            for option in step["menu_options"]
+            if (key := f"{prefix}menu_options.{option}") in resources
+        }
+        assert labels, step
+        assert step["menu_option_labels"] == labels, step
+
     async def test_partial_options_submit_keeps_unnamed_fields(self, mcp_client):
         """A one-field options patch must not reset the fields it omits (#2254).
 

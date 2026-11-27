@@ -6,7 +6,7 @@ Home Assistant script configurations.
 """
 
 import logging
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, NoReturn, cast
 
 from pydantic import Field
 
@@ -48,9 +48,16 @@ from .config_write_helpers import (
     augment_tool_error_with_skill_content,
     fetch_entity_category,
     merge_validation_meta,
+    refuse_write_by_bare_id_of_another_key,
 )
-from .entity_registration import resolve_entity_id_after_write
+from .entity_registration import (
+    LOOKUP_ERRORS,
+    post_write_entity,
+    script_entity_id,
+    script_entity_or_warning,
+)
 from .helpers import (
+    bp_warnings_suggestion,
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
@@ -121,7 +128,7 @@ class ConfigScriptTools:
         script_id: Annotated[
             str,
             Field(
-                description="Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup."
+                description="Script identifier — bare storage key ('morning_routine') or entity_id ('script.morning_routine'); a bare id names the script stored under that key even when another script's entity is 'script.<id>'."
             ),
         ],
     ) -> dict[str, Any]:
@@ -132,7 +139,7 @@ class ConfigScriptTools:
 
         The returned `config_hash` stays the same across consecutive reads of an unchanged config.
 
-        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. Prefix handling matches `ha_config_get_automation` in behavior (mechanism differs: automations resolve through the entity registry; scripts strip the prefix).
+        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A bare id names the script stored under that key first; `script.<x>` names that entity's script, or the script stored under key `<x>` when no entity has that id.
 
         EXAMPLES:
         - Get script (bare form): ha_config_get_script("morning_routine")
@@ -141,26 +148,11 @@ class ConfigScriptTools:
         For detailed script configuration help, use ha_get_skill_guide.
         """
         try:
-            # Strip BEFORE validate so a bare ``"script."`` (empty after
-            # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
-            # than slipping through validate (non-empty pre-strip) and
-            # 404-ing at ``get_script_config("")``. Accept entity_id form
-            # (``script.foo``) and bare storage key (``foo``) — behavioral
-            # parity with ``ha_config_get_automation`` (mechanism differs:
-            # automations resolve via state lookup; scripts strip the
-            # prefix). ``_raise_script_not_found`` suggests
-            # ``ha_search(domain_filter='script')`` which returns
-            # entity_ids; without this strip, feeding that output back into
-            # the GET tool fails and reseeds the wrong-tool spiral that
-            # #1297 closes.
-            script_id = script_id.removeprefix("script.")
-            # Empty/whitespace script_id would propagate to
-            # ``get_script_config`` and surface as a misleading
-            # ``RESOURCE_NOT_FOUND``. Extension of the #1312
-            # validate_identifier_not_empty pattern to the scripts
-            # family per #1313.
+            # The client tells a bare storage key from ``script.<x>``, so the
+            # id keeps its form; a bare ``"script."`` is refused as empty
+            # (#1312, #1313) instead of 404-ing.
             validate_identifier_not_empty(
-                script_id,
+                script_id.removeprefix("script."),
                 "script_id",
                 suggestions=[
                     "Pass a script identifier (e.g. 'morning_routine')",
@@ -178,8 +170,7 @@ class ConfigScriptTools:
             # arm/HAOS runners). The legacy REST config endpoint reads the config
             # FILE, which is fresh the instant a write lands, so it stays the
             # sole path. Scenes were already legacy-only (no storage body in
-            # memory at all); scripts join them here for freshness. A
-            # file-reading ``config_get`` may return later (issue #1813).
+            # memory at all); scripts join them here for freshness.
             return await self._legacy_get_script(script_id)
         except ToolError:
             raise
@@ -198,8 +189,8 @@ class ConfigScriptTools:
     async def _legacy_get_script(self, script_id: str) -> dict[str, Any]:
         """Assemble the script-get response from the REST/WS pipeline.
 
-        The multi-fetch path: id-resolution WS + per-id config REST +
-        ``fetch_entity_category`` WS call. This is the ONLY script-get path —
+        The multi-fetch path: id-resolution WS + per-id config REST + entity
+        lookup + ``fetch_entity_category`` WS call. This is the ONLY script-get path —
         see ``ha_config_get_script`` for why script gets never route through the
         component's ``config_get`` (its ``raw_config`` freshness lags the config
         file between a write and the next completed reload).
@@ -211,13 +202,17 @@ class ConfigScriptTools:
 
         # Fetch category from entity registry (best-effort)
         # (injected after hash so transient registry failures don't affect the hash)
-        entity_id = f"script.{script_id}"
         cat_warnings: list[str] = []
-        cat_id = await fetch_entity_category(
-            self._client, entity_id, "script", cat_warnings
+        key = config_result.get("script_id")
+        entity_id = await script_entity_or_warning(
+            self._client, script_id, key, cat_warnings, "category unavailable"
         )
-        if cat_id:
-            actual_config["category"] = cat_id
+        if entity_id:
+            cat_id = await fetch_entity_category(
+                self._client, entity_id, "script", cat_warnings
+            )
+            if cat_id:
+                actual_config["category"] = cat_id
 
         # Issue #1334: return the canonical storage key from the
         # rest_client envelope so callers can thread the result into
@@ -255,18 +250,27 @@ class ConfigScriptTools:
             response.setdefault("warnings", []).extend(cat_warnings)
         return response
 
-    async def _raise_script_not_found(self, script_id: str) -> None:
+    async def _raise_script_not_found(
+        self, script_id: str, *, bare_key: bool = False
+    ) -> NoReturn:
         """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing script.
 
         Single source of truth for the 404→RESOURCE_NOT_FOUND mapping used
         by the GET path (``_fetch_script_config_envelope``) and the
         mutation paths (``ha_config_set_script`` update branch,
         ``ha_config_remove_script``). Populates ``available_script_ids``
-        (up to 10 bare IDs) from the entity registry.
+        (up to 10 entity_ids) from the entity registry: a bare slug can be
+        another script's storage key. ``bare_key``: the id was read only as a
+        storage key, so the suggestions name its entity form.
         """
-        available_ids = await list_visible_registry_ids(
-            self._client, "script", bare=True
-        )
+        available_ids = await list_visible_registry_ids(self._client, "script")
+        suggestions = ["Use ha_search(domain_filter='script') to find existing scripts"]
+        if bare_key:
+            suggestions.insert(
+                0,
+                f"A bare script_id is read as a storage key; if the script you "
+                f"mean has the entity script.{script_id}, pass 'script.{script_id}'",
+            )
         raise_tool_error(
             create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
@@ -275,9 +279,7 @@ class ConfigScriptTools:
                     "script_id": script_id,
                     "available_script_ids": available_ids,
                 },
-                suggestions=[
-                    "Use ha_search(domain_filter='script') to find existing scripts"
-                ],
+                suggestions=suggestions,
             )
         )
 
@@ -307,7 +309,7 @@ class ConfigScriptTools:
         ``resolved_id`` is the storage key the REST client resolved the input to
         (from the envelope's ``script_id``). Threading ``resolved_id`` lets the
         upsert call site skip the redundant re-resolve (issue #1813 Phase 0).
-        Used internally by _fetch_and_verify_hash and ha_config_get_script.
+        Used internally by _fetch_and_verify_hash and _take_control_config.
 
         ``resolved_id`` is ``None`` when the envelope omits ``script_id`` — the
         write target must then be re-resolved from the caller's input rather
@@ -334,13 +336,15 @@ class ConfigScriptTools:
         ``resolved_id`` lets the upsert call site skip the redundant re-resolve
         (issue #1813 Phase 0); it is ``None`` when the envelope omitted the key,
         so the upsert re-resolves rather than writing to the caller slug. Raises
-        ToolError if the hash does not match (conflict).
+        ToolError when a bare ``script_id`` resolved to another script's key, or
+        when the hash does not match (conflict).
         """
         (
             actual_config,
             current_hash,
             resolved_id,
         ) = await self._get_script_config_internal(script_id)
+        refuse_write_by_bare_id_of_another_key("script", script_id, resolved_id)
         if current_hash != config_hash:
             raise_tool_error(
                 create_error_response(
@@ -361,10 +365,10 @@ class ConfigScriptTools:
         """Upsert, threading a pre-resolved storage key when available.
 
         ``script_id`` is always the CALLER's identifier (used to default a
-        missing alias). ``resolved_id`` — set only when ``_fetch_and_verify_hash``
-        already resolved the storage key — is passed as the write target so the
-        REST client skips the redundant entity-registry lookup (issue #1813
-        Phase 0); None lets the REST client resolve. Passing the caller id
+        missing alias). ``resolved_id``, the storage key the tool resolved, is
+        passed as the write target so the REST client skips the redundant
+        entity-registry lookup (issue #1813 Phase 0); ``None`` lets the REST
+        client resolve. Passing the caller id
         separately keeps a renamed script's alias caller-facing (#1935).
         """
         result: dict[str, Any] = await self._client.upsert_script_config(
@@ -460,7 +464,7 @@ class ConfigScriptTools:
         script_id: Annotated[
             str,
             Field(
-                description="Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup."
+                description="Script identifier — bare storage key ('morning_routine') or entity_id ('script.morning_routine'); a bare id writes the script stored under that key; when none is but another script's entity is 'script.<id>', the write is refused (pass 'script.<id>' for that script)."
             ),
         ],
         config: Annotated[
@@ -594,26 +598,10 @@ class ConfigScriptTools:
         """
         bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
-            # Strip BEFORE validate so a bare ``"script."`` (empty after
-            # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
-            # than slipping through validate (non-empty pre-strip) and
-            # writing a phantom ``script.foo`` storage key — HA keys writes
-            # by the literal ``script_id``, so passing ``"script.foo"``
-            # unchanged makes the row invisible to a later
-            # ``ha_config_get_script("foo")``. Behavioral parity with
-            # ``ha_config_get_script`` so an agent that received an
-            # entity_id (``script.foo``) from
-            # ``ha_search(domain_filter='script')`` can update it
-            # without a manual prefix-strip step.
-            script_id = script_id.removeprefix("script.")
-            # ``script_id`` is required (always non-None). Reject empty/
-            # whitespace up-front so the caller gets a structured parameter
-            # error instead of a misleading ``RESOURCE_NOT_FOUND`` from
-            # the downstream upsert/fetch. Extension of the #1312
-            # validate_identifier_not_empty pattern to the scripts family
-            # per #1313.
+            # The client resolves both forms (a ``script.<x>`` write never
+            # lands under that literal key); ``"script."`` is refused as empty.
             validate_identifier_not_empty(
-                script_id,
+                script_id.removeprefix("script."),
                 "script_id",
                 suggestions=[
                     "Pass a script identifier (e.g. 'morning_routine')",
@@ -703,14 +691,16 @@ class ConfigScriptTools:
                 category,
             )
 
-            # Optional hash check for full config updates. When it runs it
-            # resolves ``script_id`` to the storage key — thread that through so
-            # the upsert doesn't re-resolve (issue #1813 Phase 0). Stays None on
-            # the no-hash path (raw script_id resolved once, inside upsert).
-            resolved_key: str | None = None
+            # The storage key is resolved here, by the hash check when it runs,
+            # and threaded through so the upsert doesn't re-resolve (#1813).
             if config_hash:
                 _, resolved_key = await self._fetch_and_verify_hash(
                     script_id, config_hash, "set"
+                )
+            else:
+                resolved_key = await self._client._resolve_script_id(script_id)
+                refuse_write_by_bare_id_of_another_key(
+                    "script", script_id, resolved_key
                 )
 
             # Pre-check for best-practice issues.
@@ -750,13 +740,9 @@ class ConfigScriptTools:
                 "Use ha_get_skill_guide for help",
             ]
             if bp_warnings:
-                suggestions.append(
-                    "Config had best-practice issues that may be related: "
-                    + "; ".join(bp_warnings)
-                )
+                suggestions.append(bp_warnings_suggestion(bp_warnings))
             # 404 during update only — the create path raises on its own when
-            # the upsert hits an unknown identifier server-side. The bare
-            # script_id form is what callers pass and what the registry stores.
+            # the upsert hits an unknown identifier server-side.
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_script_not_found(script_id)
             error = exception_to_structured_error(
@@ -767,6 +753,21 @@ class ConfigScriptTools:
             )
             augment_error_dict_with_skill_content(error, bp_warnings)
             raise_tool_error(error)
+
+    async def _run_target(self, script_id: str, run: str | None) -> str:
+        """The entity a run calls: one registry lookup, not a registration poll."""
+        try:
+            entity_id = await script_entity_id(self._client, script_id)
+        except LOOKUP_ERRORS as exc:
+            exception_to_structured_error(
+                exc,
+                context={"action": run, "script_id": script_id},
+                suggestions=[
+                    "Nothing was started: the entity registry lookup failed; retry"
+                ],
+            )
+            raise  # unreachable: exception_to_structured_error always raises
+        return entity_id or await self._raise_script_not_found(script_id)
 
     async def _run_script_control(
         self,
@@ -804,10 +805,7 @@ class ConfigScriptTools:
                     context={"action": "run", "script_id": script_id, "run": run},
                 )
             )
-        # An existing script needs one registry lookup, not a registration poll.
-        entity_id = await resolve_entity_id_after_write(
-            self._client, script_id, "script", timeout=0
-        )
+        entity_id = await self._run_target(script_id, run)
         # HA's script services are a silent no-op on an unknown entity.
         try:
             await self._client.get_entity_state(entity_id)
@@ -929,21 +927,20 @@ class ConfigScriptTools:
         wait: bool,
         category: str | None,
     ) -> None:
-        """Resolve, wait, and apply a category for either script write mode.
-
-        Match the upsert's storage key, which can differ from the caller's
-        entity ID after a registry rename. Keep the caller's ID as fallback.
-        """
+        """Resolve, wait, and apply a category for either script write mode."""
         if not wait and not category:
             return
         storage_key = result.get("script_id") or resolved_key or script_id
-        entity_id = await resolve_entity_id_after_write(
+        entity_id = await post_write_entity(
             self._client,
             storage_key,
             "script",
-            fallback_entity_id=f"script.{script_id.removeprefix('script.')}",
+            result,
+            wait=wait,
+            category=category,
+            caller_id=script_id,
         )
-        if wait:
+        if wait and entity_id:
             try:
                 registered = await wait_for_entity_registered(self._client, entity_id)
                 if not registered:
@@ -955,7 +952,7 @@ class ConfigScriptTools:
                 result.setdefault("warnings", []).append(
                     f"Script saved but verification failed: {e}"
                 )
-        if category:
+        if category and entity_id:
             await apply_entity_category(
                 self._client, entity_id, category, "script", result, "script"
             )
@@ -983,8 +980,9 @@ class ConfigScriptTools:
             transformed_config, script_id, resolved_id=resolved_id
         )
 
-        # Re-fetch to get authoritative hash (HA may normalize after save)
-        _, new_config_hash, _ = await self._get_script_config_internal(script_id)
+        # Re-read the written key for the hash (HA may normalize): no registry read
+        readback = await self._client.get_script_config(script_id, result["script_id"])
+        new_config_hash = compute_config_hash(readback["config"])
 
         await self._finalize_script_write(
             result, script_id, resolved_id, wait, effective_category
@@ -1083,7 +1081,7 @@ class ConfigScriptTools:
         script_id: Annotated[
             str,
             Field(
-                description="Script identifier to delete — bare storage key ('old_script') or entity_id form ('script.old_script'); a leading 'script.' prefix is stripped before lookup."
+                description="Script identifier to delete — bare storage key ('old_script') or entity_id ('script.old_script'); a bare id deletes only the script stored under that key, even when another script's entity is 'script.<id>'."
             ),
         ],
         wait: Annotated[
@@ -1105,38 +1103,37 @@ class ConfigScriptTools:
 
         WARNING: Deleting a script that is used by automations may cause those automations to fail.
         """
+        # The client deletes a bare id under that key, unresolved.
+        bare = not script_id.startswith("script.")
         try:
-            # Strip BEFORE validate so a bare ``"script."`` (empty after
-            # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
-            # than slipping through validate (non-empty pre-strip) and
-            # producing a ``script.script.foo`` entity_id for the
-            # ``verify_entity_removed`` check below — that mis-formed
-            # entity_id 404s, which counts as removed, so the real entity
-            # would never be checked. Behavioral parity with
-            # ``ha_config_get_script``.
-            script_id = script_id.removeprefix("script.")
             # Empty/whitespace would surface as a misleading HA delete-failure.
             validate_identifier_not_empty(
-                script_id,
+                script_id.removeprefix("script."),
                 "script_id",
                 suggestions=[
                     "Use ha_search(domain_filter='script') to find existing script_ids"
                 ],
                 context={"operation": "remove_script"},
             )
+            # The delete goes by the key; the wait needs the entity, which is
+            # gone from the registry once its script is deleted.
+            key = script_id if bare else None
+            unverified: list[str] = []
+            entity_id = wait and await script_entity_or_warning(
+                self._client, script_id, key, unverified, "Deletion not verified"
+            )
             result = await self._client.delete_script_config(script_id)
-
-            # Wait for script to be removed
-            entity_id = f"script.{script_id}"
-            if wait:
+            if entity_id:
                 await verify_entity_removed(self._client, entity_id, result)
+            if unverified:
+                result.setdefault("warnings", []).extend(unverified)
 
             return {"success": True, "action": "delete", **result}
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
-                await self._raise_script_not_found(script_id)
+                await self._raise_script_not_found(script_id, bare_key=bare)
             exception_to_structured_error(
                 e,
                 context={"script_id": script_id},

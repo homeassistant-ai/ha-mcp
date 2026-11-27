@@ -147,7 +147,7 @@
     },
     "component_outdated": {
       "title": "HA-MCP inteqrasiyasını yeniləyin",
-      "description": "Quraşdırılmış ha-mcp serveri {required} və ya daha yeni HA-MCP inteqrasiyası tələb edir, lakin sizdə {installed} quraşdırılıb. İnteqrasiyanı Tənzimləmələr > Sistem > Yeniləmələr bölməsindən yeniləyin (HACS-də və ya Home Assistant 2026.11+-də Marketpleysdə, hələ heç bir yeniləmə göstərilmirsə, HA-MCP inteqrasiyasını açın və 'Məlumatı yenilə' (HACS) və ya 'Məlumatı yenilə' (Marketpleys) seçin) və Home Assistant-ı yenidən başladın. Server bu müddət ərzində işləməyə davam edəcək, lakin bəzi yeni xüsusiyyətlər inteqrasiya yenilənənə qədər işləməyə bilər."
+      "description": "Quraşdırılmış ha-mcp serveri HA-MCP inteqrasiyasının {required} və ya daha yeni versiyasını tələb edir, lakin sizdə {installed} quraşdırılıb. İnteqrasiyanı Tənzimləmələr > Sistem > Yeniləmələr bölməsindən yeniləyin (əgər hələ heç bir yeniləmə görünmürsə, Marketplace-də HA-MCP inteqrasiyasını açın və 'Məlumatı yenilə' düyməsindən istifadə edin) və Home Assistant-ı yenidən başladın. Bu müddət ərzində server işləməyə davam edəcək, lakin inteqrasiya yenilənənə qədər bəzi yeni xüsusiyyətlər işləməyə bilər."
     },
     "legacy_oauth_restart": {
       "title": "Köhnə OAuth parametrlərini tətbiq etmək üçün Home Assistant-ı yenidən başlat",
@@ -192,12 +192,12 @@
         "step": {
           "confirm": {
             "title": "HA-MCP-ni bir mağaza siyahısında saxlamaq?",
-            "description": "HA-MCP hər iki {records} üzərindən quraşdırılmış kimi işarələnib. Onlar eyni inteqrasiyanı daşıyır (ikincisi əvvəlki quraşdırmaların gəldiyi paylama güzgüsüdür). Home Assistant 2026.11-dəki Marketplace yalnız bir siyahıya inteqrasiyaya sahib olmağa imkan verir, ona görə də orada onların heç biri HA-MCP-ni yeniləyə bilməz; HACS hələ də yeniləyir, lakin 2026.11 versiyasına yüksəltmə HA-MCP-ni dayandırmış vəziyyətdə qoyacaq.\n\nTəsdiq et düyməsini sıxmaq heç bir xüsusi repozitoriya tələb etməyən defolt kataloqdakı siyahını — **{keep}** saxlayır və digər siyahını quraşdırılmamış kimi işarələyir. Heç nə silinmir: HA-MCP qeydləriniz, parametrləriniz və fayllarınız olduğu kimi qalır və bundan sonra yeniləmələr həmişəki kimi {keep} altında görünəcək."
+            "description": "HA-MCP hər iki {records} siyahısından quraşdırılmış kimi işarələnib. Onlar eyni inteqrasiyanı ehtiva edir (ikincisi əvvəlki quraşdırmaların gəldiyi paylama güzgüsüdür). Marketplace yalnız bir siyahının inteqrasiyaya sahib olmasına icazə verir, ona görə də onların heç biri HA-MCP-ni yeniləyə bilməz.\n\nTəsdiq düyməsi xüsusi repository tələb etməyən defolt kataloqdakı siyahını — **{keep}** saxlayır və digər siyahını quraşdırılmamış kimi işarələyir. Heç nə silinmir: HA-MCP qeydləriniz, tənzimləmələriniz və fayllarınız olduğu kimi qalır və bundan sonra yeniləmələr həmişəki kimi {keep} altında görünəcək."
           }
         },
         "abort": {
           "already_resolved": "HA-MCP artıq bir mağaza siyahısından quraşdırılıb; düzəldiləcək heç nə yoxdur.",
-          "store_unavailable": "Mağaza (HACS və ya Marketplace) hələ yüklənməyib, ona görə də siyahıları yoxlamaq mümkün deyil. Bir neçə dəqiqə sonra yenidən cəhd edin."
+          "store_unavailable": "Marketplace hələ yüklənməyib, ona görə də siyahılar yoxlanıla bilməz. Bir neçə dəqiqə sonra yenidən cəhd edin."
         }
       }
     }

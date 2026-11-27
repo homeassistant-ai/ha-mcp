@@ -14,7 +14,7 @@
 # this change exists to eliminate.
 # PYTHON_BASE lets CI point the runtime base at another registry holding the
 # same digest when ECR Public rate-limits the pull; the default is the pin.
-ARG PYTHON_BASE=public.ecr.aws/docker/library/python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
+ARG PYTHON_BASE=public.ecr.aws/docker/library/python:3.14-slim@sha256:22eafb370920ad8b429e0aec3fff433e0669968519f5d60469d83729c138b28b
 FROM ${PYTHON_BASE}
 COPY server.py /server.py
 CMD ["python", "/server.py"]

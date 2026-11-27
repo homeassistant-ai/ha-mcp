@@ -35,6 +35,8 @@ from .server_tool_text import (
     SKILL_USE_BEFORE_KEYWORDS,
 )
 from .tool_catalog import (
+    CATALOG_CACHE_SCOPE,
+    CATALOG_CACHE_TTL_S,
     CATALOG_MODES,
     default_catalog_mode,
     install_catalog_instructions,
@@ -97,10 +99,8 @@ class HomeAssistantSmartMCPServer:
         server_version: str = _PACKAGE_VERSION,
     ):
         """Initialize the smart MCP server with lazy loading support."""
-        # Load settings first (fast operation)
         self.settings = get_global_settings()
 
-        # Store provided client or mark for lazy creation
         self._client: HomeAssistantClient | None = client
         self._client_provided = client is not None
 
@@ -133,9 +133,9 @@ class HomeAssistantSmartMCPServer:
             version=server_version,
             instructions=self._instructions[default_catalog_mode()],
             lifespan=server_lifespan,
+            cache_ttl=CATALOG_CACHE_TTL_S,
+            cache_scope=CATALOG_CACHE_SCOPE,
         )
-
-        # Register all tools and expert prompts
         self._initialize_server()
 
     @property
@@ -678,28 +678,20 @@ class HomeAssistantSmartMCPServer:
             emit_result=partial(emit_approval_result_as, self),
         )
 
-        try:
-            self.mcp.add_middleware(
-                PolicyMiddleware(
-                    policy_provider=_policy_provider,
-                    queue=self.approval_queue,
-                    get_client=lambda: self.client,
-                    ensure_decisions_listener=(
-                        self.approval_response_listener.ensure_subscribed
-                    ),
-                )
+        self.mcp.add_middleware(
+            PolicyMiddleware(
+                policy_provider=_policy_provider,
+                queue=self.approval_queue,
+                get_client=lambda: self.client,
+                ensure_decisions_listener=(
+                    self.approval_response_listener.ensure_subscribed
+                ),
             )
-            logger.info(
-                "Tool security policies middleware registered (data_dir=%s)",
-                data_dir,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to register PolicyMiddleware (data_dir=%s, "
-                "ENABLE_TOOL_SECURITY_POLICIES=true). TOOL SECURITY GATING IS NOT ACTIVE; "
-                "all tool calls pass through ungated.",
-                data_dir,
-            )
+        )
+        logger.info(
+            "Tool security policies middleware registered (data_dir=%s)",
+            data_dir,
+        )
 
     def _apply_read_only_catalog_filter(self) -> None:
         """Install the Read Only Mode catalog filter (discussion #1569).

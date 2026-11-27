@@ -47,6 +47,7 @@ from ._client_spies import sent_messages
 from ._real_server import build_server
 
 BEFORE = "Before edit"
+UPDATE_BACKUP_SETTINGS = {"core_backup_before_update": True}
 
 
 @pytest.fixture
@@ -81,7 +82,7 @@ def _assert_untouched(
     assert _held(manager) == held
 
 
-@pytest.mark.parametrize("action", ["list", "delete"])
+@pytest.mark.parametrize("action", ["list", "delete", "configure"])
 async def test_disabled_snapshots_block_every_action_before_io(
     core_client: HomeAssistantClient,
     backup_settings: Settings,
@@ -103,13 +104,23 @@ async def test_disabled_snapshots_block_every_action_before_io(
             action=action,
             backup_id="snapshot-id",
             confirm=True,
+            update_backup_settings=UPDATE_BACKUP_SETTINGS,
         )
     sent.assert_not_awaited()
     _assert_untouched(tool_sockets, snapshot_manager, [])
 
 
-@pytest.mark.parametrize("scope", ["snapshot", "edits"])
-@pytest.mark.parametrize("action", ["create", "restore", "delete"])
+@pytest.mark.parametrize(
+    ("scope", "action"),
+    [
+        *[
+            (scope, action)
+            for scope in ("snapshot", "edits")
+            for action in ("create", "restore", "delete")
+        ],
+        ("snapshot", "configure"),
+    ],
+)
 async def test_backup_read_only_blocks_explicit_writes_before_io(
     core_client: HomeAssistantClient,
     backup_settings: Settings,
@@ -136,6 +147,7 @@ async def test_backup_read_only_blocks_explicit_writes_before_io(
             confirm=True,
             domain="label",
             entity_id=label_id,
+            update_backup_settings=UPDATE_BACKUP_SETTINGS,
         )
     sent.assert_not_awaited()
     _assert_untouched(tool_sockets, snapshot_manager, [captured.name])
@@ -168,6 +180,7 @@ async def test_backup_read_only_keeps_backup_inspection_available(
     assert result["success"] is True
 
 
+@pytest.mark.parametrize("action", ["create", "configure"])
 @pytest.mark.parametrize("restriction", ["global", "request"])
 async def test_backup_settings_cannot_lift_global_or_request_read_only(
     core_client: HomeAssistantClient,
@@ -176,14 +189,22 @@ async def test_backup_settings_cannot_lift_global_or_request_read_only(
     tool_sockets: list[HomeAssistantWebSocketClient],
     monkeypatch: pytest.MonkeyPatch,
     restriction: str,
+    action: str,
 ) -> None:
-    if restriction == "global":
-        monkeypatch.setattr(backup_settings, "read_only_mode", True)
-        with pytest.raises(ToolError, match="READ_ONLY_MODE"):
-            await manage_backup(core_client, scope="snapshot", action="create")
-    else:
-        with read_only_request(), pytest.raises(ToolError, match="READ_ONLY_MODE"):
-            await manage_backup(core_client, scope="snapshot", action="create")
+    arguments = {
+        "scope": "snapshot",
+        "action": action,
+        "update_backup_settings": UPDATE_BACKUP_SETTINGS,
+    }
+    with sent_messages(core_client) as sent:
+        if restriction == "global":
+            monkeypatch.setattr(backup_settings, "read_only_mode", True)
+            with pytest.raises(ToolError, match="READ_ONLY_MODE"):
+                await manage_backup(core_client, **arguments)
+        else:
+            with read_only_request(), pytest.raises(ToolError, match="READ_ONLY_MODE"):
+                await manage_backup(core_client, **arguments)
+    sent.assert_not_awaited()
     _assert_untouched(tool_sockets, snapshot_manager, [])
 
 

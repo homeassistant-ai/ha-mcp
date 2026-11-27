@@ -9,15 +9,19 @@ from homeassistant.generated.config_flows import FLOWS
 from .. import (
     automation_config,
     card_definitions,
+    config_file_items,
     config_references,
     core_contract,
     entity_restore,
     flow_outline,
     flow_record,
     helper_collections,
+    recorder_status,
+    scene_editor,
     todo_items,
+    update_entities,
 )
-from ..const import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
+from ..oauth_redirect_allowlist import MAX_OAUTH_CALLBACK_LENGTH, MAX_OAUTH_CALLBACKS
 from . import logbook as _logbook
 from . import trace_context as _trace_context
 
@@ -129,6 +133,7 @@ CAPABILITIES: list[str] = [
     "search",
     # Location/state filters precede pagination; search accepts any result window.
     "search_unified",
+    "search_editor_bodies",
     # A flag on search: gates its additive result_fields request and generic
     # is_group/member_entity_ids response fields.
     "search_entity_membership",
@@ -172,6 +177,9 @@ CAPABILITIES: list[str] = [
     "registry_lookup",
     "system_snapshot",
     "entity_lookup",
+    # A flag on entity_lookup: each match carries ``loaded``, whether the
+    # domain's entity component holds the entity.
+    "entity_lookup_loaded",
     "registries",
     "registry_fields",
     "dashboards",
@@ -207,7 +215,14 @@ CAPABILITIES: list[str] = [
     # server sends that key only to a component advertising this flag, and with
     # an active allowlist requires the flag or falls back to its legacy resolver.
     "search_visibility_allowlist_authorization",
+    # A semantic flag on search_visibility: this component understands the
+    # ``enforce`` wire key and then omits the config records that reference a
+    # hidden entity. The server sends an enforcing search here only with it.
+    "search_visibility_enforce",
     "server_entry",
+    # A flag on server_entry: gates its ``install_pending`` field, whether the
+    # configured spec still waits for its install.
+    "server_entry_install_pending",
     # The WRITE counterpart of ``server_entry`` (Phase 3). The server gates its
     # ``ha_dev_manage_server(update_source)`` embedded-mode direct-write on this; an
     # old component that lacks it is never sent the frame and the server stays on its
@@ -236,10 +251,15 @@ CAPABILITIES: list[str] = [
     core_contract.CAPABILITY,
     core_contract.INTEGRATION_CAPABILITY,
     todo_items.CAPABILITY,
+    update_entities.CAPABILITY,
     flow_record.CAPABILITY,
+    flow_record.REPAIRS_CAPABILITY,
     flow_outline.CAPABILITY,
+    scene_editor.CAPABILITY,
     automation_config.CAPABILITY,
     config_references.CAPABILITY,
+    config_file_items.CAPABILITY,
+    recorder_status.CAPABILITY,
     *card_definitions.CAPABILITIES,
 ]
 

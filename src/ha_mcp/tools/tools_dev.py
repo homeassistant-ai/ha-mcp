@@ -11,7 +11,6 @@ Feature Flag: Set HAMCP_ENABLE_DEV_MODE=true to enable these tools.
 """
 
 import asyncio
-import json
 import logging
 import sys
 from typing import Annotated, Any, Literal
@@ -39,9 +38,16 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .component_server_entry import fetch_server_entry_via_component, install_pending
 from .config_entry_flow import COMPONENT_DOMAIN
 from .config_entry_flow_form import MISSING, shown_value
 from .config_entry_flow_introspect import abort_probe_flow
+from .dev_settings_files import REMOVE as _REMOVE
+from .dev_settings_files import (
+    export_settings_file,
+    import_settings_file,
+    merge_feature_overrides,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -56,11 +62,6 @@ logger = logging.getLogger(__name__)
 # Feature flag - disabled by default; the toggle lives in the Developer
 # section of the web settings UI (Server Settings tab, bottom).
 FEATURE_FLAG = "HAMCP_ENABLE_DEV_MODE"
-
-# The component's own in-process command for locating its "server" config
-# entry (see ``_fetch_server_entry_via_component``) — replaces probing every
-# ha_mcp_tools-domain entry's options-flow schema from the outside.
-WS_SERVER_ENTRY = "ha_mcp_tools/server_entry"
 
 # The WRITE counterpart: applies a pip_spec delta to the server entry via
 # ``async_update_entry`` directly (embedded mode only — see
@@ -84,8 +85,6 @@ SELF_ACTION_FLUSH_DELAY_S = 1.0
 # Same pattern as settings_ui._supervisor._BACKGROUND_RESTART_TASKS.
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
-# Sentinel marking a key for removal in _merge_file_override (reset action).
-_REMOVE = object()
 
 # Sentinel returned by the per-type ``_coerce_*_setting`` helpers when ``raw``
 # is not coercible to that type — the caller then raises the generic
@@ -284,55 +283,6 @@ def _field_prefill(item: dict[str, Any]) -> Any:
     return item.get("default", item.get("value"))
 
 
-async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | None:
-    """One ``ha_mcp_tools/server_entry`` read; ``None`` ⇒ use the legacy probe.
-
-    Returns the component's ``{entry_id, pip_spec}`` payload —
-    ``entry_id`` is ``None`` when no server entry exists, an AUTHORITATIVE
-    verdict the component reaches in-process (its own ``DOMAIN`` entries),
-    not a "try the legacy path" signal. Returns ``None`` (⇒ legacy probe) on
-    capability miss, downgrade (``unknown_command`` → invalidate the cached
-    caps), command error/timeout (logged), or an empty-string ``entry_id``
-    (a malformed reply shape — not the component's real "no entry" signal,
-    which is ``None`` — so it is not trusted as authoritative either) — same
-    taxonomy as ``component_devices.fetch_device_via_component``. A
-    ``HomeAssistantConnectionError`` — a pooled-WS drop, or a failed
-    (re)connect — is caught here and mapped to ``None``: the legacy probe
-    (``find_server_config_entry``) rides the ``send_websocket_message`` bridge,
-    which answers a component-side fault rather than dying with it — so a
-    transport failure must fall back rather than escape.
-    """
-    caps = await get_component_caps(client)
-    if not component_supports(caps, "server_entry"):
-        return None
-    try:
-        ws = await get_websocket_client(
-            url=client.base_url,
-            token=client.token,
-            verify_ssl=getattr(client, "verify_ssl", None),
-        )
-        raw = await ws.send_command(WS_SERVER_ENTRY)
-    except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-        if is_unknown_command(exc):
-            invalidate_caps(client)
-        else:
-            logger.warning("%s failed; fell back to legacy: %r", WS_SERVER_ENTRY, exc)
-        return None
-    except Exception as exc:  # noqa: BLE001
-        # HomeAssistantConnectionError or any other error → legacy probe
-        # (which rides the send_websocket_message bridge).
-        logger.warning(
-            "%s connection error; falling back to legacy: %r", WS_SERVER_ENTRY, exc
-        )
-        return None
-    result = raw.get("result")
-    if not isinstance(result, dict) or "entry_id" not in result:
-        return None
-    if result.get("entry_id") == "":
-        return None
-    return result
-
-
 def _fields_from_flow_schema(flow: dict[str, Any]) -> dict[str, Any]:
     """Map an options-flow's ``data_schema`` field names to their current values.
 
@@ -382,7 +332,7 @@ async def _open_server_entry_flow(
 
     Builds ``current_options`` from the freshly-opened flow's own schema (via
     ``_fields_from_flow_schema``) rather than the component's narrower
-    ``{entry_id, pip_spec}`` shape, so callers like ``_update_source`` — whose
+    ``server_entry`` payload, so callers like ``_update_source`` — whose
     preserved-overrides resend harvests the flow schema itself (``server_url``
     / ``external_url`` / ``webhook_id_override`` / ``secret_path_override`` —
     fields the ``server_entry`` capability does not carry) — still see them.
@@ -400,7 +350,7 @@ async def _open_server_entry_flow(
 
 
 async def find_server_config_entry(
-    client: Any,
+    client: Any, via_component: Any = MISSING
 ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
     """Find the ha_mcp_tools in-process "server" config entry.
 
@@ -424,11 +374,15 @@ async def find_server_config_entry(
     current values (persisted ``suggested_value`` first, else the schema
     ``default`` or ``value``, via ``_field_prefill``).
 
+    ``via_component`` takes a ``fetch_server_entry_via_component`` result the
+    caller already read, so that read is not sent twice.
+
     Module-level (not a DevTools method) so the settings UI's embedded
     restart handler can share it.
     """
-    via_component = await _fetch_server_entry_via_component(client)
-    if via_component is not None:
+    if via_component is MISSING:
+        via_component = await fetch_server_entry_via_component(client)
+    if isinstance(via_component, dict):
         entry_id = via_component.get("entry_id")
         if entry_id is None:
             # Authoritative: the component confirmed no server entry exists.
@@ -711,65 +665,6 @@ class DevTools:
             return raw
         return _COERCE_MISS
 
-    @staticmethod
-    async def _merge_file_override(changes: dict[str, Any]) -> None:
-        """Read-merge-write ``changes`` into the shared override file.
-
-        Uses the settings UI's override-file lock and atomic-write
-        helper so a concurrent web-UI save can't interleave and
-        clobber this write (or vice versa). Refuses to overwrite an
-        unreadable or corrupt existing file — same data-loss guard as
-        the web UI save handlers.
-        """
-        from ..config import _FEATURE_FLAG_OVERRIDE_FILENAME
-        from ..settings_ui._persistence import (
-            _atomic_write_json,
-            _get_override_file_lock,
-        )
-        from ..utils.data_paths import get_data_dir
-
-        path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-        async with _get_override_file_lock():
-            existing: dict[str, Any] = {}
-            try:
-                # Executor thread: file I/O must not block the event loop.
-                existing_raw = await asyncio.to_thread(path.read_text)
-            except FileNotFoundError:
-                existing_raw = None
-            except OSError as exc:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.INTERNAL_ERROR,
-                        f"Could not read existing override file "
-                        f"({type(exc).__name__}: {exc}); refusing to "
-                        "overwrite to preserve prior settings.",
-                        suggestions=["Check filesystem permissions and retry"],
-                    )
-                )
-            if existing_raw is not None:
-                try:
-                    parsed = json.loads(existing_raw)
-                except json.JSONDecodeError as exc:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.CONFIG_INVALID,
-                            f"Existing override file at {path} is not valid "
-                            f"JSON ({exc}); refusing to overwrite to preserve "
-                            "prior settings.",
-                            suggestions=[
-                                "Inspect or delete the file manually and retry"
-                            ],
-                        )
-                    )
-                if isinstance(parsed, dict):
-                    existing = parsed
-            for key, val in changes.items():
-                if val is _REMOVE:
-                    existing.pop(key, None)
-                else:
-                    existing[key] = val
-            await asyncio.to_thread(_atomic_write_json, path, existing)
-
     # ----- server-entry helpers -----
 
     async def _delayed_submit_options(
@@ -825,13 +720,16 @@ class DevTools:
                 "set_policy",
                 "get_backup_config",
                 "set_backup_config",
+                "export_settings",
+                "import_settings",
             ],
             Field(
                 description=(
                     "Server-settings matrix: list / set / reset. Tools tab: "
                     "list_tools / set_tool (enable-disable-pin, LLM-API, security "
                     "gate). Security policies: get_policy / set_policy. Auto-backup "
-                    "config: get_backup_config / set_backup_config."
+                    "config: get_backup_config / set_backup_config. The settings "
+                    "page's whole-file transfer: export_settings / import_settings."
                 )
             ),
         ],
@@ -918,6 +816,17 @@ class DevTools:
                 ),
             ),
         ] = None,
+        settings_file: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description=(
+                    "import_settings: the settings_file from another server's "
+                    "export_settings, or a settings page's downloaded JSON"
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).
 
@@ -929,6 +838,11 @@ class DevTools:
 
         When NOT to use: for HA entity/automation configuration use the
         ha_config_* tools.
+
+        export_settings / import_settings move tool states, security
+        policies, entity visibility, feature, server and backup settings, and
+        the File & YAML Tools permissions between HA-MCP installations; the
+        HA-MCP Server entry's connection moves only through its sidebar panel.
 
         Caveats: enable/disable/pin and most server settings take effect
         only after a restart (ha_dev_manage_server action="restart");
@@ -949,6 +863,8 @@ class DevTools:
         ha_dev_manage_settings("set_tool", tool="ha_call_service", gated=True)
         ha_dev_manage_settings("get_policy")
         ha_dev_manage_settings("set_backup_config", backup={"enable_auto_backup": False})
+        ha_dev_manage_settings("export_settings")  # then, on the other server:
+        ha_dev_manage_settings("import_settings", settings_file=<its settings_file>)
         """
         try:
             if action in ("list", "set", "reset"):
@@ -963,6 +879,8 @@ class DevTools:
                 return await self._apply_set_policy(policy, expected_version)
             if action == "get_backup_config":
                 return await self._get_backup_config()
+            if action in ("export_settings", "import_settings"):
+                return await self._transfer_settings(action, settings_file)
             return await self._apply_set_backup_config(backup)
         except ToolError:
             raise
@@ -973,6 +891,13 @@ class DevTools:
                 suggestions=["Check server logs for details"],
             )
             return None  # unreachable; explicit for CodeQL
+
+    async def _transfer_settings(
+        self, action: str, settings_file: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        if action == "export_settings":
+            return await export_settings_file(self._server)
+        return await import_settings_file(self._server, settings_file)
 
     async def _manage_server_setting(
         self,
@@ -1645,7 +1570,7 @@ class DevTools:
             )
         had_override = origin == "file"
         if had_override:
-            await self._merge_file_override({setting: _REMOVE})
+            await merge_feature_overrides({setting: _REMOVE})
             reset_global_settings()
         return {
             "success": True,
@@ -1753,7 +1678,7 @@ class DevTools:
                 )
             mode = "addon"
         else:
-            await self._merge_file_override({setting: coerced})
+            await merge_feature_overrides({setting: coerced})
             reset_global_settings()
             mode = "file"
         return {
@@ -1825,7 +1750,7 @@ class DevTools:
         """Manage the running ha-mcp server itself (developer mode).
 
         When NOT to use: to restart Home Assistant use ha_restart; to
-        update Home Assistant Apps (add-ons) or HACS packages use
+        update Home Assistant Apps (add-ons) or Marketplace repositories use
         ha_manage_app / ha_manage_hacs.
 
         Caveats: update_source changes ONLY the ha_mcp_tools custom
@@ -1837,7 +1762,12 @@ class DevTools:
         untouched and keeps its current version. Success means the
         entry's options were applied — the component then reinstalls in
         the background, which can take minutes and can still fail
-        (check HA logs). update_source requires the component's
+        (check HA logs). info's component_server_entry.install_pending
+        stays true until that install is done, and after a deferred or
+        failed one; null means it is unknown (skip_pip, a component too
+        old to report it, or a failed read). It compares specs, so a deferred
+        or failed reinstall of an unchanged spec still reads false.
+        update_source requires the component's
         in-process server entry to exist. restart interrupts this MCP
         connection in embedded and app deployments (the reply
         arrives just before the server goes down) and supports those
@@ -1901,7 +1831,8 @@ class DevTools:
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"Could not read HA version: {exc}")
         try:
-            found = await find_server_config_entry(self._client)
+            via_component = await fetch_server_entry_via_component(self._client)
+            found = await find_server_config_entry(self._client, via_component)
             if found is None:
                 data["component_server_entry"] = None
             else:
@@ -1910,6 +1841,9 @@ class DevTools:
                 data["component_server_entry"] = {
                     "entry_id": entry_id,
                     "pip_spec": options.get(_OPT_PIP_SPEC),
+                    "install_pending": await install_pending(
+                        self._client, via_component, warnings
+                    ),
                     "role": (
                         "this server (embedded)"
                         if mode == "embedded"

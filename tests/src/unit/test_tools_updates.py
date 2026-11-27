@@ -1,4 +1,5 @@
-"""``ha_manage_updates`` on a real ``hass``.
+"""``ha_manage_updates`` on a real ``hass``: list, get, refresh and the release
+channel; the batch actions are in ``test_tools_updates_batch``.
 
 Updates are entities of Core's ``update`` integration (``_tools_updates_core``);
 what the tool reads from GitHub, the Home Assistant blog and PyPI is served by
@@ -7,32 +8,61 @@ respx.
 
 from __future__ import annotations
 
+import asyncio
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.components.update import UpdateEntityFeature
+from aiohasupervisor.models import UpdateChannel
+from homeassistant.components.hassio.entity import (
+    HassioAddonEntity,
+    HassioCoreEntity,
+    HassioOSEntity,
+    HassioSupervisorEntity,
+)
+from homeassistant.components.update import UpdateDeviceClass, UpdateEntityFeature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant.common import async_fire_time_changed
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
 from ha_mcp import update_check
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
+from ha_mcp.tools.helpers import core_error_message
 
-from ._tool_errors import error_of
+from ._hacs_marketplace import set_up_marketplace, stored
+from ._hassio_updates_core import (
+    OTHER_APP,
+    OTHER_SLUG,
+    hassio_entity,
+    offer_core_update,
+)
+from ._hassio_updates_core import core_versions as core_versions
+from ._hassio_updates_core import hassio_updates as hassio_updates
+from ._tool_errors import error_body, error_of
+from ._tools_addons_core import Route, Supervisor, app_info, timers
+from ._tools_addons_core import app_route as app_route
+from ._tools_addons_core import core_supervisor as core_supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
 from ._tools_updates_core import (
-    CORE_UPDATE,
     SoftwareUpdate,
     Web,
-    core_release,
     manage_updates,
+    restore_update,
     set_up_updates,
+    supervisor_info,
 )
+from ._tools_updates_core import either_client as either_client
 from ._tools_updates_core import web as web
 
-INSTALLABLE = UpdateEntityFeature.INSTALL | UpdateEntityFeature.BACKUP
-BLOG = "https://www.home-assistant.io/blog/2025/12/03/release-202512/"
+INSTALL = UpdateEntityFeature.INSTALL
 RELEASE_URL = "https://github.com/owner/repo/releases/tag/v1.0.0"
-RAW = "https://raw.githubusercontent.com/owner/repo/v1.0.0/"
 
 
 @pytest.fixture(autouse=True)
@@ -42,28 +72,16 @@ def no_self_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def listed(
-    hass: HomeAssistant, client: HomeAssistantClient, update: SoftwareUpdate
+    hass: HomeAssistant,
+    client: HomeAssistantClient,
+    update: SoftwareUpdate,
+    integration: str = "test",
 ) -> dict[str, Any]:
     """The one listed update, as ``list`` reports it."""
-    await set_up_updates(hass, update)
+    await set_up_updates(hass, update, integration=integration)
     result = await manage_updates(client)
     [entry] = result["updates"]
     return dict(entry)
-
-
-async def core_analysis(
-    hass: HomeAssistant, client: HomeAssistantClient, installed: str, latest: str
-) -> dict[str, Any]:
-    """``get`` with release analysis on a Core update from ``installed`` to ``latest``."""
-    await set_up_updates(
-        hass,
-        SoftwareUpdate(
-            CORE_UPDATE, title="Home Assistant Core", installed=installed, latest=latest
-        ),
-    )
-    return await manage_updates(
-        client, action="get", entity_ids=[CORE_UPDATE], include_release_notes=True
-    )
 
 
 class TestServerOwnUpdate:
@@ -102,486 +120,468 @@ class TestServerOwnUpdate:
         assert "ha_mcp_update" not in result
 
 
+class TestServerOwnApp:
+    """Installing the app this server runs in restarts the server, so the call
+    that installs it never gets its answer."""
+
+    async def test_in_the_app_list_marks_the_server_app_and_warns(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        app_route: Route,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        hassio_updates.answer(
+            "GET", "/addons/self/info", app_info(OTHER_SLUG, name=OTHER_APP)
+        )
+        own = hassio_entity(hass, HassioAddonEntity, OTHER_APP).entity_id
+
+        result = await manage_updates(component_core_client)
+
+        marked = {u["entity_id"]: u.get("runs_this_server") for u in result["updates"]}
+        assert [eid for eid, mark in marked.items() if mark] == [own]
+        [warning] = result["warnings"]
+        assert own in warning
+
+    async def test_outside_the_app_nothing_is_marked_and_supervisor_is_not_asked(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        result = await manage_updates(component_core_client)
+
+        assert not any("runs_this_server" in u for u in result["updates"])
+        assert "warnings" not in result
+        assert ("GET", "/addons/self/info") not in hassio_updates.requests
+
+    async def test_an_unreadable_app_identity_marks_nothing_and_warns_nothing(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        app_route: Route,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        app_route.supervisor.refuse("GET", "/addons/self/info", "Unknown app")
+
+        result = await manage_updates(component_core_client)
+
+        assert not any("runs_this_server" in u for u in result["updates"])
+        assert "warnings" not in result
+        assert ("GET", "/addons/self/info") in app_route.supervisor.requests
+
+
 class TestCategories:
-    """Each pending update is filed under the category the Updates page uses."""
+    """Each pending update is filed under the category the Updates page uses,
+    read from the integration that owns it and Core's attributes, never from
+    its entity_id."""
 
     @pytest.mark.parametrize(
-        ("entity_id", "title", "category"),
+        ("integration", "title", "device_class", "category"),
         [
-            pytest.param(CORE_UPDATE, None, "core", id="core"),
             pytest.param(
-                "update.some_core_entity",
-                "Home Assistant Core Update",
-                "other",
-                id="core-in-id-but-not-home-assistant-core",
+                "test", "Bulb", UpdateDeviceClass.FIRMWARE, "devices", id="firmware"
             ),
-            pytest.param("update.home_assistant_operating_system", None, "os", id="os"),
-            pytest.param(
-                "update.home_assistant_supervisor_update", None, "supervisor", id="sv"
-            ),
-            pytest.param("update.some_addon_update", "Some Add-on", "addons", id="app"),
-            pytest.param("update.esphome_device_firmware", None, "devices", id="esp"),
-            pytest.param(
-                "update.slzb_06m_core",
-                "SLZB-06M Core firmware",
-                "devices",
-                id="firmware-title",
-            ),
-            pytest.param("update.unknown_thing", "Unknown", "other", id="other"),
+            pytest.param("test", "Bulb hub", None, "other", id="other"),
         ],
     )
     async def test_update_lands_in_its_category(
         self,
         hass: HomeAssistant,
         core_client: HomeAssistantClient,
-        entity_id: str,
-        title: str | None,
+        integration: str,
+        title: str,
+        device_class: UpdateDeviceClass | None,
         category: str,
     ) -> None:
-        entry = await listed(hass, core_client, SoftwareUpdate(entity_id, title=title))
-
-        assert entry["category"] == category
-
-    @pytest.mark.parametrize("integration", ["hacs", "marketplace"])
-    async def test_store_repository_update_is_hacs_whatever_its_entity_id(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, integration: str
-    ) -> None:
-        """The Marketplace (Core 2026.11) names its entities after the repository
-        alone, so update.ha_mcp_custom_component carries no "hacs"."""
-        await set_up_updates(
-            hass,
-            SoftwareUpdate("update.ha_mcp_custom_component"),
-            integration=integration,
+        update = SoftwareUpdate(
+            "update.renamed_by_user", title=title, device_class=device_class
         )
+
+        entry = await listed(hass, core_client, update, integration)
+
+        assert (entry["platform"], entry["category"]) == (integration, category)
+
+    async def test_a_store_repository_update_lands_under_the_store(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        aioclient_mock: AiohttpClientMocker,
+        hass_storage: dict[str, Any],
+    ) -> None:
+        """An installed repository Core's Marketplace offers a newer release of."""
+        card = stored(
+            "someone/some-card", "plugin", installed="v1.0.0", last_version="v1.1.0"
+        )
+        await set_up_marketplace(hass, aioclient_mock, hass_storage, {"1": card})
+        assert await async_setup_component(hass, "config", {})
 
         result = await manage_updates(core_client)
 
-        assert [u["entity_id"] for u in result["categories"]["hacs"]] == [
-            "update.ha_mcp_custom_component"
-        ]
+        [entry] = result["updates"]
+        assert (entry["platform"], entry["category"]) == ("marketplace", "hacs")
+
+    @pytest.mark.parametrize(
+        ("kind", "title", "category"),
+        [
+            pytest.param(HassioCoreEntity, None, "core", id="core"),
+            pytest.param(HassioOSEntity, None, "os", id="os"),
+            pytest.param(HassioSupervisorEntity, None, "supervisor", id="sv"),
+            pytest.param(HassioAddonEntity, OTHER_APP, "addons", id="app"),
+        ],
+    )
+    async def test_a_supervisor_update_lands_in_its_category(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        either_client: HomeAssistantClient,
+        web: Web,
+        kind: type,
+        title: str | None,
+        category: str,
+    ) -> None:
+        entity_id = hassio_entity(hass, kind, title).entity_id
+
+        result = await manage_updates(
+            either_client, action="get", entity_ids=[entity_id]
+        )
+
+        assert (result["platform"], result["category"]) == ("hassio", category)
+
+    async def test_with_the_component_supervisor_updates_go_by_their_core_entity(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        """An app named like the Core update is still an app, and is not
+        taken for the Core update a release analysis is read for."""
+        core_title = hassio_entity(hass, HassioCoreEntity).title
+        app = hassio_entity(hass, HassioAddonEntity, core_title).entity_id
+
+        result = await manage_updates(
+            component_core_client, action="get", entity_ids=[app]
+        )
+
+        assert result["category"] == "addons"
 
 
-@pytest.mark.parametrize(
-    ("features", "release_url", "supported"),
-    [
-        pytest.param(UpdateEntityFeature.RELEASE_NOTES, None, True, id="feature"),
-        pytest.param(UpdateEntityFeature(0), RELEASE_URL, True, id="release-url"),
-        pytest.param(UpdateEntityFeature(0), None, False, id="neither"),
-        pytest.param(
-            UpdateEntityFeature.INSTALL
+class TestUpdateRows:
+    """A listed update is Core's state, with what the component reads from
+    Core's entity added."""
+
+    async def test_every_attribute_core_wrote_reaches_the_row(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        update = SoftwareUpdate("update.thing", release_url=RELEASE_URL)
+
+        entry = await listed(hass, core_client, update)
+
+        state = hass.states.get("update.thing")
+        assert state is not None
+        assert entry.items() >= dict(state.attributes).items()
+
+    async def test_features_are_named_after_core_feature_flags(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
+    ) -> None:
+        update = SoftwareUpdate(
+            "update.thing",
+            features=INSTALL
             | UpdateEntityFeature.SPECIFIC_VERSION
-            | UpdateEntityFeature.PROGRESS
-            | UpdateEntityFeature.BACKUP,
-            None,
-            False,
-            id="only-other-features",
-        ),
-    ],
-)
-async def test_list_says_which_updates_have_release_notes(
-    hass: HomeAssistant,
-    core_client: HomeAssistantClient,
-    features: UpdateEntityFeature,
-    release_url: str | None,
-    supported: bool,
-) -> None:
-    update = SoftwareUpdate("update.thing", features=features, release_url=release_url)
-
-    entry = await listed(hass, core_client, update)
-
-    assert entry["supports_release_notes"] is supported
-
-
-class TestReleaseNotes:
-    """``get`` returns an update's release notes from the first source that has them."""
-
-    async def test_notes_come_from_the_update_entity_first(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
-    ) -> None:
-        notes = "## 1.1.0\n- Faster startup"
-        await set_up_updates(
-            hass,
-            SoftwareUpdate(
-                "update.thing",
-                features=UpdateEntityFeature.RELEASE_NOTES,
-                release_url=RELEASE_URL,
-                notes=notes,
-            ),
+            | UpdateEntityFeature.RELEASE_NOTES,
         )
 
-        result = await manage_updates(
-            core_client, action="get", entity_ids=["update.thing"]
-        )
+        entry = await listed(hass, component_core_client, update)
 
-        assert (result["release_notes"], result["release_notes_source"]) == (
-            notes,
-            "websocket",
-        )
-        assert web.requested == []
-
-    async def test_hint_links_the_release_when_no_changelog_file_exists(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
-    ) -> None:
-        await set_up_updates(
-            hass, SoftwareUpdate("update.thing", release_url=RELEASE_URL)
-        )
-
-        result = await manage_updates(
-            core_client, action="get", entity_ids=["update.thing"]
-        )
-
-        assert "release_notes" not in result
-        assert result["release_notes_hint"] == (
-            "Release notes could not be fetched automatically. "
-            f"View them at: {RELEASE_URL}"
-        )
-        assert len([u for u in web.requested if u.startswith(RAW)]) == 5
-
-    async def test_a_changelog_too_short_to_be_notes_is_not_returned(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
-    ) -> None:
-        web.hosts["raw.githubusercontent.com"] = {"text": "too short"}
-        await set_up_updates(
-            hass, SoftwareUpdate("update.thing", release_url=RELEASE_URL)
-        )
-
-        result = await manage_updates(
-            core_client, action="get", entity_ids=["update.thing"]
-        )
-
-        assert "release_notes" not in result
-        assert "release_notes_hint" in result
-
-    @pytest.mark.parametrize("first_file", ["unreachable", "missing"])
-    async def test_changelog_is_read_from_the_next_file_when_one_fails(
-        self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        web: Web,
-        first_file: str,
-    ) -> None:
-        if first_file == "unreachable":
-            web.unreachable.add(RAW + "CHANGELOG.md")
-        changelog = "# Releases\n\n## v1.0.0\n- First stable release of the thing"
-        web.serve(RAW + "RELEASES.md", text=changelog)
-        await set_up_updates(
-            hass, SoftwareUpdate("update.thing", release_url=RELEASE_URL)
-        )
-
-        result = await manage_updates(
-            core_client, action="get", entity_ids=["update.thing"]
-        )
-
-        assert (result["release_notes"], result["release_notes_source"]) == (
-            changelog,
-            "github_raw",
-        )
-        assert [u for u in web.requested if u.startswith(RAW)] == [
-            RAW + "CHANGELOG.md",
-            RAW + "RELEASES.md",
-        ]
-
-
-class TestCoreReleaseAnalysis:
-    """``get`` with ``include_release_notes`` reads every monthly Core release
-    between the installed and the offered version."""
+        assert entry["features"] == ["install", "specific_version", "release_notes"]
 
     @pytest.mark.parametrize(
-        ("installed", "latest", "checked"),
+        ("features", "in_progress", "can_install"),
         [
-            pytest.param("2025.11.3", "2025.12.0", ["2025.12.0"], id="next-month"),
+            pytest.param(INSTALL, False, True, id="installable"),
+            pytest.param(UpdateEntityFeature(0), False, False, id="no-install"),
             pytest.param(
-                "2025.10.3",
-                "2026.2.1",
-                ["2025.11.0", "2025.12.0", "2026.1.0", "2026.2.0"],
-                id="across-new-year",
+                INSTALL | UpdateEntityFeature.PROGRESS, True, False, id="busy"
             ),
-            pytest.param("2025.11.0", "2025.11.3", [], id="same-month"),
-            pytest.param("2025.11", "2025.12.0", ["2025.12.0"], id="no-patch-part"),
+            # Core refuses an install unless in_progress is False.
             pytest.param(
-                "2025.12.0b1", "2026.1.0", ["2026.1.0"], id="unreadable-installed"
+                INSTALL | UpdateEntityFeature.PROGRESS, None, False, id="unknown"
             ),
         ],
     )
-    async def test_every_monthly_release_in_between_is_checked(
+    async def test_can_install_follows_core_feature_flags_and_progress(
         self,
         hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        web: Web,
-        installed: str,
-        latest: str,
-        checked: list[str],
+        component_core_client: HomeAssistantClient,
+        features: UpdateEntityFeature,
+        in_progress: bool | None,
+        can_install: bool,
     ) -> None:
-        web.hosts["api.github.com"] = {
-            "json": {"body": "- Fix ([hue docs]) (breaking-change)"}
-        }
-
-        result = await core_analysis(hass, core_client, installed, latest)
-
-        assert result["breaking_changes"]["versions_checked"] == checked
-
-    @pytest.mark.parametrize(
-        ("page", "content"),
-        [
-            pytest.param(
-                "<h1>Blog</h1><nav>Nav</nav><article><h2>Release</h2>"
-                "<p><b>Great</b> stuff</p><ul><li>One</li><li>Two</li></ul>"
-                "</article><aside>Related posts</aside><footer>F</footer>",
-                "Release\nGreat stuff\n\n- One\n- Two",
-                id="article",
-            ),
-            pytest.param(
-                '<div>Nav</div><h1>Release</h1><p>Content</p><footer class="f">F</footer>',
-                "Release\nContent",
-                id="from-the-heading",
-            ),
-            pytest.param("just plain text", "just plain text", id="plain-page"),
-        ],
-    )
-    async def test_blog_post_body_is_returned_as_plain_text(
-        self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        web: Web,
-        page: str,
-        content: str,
-    ) -> None:
-        web.serve(core_release("2025.12.0"), json={"body": BLOG})
-        web.serve(BLOG, text=page)
-
-        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
-
-        assert result["multi_version_release_notes"] == [
-            {"version": "2025.12.0", "content": content, "source_url": BLOG}
-        ]
-
-    async def test_an_empty_blog_post_adds_no_release_notes(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
-    ) -> None:
-        web.serve(core_release("2025.12.0"), json={"body": BLOG})
-        web.serve(BLOG, text="")
-
-        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
-
-        assert result["multi_version_release_notes"] == []
-        assert result["breaking_changes"]["versions_checked"] == ["2025.12.0"]
-
-    async def test_blog_breaking_changes_are_listed_per_integration(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
-    ) -> None:
-        web.serve(core_release("2025.12.0"), json={"body": BLOG})
-        web.serve(
-            BLOG,
-            text="<article>"
-            '<h2 id="backward-incompatible-changes">Backward-incompatible changes</h2>'
-            "<h3>Tuya</h3><p>HVACMode converted to presets.</p>"
-            "<h3>Group</h3><p>Sensor group behavior changed.</p>"
-            '<h2 id="all-changes">All changes</h2></article>',
+        update = SoftwareUpdate(
+            "update.thing", features=features, in_progress=in_progress
         )
 
-        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
+        entry = await listed(hass, component_core_client, update)
 
-        assert result["breaking_changes"]["entries"] == [
-            {
-                "integration": "Tuya",
-                "description": "HVACMode converted to presets.",
-                "version": "2025.12.0",
-            },
-            {
-                "integration": "Group",
-                "description": "Sensor group behavior changed.",
-                "version": "2025.12.0",
-            },
-        ]
-        assert result["breaking_changes"]["count"] == 2
+        assert entry["can_install"] is can_install
 
-    @pytest.mark.parametrize(
-        "page",
-        [
-            pytest.param("<article><h2>Other</h2><p>x</p></article>", id="no-section"),
-            pytest.param(
-                '<article><h2 id="backward-incompatible-changes">BC</h2>'
-                '<h2 id="next">N</h2></article>',
-                id="empty-section",
-            ),
-        ],
-    )
-    async def test_blog_without_breaking_changes_lists_none(
-        self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        web: Web,
-        page: str,
-    ) -> None:
-        web.serve(core_release("2025.12.0"), json={"body": BLOG})
-        web.serve(BLOG, text=page)
-
-        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
-
-        assert result["breaking_changes"] == {
-            "entries": [],
-            "count": 0,
-            "versions_checked": ["2025.12.0"],
-        }
-
-    @pytest.mark.parametrize(
-        ("line", "integration", "description"),
-        [
-            pytest.param(
-                "- Tuya fix ([tuya docs]) (breaking-change)",
-                "tuya",
-                "Tuya fix ([tuya docs])",
-                id="docs-link",
-            ),
-            pytest.param(
-                "- Fix ([vesync documentation]) (breaking-change)",
-                "vesync",
-                "Fix ([vesync documentation])",
-                id="documentation-link",
-            ),
-            pytest.param(
-                "- Some change (breaking-change)",
-                "unknown",
-                "Some change",
-                id="no-link",
-            ),
-            pytest.param(
-                "- Fix ([hue docs]) (Breaking-Change)",
-                "hue",
-                "Fix ([hue docs])",
-                id="any-case",
-            ),
-        ],
-    )
-    async def test_tagged_release_line_is_a_breaking_change(
-        self,
-        hass: HomeAssistant,
-        core_client: HomeAssistantClient,
-        web: Web,
-        line: str,
-        integration: str,
-        description: str,
-    ) -> None:
-        body = f"- Normal fix\n{line}\n- Another fix\n"
-        web.serve(core_release("2025.12.0"), json={"body": body})
-
-        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
-
-        assert result["breaking_changes"]["entries"] == [
-            {
-                "integration": integration,
-                "description": description,
-                "version": "2025.12.0",
-            }
-        ]
-
-    async def test_release_without_tagged_lines_has_no_breaking_changes(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient, web: Web
-    ) -> None:
-        web.serve(core_release("2025.12.0"), json={"body": "- Normal fix\n"})
-
-        result = await core_analysis(hass, core_client, "2025.11.3", "2025.12.0")
-
-        assert result["breaking_changes"] == {
-            "entries": [],
-            "count": 0,
-            "versions_checked": [],
-        }
-
-
-class TestBatchActions:
-    """install / skip act on each target and report every outcome."""
-
-    async def test_category_install_skips_updates_already_in_progress(
+    async def test_without_the_component_features_are_unknown_and_said_so(
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:
-        idle = SoftwareUpdate("update.addon_a", title="Add-on A", features=INSTALLABLE)
-        busy = SoftwareUpdate(
-            "update.addon_b",
-            title="Add-on B",
-            features=INSTALLABLE | UpdateEntityFeature.PROGRESS,
-            in_progress=True,
-        )
-        await set_up_updates(hass, idle, busy)
+        await set_up_updates(hass, SoftwareUpdate("update.thing", features=INSTALL))
 
-        result = await manage_updates(
-            core_client, action="install", categories=["addons"], backup=True
-        )
+        result = await manage_updates(core_client)
 
-        assert (idle.installs, busy.installs) == ([(None, True)], [])
-        assert (result["requested"], result["succeeded"], result["failed"]) == (1, 1, 0)
-        assert result["results"] == [{"success": True, "entity_id": "update.addon_a"}]
+        [entry] = result["updates"]
+        assert (entry["features"], entry["can_install"]) == (None, None)
+        assert any(COMPONENT_INSTALL_HINT in w for w in result["warnings"])
 
-    async def test_skip_reports_a_missing_entity_and_skips_the_rest(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    async def test_get_returns_the_row_list_returns(
+        self, hass: HomeAssistant, component_core_client: HomeAssistantClient
     ) -> None:
-        await set_up_updates(hass, SoftwareUpdate("update.exists"))
+        await set_up_updates(hass, SoftwareUpdate("update.thing", features=INSTALL))
+        [entry] = (await manage_updates(component_core_client))["updates"]
 
         result = await manage_updates(
-            core_client, action="skip", entity_ids=["update.exists", "update.missing"]
+            component_core_client, action="get", entity_ids=["update.thing"]
         )
 
-        state = hass.states.get("update.exists")
+        assert result.items() >= entry.items()
+
+    async def test_a_restored_update_is_read_as_core_shows_it(
+        self,
+        hass: HomeAssistant,
+        either_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        """Its integration did not set it up again; Home Assistant still has it."""
+        await set_up_updates(hass)
+        entity_id = restore_update(hass, entity_registry)
+
+        result = await manage_updates(
+            either_client, action="get", entity_ids=[entity_id]
+        )
+
+        state = hass.states.get(entity_id)
         assert state is not None
-        assert state.attributes["skipped_version"] == "1.1.0"
-        assert (result["requested"], result["succeeded"], result["failed"]) == (2, 1, 1)
-        assert result["success"] is False
-        [failure] = [r for r in result["results"] if not r.get("success")]
-        assert failure["entity_id"] == "update.missing"
-        assert failure["error"]["code"] == "ENTITY_NOT_FOUND"
-
-    async def test_an_update_core_refuses_does_not_stop_the_batch(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient
-    ) -> None:
-        await set_up_updates(
-            hass,
-            SoftwareUpdate("update.auto", auto_update=True),
-            SoftwareUpdate("update.manual"),
-        )
-
-        result = await manage_updates(
-            core_client, action="skip", entity_ids=["update.auto", "update.manual"]
-        )
-
-        state = hass.states.get("update.manual")
-        assert state is not None
-        assert state.attributes["skipped_version"] == "1.1.0"
-        assert (result["requested"], result["succeeded"], result["failed"]) == (2, 1, 1)
-        [failure] = [r for r in result["results"] if not r.get("success")]
-        assert failure["entity_id"] == "update.auto"
-        assert failure["error"]["code"] == "SERVICE_CALL_FAILED"
-
-    async def test_lost_connection_ends_the_batch_with_a_connection_error(
-        self, hass: HomeAssistant, core_client: HomeAssistantClient
-    ) -> None:
-        await set_up_updates(
-            hass, SoftwareUpdate("update.first"), SoftwareUpdate("update.second")
-        )
-        with (
-            patch.object(
-                core_client,
-                "call_service",
-                AsyncMock(side_effect=HomeAssistantConnectionError("connection lost")),
-            ) as call_service,
-            pytest.raises(ToolError) as exc_info,
-        ):
-            await manage_updates(
-                core_client, action="skip", entity_ids=["update.first", "update.second"]
-            )
-
-        assert error_of(exc_info)["code"] == "CONNECTION_FAILED"
-        assert call_service.await_count == 1
+        assert result.items() >= dict(state.attributes).items()
+        assert (result["state"], result["platform"]) == ("unavailable", "test")
 
 
 async def test_get_names_an_update_entity_core_does_not_have(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, either_client: HomeAssistantClient
 ) -> None:
-    """Core's 404 for the state is what marks the entity as missing."""
     await set_up_updates(hass, SoftwareUpdate("update.exists"))
 
     with pytest.raises(ToolError) as exc_info:
-        await manage_updates(core_client, action="get", entity_ids=["update.missing"])
+        await manage_updates(either_client, action="get", entity_ids=["update.missing"])
 
     error = error_of(exc_info)
     assert error["code"] == "ENTITY_NOT_FOUND"
     assert error["message"] == "Update entity not found: update.missing"
+
+
+async def answered(
+    hass: HomeAssistant, call: asyncio.Task[Any], besides: set[asyncio.TimerHandle]
+) -> None:
+    """Return once Core has answered the refresh's call: the tool is done, or
+    it waits on a timer due in about 15 seconds."""
+    for _ in range(10_000):
+        due = [h.when() - hass.loop.time() for h in timers(hass) - besides]
+        if call.done() or any(14 < seconds <= 15 for seconds in due):
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("the refresh neither finished nor waited")
+
+
+class TestRefresh:
+    """``refresh`` has every update checked, as the Updates page's "Check for
+    updates" does, then lists what Home Assistant offers afterwards."""
+
+    async def test_every_update_is_checked_and_the_new_offer_is_listed(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        assert await async_setup_component(hass, "homeassistant", {})
+        first, second = SoftwareUpdate("update.first"), SoftwareUpdate("update.second")
+        first.next_latest = "1.2.0"
+        await set_up_updates(hass, first, second)
+
+        result = await manage_updates(core_client, action="refresh")
+
+        assert (first.checks, second.checks) == (1, 1)
+        offered = {u["entity_id"]: u["latest_version"] for u in result["updates"]}
+        assert offered["update.first"] == "1.2.0"
+
+    async def test_a_version_supervisor_finds_on_its_delayed_check_is_listed(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        either_client: HomeAssistantClient,
+    ) -> None:
+        """Supervisor's updates check after their coordinator's debounce, once
+        Core has answered the call; listed at once, the new Core is missed."""
+        assert await async_setup_component(hass, "homeassistant", {})
+        await offer_core_update(hass, hassio_updates, "2026.12.0")
+        core = hassio_entity(hass, HassioCoreEntity).entity_id
+        besides = timers(hass)
+
+        call = asyncio.create_task(manage_updates(either_client, action="refresh"))
+        try:
+            await answered(hass, call, besides)
+            # Home Assistant's clock passes Supervisor's debounce, then the wait.
+            async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=10))
+            await hass.async_block_till_done()
+            async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=15))
+            result = await call
+        finally:
+            if not call.done():
+                call.cancel()
+                await asyncio.gather(call, return_exceptions=True)
+
+        offered = {u["entity_id"]: u["latest_version"] for u in result["updates"]}
+        assert offered.get(core) == "2026.12.0"
+
+    async def test_a_restored_update_is_not_asked_to_check(
+        self,
+        hass: HomeAssistant,
+        either_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        """Its integration is not loaded; the Updates page skips it too."""
+        assert await async_setup_component(hass, "homeassistant", {})
+        await set_up_updates(hass, SoftwareUpdate("update.loaded"))
+        restore_update(hass, entity_registry)
+
+        result = await manage_updates(either_client, action="refresh")
+
+        assert result["refreshed"] == 1
+
+    async def test_with_no_update_entities_nothing_is_asked(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await set_up_updates(hass)
+        with patch.object(
+            core_client,
+            "send_websocket_message",
+            AsyncMock(wraps=core_client.send_websocket_message),
+        ) as send:
+            result = await manage_updates(core_client, action="refresh")
+
+        assert result["refreshed"] == 0
+        assert "note" in result
+        assert "call_service" not in [c.args[0]["type"] for c in send.await_args_list]
+
+    async def test_a_check_core_refuses_ends_the_call_with_core_answer(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """Core swallows an integration's failed check, so its refusal here is
+        the missing ``homeassistant`` integration."""
+        await set_up_updates(hass, SoftwareUpdate("update.thing"))
+
+        with pytest.raises(ToolError) as exc_info:
+            await manage_updates(core_client, action="refresh")
+
+        reply = await core_client.send_websocket_message(
+            {
+                "type": "call_service",
+                "domain": "homeassistant",
+                "service": "update_entity",
+                "service_data": {"entity_id": "update.thing"},
+            }
+        )
+        assert error_body(exc_info)["ha_error_code"] == reply["error_code"]
+        assert core_error_message(reply["error"]) in error_of(exc_info)["message"]
+
+
+class TestReleaseChannel:
+    """Supervisor's release channel, as the Updates page's Join beta / Leave
+    beta sets it."""
+
+    async def test_set_channel_writes_it_and_returns_the_old_and_new_one(
+        self, core_supervisor: Supervisor, core_client: HomeAssistantClient
+    ) -> None:
+        core_supervisor.answer(
+            "GET", "/supervisor/info", supervisor_info(UpdateChannel.STABLE)
+        )
+        core_supervisor.answer(
+            "GET", "/supervisor/info", supervisor_info(UpdateChannel.BETA)
+        )
+        core_supervisor.answer("POST", "/supervisor/options")
+        core_supervisor.answer("POST", "/supervisor/reload")
+
+        result = await manage_updates(core_client, action="set_channel", channel="beta")
+
+        assert core_supervisor.sent("POST", "/supervisor/options") == [
+            {"channel": "beta"}
+        ]
+        assert core_supervisor.requests[1:3] == [
+            ("POST", "/supervisor/options"),
+            ("POST", "/supervisor/reload"),
+        ]
+        assert (result["previous_channel"], result["channel"]) == ("stable", "beta")
+
+    async def test_set_channel_without_a_channel_is_refused(
+        self, core_supervisor: Supervisor, core_client: HomeAssistantClient
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await manage_updates(core_client, action="set_channel")
+
+        assert error_of(exc_info)["code"] == "VALIDATION_MISSING_PARAMETER"
+        assert core_supervisor.requests == []
+
+    async def test_supervisor_refusal_of_a_channel_reaches_the_caller(
+        self, core_supervisor: Supervisor, core_client: HomeAssistantClient
+    ) -> None:
+        core_supervisor.answer(
+            "GET", "/supervisor/info", supervisor_info(UpdateChannel.STABLE)
+        )
+        refusal = (
+            "expected UpdateChannel or one of 'stable', 'beta', 'dev' for "
+            "dictionary value @ data['channel']. Got 'nightly'"
+        )
+        core_supervisor.refuse("POST", "/supervisor/options", refusal)
+
+        with pytest.raises(ToolError) as exc_info:
+            await manage_updates(core_client, action="set_channel", channel="nightly")
+
+        assert refusal in error_of(exc_info)["message"]
+        assert ("POST", "/supervisor/reload") not in core_supervisor.requests
+
+    async def test_without_a_supervisor_set_channel_is_refused(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await manage_updates(core_client, action="set_channel", channel="beta")
+
+        assert error_of(exc_info)["code"] == "RESOURCE_NOT_FOUND"
+
+    async def test_list_carries_the_channel_supervisor_reports(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        result = await manage_updates(component_core_client)
+
+        # The channel the fixture's Supervisor reports.
+        assert result["channel"] == UpdateChannel.STABLE.value
+        assert not any("channel" in w for w in result.get("warnings", []))
+
+    async def test_a_channel_supervisor_refuses_to_report_is_a_warning_with_its_reason(
+        self,
+        hass: HomeAssistant,
+        hassio_updates: Supervisor,
+        component_core_client: HomeAssistantClient,
+    ) -> None:
+        """A hassio row means a Supervisor runs, so a missing channel is a read
+        that failed; the list says so, with Supervisor's reason, instead of
+        dropping it silently."""
+        hassio_updates.refuse("GET", "/supervisor/info", "Supervisor is starting up")
+
+        result = await manage_updates(component_core_client)
+
+        assert any(row["platform"] == "hassio" for row in result["updates"])
+        assert "channel" not in result
+        [warning] = [w for w in result["warnings"] if "channel" in w]
+        assert warning.startswith("Supervisor's release channel could not be read (")
+        assert "Supervisor is starting up" in warning

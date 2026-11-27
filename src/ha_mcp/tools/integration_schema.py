@@ -259,7 +259,6 @@ async def fetch_config_subentry_schema(
     *,
     subentry_type: str | None,
     subentry_id: str | None,
-    show_advanced_options: bool,
     menu_choice: str | None = None,
 ) -> None:
     """Describe a config subentry flow as ``resp["subentry_schema"]``."""
@@ -282,7 +281,6 @@ async def fetch_config_subentry_schema(
         entry_id,
         subentry_type,
         subentry_id=subentry_id,
-        show_advanced_options=show_advanced_options,
     )
     _put_payload(
         resp,
@@ -342,7 +340,6 @@ async def describe_flow_form(
         resp,
         subentry_type=subentry_type,
         subentry_id=subentry_id,
-        show_advanced_options=False,
         menu_choice=menu_choice,
     )
     del resp["entry"]

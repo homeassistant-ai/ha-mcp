@@ -479,7 +479,8 @@ class TestConnectUrlSurfaces:
             assert "mcp_id" not in surface
             assert "/private_x" not in surface
             assert "/api/webhook/" not in surface
-            assert "Configure" in surface
+        assert "Configure" in caplog.text
+        assert "because the URL is the credential" not in notices.message
         assert "HA-MCP in-process server is running" in caplog.text
         # The URLs still resolve for the Configure screen.
         urls = esetup.build_connect_urls(hass, entry)
@@ -497,10 +498,9 @@ class TestConnectUrlSurfaces:
         await esetup.async_bring_up_server(hass, entry)
 
         assert PANEL_LINK in notices.message
-        assert notices.message.endswith(
-            "\n\nTo disable this notification, uncheck the startup notification "
-            "box on that same configuration screen.\n"
-        )
+        assert "(/config/integrations/integration/ha_mcp_tools)" in notices.message
+        assert "gear" in notices.message
+        assert "Startup notification" in notices.message
 
     async def test_sidebar_panel_off_drops_the_panel_link(
         self,
@@ -515,7 +515,7 @@ class TestConnectUrlSurfaces:
         await esetup.async_bring_up_server(hass, entry)
 
         assert "(/ha-mcp)" not in notices.message
-        assert "Configure" in notices.message
+        assert "(/config/integrations/integration/ha_mcp_tools)" in notices.message
 
     async def test_startup_notification_off_dismisses_the_old_one_and_still_logs(
         self,

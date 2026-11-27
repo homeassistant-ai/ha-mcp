@@ -420,6 +420,32 @@ BLANK_IDENTIFIER_CALLS = [
         "category",
         name="hacs_add_repository_without_category",
     ),
+    _case(
+        lambda c, v: HacsTools(c).ha_manage_hacs(
+            action="remove_repository", repository_id=v
+        ),
+        "repository_id",
+        name="hacs_remove_repository",
+    ),
+    _case(
+        lambda c, v: HacsTools(c).ha_manage_hacs(
+            action="set_version", repository_id="123", version=v
+        ),
+        "version",
+        name="hacs_set_version_without_version",
+    ),
+    _case(
+        lambda c, v: HacsTools(c).ha_manage_hacs(
+            action="acknowledge_critical", repository=v
+        ),
+        "repository",
+        name="hacs_acknowledge_critical",
+    ),
+    _case(
+        lambda c, v: HacsTools(c).ha_get_hacs_info(action="detect", repository=v),
+        "repository",
+        name="hacs_detect",
+    ),
 ]
 
 

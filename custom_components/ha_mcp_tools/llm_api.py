@@ -497,6 +497,8 @@ def _loopback_httpx_client_factory(
 @asynccontextmanager
 async def mcp_session(
     url: str,
+    *,
+    caller_platform: str | None = None,
 ) -> AsyncIterator[tuple[ClientSession, mcp_types.InitializeResult]]:
     """Open an initialized MCP session against the loopback server.
 
@@ -541,6 +543,11 @@ async def mcp_session(
 
     sdk_transport = importlib.import_module("mcp.client.streamable_http")
 
+    headers = {}
+    if caller_platform is not None:
+        headers["X-HA-MCP-LLM-Caller"] = (
+            "mcp_server" if caller_platform == "mcp_server" else "llm_api"
+        )
     async with AsyncExitStack() as stack:
         streamable_http_client = getattr(sdk_transport, "streamable_http_client", None)
         if streamable_http_client is None:
@@ -551,7 +558,9 @@ async def mcp_session(
             # keeps this fallback on the same verify=False/trust_env=False
             # posture as the canonical path below.
             transport = sdk_transport.streamablehttp_client(
-                url=url, httpx_client_factory=_loopback_httpx_client_factory
+                url=url,
+                headers=headers,
+                httpx_client_factory=_loopback_httpx_client_factory,
             )
         else:
             # SDK 1.x takes an httpx client, 2.x an httpx2 one: use the library
@@ -563,6 +572,7 @@ async def mcp_session(
                 http_lib = importlib.import_module("httpx")
             http_client = await stack.enter_async_context(
                 http_lib.AsyncClient(
+                    headers=headers,
                     verify=False,
                     trust_env=False,
                     timeout=http_lib.Timeout(CALL_TOOL_TIMEOUT_SECONDS),
@@ -605,17 +615,21 @@ class HaMcpTool(llm.Tool):
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
-    ) -> llm.ToolResult | JsonObjectType:
+    ) -> llm.ToolResult:
         """Call the tool on the in-process server and return its result."""
         dumped = await _forward_tool_call(
-            hass, self._server_url, self.name, tool_input.tool_args
+            hass,
+            self._server_url,
+            self.name,
+            tool_input.tool_args,
+            llm_context.platform,
         )
         if dumped is None:
             return _unknown_tool(self.name)
         return tool_result(dumped, error=dumped.get("isError") is True)
 
 
-def _unknown_tool(name: str) -> llm.ToolResult | JsonObjectType:
+def _unknown_tool(name: str) -> llm.ToolResult:
     """The answer for a tool that does not exist or is not exposed."""
     return tool_result(
         {
@@ -627,7 +641,11 @@ def _unknown_tool(name: str) -> llm.ToolResult | JsonObjectType:
 
 
 async def _forward_tool_call(
-    hass: HomeAssistant, server_url: str, name: str, arguments: dict[str, Any]
+    hass: HomeAssistant,
+    server_url: str,
+    name: str,
+    arguments: dict[str, Any],
+    caller_platform: str,
 ) -> JsonObjectType | None:
     """Forward one tool call over loopback and dump the result for the agent.
 
@@ -638,7 +656,10 @@ async def _forward_tool_call(
     try:
         async with (
             asyncio.timeout(CALL_TOOL_TIMEOUT_SECONDS),
-            mcp_session(server_url) as (session, _init),
+            mcp_session(server_url, caller_platform=caller_platform) as (
+                session,
+                _init,
+            ),
         ):
             exposed, _pinned, _stamped = partition_tools(
                 (await session.list_tools()).tools
@@ -715,13 +736,15 @@ class HaMcpCallTool(llm.Tool):
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
-    ) -> llm.ToolResult | JsonObjectType:
+    ) -> llm.ToolResult:
         """Forward the call when the target is exposed; unknown-tool otherwise."""
         name = str(tool_input.tool_args.get("name", ""))
         arguments = tool_input.tool_args.get("arguments") or {}
         if name not in self._exposed_names:
             return _unknown_tool(name)
-        dumped = await _forward_tool_call(hass, self._server_url, name, arguments)
+        dumped = await _forward_tool_call(
+            hass, self._server_url, name, arguments, llm_context.platform
+        )
         if dumped is None:
             return _unknown_tool(name)
         return tool_result(dumped, error=dumped.get("isError") is True)

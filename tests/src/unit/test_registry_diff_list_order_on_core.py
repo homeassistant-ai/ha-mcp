@@ -24,6 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
+from homeassistant.helpers import label_registry as lr
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockConfigEntry
 from starlette.requests import Request
@@ -40,6 +41,13 @@ from ._backup_core import snapshot_manager as snapshot_manager
 from ._backup_restore_helpers import settings_handlers
 from ._command_faults import received, taking
 from ._registry_item_snapshots import _snapshot
+
+
+@pytest.fixture(autouse=True)
+def diff_labels(label_registry: lr.LabelRegistry) -> None:
+    """Core 2026.12 refuses an entity label the label registry lacks."""
+    for name in ("First", "Second", "Third"):
+        label_registry.async_create(name)
 
 
 async def _snapshot_reversing(
@@ -152,7 +160,7 @@ async def test_a_diff_without_the_component_reports_the_order_and_says_so(
     (warning,) = diff["warnings"]
     assert "connections, identifiers, labels" in warning
     assert "only the ha_mcp_tools component can tell" in warning
-    assert "install or update it via HACS" in warning
+    assert "install or update it via the Marketplace" in warning
 
 
 async def test_a_diff_the_component_names_no_set_for_reports_the_order_only(
@@ -347,7 +355,7 @@ async def test_a_device_diff_without_the_component_reports_modified_at_and_says_
     (warning,) = diff["warnings"]
     assert "reports modified_at as" in warning
     assert "only the ha_mcp_tools component can tell" in warning
-    assert "install or update it via HACS" in warning
+    assert "install or update it via the Marketplace" in warning
 
 
 async def test_a_device_diff_names_a_list_the_snapshot_does_not_hold(

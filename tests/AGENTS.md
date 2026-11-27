@@ -72,7 +72,7 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
 - **The in-process "server" config entry** of that same component (#1527) is
   the embedded backend only, seeded separately. That one IS lane-specific.
 
-In production the component is optional (it ships via HACS), so server code
+In production the component is optional (it ships via the Marketplace), so server code
 reading component-only data must degrade honestly for installs without it.
 
 ## Combined PR lanes (`E2E_COMBINE_TOPOLOGIES=1`)
@@ -130,8 +130,8 @@ It is orthogonal to the backend selectors, so each backend has its own shape:
 
 The staging lives in `_conftest_testcontainer._prepare_testcontainer_config` (container) and
 `_conftest_haos._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
-(HAOS). The qcow2 edit is offline and per-worker, like the recorder / HACS
-refreshers, and raises rather than warning: a silent no-op would leave the
+(HAOS). The qcow2 edit is offline and per-worker, like the recorder seed
+staging and the Marketplace token injection, and raises rather than warning: a silent no-op would leave the
 entry in place and the lane would re-test the ordinary topology while
 reporting green.
 
@@ -149,12 +149,28 @@ component capabilities answer while the privileged *services* stay gone —
 that split is the whole point of the lanes, and `test_tools_entry_absent.py`
 asserts both halves.
 
+## Recorder seed
+
+No recorder database is committed. At the start of each E2E session
+`src/recorder_seed.py` has the pinned Core's own recorder write one
+(`session_recorder_seed`), with states and statistics from before the session,
+relative to now. Every backend boots on that file.
+`src/unit/recorder_seed_generator.py` owns the span and the entities it covers,
+under the unit tree's real-Core rules: to give another entity history, add it
+there; do not commit rows or shift timestamps. The
+[test commands](../docs/agents/development.md#test-commands) say what the
+generator needs from the host.
+
 ## Unit Tests Run on Real Home Assistant Core
 
 `tests/src/unit/` and `tests/addon/` import Core from the dev group
 (`homeassistant`, pinned with `pytest-homeassistant` to the e2e image's Core)
 and run under Core's own test plugin, which their `conftest.py` loads; its
 entry point is blocked in `pyproject.toml`, so E2E sessions never load it.
+Test code that drives Core lives in one of these two trees, the only ones the
+checks below scan. A new directory under `tests/` goes inside a tree CI runs in
+full (`src/unit`, `src/e2e`, `addon`, `uat`); anywhere else CI would ignore it,
+and `src/unit/test_tests_tree_layout.py` fails.
 A test never writes its own Home Assistant. A hand-made one asserts against a
 guess of what Core does, and such guesses have shipped bugs (#2752):
 
@@ -191,9 +207,10 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   `component_core_client` also registers the `ha_mcp_tools/*` commands. Data
   handed straight to a pure helper follows the same rule: get it from Core.
 - What may be replaced: this repository's own collaborators that do not speak
-  for Home Assistant (the in-process server, an upstream), another integration
-  through Core's `mock_integration`, and one function or constant on a real
-  Core module when the test needs an answer Core cannot be made to give in a
+  for Home Assistant (the in-process server, an upstream), an integration of a
+  made-up domain through Core's `mock_integration` (see
+  `scripts/integration_stand_ins.py` below), and one function or constant on a
+  real Core module when the test needs an answer Core cannot be made to give in a
   unit test (a failure, a URL, another Core version's shape). Another Core
   version's shape is for the occasional case that needs it, such as a beta
   change with a fallback to current stable or an update path; it is not a
@@ -215,7 +232,8 @@ guess of what Core does, and such guesses have shipped bugs (#2752):
   `INTEGRATIONS` like any requirement): a test reads what `hass_frontend.where()`
   names and never writes a frontend build of its own.
 - A unit test has no Supervisor: `src/unit/_tools_addons_core.py` serves its
-  REST API over real HTTP behind Core's `hassio` integration. What it answers
+  REST API over real HTTP behind Core's `hassio` integration, which
+  `src/unit/_hassio_core.py`'s `set_up_hassio` sets up. What it answers
   is built from Supervisor's own client models (`aiohasupervisor.models`, as
   `app_info()` does) with only the fields the test is about changed, never a
   dict typed into the test. A body the models cannot express is one Supervisor
@@ -291,6 +309,24 @@ files.
 A file on a list would be exempt for what it already holds, and an edit to it
 could add a faked test, so a listed file a pull request changes is converted:
 the same script fails when it is still on any list.
+
+`scripts/integration_stand_ins.py` (in Fast Checks) refuses `mock_component`,
+`MockModule` (what `mock_integration` registers), `mock_platform`,
+`mock_config_flow` and `hass.config.components.add` under the name of an
+integration of the installed Core, also when the name reaches them through
+helpers' parameters: the test would run against a stand-in while the
+integration's own code never runs (#3178). Set the real integration
+up, or register the stand-in under a made-up domain, as Core's own tests do.
+A name the check cannot read fails too (one only known at runtime, or given
+to a helper handed on instead of called): write it in the call or a constant.
+A case is fixed, not listed: only one the real integration was tried for and
+cannot serve is recorded, with its reason, in
+`src/unit/integration_stand_in_allowlist.yml`, and an entry that matches
+nothing fails. The list ratchet treats that file like the lists above, except
+that editing a listed file does not take it off, and a file converted off the
+other lists may stay on it: it never lists a new file, adds an older file or
+integration only when the check's code changed, and takes a file it drops off
+every list.
 
 Production code has no public name that only the tests use
 (`scripts/test_only_public_names.py`, in Fast Checks): a helper made public for

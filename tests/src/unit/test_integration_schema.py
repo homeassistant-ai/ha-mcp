@@ -31,6 +31,8 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -374,6 +376,41 @@ async def test_a_password_field_stays_recognisable_as_secret(
     fields = {f["name"]: f for f in resp["options_schema"]["fields"]}
     assert fields["api_key"]["input_type"] == "password"
     assert "input_type" not in fields["host"]
+
+
+async def test_a_select_without_option_labels_from_core_is_described_as_given(
+    tools: IntegrationTools, mount: Mount
+) -> None:
+    """Core labels a select's options only under its translation_key, in the
+    integration's selector strings; with neither there is nothing to add."""
+    selects = vol.Schema(
+        {
+            vol.Required("speed"): SelectSelector(
+                SelectSelectorConfig(options=["low", "high"], translation_key="speed")
+            ),
+            vol.Required("color"): SelectSelector(
+                SelectSelectorConfig(options=["red", "blue"])
+            ),
+        }
+    )
+    entry = mount(options=_options(_form(selects)))
+
+    resp = await tools.ha_get_integration(entry_id=entry.entry_id, include_schema=True)
+
+    assert resp["options_schema"]["fields"] == [
+        {
+            "name": "speed",
+            "required": True,
+            "type": "select",
+            "options": ["low", "high"],
+        },
+        {
+            "name": "color",
+            "required": True,
+            "type": "select",
+            "options": ["red", "blue"],
+        },
+    ]
 
 
 async def test_menu_without_a_choice_lists_the_branches_and_points_at_menu_choice(

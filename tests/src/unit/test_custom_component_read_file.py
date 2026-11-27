@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from homeassistant.const import KEY_DATA_LOGGING, KEY_DATA_LOGGING_DISABLED_REASON
 from homeassistant.core import HomeAssistant
 
 import custom_components.ha_mcp_tools as comp
@@ -24,7 +25,13 @@ from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._component_filesystem import put
 from ._file_services import FileService, make_file_service
+from ._hassio_core import set_up_hassio
+from ._symlink_support import symlink_or_skip
+from ._tools_addons_core import Supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
 
+ERROR_LOG = "home-assistant.log"
 FAULT_LOG = "home-assistant.log.fault"
 LOG_SAMPLE = "l1\nlé2\n\nl4 ünïcode\nl5\n"
 
@@ -70,6 +77,21 @@ class TestLogTail:
         assert result["total_lines"] == 4
         assert result["truncated"] is True
 
+    async def test_a_thread_name_cut_mid_character_is_escaped(
+        self, hass: HomeAssistant, files: FileService
+    ) -> None:
+        """faulthandler writes the thread name Python cut to Linux's 15-byte
+        limit, which can end in the first byte of a two-byte character."""
+        name = "abcdefghijklmnä".encode()[:15]
+        await put(hass, {FAULT_LOG: b"Current thread [" + name + b"]:\n"})
+
+        result = await _read(files, FAULT_LOG)
+
+        assert (result["success"], result.get("content")) == (
+            True,
+            "Current thread [abcdefghijklmn\\xc3]:\n",
+        )
+
     async def test_the_whole_file_is_never_read_at_once(
         self,
         hass: HomeAssistant,
@@ -78,7 +100,7 @@ class TestLogTail:
     ) -> None:
         """The fault log grows for the life of the install."""
         content = "x\n" * 200_000
-        await put(hass, {"home-assistant.log": content})
+        await put(hass, {FAULT_LOG: content})
         asked: list[int] = []
         real_open = Path.open
 
@@ -88,7 +110,7 @@ class TestLogTail:
 
         monkeypatch.setattr(Path, "open", spying_open)
 
-        result = await _read(files, "home-assistant.log", tail_lines=3)
+        result = await _read(files, FAULT_LOG, tail_lines=3)
 
         assert result["content"] == "x\nx\n"
         size = len(content)
@@ -133,6 +155,147 @@ class _RecordingReader:
         return position
 
 
+class TestCoreLogFile:
+    """``home-assistant.log`` is the file Core writes its log to, not a name
+    in the config directory: ``--log-file`` moves it, and Supervisor or
+    ``HA_DISABLE_LOG_FILE`` leave none, renaming the old one at startup."""
+
+    @pytest.mark.parametrize("name", [ERROR_LOG, f"./{ERROR_LOG}"])
+    async def test_at_the_default_path_it_is_tailed_like_the_fault_log(
+        self, hass: HomeAssistant, files: FileService, name: str
+    ) -> None:
+        await put(hass, {ERROR_LOG: LOG_SAMPLE})
+        hass.data[KEY_DATA_LOGGING] = hass.config.path(ERROR_LOG)
+
+        result = await _read(files, name, tail_lines=2)
+
+        assert (result["success"], result["content"]) == (True, "l5\n")
+        assert result["total_lines"] == len(LOG_SAMPLE.split("\n"))
+
+    @pytest.mark.parametrize(
+        ("name", "hinted"),
+        [(ERROR_LOG, True), (f"./{ERROR_LOG}", True), (FAULT_LOG, False)],
+    )
+    async def test_a_read_of_cores_log_points_to_the_log_tool(
+        self, hass: HomeAssistant, files: FileService, name: str, hinted: bool
+    ) -> None:
+        await put(hass, {ERROR_LOG: LOG_SAMPLE, FAULT_LOG: LOG_SAMPLE})
+        hass.data[KEY_DATA_LOGGING] = hass.config.path(ERROR_LOG)
+
+        result = await _read(files, name)
+
+        assert result["success"] is True
+        if hinted:
+            assert "ha_get_logs(source='error_log')" in result["hint"]
+        else:
+            assert "hint" not in result
+
+    # Under Supervisor, HA_DUPLICATE_LOG_FILE keeps Core's file log on.
+    @pytest.mark.parametrize("supervised", [False, True])
+    async def test_reads_the_log_where_core_writes_it(
+        self,
+        hass: HomeAssistant,
+        files: FileService,
+        tmp_path_factory: pytest.TempPathFactory,
+        supervisor: Supervisor,
+        monkeypatch: pytest.MonkeyPatch,
+        supervised: bool,
+    ) -> None:
+        log = tmp_path_factory.mktemp("logs") / "core.log"
+        await hass.async_add_executor_job(log.write_text, "moved\n")
+        await put(hass, {ERROR_LOG: "stale\n"})
+        hass.data[KEY_DATA_LOGGING] = str(log)
+        if supervised:
+            await set_up_hassio(hass, supervisor, monkeypatch)
+
+        result = await _read(files, ERROR_LOG)
+
+        assert result["success"] is True
+        assert result["content"] == "moved\n"
+
+    async def test_a_missing_moved_log_names_the_file_core_logs_to(
+        self,
+        hass: HomeAssistant,
+        files: FileService,
+        tmp_path_factory: pytest.TempPathFactory,
+    ) -> None:
+        log = tmp_path_factory.mktemp("logs") / "core.log"
+        hass.data[KEY_DATA_LOGGING] = str(log)
+
+        result = await _read(files, ERROR_LOG)
+
+        assert (result["success"], result["error_code"]) == (False, "not_found")
+        assert str(log) in result["error"]
+
+    @pytest.mark.parametrize(
+        ("setup", "told"),
+        [
+            ("environment", "environment"),
+            ("supervisor", "ha_get_logs(source='error_log')"),
+            # HA_DUPLICATE_LOG_FILE and HA_DISABLE_LOG_FILE both set.
+            ("both", "environment"),
+            (None, "writes no log file"),
+        ],
+    )
+    async def test_without_a_log_file_a_stale_one_is_not_read(
+        self,
+        hass: HomeAssistant,
+        files: FileService,
+        supervisor: Supervisor,
+        monkeypatch: pytest.MonkeyPatch,
+        setup: str | None,
+        told: str,
+    ) -> None:
+        await put(hass, {ERROR_LOG: "stale\n"})
+        if setup in ("environment", "both"):
+            hass.data[KEY_DATA_LOGGING_DISABLED_REASON] = "environment"
+        if setup in ("supervisor", "both"):
+            await set_up_hassio(hass, supervisor, monkeypatch)
+
+        result = await _read(files, ERROR_LOG)
+
+        assert (result["success"], result["error_code"]) == (False, "not_found")
+        assert told in result["error"]
+
+    # A leftover home-assistant.log link pointing out of the config directory.
+    @pytest.mark.parametrize(
+        ("name", "recorded", "error_code", "content"),
+        [
+            (ERROR_LOG, "elsewhere", None, "recorded\n"),
+            (f"./{ERROR_LOG}", "elsewhere", None, "recorded\n"),
+            (f"www/../{ERROR_LOG}", "elsewhere", None, "recorded\n"),
+            (ERROR_LOG, None, "not_found", None),
+            (ERROR_LOG, "config_dir", "path_not_allowed", None),
+        ],
+    )
+    async def test_only_a_log_in_the_config_directory_must_stay_inside_it(
+        self,
+        hass: HomeAssistant,
+        files: FileService,
+        tmp_path_factory: pytest.TempPathFactory,
+        name: str,
+        recorded: str | None,
+        error_code: str | None,
+        content: str | None,
+    ) -> None:
+        logs = tmp_path_factory.mktemp("logs")
+        await hass.async_add_executor_job((logs / "linked.log").write_text, "linked\n")
+        await hass.async_add_executor_job((logs / "core.log").write_text, "recorded\n")
+        link = Path(hass.config.path(ERROR_LOG))
+        await hass.async_add_executor_job(symlink_or_skip, link, logs / "linked.log")
+        if recorded == "elsewhere":
+            hass.data[KEY_DATA_LOGGING] = str(logs / "core.log")
+        elif recorded == "config_dir":
+            hass.data[KEY_DATA_LOGGING] = str(link)
+
+        result = await _read(files, name)
+
+        assert (result.get("error_code"), result.get("content")) == (
+            error_code,
+            content,
+        )
+
+
 class TestReadFile:
     async def test_returns_the_text_with_its_size_and_modified_time(
         self, hass: HomeAssistant, files: FileService
@@ -144,6 +307,7 @@ class TestReadFile:
         assert result["success"] is True
         assert result["content"] == "hello world"
         assert result["size"] == 11
+        assert "hint" not in result
         datetime.fromisoformat(result["modified"])
 
     @pytest.mark.parametrize(
@@ -151,11 +315,7 @@ class TestReadFile:
         [
             ("www/missing.txt", "not_found", "File does not exist: www/missing.txt"),
             ("www/sub", "not_a_file", "Path is not a file: www/sub"),
-            (
-                "home-assistant.log",
-                "not_found",
-                "File does not exist: home-assistant.log",
-            ),
+            (FAULT_LOG, "not_found", f"File does not exist: {FAULT_LOG}"),
         ],
     )
     async def test_a_path_that_is_not_a_file_is_reported(
@@ -177,14 +337,14 @@ class TestReadFile:
     async def test_a_folder_named_like_a_log_is_not_a_file(
         self, hass: HomeAssistant, files: FileService
     ) -> None:
-        await put(hass, {"home-assistant.log/inner.txt": "x"})
+        await put(hass, {f"{FAULT_LOG}/inner.txt": "x"})
 
-        result = await _read(files, "home-assistant.log")
+        result = await _read(files, FAULT_LOG)
 
         assert result == {
             "success": False,
             "error_code": "not_a_file",
-            "error": "Path is not a file: home-assistant.log",
+            "error": f"Path is not a file: {FAULT_LOG}",
         }
 
     async def test_a_binary_file_is_reported_not_raised(

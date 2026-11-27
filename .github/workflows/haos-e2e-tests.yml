@@ -177,7 +177,7 @@ jobs:
         id: key
         # Cache invalidates when ANY input that gets baked into the qcow2
         # changes — build script (addon list / HAOS pin), initial_test_state
-        # (seed config + recorder DB + .storage), and the custom components
+        # (seed config + .storage), and the custom components
         # the bake stages into /config. git ls-tree uses object IDs so the
         # hash is reproducible across runs (no mtime noise like `find`
         # would have).
@@ -283,7 +283,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -308,8 +308,6 @@ jobs:
         # worker amortizes its boot cost. 4-vCPU/16-GB runner fits 2x
         # QEMU at -smp 2 -m 4096 each (#1350).
         #
-        # --maxfail=0 overrides pyproject.toml's --maxfail=3 so we see the
-        # full failure surface for triage — early-terminating loses signal.
         run: |
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
@@ -317,15 +315,15 @@ jobs:
           # lanes. Both stay unquoted for word splitting.
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
+            -n2 --dist loadscope -v --tb=short $PYTEST_ARGS
         env:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
-          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit)
-          # so HACS repo adds don't hit the unauthenticated shared-IP
-          # GitHub rate limit — the recurring HACS-install flake.
+          # Feeds _conftest_haos.py's Marketplace token injection (qcow2 pre-boot
+          # edit) so the Marketplace's GitHub calls don't hit the unauthenticated
+          # shared-IP GitHub rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HA diagnostics from booted qcow2 (always)
@@ -370,7 +368,7 @@ jobs:
           ls -la /tmp/haos-diagnostics/ || true
           echo '--- config dir listing ---'
           cat /tmp/haos-diagnostics/config-dir-listing.txt || true
-          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
+          # The Marketplace token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar. Redact
           # it (fail-closed: an unredactable tar is deleted) so no credential
           # persists into the downloadable artifact.
@@ -508,14 +506,14 @@ jobs:
       # base: the key hashes bake-input paths only, and every PR-level source /
       # feature-flag override happens in-VM at test time on each worker's overlay
       # (see stage_embedded_server_wheel_in_qcow2 /
-      # stage_embedded_server_feature_flags_in_qcow2 / refresh_recorder_in_qcow2
+      # stage_embedded_server_feature_flags_in_qcow2 / stage_recorder_seed_in_qcow2
       # in _conftest_haos.py) — never on the cached base.
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -536,9 +534,7 @@ jobs:
         # the 3 self-referential haos_only embedded smoke tests skip automatically.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
-        # other HAOS lanes (#1350); --maxfail=0 overrides
-        # pyproject.toml's --maxfail=3
-        # so triage sees the full failure surface.
+        # other HAOS lanes (#1350).
         run: |
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
@@ -546,7 +542,7 @@ jobs:
           # lanes. Both stay unquoted for word splitting.
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
+            -n2 --dist loadscope -v --tb=short $PYTEST_ARGS
         env:
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
@@ -557,9 +553,9 @@ jobs:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           HAOS_TEST_MODE: embedded
-          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit) so HACS
-          # repo adds don't hit the unauthenticated shared-IP GitHub rate limit —
-          # the recurring HACS-install flake.
+          # Feeds _conftest_haos.py's Marketplace token injection (qcow2 pre-boot
+          # edit) so the Marketplace's GitHub calls don't hit the unauthenticated
+          # shared-IP GitHub rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HA diagnostics from booted qcow2 (always)
@@ -614,7 +610,7 @@ jobs:
             cat "$outdir/config-dir-listing.txt" || true
           done
           ls -laR /tmp/haos-embedded-diagnostics/ || true
-          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
+          # The Marketplace token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.
@@ -760,7 +756,7 @@ jobs:
       # to the shared key for all to restore, and PR-level addon/source
       # overrides happen *in-VM at test time* (see
       # ``refresh_dev_addon_source_in_qcow2`` /
-      # ``refresh_recorder_in_qcow2`` in _conftest_haos.py) on each
+      # ``stage_recorder_seed_in_qcow2`` in _conftest_haos.py) on each
       # worker's per-worker overlay — never on the base qcow2 that
       # gets cached.
 
@@ -768,7 +764,7 @@ jobs:
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -834,14 +830,14 @@ jobs:
           # lanes. Both stay unquoted for word splitting.
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 \
+            -n2 --dist loadscope -v --tb=short \
             -m "not addon_disruptive" $PYTEST_ARGS || parallel=$?
           # Exit 5 is an empty selection: a -k can pick only disruptive tests,
           # or none. Either phase may be empty, not both.
           [ "${parallel:-0}" -eq 0 ] || [ "$parallel" -eq 5 ] || exit "$parallel"
           # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
-            -n0 -v --tb=short --maxfail=0 \
+            -n0 -v --tb=short \
             -m addon_disruptive $PYTEST_ARGS || serial=$?
           [ "${serial:-0}" -eq 0 ] || [ "$serial" -eq 5 ] || exit "$serial"
           if [ "${parallel:-0}" -eq 5 ] && [ "${serial:-0}" -eq 5 ]; then
@@ -858,9 +854,9 @@ jobs:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           HAOS_TEST_MODE: inaddon
-          # Feeds _conftest_haos.py's HACS token injection (qcow2 pre-boot edit)
-          # so HACS repo adds don't hit the unauthenticated shared-IP
-          # GitHub rate limit — the recurring HACS-install flake.
+          # Feeds _conftest_haos.py's Marketplace token injection (qcow2 pre-boot
+          # edit) so the Marketplace's GitHub calls don't hit the unauthenticated
+          # shared-IP GitHub rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HAOS + addon diagnostics from booted qcow2 (always)
@@ -938,7 +934,7 @@ jobs:
             cat "$outdir/config.yaml" || true
           done
           ls -laR /tmp/haos-inaddon-diagnostics/ || true
-          # The HACS token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
+          # The Marketplace token injection (_conftest_haos.py pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.

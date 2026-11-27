@@ -45,6 +45,22 @@ async def test_remembered_approval_never_bypasses_dynamic_bulk_selector() -> Non
     call_next.assert_not_awaited()
 
 
+async def test_remembered_approval_never_covers_a_scene_device_capture() -> None:
+    """A device's entities can change between calls just like a selector's."""
+    scenes = Policy(rules=[Rule(tool_name="ha_config_set_scene", remember_minutes=5)])
+    args = {"scene_id": "movie", "config": {"name": "M"}, "capture_devices": ["d1"]}
+    queue = ApprovalQueue()
+    queue.remember("ha_config_set_scene", compute_args_hash(args), minutes=5)
+    call_next = AsyncMock()
+
+    with pytest.raises(ToolError):
+        await gate(scenes, queue).on_call_tool(
+            tool_call("ha_config_set_scene", args), call_next
+        )
+
+    call_next.assert_not_awaited()
+
+
 async def test_dynamic_bulk_selector_never_consumes_a_foreign_approval() -> None:
     """A selector call must not pick up an approval it didn't wait on.
 

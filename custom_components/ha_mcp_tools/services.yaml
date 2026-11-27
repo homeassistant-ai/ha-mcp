@@ -262,6 +262,16 @@ set_allowed_paths:
       example: '["pyscript", "python_scripts"]'
       selector:
         object:
+    only_if:
+      name: Only if
+      description: >-
+        Lists the current value must equal one of for the write to happen;
+        otherwise nothing is written and the reply has kept true. A settings
+        import's undo uses it to keep a save made after the import.
+      required: false
+      example: '[["www"], ["pyscript"]]'
+      selector:
+        object:
 
 get_extra_yaml_keys:
   name: Get Extra YAML Write Keys (Internal)
@@ -290,5 +300,15 @@ set_extra_yaml_keys:
         on this install (e.g. "alert2"). Replaces the current list.
       required: false
       example: '["alert2"]'
+      selector:
+        object:
+    only_if:
+      name: Only if
+      description: >-
+        Lists the current value must equal one of for the write to happen;
+        otherwise nothing is written and the reply has kept true. A settings
+        import's undo uses it to keep a save made after the import.
+      required: false
+      example: '[["www"], ["pyscript"]]'
       selector:
         object:

@@ -290,6 +290,18 @@ configuration:
       servizi e i comandi di backup equivalenti in ha_call_service. I backup automatici
       pre-modifica continuano. Le azioni di backup eseguite da una persona nell'interfaccia
       utente delle impostazioni web rimangono disponibili.
+  enable_settings_transfer_actions:
+    name: Consenti a ha_manage_backup di esportare e importare le impostazioni
+    description: Consenti agli assistenti IA di scaricare il file delle impostazioni
+      di questo server e di importarne uno tramite ha_manage_backup, come fanno i
+      pulsanti Esporta e Importa nella scheda Impostazioni server. Un'importazione
+      mantiene le impostazioni riservate agli utenti umani e la modifica del criterio
+      di sicurezza, della visibilità delle entità o delle autorizzazioni File & YAML
+      Tools richiede anche l'accesso ai criteri di sicurezza degli Strumenti di sviluppo.
+      Un'importazione può anche attivare la modalità sviluppatore, strumenti e funzionalità,
+      e disattivare protezioni come l'oscuramento dei segreti, la verifica SSL e l'elenco
+      consentiti IPv6, come indicato dal file; pertanto, controlla le tue impostazioni
+      dopo che un assistente IA ne ha importata una.
   enable_snapshot_delete:
     name: Consenti l'eliminazione degli snapshot
     description: Consente a ha_manage_backup di eliminare istantanee complete di Home
