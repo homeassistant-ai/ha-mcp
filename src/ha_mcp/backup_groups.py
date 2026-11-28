@@ -9,7 +9,7 @@ from .backup_entity_ids import _manager
 
 async def fetch_group(client: Any, entity_id: str) -> Any:
     eid = entity_id if entity_id.startswith("group.") else f"group.{entity_id}"
-    state = await _manager()._rest_get_or_none(client, f"states/{eid}")
+    state = await _manager()._rest_get_or_none(client, client.state_path(eid))
     if state is None:
         return None
     attrs = state.get("attributes", {}) if isinstance(state, dict) else {}

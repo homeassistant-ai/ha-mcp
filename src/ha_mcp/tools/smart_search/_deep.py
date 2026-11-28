@@ -485,9 +485,9 @@ class DeepSearchMixin(SceneSearchMixin, FlowHelperSearchMixin):
             uid: str,
         ) -> tuple[str, dict[str, Any] | None, str | None]:
             try:
+                path = self.client.config_path("automation", uid)
                 config = await asyncio.wait_for(
-                    self.client._request("GET", f"/config/automation/config/{uid}"),
-                    timeout=self.config_timeout,
+                    self.client._request("GET", path), timeout=self.config_timeout
                 )
                 return (uid, config, None)
             except HomeAssistantAPIError as e:

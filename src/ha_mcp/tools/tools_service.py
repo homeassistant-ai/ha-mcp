@@ -660,10 +660,9 @@ CONFIRMATION_TIMEOUT_S = 10.0
 # confirmation hint.
 
 
-# One-shot WS commands that re-enter Home Assistant's service invocation. Routing
-# them through the escape hatch would bypass the service-mode guards (notably the
-# reserved ha_mcp_tools domain block), so they are rejected -- use the
-# domain/service parameters for service calls instead.
+# One-shot WS commands that re-enter Home Assistant's service invocation. Through
+# the escape hatch they would bypass the service-mode guards (notably the reserved
+# ha_mcp_tools domain block), so they are rejected; the refusal names the tools.
 _WS_COMMAND_SERVICE_INVOKERS = frozenset({"call_service", "execute_script"})
 
 # Reserved WebSocket envelope keys the transport owns. Allowing them inside data
@@ -1178,9 +1177,9 @@ class ServiceTools(EventCallMixin):
         if command_type.lower() in _WS_COMMAND_SERVICE_INVOKERS:
             raise_tool_error(
                 create_validation_error(
-                    f"ws_command '{command_type}' invokes Home Assistant services "
-                    "and would bypass ha_call_service's safeguards. Use the "
-                    "domain/service parameters for service calls instead.",
+                    f"ws_command '{command_type}' invokes Home Assistant services and "
+                    "would bypass ha_call_service's safeguards. Use domain/service for "
+                    "a service call or ha_config_set_script(run_sequence) for actions.",
                     parameter="ws_command",
                 )
             )
@@ -1842,10 +1841,11 @@ class ServiceTools(EventCallMixin):
         request, reports the outcome in its own terms, and stays available where
         a security policy gates this tool. For example: turn an automation on or
         off or run it now with ha_config_set_automation (enabled / run_actions);
-        start or stop a script with ha_config_set_script (run); activate a scene
-        with ha_config_set_scene (activate); manage apps (add-ons) with
-        ha_manage_app; handle updates and Repairs issues with ha_manage_updates;
-        set an integration's log level with ha_set_integration (log_level).
+        start or stop a script, or run actions, with ha_config_set_script (run /
+        run_sequence); activate a scene with ha_config_set_scene (activate);
+        manage apps (add-ons) with ha_manage_app; handle updates and Repairs
+        issues with ha_manage_updates; set an integration's log level with
+        ha_set_integration (log_level).
 
         When to use: a service no dedicated tool covers. Services follow the
         pattern domain.service (e.g., light.turn_on, climate.set_temperature);

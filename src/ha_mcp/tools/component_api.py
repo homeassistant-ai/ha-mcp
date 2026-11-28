@@ -643,7 +643,7 @@ def component_unusable_warning(caps: ComponentCaps | None, without: str) -> str:
     )
 
 
-def component_unasked_warning(exc: ComponentDiscoveryError, without: str) -> str:
+def component_unasked_warning(exc: Exception, without: str) -> str:
     """A read that could not ask the component whether it serves its part."""
     return f"The ha_mcp_tools component could not be asked ({exc}), so {without}."
 

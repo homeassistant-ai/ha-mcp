@@ -125,8 +125,9 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/automation_config`` — Core's automation validator run on a
   proposed config (``validate``: Core's ``validation_status`` and humanized
   error), Core's trigger/condition descriptions (``describe``), and an
-  automation's registry row, validation repair issue and references
-  (``lookup``). See ``automation_config.py``.
+  automation's or, with ``domain: "script"`` (capability ``script_lookup``), a
+  script's registry row, validation repair issue and references (``lookup``).
+  See ``automation_config.py``.
 * ``ha_mcp_tools/config_references`` — a proposed automation, script or scene
   validated by Core, its references collected by Core's own helpers and
   checked against Core's registries, and each entity target put to Core's
@@ -163,6 +164,9 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/scene_ignored_domains`` — the domains the scene editor leaves
   out of a picked device's entities, read from the installed frontend build,
   the only place the list exists. See ``scene_editor.py``.
+* ``ha_mcp_tools/config_keys`` — the top-level keys an automation or script
+  config takes, read from Core's schema for the domain and the blueprint
+  instance fields. See ``config_keys.py``.
 * ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set
@@ -390,6 +394,7 @@ from homeassistant.helpers import entity_registry as er
 from .. import (
     automation_config,
     config_file_items,
+    config_keys,
     config_references,
     core_contract,
     dashboard_cards_ws,
@@ -595,6 +600,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *flow_format.command_specs(vol),
         *flow_outline.command_specs(vol),
         *scene_editor.command_specs(vol),
+        *config_keys.command_specs(vol),
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
         *config_file_items.command_specs(vol),

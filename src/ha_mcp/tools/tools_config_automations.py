@@ -23,7 +23,6 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
     HomeAssistantError,
 )
-from ..client_error_responses import core_validation_errors
 from ..errors import (
     ErrorCode,
     create_error_response,
@@ -40,9 +39,8 @@ from ..utils.python_sandbox import (
 from .auto_backup import automation_backup_target, with_auto_backup
 from .automation_action_validation import action_contains_scene_create
 from .automation_errors import (
-    core_rejection_text,
-    failed_section_from_core,
     raise_core_rejection,
+    raise_if_core_rejected,
     section_from_status,
     verdict_errors,
 )
@@ -790,17 +788,14 @@ class AutomationConfigTools:
                     wait_for_entity=operation == "created",
                 )
             except HomeAssistantAPIError as e:
-                core_text = core_rejection_text(e)
-                if core_text is None:
-                    raise
-                await raise_core_rejection(
+                await raise_if_core_rejected(
                     self._client,
-                    core_text,
+                    e,
                     config,
-                    failed_section=await failed_section_from_core(self._client, config),
-                    context={"entity_id": entity_id, **core_validation_errors(e)},
+                    context={"entity_id": entity_id},
                     bp_warnings=bp_warnings,
                 )
+                raise
             reloaded = await wait_for_reload()
             note_reload_outcome(
                 result, reloaded, domain="automation", requested=enabled is not None

@@ -74,14 +74,41 @@ def safe_entity_id(entity_id: str) -> str:
     return f"{cleaned[:prefix_length]}-{digest}"
 
 
-def matches_listing_identity(
-    payload_id: str | None, wanted: str, file_stem: str
-) -> bool:
-    """Whether a snapshot whose payload names ``payload_id`` is ``wanted``.
+def listing_ids(entity_id: str, domain: str | None) -> tuple[str, ...]:
+    """The stored ids ``entity_id`` stands for in a ``domain`` snapshot.
 
-    The original id selects the complete history. A digest selector includes
-    files written under either generation of digest naming.
+    ``domain`` None means a listing across every domain. A group's snapshots
+    are kept under its object id, but captures made before by
+    ``group.<object_id>`` kept the prefix, so a group's id takes both forms.
     """
+    if domain not in (None, "group"):
+        return (entity_id,)
+    bare = entity_id.removeprefix("group.")
+    return (bare, f"group.{bare}")
+
+
+def listing_aliases(entity_id: str, domain: str | None) -> list[str]:
+    """Every filename stem a listing filtered by ``entity_id`` takes in ``domain``."""
+    ids = listing_ids(entity_id, domain)
+    return list(dict.fromkeys(a for i in ids for a in entity_id_aliases(i)))
+
+
+def matches_listing_identity(
+    payload_id: str | None, wanted: str, file_stem: str, domain: str
+) -> bool:
+    """Whether a ``domain`` snapshot whose payload names ``payload_id`` is ``wanted``.
+
+    ``domain`` is the snapshot's own; a group snapshot also matches ``wanted``
+    with or without its ``group.`` prefix (``listing_ids``). The original id
+    selects the complete history. A digest selector includes files written
+    under either generation of digest naming.
+    """
+    return any(
+        _matches_one(payload_id, w, file_stem) for w in listing_ids(wanted, domain)
+    )
+
+
+def _matches_one(payload_id: str | None, wanted: str, file_stem: str) -> bool:
     if payload_id is None:
         return False
     if payload_id == wanted:

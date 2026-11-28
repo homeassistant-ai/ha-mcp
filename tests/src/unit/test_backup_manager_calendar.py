@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from freezegun import freeze_time
 from homeassistant.components.calendar import CalendarEntity, CalendarEntityFeature
@@ -121,6 +122,47 @@ async def test_an_event_is_found_by_uid_and_tagged_with_its_calendar(
     held = await _fetch(snapshot_manager, core_client, f"calendar.fam::{dinner['uid']}")
 
     assert held == {"calendar_entity_id": "calendar.fam", **dinner}
+
+
+# Climbs from /api/calendars to /api/states, which answers 200.
+CLIMBING = "calendar.x/../../states?"
+
+
+@pytest.mark.usefixtures("fam")
+async def test_a_calendar_id_that_climbs_its_path_reads_no_other_endpoint(
+    snapshot_manager: bm.BackupManager, core_client: HomeAssistantClient
+) -> None:
+    with pytest.raises(HomeAssistantError):
+        await _fetch(snapshot_manager, core_client, f"{CLIMBING}::uid")
+
+
+@pytest.mark.usefixtures("fam")
+async def test_a_restore_to_a_climbing_calendar_id_reads_no_other_endpoint(
+    snapshot_manager: bm.BackupManager, core_client: HomeAssistantClient
+) -> None:
+    read: list[str] = []
+
+    async def record(request: httpx.Request) -> None:
+        if request.method == "GET":
+            read.append(request.url.raw_path.decode())
+
+    core_client.httpx_client.event_hooks["request"].append(record)
+    handler = snapshot_manager.handler_for("calendar_event")
+    assert handler is not None
+    start = _soon().isoformat()
+    # No uid: the restore first looks for an earlier re-created copy; that read
+    # is what must stay on the calendar path.
+    held = {
+        "calendar_entity_id": CLIMBING,
+        "summary": "S",
+        "start": {"dateTime": start},
+        "end": {"dateTime": start},
+    }
+
+    with pytest.raises(HomeAssistantError):
+        await handler.restore(core_client, f"{CLIMBING}::", held)
+
+    assert read and all(p.startswith("/api/calendars/") for p in read)
 
 
 async def test_an_event_in_the_first_window_does_not_trigger_the_wide_sweep(

@@ -36,7 +36,7 @@ async def _find_calendar_event(
     try:
         events = await client._request(
             "GET",
-            f"/calendars/{cal}",
+            f"/calendars/{client.path_segment(cal)}",
             params={"start": start.isoformat(), "end": end.isoformat()},
         )
     except HomeAssistantError as err:
@@ -175,7 +175,7 @@ async def _restored_copy(
     try:
         events = await client._request(
             "GET",
-            f"/calendars/{cal}",
+            f"/calendars/{client.path_segment(cal)}",
             params={
                 "start": (first - timedelta(days=1)).isoformat(),
                 "end": (last + timedelta(days=1)).isoformat(),

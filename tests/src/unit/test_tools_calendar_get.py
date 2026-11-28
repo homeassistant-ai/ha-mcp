@@ -314,6 +314,19 @@ async def test_a_read_core_refuses_names_what_its_bare_400_can_mean(
     assert "'calendar.missing' is not a calendar entity" in hint
 
 
+async def test_a_calendar_id_that_climbs_its_path_reads_no_other_endpoint(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    """The id is one path segment: one climbing to Core's states, which answers
+    200, is refused as no calendar."""
+    await local_calendar(hass, "Test")
+
+    with pytest.raises(ToolError):
+        await CalendarTools(core_client).ha_config_get_calendar_events(
+            "calendar.x/../../states?"
+        )
+
+
 async def test_a_refused_read_shows_the_bounds_it_sent(
     hass: HomeAssistant,
     core_client: HomeAssistantClient,

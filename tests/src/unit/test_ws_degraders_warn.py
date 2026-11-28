@@ -32,8 +32,11 @@ from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import tools_config_scripts
-from ha_mcp.tools.config_write_helpers import fetch_entity_category
+from ha_mcp.tools import automation_registry_details
+from ha_mcp.tools.config_write_helpers import (
+    fetch_entity_category,
+    fetch_registry_entry,
+)
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
@@ -316,7 +319,8 @@ class TestEnrichmentAbsenceIsNotAnAnswer:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """At the seam: the tool response, not the helper. The connection
-        drops as the category is read, after the config arrived."""
+        drops as the registry row the category comes from is read, after the
+        config arrived."""
         body = {"alias": "Morning", "sequence": [{"delay": {"seconds": 1}}]}
         await write_config_files(
             hass,
@@ -328,12 +332,12 @@ class TestEnrichmentAbsenceIsNotAnAnswer:
         await setup_from_configuration(hass, "script")
         socket = await pooled_socket(core_client)
 
-        async def category_read_dropped(*args: Any) -> str | None:
+        async def registry_read_dropped(*args: Any) -> dict[str, Any] | None:
             with dropped_on(hass, "config/entity_registry/get", socket):
-                return await fetch_entity_category(*args)
+                return await fetch_registry_entry(*args)
 
         monkeypatch.setattr(
-            tools_config_scripts, "fetch_entity_category", category_read_dropped
+            automation_registry_details, "fetch_registry_entry", registry_read_dropped
         )
 
         result = await ConfigScriptTools(core_client).ha_config_get_script(
@@ -341,8 +345,9 @@ class TestEnrichmentAbsenceIsNotAnAnswer:
         )
 
         assert result["config"] == body
-        assert [w.split(":")[0] for w in result["warnings"]] == [
-            "category unavailable for script.morning"
+        assert "category" not in result["config"]
+        assert "registry entry unavailable for script.morning" in [
+            w.split(":")[0] for w in result["warnings"]
         ]
 
 

@@ -280,7 +280,9 @@ class CalendarTools:
 
             # The client adds the /api prefix to Core's calendar view.
             response = await self._client._request(
-                "GET", f"/calendars/{entity_id}", params={"start": start, "end": end}
+                "GET",
+                f"/calendars/{self._client.path_segment(entity_id)}",
+                params={"start": start, "end": end},
             )
             events = response if isinstance(response, list) else []
             limited_events = events[:max_results]
