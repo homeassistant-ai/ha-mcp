@@ -142,8 +142,9 @@ class TestGatherDiagnostics:
 
         assert result["entity_enabled"] is False
         assert result["loaded"] is False
-        assert "enable it" not in result["suggestion"].lower()
-        assert "automation.trigger" in result["suggestion"]
+        assert "disabled in the entity registry" in result["suggestion"]
+        # Core adds no entity for it, so automation.trigger cannot run it.
+        assert "automation.trigger" not in result["suggestion"]
 
     @pytest.mark.asyncio
     async def test_a_turned_off_loaded_automation_mentions_trigger(
@@ -283,7 +284,7 @@ class TestGatherDiagnostics:
         result, _warnings = await _diagnose(component_core_client, "script.test")
 
         assert result["loaded"] is False
-        assert "this script is not loaded" in result["suggestion"]
+        assert "This script's entity is disabled" in result["suggestion"]
         assert "automation" not in result["suggestion"]
 
 

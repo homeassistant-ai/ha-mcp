@@ -27,6 +27,7 @@ from .component_api import (
     get_component_caps,
     invalidate_caps,
 )
+from .config_write_helpers import fetch_registry_entry
 from .entity_registration import script_entity_or_warning
 from .helpers import tool_error_from_response
 
@@ -164,7 +165,9 @@ async def _from_component(client: Any, entity_id: str) -> dict[str, Any] | None:
         logger.warning("%s failed: %s", WS_LOADED_CONFIG, result.get("error"))
         return None
     reply = result.get("result")
-    return reply if isinstance(reply, dict) else None
+    # A reply without the verdict is malformed: read from Core instead.
+    usable = isinstance(reply, dict) and isinstance(reply.get("loaded"), bool)
+    return reply if usable else None
 
 
 async def loaded_definition(
@@ -224,13 +227,14 @@ async def raise_not_in_storage(
     entity_id: str | None,
     context: dict[str, Any],
     *,
-    registered: bool,
+    registered: bool | None,
 ) -> None:
     """Raise for an item Core's config API stores nothing for, when Core knows it.
 
     A loaded one is YAML-defined (:class:`YamlDefinedError`, which a read
     returns the definition from). A ``registered`` one Core has not loaded, a
-    disabled entity, is CONFIG_NOT_FOUND. Returns when Core knows neither.
+    disabled entity, is CONFIG_NOT_FOUND; None reads that from the entity
+    registry. Returns when Core knows neither.
     """
     if entity_id and entity_id.startswith(f"{domain}."):
         definition = await loaded_definition(client, domain, entity_id)
@@ -238,6 +242,9 @@ async def raise_not_in_storage(
             raise _refusal(definition, context)
         if definition is not None:
             raise YamlDefinedError(definition, context)
+    if registered is None:
+        row = await fetch_registry_entry(client, entity_id) if entity_id else None
+        registered = bool(row and row.get("disabled_by"))
     if not registered:
         return
     raise tool_error_from_response(
@@ -267,7 +274,7 @@ async def raise_if_script_in_yaml(
             client, script_id, key or script_id, [], ""
         )
     await raise_not_in_storage(
-        client, "script", entity_id, {"script_id": script_id}, registered=False
+        client, "script", entity_id, {"script_id": script_id}, registered=None
     )
 
 

@@ -27,7 +27,14 @@ from .helpers import (
 
 # What an action passes on rather than runs: an action name inside it is data.
 _PAYLOAD_KEYS = frozenset(
-    {"data", "data_template", "event_data", "event_data_template", "variables"}
+    {
+        "data",
+        "data_template",
+        "event_data",
+        "event_data_template",
+        "variables",
+        "for_each",
+    }
 )
 
 

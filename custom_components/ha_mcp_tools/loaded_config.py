@@ -75,8 +75,9 @@ def loaded_config(
     *,
     secret_values: frozenset[str],
     scrub_degraded: bool,
+    loaded: tuple[str, Any, Any],
 ) -> dict[str, Any]:
-    domain, entity, raw = _loaded(hass, msg["entity_id"])
+    domain, entity, raw = loaded
     if not isinstance(raw, dict):
         return dict(_NOT_LOADED)
     file, line = _declared_at(hass, domain, entity, raw)
@@ -121,13 +122,16 @@ def _loaded(hass: HomeAssistant, entity_id: str) -> tuple[str, Any, Any]:
 
 
 async def _prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    # Read once: a reload during the file read below must not swap in another
+    # definition than the one the secrets were read for.
+    loaded = _loaded(hass, msg["entity_id"])
     # Every file the definition draws on: Core resolves a !secret from the
     # secrets.yaml nearest the file that names it.
-    files = sorted(set(_files(_loaded(hass, msg["entity_id"])[2])))
+    files = sorted(set(_files(loaded[2])))
     values, degraded = await hass.async_add_executor_job(
         _load_secret_scrub, hass, files
     )
-    return {"secret_values": values, "scrub_degraded": degraded}
+    return {"secret_values": values, "scrub_degraded": degraded, "loaded": loaded}
 
 
 def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:

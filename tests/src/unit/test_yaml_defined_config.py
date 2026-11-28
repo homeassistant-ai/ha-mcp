@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from homeassistant.components import automation
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.ha_mcp_tools import websocket_api
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -398,3 +399,26 @@ class TestWrite:
         body = error_body(exc)
         assert body["error"]["code"] == "CONFIG_NOT_FOUND", body
         assert body["source"] == _yaml_source(COMPONENT, "packages/night.yaml", 2)
+
+    async def test_write_to_a_disabled_yaml_script_is_refused(
+        self,
+        hass: HomeAssistant,
+        scripts: ConfigScriptTools,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        """Core loads nothing for a disabled entity, so a disabled package
+        script looked like a new one and was stored a second time."""
+        entity_registry.async_update_entity(
+            "script.packaged_speakers", disabled_by=er.RegistryEntryDisabler.USER
+        )
+        await hass.async_block_till_done()
+
+        with pytest.raises(ToolError) as exc:
+            await scripts.ha_config_set_script(
+                script_id="packaged_speakers",
+                config={"alias": "Changed", "sequence": [{"event": "changed"}]},
+                wait=False,
+            )
+
+        assert error_body(exc)["error"]["code"] == "CONFIG_NOT_FOUND"
+        assert list(await stored_scripts(hass)) == ["stored"]

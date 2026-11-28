@@ -376,3 +376,28 @@ async def test_run_sequence_runs_an_action_whose_data_names_a_guarded_service(
 
     assert result["action"] == "run_sequence"
     assert [e.data for e in events] == [{"action": "ha_mcp_tools.write_file"}]
+
+
+@pytest.mark.unit
+async def test_run_sequence_runs_a_repeat_over_items_named_like_actions(
+    hass: HomeAssistant, tools: ConfigScriptTools
+) -> None:
+    """A repeat's ``for_each`` items are data; one with an ``action`` key was
+    read as an action and its template refused."""
+    events = async_capture_events(hass, "audit")
+
+    await tools.ha_config_set_script(
+        script_id="morning",
+        run_sequence=[
+            {
+                "repeat": {
+                    "for_each": [{"action": "{{ 'door' }}"}],
+                    "sequence": [
+                        {"event": "audit", "event_data": {"item": "{{ repeat.item }}"}}
+                    ],
+                }
+            }
+        ],
+    )
+
+    assert len(events) == 1
