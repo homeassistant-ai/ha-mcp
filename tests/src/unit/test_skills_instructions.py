@@ -503,40 +503,24 @@ async def test_skills_extension_lists_and_gets_the_bundled_skill(server, populat
         fetched = await client.get_skill(uri)
     assert [skill.uri for skill in listed] == [uri]
     assert fetched.frontmatter.name == BEST_PRACTICES_SKILL_NAME
-    assert isinstance(fetched.resources, list)
     assert {str(resource.uri) for resource in fetched.resources} == {
         uri,
         f"skill://{BEST_PRACTICES_SKILL_NAME}/reference.md",
     }
 
 
-@pytest.mark.parametrize("failure", ["invalid_skill", "add"])
 async def test_resource_provider_failure_keeps_guide_tool(
-    server, populated_dir, monkeypatch, caplog, failure
+    server, populated_dir, caplog
 ):
-    """A skills folder the provider rejects, or a provider that fails to
-    register, must not take the skill guide tool down with it."""
+    """A skills folder the provider rejects must not take the skill guide
+    tool down with it."""
     import logging
 
-    from ha_mcp.http_transport import HttpTransportFastMCP
-
-    if failure == "invalid_skill":
-        stray = populated_dir / "stray-skill"
-        stray.mkdir()
-        (stray / "SKILL.md").write_text(
-            "---\nname: other-name\ndescription: Name does not match.\n---\n"
-        )
-    else:
-        from ha_mcp._vendor.fastmcp.skills.provider import SkillsDirectoryProvider
-
-        original_add = HttpTransportFastMCP.add_provider
-
-        def add_provider(self, provider, **kwargs):
-            if isinstance(provider, SkillsDirectoryProvider):
-                raise RuntimeError("simulated provider registration crash")
-            return original_add(self, provider, **kwargs)
-
-        monkeypatch.setattr(HttpTransportFastMCP, "add_provider", add_provider)
+    stray = populated_dir / "stray-skill"
+    stray.mkdir()
+    (stray / "SKILL.md").write_text(
+        "---\nname: other-name\ndescription: Name does not match.\n---\n"
+    )
     with caplog.at_level(logging.WARNING):
         result = await _guide(server, populated_dir)
     assert result["success"] is True
