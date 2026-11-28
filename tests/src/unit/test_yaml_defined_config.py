@@ -93,11 +93,18 @@ _FILES = {
         "        pin: !secret office_pin\n"
         "        !secret office_key: open\n"
         "        !secret office_key_2: shut\n"
+        "- id: office_keyed\n"
+        "  alias: Office Keyed\n"
+        "  triggers: []\n"
+        "  actions:\n"
+        "    - event: office_keyed_only\n"
+        "      event_data:\n"
+        "        !secret office_number_key: set\n"
     ),
     # Core resolves a !secret from the secrets.yaml nearest the file naming it.
     "automations/secrets.yaml": (
         "office_code: hunter2-office\noffice_pin: 471147\noffice_key: hunter2-key\n"
-        "office_key_2: hunter2-key2\n"
+        "office_key_2: hunter2-key2\noffice_number_key: 864213\n"
     ),
     "scripts/office.yaml": (
         "office_join:\n  alias: Office Join\n  sequence:\n    - event: office_join_only\n"
@@ -278,6 +285,22 @@ class TestRead:
         with pytest.raises(ToolError) as exc:
             await read(entity_id="automation.office_lights")
         assert "471147" not in str(error_body(exc))
+
+    async def test_numeric_secret_key_whose_file_was_deleted_is_withheld(
+        self, hass: HomeAssistant, automations: AutomationConfigTools, redact_on: None
+    ) -> None:
+        """A number used as a mapping key was not counted as a number, so a
+        definition whose only number was a secret key was returned in full."""
+        read = automations.ha_config_get_automation
+        await _as_at_start(hass)
+        assert "864213" not in str(await read(entity_id="automation.office_keyed"))
+
+        secrets = Path(hass.config.path("automations/secrets.yaml"))
+        await hass.async_add_executor_job(secrets.unlink)
+
+        with pytest.raises(ToolError) as exc:
+            await read(entity_id="automation.office_keyed")
+        assert "864213" not in str(error_body(exc))
 
     async def test_two_secret_keys_keep_both_entries(
         self, hass: HomeAssistant, automations: AutomationConfigTools

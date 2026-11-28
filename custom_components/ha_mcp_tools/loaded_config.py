@@ -135,7 +135,8 @@ def _loaded(hass: HomeAssistant, entity_id: str) -> tuple[str, Any, Any]:
 
 def _has_number(node: Any) -> bool:
     if isinstance(node, dict):
-        return any(_has_number(value) for value in node.values())
+        # A key can be a number too.
+        return any(_has_number(key) or _has_number(node[key]) for key in node)
     if isinstance(node, list):
         return any(_has_number(item) for item in node)
     return isinstance(node, (int, float)) and not isinstance(node, bool)
