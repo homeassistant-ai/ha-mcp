@@ -245,6 +245,21 @@ class TestRead:
 
         assert "471147" not in str(error_body(exc))
 
+    async def test_numeric_secret_whose_file_was_deleted_is_withheld_under_redaction(
+        self, hass: HomeAssistant, automations: AutomationConfigTools, redact_on: None
+    ) -> None:
+        """Once its secrets.yaml is gone, nothing names the loaded number as a
+        secret; it was returned as the automation's own."""
+        secrets = Path(hass.config.path("automations/secrets.yaml"))
+        await hass.async_add_executor_job(secrets.unlink)
+
+        with pytest.raises(ToolError) as exc:
+            await automations.ha_config_get_automation(
+                entity_id="automation.office_lights"
+            )
+
+        assert "471147" not in str(error_body(exc))
+
     async def test_secrets_file_that_contains_itself_is_read(
         self, hass: HomeAssistant, automations: AutomationConfigTools
     ) -> None:

@@ -33,9 +33,8 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 WS_LOADED_CONFIG = "ha_mcp_tools/loaded_config"
-# The fallback for the process start, and the secrets.yaml files seen so far.
+# The fallback for the process start.
 _IMPORTED = time.time()
-_EXISTED: set[str] = set()
 # Advertised by websocket_api's info; without it the server reads the body
 # from Core's own WebSocket command and cannot name the file.
 CAPABILITY = "loaded_config"
@@ -149,16 +148,21 @@ def _process_started() -> float:
 
 
 def _changed_since_start(path: str) -> bool:
-    """Whether a secrets.yaml differs from the one Core read at its start."""
+    """Whether a secrets.yaml may differ from the one Core read at its start.
+
+    A missing one leaves no trace of its own: removing a file changes its
+    directory, so the directory's change time stands in for it.
+    """
+    started = _process_started()
     try:
-        changed = os.path.getmtime(path) > _process_started()
+        return os.path.getmtime(path) > started
     except FileNotFoundError:
-        # Gone now, but an earlier read found it.
-        return path in _EXISTED
+        try:
+            return os.path.getmtime(os.path.dirname(path)) > started
+        except OSError:
+            return True
     except OSError:
         return True
-    _EXISTED.add(path)
-    return changed
 
 
 def _scrub_inputs(hass: HomeAssistant, raw: Any) -> tuple[frozenset[str], bool]:
