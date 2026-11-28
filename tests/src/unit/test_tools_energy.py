@@ -447,6 +447,22 @@ async def test_a_device_list_cannot_gain_a_meter_used_twice(
     assert bool(_sent(spy, "energy/save_prefs")) is not refused
 
 
+@pytest.mark.usefixtures("energy")
+async def test_a_malformed_device_reaches_cores_refusal(
+    core_client: HomeAssistantClient,
+) -> None:
+    """A device whose meter is not a string is refused by Core with its own
+    code, not by a crash in the tool's repeat check."""
+    with pytest.raises(ToolError) as refused:
+        await _save_key(
+            EnergyTools(core_client),
+            "device_consumption",
+            [{"stat_consumption": ["sensor.a"]}, {"stat_consumption": ["sensor.a"]}],
+        )
+
+    assert '"ha_error_code": "invalid_format"' in str(refused.value)
+
+
 @pytest.mark.parametrize(
     ("arguments", "code"),
     [

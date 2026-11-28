@@ -45,7 +45,9 @@ def _device_uses(entries: list[Any], field: str) -> Counter[Any]:
     return Counter(
         entry[field]
         for entry in entries
-        if isinstance(entry, dict) and "stat_consumption" in entry and entry.get(field)
+        if isinstance(entry, dict)
+        and "stat_consumption" in entry
+        and isinstance(entry.get(field), str)  # Core refuses anything else
     )
 
 
