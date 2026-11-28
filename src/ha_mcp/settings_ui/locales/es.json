@@ -877,7 +877,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Gestionar preferencias del panel de energía",
-      "description": "Gestiona las preferencias del panel de energía de Home Assistant: red / solar /"
+      "description": "Gestionar las preferencias del panel de control de energía de Home Assistant: su energía"
     },
     "ha_manage_hacs": {
       "title": "Gestionar Marketplace",

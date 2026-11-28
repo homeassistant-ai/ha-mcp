@@ -877,7 +877,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "管理能源仪表盘偏好",
-      "description": "管理 Home Assistant 能源面板首选项：电网 / 太阳能 /"
+      "description": "管理 Home Assistant 能源仪表盘首选项：其能源"
     },
     "ha_manage_hacs": {
       "title": "管理应用商店",

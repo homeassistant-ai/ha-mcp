@@ -877,7 +877,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Energie-Dashboard konfigurieren",
-      "description": "Verwalte die Einstellungen des Home-Assistant-Energie-Dashboards: Stromnetz / Solar /"
+      "description": "Verwalte die Einstellungen des Home Assistant Energy-Dashboards: dessen Energie"
     },
     "ha_manage_hacs": {
       "title": "Marketplace verwalten",

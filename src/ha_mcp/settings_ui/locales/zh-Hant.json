@@ -846,7 +846,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "管理能源儀表板偏好設定",
-      "description": "管理 Home Assistant 能源儀表板偏好設定：電網 / 太陽能 /"
+      "description": "管理 Home Assistant 能源儀表板偏好設定：其能源"
     },
     "ha_manage_hacs": {
       "title": "管理市集",

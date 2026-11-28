@@ -877,7 +877,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "에너지 대시보드 환경설정 관리",
-      "description": "Home Assistant 에너지 대시보드 기본 설정(그리드 / 태양광 /)을 관리합니다."
+      "description": "Manage the Home Assistant Energy dashboard preferences: its energy"
     },
     "ha_manage_hacs": {
       "title": "마켓플레이스 관리",

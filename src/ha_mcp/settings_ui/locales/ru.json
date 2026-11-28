@@ -877,7 +877,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Настроить панель энергии",
-      "description": "Управление настройками панели управления энергией Home Assistant: сеть / солнечные панели /"
+      "description": "Управление настройками панели управления Energy в Home Assistant: её энергией"
     },
     "ha_manage_hacs": {
       "title": "Управление Marketplace",

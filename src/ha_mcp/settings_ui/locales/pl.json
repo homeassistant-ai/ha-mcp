@@ -846,7 +846,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Zarządzaj preferencjami panelu energii",
-      "description": "Zarządzaj preferencjami panelu energii Home Assistant: sieć / fotowoltaika /"
+      "description": "Zarządzaj preferencjami panelu energii Home Assistant: jego energią"
     },
     "ha_manage_hacs": {
       "title": "Zarządzaj Marketplace",

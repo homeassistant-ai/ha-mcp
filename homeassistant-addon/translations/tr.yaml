@@ -25,22 +25,25 @@ configuration:
       istemciler yeniden bağlandıklarında değişikliği görür.
   enable_tool_search:
     name: Araç aramayı etkinleştir
-    description: 'Replace the full tool catalog with search-based discovery. Reduces
-      idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients
-      with their own built-in tool search / deferred tools (claude.ai, Claude Desktop,
-      Claude Code) — the two search layers conflict, and the client''s built-in tool
-      search is the better choice there; leave this off. Whether tools are deferred
-      depends on your client and model combination: use this when your setup loads
-      the full catalog up front — models without native deferred tools (e.g. Gemini,
-      OpenAI-compatible local models, Claude Haiku), clients that inline all tool
-      schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows.
-      Some Codex models and ChatGPT include deferred tools too — check your client/model
-      directly to confirm its features so you don''t leave this enabled unnecessarily.
-      Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires an app (add-on) restart to take effect — then reconnect or refresh
-      the MCP server in your AI client so it reloads the tool list. Restarting the
-      app (add-on) alone does NOT refresh a client''s cached tool list; this applies
-      after changing any setting here.'
+    description: 'Tam araç kataloğunu arama tabanlı keşifle değiştirin. Boşta kalan
+      bağlamı yaklaşık %90 oranında azaltarak yaklaşık 5K token''a düşürür. ⚠️ Kendi
+      yerleşik araç aramasına / ertelenmiş araçlarına sahip istemcilerde (claude.ai,
+      Claude Desktop, Claude Code) bunu ETKİNLEŞTİRMEYİN — iki arama katmanı çakışır
+      ve istemcinin yerleşik araç araması burada daha iyi bir seçenektir; bunu kapalı
+      bırakın. Araçların ertelenip ertelenmediği, istemci ve model kombinasyonunuza
+      bağlıdır: kurulumunuz tam kataloğu baştan yüklediğinde bunu kullanın — yerel
+      ertelenmiş araçları olmayan modeller (örn. Gemini, OpenAI uyumlu yerel modeller,
+      Claude Haiku), modelden bağımsız olarak tüm araç şemalarını satır içi yapan
+      istemciler (örn. GitHub Copilot CLI) veya daha küçük bağlam pencereleri. Bazı
+      Codex modelleri ve ChatGPT de ertelenmiş araçlar içerir; bunu gereksiz yere
+      etkin bırakmamak için özelliklerini onaylamak üzere istemcinizi/modelinizi doğrudan
+      kontrol edin. Araçlar ha_search_tools aracılığıyla bulunur ve kategorize edilmiş
+      vekiller (okuma/yazma/silme) aracılığıyla yürütülür. Etkili olması için bir
+      uygulama (eklenti) yeniden başlatması gerektirir — ardından araç listesini yeniden
+      yüklemesi için yapay zeka istemcinizdeki MCP sunucusunu yeniden bağlayın veya
+      yenileyin. Yalnızca uygulamayı (eklentiyi) yeniden başlatmak, bir istemcinin
+      önbelleğe alınmış araç listesini YENİLEMEZ; bu, buradaki herhangi bir ayarı
+      değiştirdikten sonra geçerlidir.'
   tool_search_max_results:
     name: Araç arama maksimum sonuç sayısı
     description: 'Araç araması etkinken her ha_search_tools çağrısı başına döndürülen

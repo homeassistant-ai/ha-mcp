@@ -846,7 +846,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Spravovat předvolby energetického panelu",
-      "description": "Spravuje předvolby panelu Energy v Home Assistant: síť / solární /"
+      "description": "Správa předvoleb panelu Energy v Home Assistant: jeho energie"
     },
     "ha_manage_hacs": {
       "title": "Spravovat Marketplace",

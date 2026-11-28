@@ -877,7 +877,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Configurer le tableau de bord énergétique",
-      "description": "Gère les préférences du tableau de bord Énergie de Home Assistant : réseau / solaire /"
+      "description": "Gérer les préférences du tableau de bord Énergie de Home Assistant : son énergie"
     },
     "ha_manage_hacs": {
       "title": "Gérer le Marketplace",

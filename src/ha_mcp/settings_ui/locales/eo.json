@@ -846,7 +846,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Administri Preferojn de Energia Panelo",
-      "description": "Administri la preferojn de la Energio-Panelo de Home Assistant: reto / sunenergio /"
+      "description": "Administri la preferojn de la energia panelo de Home Assistant: ĝia energio"
     },
     "ha_manage_hacs": {
       "title": "Administri Marketplace",

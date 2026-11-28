@@ -877,7 +877,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Gestisci le preferenze della dashboard Energia",
-      "description": "Gestisci le preferenze del cruscotto energetico di Home Assistant: rete / solare /"
+      "description": "Gestisci le preferenze del cruscotto energetico di Home Assistant: la sua energia"
     },
     "ha_manage_hacs": {
       "title": "Gestisci Marketplace",

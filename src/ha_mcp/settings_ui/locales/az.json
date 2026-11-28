@@ -877,7 +877,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Enerji idarə panelinin tərcihlərini idarə et",
-      "description": "Home Assistant Enerji Paneli seçimlərini idarə edin: şəbəkə / günəş /"
+      "description": "Home Assistant Enerji idarəetmə panelinin tənzimləmələrini idarə edin: onun enerji"
     },
     "ha_manage_hacs": {
       "title": "Marketplace-i İdarə Edin",

@@ -846,7 +846,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Upravljaj željama energetske kontrolne table",
-      "description": "Upravljajte željama Home Assistant energetske kontrolne table: mreža / solarna energija /"
+      "description": "Upravljajte podešavanjima kontrolne table za energiju u sistemu Home Assistant: energija"
     },
     "ha_manage_hacs": {
       "title": "Upravljaj Marketplace-om",

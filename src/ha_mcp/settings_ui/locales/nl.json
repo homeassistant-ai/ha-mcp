@@ -846,7 +846,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Voorkeuren Energie Dashboard Beheren",
-      "description": "Beheer de voorkeuren van het Home Assistant Energy Dashboard: elektriciteitsnet / zonne-energie /"
+      "description": "Beheer de voorkeuren van het Home Assistant-energiedashboard: het energie"
     },
     "ha_manage_hacs": {
       "title": "Marktplaats beheren",

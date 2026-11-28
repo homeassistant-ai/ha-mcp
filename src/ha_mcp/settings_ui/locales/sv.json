@@ -846,7 +846,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Hantera inställningar för energipanelen",
-      "description": "Hantera inställningar för Home Assistant Energy Dashboard: elnät / solenergi /"
+      "description": "Hantera inställningarna för Home Assistant Energy-instrumentpanelen: dess energi"
     },
     "ha_manage_hacs": {
       "title": "Hantera Marketplace",

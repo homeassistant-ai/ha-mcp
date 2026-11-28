@@ -846,7 +846,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Energiavezérlőpult beállításainak kezelése",
-      "description": "A Home Assistant energiavezérlőpult beállításainak kezelése: hálózat / napelem /"
+      "description": "A Home Assistant Energia irányítópult beállításainak kezelése: az energia"
     },
     "ha_manage_hacs": {
       "title": "Piactér kezelése",
