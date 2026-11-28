@@ -299,3 +299,33 @@ async def test_a_dismissed_meter_added_to_the_dashboard_is_no_longer_listed(
 
     assert "sensor.oven_energy" not in read["energy_suggestions"]["dismissed"]
     assert "sensor.oven_energy" not in _suggested(read)
+
+
+@_NEEDS_SUGGESTIONS
+@pytest.mark.usefixtures("fresh_card_state")
+async def test_a_null_dismissed_list_reads_as_empty(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    hass_admin_user: MockUser,
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """Frontend user data that stores the dismissed list as null reads as
+    nothing dismissed, as the panel's ``?? []`` does, and a dismiss still works."""
+    hass_storage[f"frontend.user_data_{hass_admin_user.id}"] = {
+        "version": 1,
+        "key": f"frontend.user_data_{hass_admin_user.id}",
+        "data": {"energy": {"dismissed_suggestions": None}},
+    }
+    await _meters(hass, hass_storage)
+    tool = EnergyTools(component_core_client)
+
+    read = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
+    await tool.ha_manage_energy_prefs(
+        mode="dismiss_suggestions", statistic_ids=["sensor.oven_energy"]
+    )
+
+    assert read["energy_suggestions"]["dismissed"] == []
+    assert await _stored(hass, hass_admin_user) == {
+        "dismissed_suggestions": ["sensor.oven_energy"]
+    }
