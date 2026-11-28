@@ -383,15 +383,27 @@ async def test_file_that_only_shares_a_hidden_key_stays_readable(
     assert expected in result.content[0].text
 
 
+@pytest.mark.parametrize(
+    ("call", "kwargs"),
+    [
+        (_read_file_tool, {"path": "www/presence.yaml"}),
+        (
+            _get_yaml_tool,
+            {"file": "packages/presence.yaml", "yaml_path": "input_boolean.come_home"},
+        ),
+    ],
+    ids=["read_file", "get_yaml"],
+)
 async def test_a_read_while_the_configuration_does_not_load_is_refused(
-    client: HomeAssistantClient, tmp_path: Path
+    client: HomeAssistantClient,
+    tmp_path: Path,
+    call: Callable[..., Any],
+    kwargs: dict[str, Any],
 ) -> None:
     (tmp_path / "configuration.yaml").write_text("script: !include missing.yaml\n")
 
     with pytest.raises(ToolError) as exc:
-        await _call_through_enforcement(
-            client, _read_file_tool, {"path": "www/presence.yaml"}
-        )
+        await _call_through_enforcement(client, call, kwargs)
     assert error_code(exc) == "CONFIG_INVALID"
     assert "missing.yaml" in error_body(exc)["error"]["details"]
 

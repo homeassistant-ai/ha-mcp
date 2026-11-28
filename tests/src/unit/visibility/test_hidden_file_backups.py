@@ -22,8 +22,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 
+from custom_components.ha_mcp_tools.config_file_items import WS_CONFIG_FILE_ITEMS
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
@@ -34,6 +36,7 @@ from ha_mcp.visibility.model import VisibilityConfig
 
 from .._backup_core import backup_settings as backup_settings
 from .._backup_core import manage_backup
+from .._command_faults import before_handling
 from .._config_dir_yaml import write_config_files
 from .._core_setup import set_up_tools_entry
 from .._tool_errors import error_body
@@ -363,6 +366,8 @@ async def test_a_legacy_backup_whose_read_failed_is_not_shown_on_the_retry(
     dropped = component_core_client.call_service
     assert isinstance(dropped, AsyncMock)
     assert dropped.await_count == 1
+    assert dropped.await_args is not None
+    assert dropped.await_args.args[1] == "read_legacy_backup"
     assert error_code(excinfo) == "ENTITY_VISIBILITY_ENFORCED"
 
 
@@ -433,7 +438,7 @@ async def _break_the_configuration(hass: HomeAssistant, tools: FilesystemTools) 
 
 def _names_the_way_out(exc: pytest.ExceptionInfo[ToolError]) -> bool:
     suggestions = " ".join(error_body(exc)["error"]["suggestions"])
-    return "ha_write_file" in suggestions and "Enforce mode off" in suggestions
+    return "ha_write_file" in suggestions and "turn off enforce mode" in suggestions
 
 
 async def test_a_configuration_that_does_not_load_can_be_repaired(
@@ -474,10 +479,9 @@ async def test_a_delete_or_restore_runs_while_the_configuration_does_not_load(
     set_config: Callable[..., VisibilityConfig],
     call: str,
 ) -> None:
+    """Both run while the configuration does not load: the delete removes the
+    broken file, the restore puts back the backup the breaking write took."""
     tools = FilesystemTools(component_core_client)
-    await write_config_files(hass, {BROKEN: "[]\n"})
-    good = await manager.maybe_snapshot("file", BROKEN, force=True)
-    assert good is not None
     enforce_hiding(set_config, HIDDEN)
     await _break_the_configuration(hass, tools)
 
@@ -485,14 +489,39 @@ async def test_a_delete_or_restore_runs_while_the_configuration_does_not_load(
         await tools.ha_delete_file(path=BROKEN, confirm=True)
         assert await _read(hass, BROKEN) is None
     else:
+        [taken] = _file_snapshots(manager)  # the breaking write's backup
         result = await manage_backup(
             component_core_client,
             scope="edits",
             action="restore",
-            backup_name=good.name,
+            backup_name=taken["name"],
         )
         assert result["success"] is True
         assert await _read(hass, BROKEN) == "[]\n"
+
+
+async def test_a_repair_is_refused_when_the_check_fails(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """Only a load error lets a repair through, not a check that fails."""
+
+    def fail(msg: dict[str, Any]) -> None:
+        raise HomeAssistantError("check failed")
+
+    enforce_hiding(set_config, HIDDEN)
+    tools = FilesystemTools(component_core_client)
+    with (
+        pytest.raises(ToolError) as excinfo,
+        before_handling(hass, WS_CONFIG_FILE_ITEMS, fail),
+    ):
+        await tools.ha_write_file(path=DEFINING, content="[]\n", overwrite=True)
+
+    assert error_code(excinfo) == "SERVICE_CALL_FAILED"
+    assert await _read(hass, DEFINING) == SCRIPTS
+    assert _file_snapshots(manager) == []
 
 
 @pytest.mark.parametrize("call", ["edits", "create", "view", "diff"])
@@ -503,7 +532,8 @@ async def test_what_the_check_must_judge_is_refused_with_the_way_out(
     set_config: Callable[..., VisibilityConfig],
     call: str,
 ) -> None:
-    """These show or keep a file's content, which a failed load cannot clear."""
+    """These show a file's content, tell whether it holds a text or back it
+    up, which a failed load cannot clear."""
     snapshot = await manager.maybe_snapshot("file", DEFINING, force=True)
     assert snapshot is not None
     enforce_hiding(set_config, HIDDEN)

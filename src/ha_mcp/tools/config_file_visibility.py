@@ -19,8 +19,9 @@ restore or take a backup of a file while it defines a hidden item.
 
 A configuration that does not load leaves every file unchecked. The calls that
 can repair it (a whole-file write, a confirmed delete, a backup restore) then
-run anyway, so the file tools can fix the error; the calls that show or keep a
-file's content stay refused.
+run anyway, so the file tools can fix the error; the calls that show a file's
+content, tell whether it holds a text (an edits= write) or back it up on
+request stay refused.
 """
 
 from __future__ import annotations
@@ -38,6 +39,12 @@ from .component_api import (
 from .helpers import raise_tool_error
 
 _CAPABILITY = "config_file_items"
+_LOAD_ERROR_SUGGESTIONS = [
+    "Fix the error in details: a whole-file ha_write_file, a confirmed "
+    "ha_delete_file and a ha_manage_backup restore still run while the "
+    "configuration does not load",
+    "Or turn off enforce mode in the ha-mcp settings UI (Entity Visibility tab)",
+]
 
 
 async def refuse_reading_hidden_definitions(
@@ -94,17 +101,7 @@ async def refuse_reading_hidden_definitions(
             tool_name,
             ErrorCode.CONFIG_INVALID,
             items["error"],
-            suggestions=[
-                (
-                    "Fix the error in details: a whole-file ha_write_file, a "
-                    "confirmed ha_delete_file and a ha_manage_backup restore "
-                    "still run while the configuration does not load"
-                ),
-                (
-                    "Or turn Enforce mode off under Entity Visibility in the "
-                    "ha-mcp settings UI"
-                ),
-            ],
+            suggestions=_LOAD_ERROR_SUGGESTIONS,
         )
     scripts = aliases.script_services
     if any(key.casefold() in scripts for key in items["script"]) or any(
