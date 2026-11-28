@@ -464,7 +464,7 @@ Mixed read/write tools whose read functionality exists nowhere else stay availab
 - `ha_config_get_dashboard` — config/list/search reads; optional screenshot rendering is a beta feature that uses a separate screenshot engine (see [beta documentation](../docs/beta.md))
 - `ha_manage_backup` — only listing and viewing per-edit backups
 - `ha_manage_app` — only HTTP GET proxy reads of app (add-on) APIs
-- `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
+- `ha_manage_energy_prefs` — only `mode='get'` and dry-run previews (`mode='set'`, `dry_run=true`)
 - `ha_manage_pipeline` — only `action='list'` / `'get'`
 - `ha_manage_custom_tool` — only `list_saved=true`
 
@@ -791,7 +791,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_set_device` — Update device properties such as name, area, disabled state, or labels.
 
 ### Energy
-- `ha_manage_energy_prefs` — Manage the Home Assistant Energy Dashboard preferences: grid / solar /
+- `ha_manage_energy_prefs` — Manage the Home Assistant Energy dashboard preferences: its energy
 
 ### Entity Registry
 - `ha_get_entity` — Get entity registry entries, or without an entity the registry settings and exposed entities.

@@ -14,7 +14,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .helpers import raise_tool_error
+from .helpers import ha_error_code_field, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +67,23 @@ async def integration_commands(client: Any, domain: str) -> dict[str, Any]:
     )
 
 
+async def energy_suggestions(client: Any) -> dict[str, Any]:
+    """The meters Settings > Energy suggests, computed by the installed frontend."""
+    return await _contract_bridge(
+        client,
+        "energy_suggestions",
+        {},
+        "the energy meter suggestions of Settings > Energy",
+        absent_note="Install or update the HA-MCP component to read them.",
+    )
+
+
 async def _contract_bridge(
-    client: Any, capability: str, params: dict[str, Any], feature: str
+    client: Any,
+    capability: str,
+    params: dict[str, Any],
+    feature: str,
+    absent_note: str = "Core still validates actual requests.",
 ) -> dict[str, Any]:
     """Ask the component's ``capability`` bridge; ``feature`` names it in
     the reason and error texts."""
@@ -77,7 +92,7 @@ async def _contract_bridge(
         caps = await get_component_caps(client, strict=True)
         unavailable["reason"] = (
             component_unusable_warning(caps, f"{feature} is unavailable")
-            + " Core still validates actual requests."
+            + f" {absent_note}"
         )
         if not component_supports(caps, capability):
             return unavailable
@@ -104,7 +119,10 @@ async def _contract_bridge(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"Could not obtain {feature}: {exc}",
-                context={k: v for k, v in params.items() if k != "payload"},
+                context={
+                    **{k: v for k, v in params.items() if k != "payload"},
+                    **ha_error_code_field(getattr(exc, "code", None)),
+                },
             )
         )
         return {}  # unreachable

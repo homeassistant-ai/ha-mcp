@@ -11,8 +11,6 @@ import logging
 
 import pytest
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
 from ..utilities.assertions import MCPAssertions, assert_mcp_success
 from ..utilities.cleanup import CleanupSteps
 
@@ -21,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
 async def test_energy_prefs_get_returns_expected_shape(mcp_client):
-    """mode='get' returns the three top-level keys and a config_hash.
+    """mode='get' returns Core's top-level lists and a config_hash.
 
     A fresh HA install has no ``.storage/energy``; the endpoint still
     succeeds and returns empty lists for the top-level keys. The tool
@@ -44,14 +42,7 @@ async def test_energy_prefs_get_returns_expected_shape(mcp_client):
     # Native defaults are available through the component; without it an
     # unconfigured Core returns no prefs and the tool reports an empty config.
     if config:
-        assert all(
-            isinstance(config[key], list)
-            for key in (
-                "energy_sources",
-                "device_consumption",
-                "device_consumption_water",
-            )
-        )
+        assert all(isinstance(value, list) for value in config.values())
     else:
         assert "unavailable" in data["note"]
 
@@ -128,184 +119,6 @@ async def test_energy_prefs_set_roundtrip(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_energy_add_device_roundtrip(mcp_client):
-    """mode='add_device' atomically appends to device_consumption.
-
-    Verifies the convenience mode reads, mutates, and writes through the
-    real WebSocket plumbing without the caller having to manage
-    config_hash. A subsequent get must show the new entry.
-
-    Cleanup is in a finally so an assertion failure between add and
-    cleanup does not leave the artifact in the test container — the next
-    run would otherwise hit RESOURCE_ALREADY_EXISTS.
-    """
-    stat = "sensor.test_e2e_add_device"
-    added = False
-    try:
-        add_result = await mcp_client.call_tool(
-            "ha_manage_energy_prefs",
-            {
-                "mode": "add_device",
-                "stat_consumption": stat,
-                "name": "E2E Test Device",
-            },
-        )
-        assert_mcp_success(add_result)
-        added = True
-        assert add_result.data["target_key"] == "device_consumption"
-        assert add_result.data["new_count"] >= 1
-
-        # Verify via get that the entry persisted.
-        get_after = await mcp_client.call_tool(
-            "ha_manage_energy_prefs", {"mode": "get"}
-        )
-        assert_mcp_success(get_after)
-        devices = get_after.data["config"]["device_consumption"]
-        stats = [d.get("stat_consumption") for d in devices]
-        assert stat in stats, (
-            f"Added device should appear in subsequent get; got stats={stats}"
-        )
-    finally:
-        with CleanupSteps() as cleanup, cleanup.step():
-            if added:
-                await MCPAssertions(mcp_client).call_tool_success(
-                    "ha_manage_energy_prefs",
-                    {"mode": "remove_device", "stat_consumption": stat},
-                )
-
-
-@pytest.mark.asyncio
-async def test_energy_remove_device_not_found_returns_error(mcp_client):
-    """mode='remove_device' on a missing entry surfaces RESOURCE_NOT_FOUND.
-
-    Confirms the convenience-mode error path traverses the real WS plumbing
-    correctly — the unit tests cover the same logic against mocks; this
-    catches any divergence in how raise_tool_error serialises through MCP.
-    """
-    with pytest.raises(ToolError) as exc_info:
-        await mcp_client.call_tool(
-            "ha_manage_energy_prefs",
-            {
-                "mode": "remove_device",
-                "stat_consumption": "sensor.does_not_exist_e2e",
-            },
-        )
-    assert "RESOURCE_NOT_FOUND" in str(exc_info.value)
-
-
-async def _cleanup_test_source(mcp_client, stat_energy_from: str) -> None:
-    """Remove any energy_sources entry matching ``stat_energy_from`` via a
-    fresh read + mode='set' rewrite. Idempotent; safe to call when the
-    source is already absent."""
-    get_result = await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
-    assert_mcp_success(get_result)
-    sources = get_result.data["config"]["energy_sources"]
-    if not any(s.get("stat_energy_from") == stat_energy_from for s in sources):
-        return
-    cleaned = [s for s in sources if s.get("stat_energy_from") != stat_energy_from]
-    cleanup = await mcp_client.call_tool(
-        "ha_manage_energy_prefs",
-        {
-            "mode": "set",
-            "config": {"energy_sources": cleaned},
-            "config_hash": get_result.data["config_hash"],
-        },
-    )
-    assert_mcp_success(cleanup)
-
-
-@pytest.mark.asyncio
-async def test_energy_add_source_roundtrip(mcp_client):
-    """mode='add_source' atomically appends a grid entry to energy_sources.
-
-    Uses a representative native grid source and verifies saved preferences.
-
-    Cleanup is in a finally so an assertion failure does not persist the
-    test artifact (subsequent runs would otherwise leave it accumulating).
-    """
-    stat = "sensor.test_e2e_grid_import"
-    new_grid = {
-        "type": "grid",
-        "stat_energy_from": stat,
-        "stat_energy_to": None,
-        "stat_cost": None,
-        "entity_energy_price": None,
-        "number_energy_price": None,
-        "cost_adjustment_day": "1",
-        "entity_energy_price_export": None,
-        "number_energy_price_export": None,
-        "stat_compensation": None,
-    }
-    try:
-        add_result = await mcp_client.call_tool(
-            "ha_manage_energy_prefs",
-            {"mode": "add_source", "source": new_grid},
-        )
-        assert_mcp_success(add_result)
-        assert add_result.data["target_key"] == "energy_sources"
-
-        get_after = await mcp_client.call_tool(
-            "ha_manage_energy_prefs", {"mode": "get"}
-        )
-        assert_mcp_success(get_after)
-        assert add_result.data["config"] == get_after.data["config"]
-        assert add_result.data["config_hash"] == get_after.data["config_hash"]
-        assert (
-            add_result.data["config_hash_per_key"]
-            == get_after.data["config_hash_per_key"]
-        )
-        sources = get_after.data["config"]["energy_sources"]
-        assert any(s.get("stat_energy_from") == stat for s in sources), (
-            f"Added grid source should appear; got sources={sources}"
-        )
-    finally:
-        with CleanupSteps() as cleanup, cleanup.step():
-            await _cleanup_test_source(mcp_client, stat)
-
-
-def _non_grid_source_payload(source_type: str, stat: str) -> dict:
-    """Representative real source payloads; Core owns their acceptance contract."""
-    if source_type == "battery":
-        return {
-            "type": "battery",
-            "stat_energy_from": stat,
-            "stat_energy_to": f"{stat}_to",
-        }
-    return {"type": source_type, "stat_energy_from": stat}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("source_type", ["solar", "battery", "gas", "water"])
-async def test_energy_add_source_non_grid_roundtrip(mcp_client, source_type):
-    """mode='add_source' atomically appends solar/battery/gas/water entries.
-
-    Missing statistics can produce semantic warnings after a valid save.
-    """
-    stat = f"sensor.test_e2e_{source_type}_in"
-    new_source = _non_grid_source_payload(source_type, stat)
-    try:
-        add_result = await mcp_client.call_tool(
-            "ha_manage_energy_prefs",
-            {"mode": "add_source", "source": new_source},
-        )
-        assert_mcp_success(add_result)
-        assert add_result.data["target_key"] == "energy_sources"
-
-        get_after = await mcp_client.call_tool(
-            "ha_manage_energy_prefs", {"mode": "get"}
-        )
-        assert_mcp_success(get_after)
-        sources = get_after.data["config"]["energy_sources"]
-        assert any(
-            s.get("type") == source_type and s.get("stat_energy_from") == stat
-            for s in sources
-        ), f"Added {source_type} source should appear; got sources={sources}"
-    finally:
-        with CleanupSteps() as cleanup, cleanup.step():
-            await _cleanup_test_source(mcp_client, stat)
-
-
-@pytest.mark.asyncio
 async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
     """Issue #1049: ``mode='get'`` exposes ``config_hash_per_key``, and
     ``mode='set'`` accepts a per-top-level-key dict-form ``config_hash``
@@ -335,9 +148,8 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
         "mode='get' must surface config_hash_per_key alongside config_hash"
     )
     per_key = initial_data["config_hash_per_key"]
-    for key in ("energy_sources", "device_consumption", "device_consumption_water"):
-        assert key in per_key, f"per-key hash for '{key}' missing"
-        assert isinstance(per_key[key], str) and len(per_key[key]) == 16
+    assert set(per_key) == set(initial_data["config"])
+    assert all(isinstance(h, str) and len(h) == 16 for h in per_key.values())
 
     original_dc = list(initial_data["config"]["device_consumption"])
     test_stat = "sensor.e2e_per_key_hash_test"
@@ -387,6 +199,31 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
                 )
 
 
+async def _save_devices(mcp_client, devices: list[dict]) -> None:
+    """Save ``device_consumption`` whole under its per-key hash from a fresh read."""
+    mcp = MCPAssertions(mcp_client)
+    current = await mcp.call_tool_success("ha_manage_energy_prefs", {"mode": "get"})
+    if "device_consumption" not in current["config_hash_per_key"]:
+        # Nothing saved yet and no Core defaults read: the first save takes
+        # the full hash and Core fills in its defaults.
+        current = await mcp.call_tool_success(
+            "ha_manage_energy_prefs",
+            {"mode": "set", "config": {}, "config_hash": current["config_hash"]},
+        )
+    await mcp.call_tool_success(
+        "ha_manage_energy_prefs",
+        {
+            "mode": "set",
+            "config": {"device_consumption": devices},
+            "config_hash": {
+                "device_consumption": current["config_hash_per_key"][
+                    "device_consumption"
+                ]
+            },
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_energy_inspection_exposes_native_statistics_metadata(mcp_client):
     """Configured device statistics can be discovered with their real recorder units."""
@@ -399,18 +236,19 @@ async def test_energy_inspection_exposes_native_statistics_metadata(mcp_client):
         d.get("stat_consumption") == statistic_id
         for d in before["config"].get("device_consumption", [])
     )
+    original = list(before["config"].get("device_consumption", []))
     added = False
     try:
         if not already_present:
-            assert_mcp_success(
-                await mcp_client.call_tool(
-                    "ha_manage_energy_prefs",
+            await _save_devices(
+                mcp_client,
+                original
+                + [
                     {
-                        "mode": "add_device",
                         "stat_consumption": statistic_id,
                         "name": "E2E statistics metadata",
-                    },
-                )
+                    }
+                ],
             )
             added = True
         result = assert_mcp_success(
@@ -435,7 +273,4 @@ async def test_energy_inspection_exposes_native_statistics_metadata(mcp_client):
     finally:
         with CleanupSteps() as cleanup, cleanup.step():
             if added:
-                await MCPAssertions(mcp_client).call_tool_success(
-                    "ha_manage_energy_prefs",
-                    {"mode": "remove_device", "stat_consumption": statistic_id},
-                )
+                await _save_devices(mcp_client, original)

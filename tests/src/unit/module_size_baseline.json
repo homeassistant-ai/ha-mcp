@@ -47,7 +47,7 @@
   "tests/src/unit/test_astro_setup_js_behavior.py": 1088,
   "tests/src/unit/test_best_practice_checker.py": 2961,
   "tests/src/unit/test_locale_parity.py": 2614,
-  "tests/src/unit/test_read_only.py": 1154,
+  "tests/src/unit/test_read_only.py": 1145,
   "tests/src/unit/test_settings_ui_js_behavior.py": 7781,
   "tests/uat/stories/run_story.py": 1713
 }
