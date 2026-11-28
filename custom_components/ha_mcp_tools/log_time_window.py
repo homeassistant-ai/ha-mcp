@@ -22,7 +22,10 @@ def _lines(text: str) -> list[str]:
 def _requests(
     name: str, start: datetime, end: datetime, count: int, raw: bool, skip: int
 ) -> list[dict[str, str]]:
-    """The journal reads for one source: Core's log tool's, or a page and its probe.
+    """The journal reads for one source.
+
+    A timeline makes the read Core's log tool makes; a raw page makes the page
+    and a one-entry probe that says whether more follows.
 
     Core's tool (``hassio/llm.py``) ends its range a whole second after the
     window and reads Core and Supervisor in the plain format.
@@ -66,6 +69,7 @@ async def _source(
         entries //= 2
     if reply.get("unavailable") and not is_hassio(hass):
         return {"error": "This installation has no Supervisor journal.", "status": 404}
+    # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
     if reply.get("unavailable"):
         return {**reply, "requests": _requests(name, start, end, wanted, raw, skip)}
     if "text" not in reply:
@@ -111,8 +115,8 @@ def _merge(
             times = [row.time for row in records if row.time >= start]
             if not times:
                 errors[name] = (
-                    f"One record runs past the {len(lines)} lines read from "
-                    "start_time. Set start_time after it to continue this source."
+                    f"The {len(lines)} lines read from start_time continue a record "
+                    "that began before it. Set a later start_time to continue this source."
                 )
                 continue
             boundary = min(
@@ -197,6 +201,8 @@ def _file_page(
 
 
 def _raw_page(msg: dict[str, Any], batch: dict[str, Any]) -> dict[str, Any]:
+    # A journal batch is exactly the page; a file batch holds one line more,
+    # which says whether another page follows.
     lines = batch["lines"]
     whole = "has_more" in batch or "entries" in batch
     selected = [
@@ -231,6 +237,7 @@ def _window(msg: dict[str, Any]) -> tuple[datetime, datetime] | None:
     return start.astimezone(UTC), end.astimezone(UTC)
 
 
+# Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
 def _given(msg: dict[str, Any], name: str) -> dict[str, Any] | None:
     """Journal text the caller read itself, where this install could not."""
     if name not in msg.get("journal_text", {}):
@@ -255,7 +262,7 @@ async def _prepare(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     batches = []
     errors: dict[str, str] = {}
     requests: dict[str, list[dict[str, str]]] = {}
-    status = None
+    statuses: set[int | None] = set()
     for name in names:
         batch = _given(msg, name) or await _source(
             hass, name, start, end, count, raw, msg["offset"]
@@ -263,7 +270,8 @@ async def _prepare(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         if batch.get("unavailable"):
             requests[name] = batch["requests"]
         elif "lines" not in batch:
-            errors[name], status = batch["error"], batch.get("status")
+            errors[name] = batch["error"]
+            statuses.add(batch.get("status"))
         elif raw:
             return _raw_page(msg, batch)
         else:
@@ -272,11 +280,12 @@ async def _prepare(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
                 (name, lines, bool(batch.get("byte_limited")) or len(lines) >= count)
             )
     if requests:
-        # Core before 2026.12: the caller makes these reads.
+        # Core 2026.11 fallback (the caller makes these reads): remove when the
+        # minimum Home Assistant is 2026.12.
         return {"unavailable": True, "requests": requests}
     if errors and not batches:
-        text = "; ".join(f"{name}: {error}" for name, error in errors.items())
-        return {"error": text, "status": status if len(errors) == 1 else None}
+        text = " ".join(f"{name}: {error}" for name, error in errors.items())
+        return {"error": text, "status": statuses.pop() if len(statuses) == 1 else None}
     result = _merge(batches, start, end, msg["limit"], msg["search"], errors)
     if errors:
         result["errors"] = errors
@@ -296,6 +305,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
                 vol.Required("limit"): vol.All(int, vol.Range(min=1, max=500)),
                 vol.Optional("search", default=""): str,
                 vol.Optional("raw", default=False): bool,
+                # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
                 vol.Optional("journal_text"): vol.All(
                     {str: vol.All(str, vol.Length(max=1_000_000))}, vol.Length(max=12)
                 ),

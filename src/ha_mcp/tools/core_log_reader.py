@@ -80,8 +80,9 @@ class CoreLogWindow(ErrorLogPage):
 
     ``headers`` maps a line's index in ``text`` to Core's parse of the record
     it starts; ``None`` means no parse was available, so lines are not grouped
-    into records. ``requested_lines`` is the window's width when the reader
-    changed it from what was asked.
+    into records. ``requested_lines`` is the width the reader fetched when it
+    knows it (a byte limit halves it, the fallback raises it to the minimum);
+    ``None`` means the width that was asked.
     """
 
     warning: str | None = None
@@ -168,6 +169,7 @@ async def core_log_window(
             return CoreLogWindow("", False, warning=warning, disabled_reason=reason)
         raise
     headers = None
+    # Core 2026.11 fallback: remove when the minimum Home Assistant is 2026.12.
     if reply and reply.get("journal") and records:
         headers = await _record_headers(client, page.text)
     return CoreLogWindow(

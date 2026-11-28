@@ -99,7 +99,7 @@ class LogbookLogSourceMixin:
         effective_limit: int,
         total_entries: int,
         paginated_entries: Any,
-        hours_back_int: int,
+        window: str,
         end_time: str | None,
         entity_id: str | None,
         device_id: str | None,
@@ -115,7 +115,7 @@ class LogbookLogSourceMixin:
         """
         next_offset = offset_int + effective_limit
         param_parts = [
-            f"hours_back={hours_back_int}",
+            window,
             f"limit={effective_limit}",
             f"offset={next_offset}",
         ]
@@ -556,10 +556,10 @@ class LogbookLogSourceMixin:
         return response
 
     async def _native_page(
-        self, command: dict[str, Any], request: dict[str, Any], hours: int
+        self, command: dict[str, Any], request: dict[str, Any], span: timedelta
     ) -> dict[str, Any]:
         # HA-MCP policy: native transports materialize the entire time window.
-        if hours > 24:
+        if span > timedelta(hours=24):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -604,6 +604,7 @@ class LogbookLogSourceMixin:
         search: str | None,
         limit: int,
         scope: dict[str, Any],
+        fixed_start: bool,
     ) -> dict[str, Any]:
         command = {
             **scope,
@@ -620,9 +621,7 @@ class LogbookLogSourceMixin:
                 self._required_component_page, command, request, first, cursor
             )
         else:
-            page = await self._native_page(
-                command, request, (end - start) // timedelta(hours=1)
-            )
+            page = await self._native_page(command, request, end - start)
         total = page["total"]
         entries = page["entries"]
         after = page.get("after")
@@ -640,7 +639,7 @@ class LogbookLogSourceMixin:
             "success": True,
             "source": "logbook",
             "entries": entries,
-            "period": f"{hours} hours back from {end.isoformat()}",
+            "period": self._period(start, end, fixed_start),
             "start_time": start.isoformat(),
             "end_time": end.isoformat(),
             "entity_filter": ",".join(scope.get("entity_ids", [])) or None,
@@ -666,7 +665,9 @@ class LogbookLogSourceMixin:
                     limit,
                     total,
                     entries,
-                    hours,
+                    f"start_time={start.isoformat()!r}"
+                    if fixed_start
+                    else f"hours_back={hours}",
                     end.isoformat(),
                     data["entity_filter"],
                     data["device_filter"],
@@ -679,7 +680,8 @@ class LogbookLogSourceMixin:
             data["next_offset"] = LogbookCursor(
                 scope=scope,
                 lower_bound=page["lower_bound"],
-                hours_back=hours,
+                hours_back=max(hours, 1),
+                start=start if fixed_start else None,
                 total=total,
                 end=end,
                 order=order,
@@ -699,6 +701,64 @@ class LogbookLogSourceMixin:
                 )
         return await add_timezone_metadata(self._client, data)
 
+    @staticmethod
+    def _period(start: datetime, end: datetime, fixed_start: bool) -> str:
+        if fixed_start:
+            return f"{start.isoformat()} to {end.isoformat()}"
+        return (
+            f"{(end - start) // timedelta(hours=1)} hours back from {end.isoformat()}"
+        )
+
+    async def _logbook_time(self, value: str, name: str) -> datetime:
+        try:
+            when = datetime.fromisoformat(value)
+        except ValueError:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid {name} '{value}': not an ISO 8601 timestamp",
+                    suggestions=[f"Use ISO format, e.g. {name}='2026-08-28T01:00:00Z'"],
+                )
+            )
+        if when.tzinfo is None:
+            zone = await require_ha_timezone(
+                self._client,
+                needed_for="a Logbook time without an offset needs",
+                workaround=f"Pass {name} with an explicit UTC offset",
+            )
+            when = when.replace(tzinfo=zone).astimezone(UTC)
+        return when
+
+    async def _logbook_start(
+        self,
+        cursor: LogbookCursor | None,
+        start_time: str | None,
+        hours_back: int | None,
+        end: datetime,
+    ) -> tuple[datetime, bool]:
+        """The window's start, and whether ``start_time`` set it."""
+        fixed = cursor.start if cursor else None
+        window: tuple[datetime, bool] | None = None
+        if start_time and hours_back is None:
+            start = await self._logbook_time(start_time, "start_time")
+            if start < end and (cursor is None or fixed == start):
+                window = start, True
+        elif not start_time and fixed and hours_back is None:
+            window = fixed, True
+        elif not start_time and not fixed:
+            hours = hours_back or (cursor.hours_back if cursor else 1)
+            if cursor is None or hours == cursor.hours_back:
+                window = end - timedelta(hours=hours), False
+        if window is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "A Logbook window takes start_time or hours_back, not both, with "
+                    "start_time before end_time; a Logbook cursor continues the same window.",
+                )
+            )
+        return window
+
     async def _logbook_page_request(
         self,
         offset: int | str,
@@ -711,25 +771,7 @@ class LogbookLogSourceMixin:
         cursor = LogbookCursor.parse(offset) if isinstance(offset, str) else None
         end = cursor.end if cursor else datetime.now(UTC)
         if end_time:
-            try:
-                end = datetime.fromisoformat(end_time)
-            except ValueError:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid end_time '{end_time}': not an ISO 8601 timestamp",
-                        suggestions=[
-                            "Use ISO format, e.g. end_time='2026-08-28T01:00:00Z'"
-                        ],
-                    )
-                )
-        if end.tzinfo is None:
-            zone = await require_ha_timezone(
-                self._client,
-                needed_for="a Logbook time without an offset needs",
-                workaround="Pass end_time with an explicit UTC offset",
-            )
-            end = end.replace(tzinfo=zone).astimezone(UTC)
+            end = await self._logbook_time(end_time, "end_time")
         if cursor and (
             scope != cursor.scope
             or (order, search, end) != (cursor.order, cursor.search, cursor.end)
@@ -764,6 +806,7 @@ class LogbookLogSourceMixin:
         compact: bool = True,
         action_calls: bool = False,
         order: Literal["newest", "oldest"] = "newest",
+        start_time: str | None = None,
     ) -> dict[str, Any]:
         """Fetch logbook entries with search and pagination."""
         effective_limit = _coerce_limit(limit)
@@ -772,21 +815,11 @@ class LogbookLogSourceMixin:
         cursor, end_dt, page = await self._logbook_page_request(
             offset, end_time, order, search, effective_limit, scope
         )
-        hours_back = (
-            hours_back
-            if hours_back is not None
-            else (cursor.hours_back if cursor else 1)
+        start_dt, fixed_start = await self._logbook_start(
+            cursor, start_time, hours_back, end_dt
         )
-        if cursor and hours_back != cursor.hours_back:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Use the same hours_back with this Logbook cursor.",
-                )
-            )
         self._validate_logbook_filters(context_id)
         numeric_offset = offset if isinstance(offset, int) else 0
-        start_dt = end_dt - timedelta(hours=hours_back)
         try:
             return await self._format_logbook_page(
                 page,
@@ -798,6 +831,7 @@ class LogbookLogSourceMixin:
                 search,
                 effective_limit,
                 scope,
+                fixed_start,
             )
         except ToolError:
             raise
@@ -805,7 +839,7 @@ class LogbookLogSourceMixin:
             exception_to_structured_error(
                 e,
                 context={
-                    "period": f"{hours_back} hours back from {end_dt.isoformat()}",
+                    "period": self._period(start_dt, end_dt, fixed_start),
                 },
                 suggestions=self._logbook_error_suggestions(e),
             )

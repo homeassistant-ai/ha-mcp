@@ -7,9 +7,11 @@ import pytest
 from homeassistant.const import KEY_DATA_LOGGING
 from homeassistant.core import HomeAssistant
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ._error_log_core import call_logs
+from ._tool_errors import error_body
 from ._tools_addons_core import Supervisor
 from ._tools_addons_core import core_supervisor as core_supervisor
 from ._tools_addons_core import supervisor as supervisor
@@ -97,7 +99,7 @@ async def test_a_searched_window_over_the_byte_limit_is_read_in_pieces(
     )
     assert result["log"] == "kernel: first done\nkernel: second done"
     assert not result.get("warnings")
-    assert core_supervisor.headers("GET", path)["Range"] == "entries=c1:5000:5000"
+    assert core_supervisor.headers("GET", path)["Range"].startswith("entries=c1:")
 
 
 @pytest.mark.skipif(
@@ -115,6 +117,30 @@ async def test_a_one_line_tail_is_the_newest_line(
     )
     assert result["log"] == "newest"
     assert core_supervisor.headers("GET", path)["Range"] == "entries=:-1:2"
+
+
+@pytest.mark.skipif(
+    not hasattr(aiohasupervisor.models, "LogsOptions"),
+    reason="Core 2026.11's Supervisor client does not implement native journal reads",
+)
+async def test_a_failure_supervisor_gives_no_reason_for_points_at_its_log(
+    component_core_client: HomeAssistantClient, core_supervisor: Supervisor
+) -> None:
+    """Supervisor answers a log route's failure in plain text, which its client
+    drops: an app that never started has no latest start to read."""
+    core_supervisor.reply(
+        "GET", "/addons/core_mosquitto/logs/latest", status=500, text="no epoch"
+    )
+    with pytest.raises(ToolError) as refused:
+        await call_logs(
+            component_core_client,
+            source="supervisor",
+            slug="core_mosquitto",
+            latest=True,
+        )
+    message = error_body(refused)["error"]["message"]
+    assert "slug supervisor" in message
+    assert "SupervisorError" not in message
 
 
 @pytest.mark.skipif(

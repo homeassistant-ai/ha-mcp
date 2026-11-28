@@ -322,7 +322,7 @@ class TestTheCredentialToFix:
     async def test_a_journal_selection_inside_the_app_goes_to_supervisor(
         self, app_route: Route, selection: dict[str, Any], path: str
     ):
-        """Core's proxy refuses the app's token (#1116)."""
+        """Supervisor's proxy to Core refuses an app's /api/hassio requests (#1116)."""
         app_route.supervisor.reply("selected line\n")
 
         result = await ask(
@@ -331,6 +331,38 @@ class TestTheCredentialToFix:
 
         assert result["log"] == "selected line"
         assert [seen.path for seen in app_route.supervisor.requests] == [path]
+
+    async def test_a_boot_offset_outside_the_app_goes_through_cores_proxy(
+        self, core_route: Route
+    ):
+        core_route.supervisor.reply("previous boot line\n")
+
+        result = await ask(
+            core_route.client, Target("system_service", "host", ""), boot=-1
+        )
+
+        assert result["log"] == "previous boot line"
+        assert result["warnings"]
+        assert [seen.path for seen in core_route.supervisor.requests] == [
+            "/host/logs/boots/-1"
+        ]
+
+    @pytest.mark.parametrize(
+        ("target", "selection"),
+        [
+            (Target("system_service", "host", ""), {"identifier": "kernel"}),
+            (Target("system_service", "host", ""), {"boot": "a" * 32}),
+            (Target("supervisor", "core_mosquitto", ""), {"latest": True}),
+        ],
+    )
+    async def test_a_selection_cores_proxy_does_not_serve_is_refused_before_any_read(
+        self, core_route: Route, target: Target, selection: dict[str, Any]
+    ):
+        with pytest.raises(ToolError) as refused:
+            await ask(core_route.client, target, **selection)
+
+        assert error_body(refused)["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert core_route.supervisor.requests == []
 
     async def test_a_boots_listing_inside_the_app_goes_to_supervisor(
         self, app_route: Route

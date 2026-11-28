@@ -495,9 +495,6 @@ class CoreLogSourcesMixin:
                 e,
             )
             return fetch_lines, page, raw_text, True
-        if wider_page.headers is None:
-            # The wider read came back without record headers: keep the first.
-            return fetch_lines, page, raw_text, True
         return (
             wider_page.requested_lines or wider,
             wider_page,

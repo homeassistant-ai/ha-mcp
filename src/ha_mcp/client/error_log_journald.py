@@ -113,7 +113,7 @@ def container_page(text: str, lines: int, offset: int) -> ErrorLogPage:
     Paging is exact here: the whole file is in hand, so ``has_more`` is simply
     whether anything precedes the window.
     """
-    all_lines = log_lines(text)
+    all_lines = text.splitlines()
     end = len(all_lines) - offset
     if end <= 0:
         return ErrorLogPage(text="", has_more=False)

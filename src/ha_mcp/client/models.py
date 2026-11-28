@@ -16,7 +16,7 @@ class ErrorLogPage:
     ``first_cursor`` names the oldest line this window served: Supervisor's
     ``X-First-Cursor`` for a journal block, or the component's position in the
     log file. It is ``None`` when the whole file was read without the
-    component. The tool layer turns it into the ``next_offset`` token, so the
+    component, and for an integration's backlog. The tool layer turns it into the ``next_offset`` token, so the
     cursor travels as data instead of being re-derived from the text.
     """
 

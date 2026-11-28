@@ -462,6 +462,25 @@ class TestRecordLimitAndPaging:
         assert second["log"].splitlines()[0] == _HEADER
         assert "ValueError: NEEDLE" in second["log"]
 
+    async def test_journal_entries_holding_a_carriage_return_page_once_each(
+        self, gatewayd: FakeGatewayd, journal_client: HomeAssistantClient
+    ) -> None:
+        entries = [
+            f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] got OK\rtail {index}"
+            for index in range(450)
+        ]
+        load_lines(gatewayd, entries)
+        seen: list[str] = []
+        arguments: dict[str, Any] = {"limit": 100}
+        for _ in range(12):
+            page = await _read(journal_client, **arguments)
+            assert page["returned_lines"] == page["returned_records"]
+            seen += page["log"].split("\n")
+            if not page["has_more"]:
+                break
+            arguments["offset"] = page["next_offset"]
+        assert seen == entries[::-1]
+
     async def test_a_window_longer_than_one_records_call_is_grouped_whole(
         self,
         gatewayd: FakeGatewayd,

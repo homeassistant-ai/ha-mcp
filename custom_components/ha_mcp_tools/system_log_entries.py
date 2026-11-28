@@ -26,7 +26,8 @@ async def integration_loggers(
     """Logger prefixes of the loaded integrations and of those ``names`` log from.
 
     An integration whose setup failed is not loaded, and its log lines are the
-    ones being looked for.
+    ones being looked for. With ``selected``, only that integration's prefixes
+    are returned, and it not existing raises.
     """
     loaded = set(async_get_loaded_integrations(hass))
     domains = {selected} if selected else loaded | _package_domains(names)

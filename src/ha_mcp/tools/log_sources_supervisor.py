@@ -591,9 +591,7 @@ class SupervisorLogSourcesMixin:
             # _supervisor_logs_get / _raw_request propagates raw to FastMCP and
             # surfaces without a structured `code` field.
             #
-            # Suggestions branch on is_running_in_addon() (see _get_supervisor_log
-            # for the rationale): SUPERVISOR_TOKEN suggestions only make sense
-            # inside the addon container; non-addon installs need admin-LLA hints.
+            # Core's proxy also answers 401 for a path it does not serve.
             if await proxy_refused_path(self._client):
                 raise_tool_error(
                     create_error_response(
@@ -605,6 +603,9 @@ class SupervisorLogSourcesMixin:
                         ],
                     )
                 )
+            # Suggestions branch on is_running_in_addon() (see _get_supervisor_log
+            # for the rationale): SUPERVISOR_TOKEN suggestions only make sense
+            # inside the addon container; non-addon installs need admin-LLA hints.
             exception_to_structured_error(
                 e,
                 context={"source": "system_service", "slug": service},
