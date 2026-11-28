@@ -461,7 +461,9 @@ async def _dispatch_edits_action(
     if action == "create" and domain and entity_id:
         await refuse_reading_hidden_backup(client, domain, entity_id)
     if action in ("view", "diff", "restore") and backup_name:
-        await _refuse_hidden_file_backup(client, mgr, backup_name)
+        await _refuse_hidden_file_backup(
+            client, mgr, backup_name, repairs=action == "restore"
+        )
     if action == "create":
         return await _edits_create(mgr, scope, action, domain, entity_id)
     if action == "list":
@@ -477,13 +479,14 @@ async def _dispatch_edits_action(
 
 
 async def _refuse_hidden_file_backup(
-    client: Any, mgr: BackupManager, bname: str
+    client: Any, mgr: BackupManager, bname: str, *, repairs: bool
 ) -> None:
     """Refuse a backup of a config file that defines a hidden item. A backup
     that does not exist, or a snapshot that cannot be parsed, is left to the
     action, which reports it. A legacy backup that cannot be read counts as
     naming no file: when the component could not be reached, the action asks
-    again and may get its content."""
+    again and may get its content. With ``repairs`` (a restore) the call runs
+    while the configuration does not load."""
     domain, target = "yaml_file", None
     try:
         if bname.startswith(LEGACY_PREFIX):
@@ -500,7 +503,7 @@ async def _refuse_hidden_file_backup(
             return
     except OSError:
         pass  # unreadable: counts as naming no file
-    await refuse_reading_hidden_backup(client, domain, target)
+    await refuse_reading_hidden_backup(client, domain, target, repairs=repairs)
 
 
 async def _edits_create(

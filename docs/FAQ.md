@@ -1084,7 +1084,11 @@ dimension. What it covers:
   stays readable, including one taken by an `ha_config_set_yaml` write, which is
   not checked.
   If the configuration does not load, or the component cannot be reached or
-  lacks the check, these calls are refused. Elsewhere,
+  lacks the check, these calls are refused, except that a broken configuration
+  stays repairable: while it does not load, a whole-file `ha_write_file`, a
+  confirmed `ha_delete_file` and a backup `restore` still run, so the backup
+  such a write, delete or restore takes is not checked and can hold a hidden
+  definition. Elsewhere,
   because keys and ids now count, enforce mode can also refuse a read that
   only shares a hidden entity's key or id.
   An automation's bare `identifier` is only ever read as its config `id`.

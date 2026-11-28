@@ -14,22 +14,19 @@ backup manager.
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from custom_components.ha_mcp_tools import SERVICE_READ_LEGACY_BACKUP
-from custom_components.ha_mcp_tools.const import DOMAIN
 from ha_mcp import backup_manager as bm
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.config import Settings
 from ha_mcp.tools import auto_backup
 from ha_mcp.tools.tools_filesystem import FilesystemTools
@@ -39,6 +36,7 @@ from .._backup_core import backup_settings as backup_settings
 from .._backup_core import manage_backup
 from .._config_dir_yaml import write_config_files
 from .._core_setup import set_up_tools_entry
+from .._tool_errors import error_body
 from .._visibility_core import enforce_hiding, error_code
 
 HIDDEN = "script.secret_door"
@@ -332,9 +330,11 @@ async def test_a_legacy_backup_whose_read_failed_is_not_shown_on_the_retry(
     component_core_client: HomeAssistantClient,
     manager: bm.BackupManager,
     set_config: Callable[..., VisibilityConfig],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The check's read of the backup fails; the action's own read, once the
-    component answers again, would hand out the hidden definition unchecked."""
+    """The check's read of the backup gets no answer. Left to the action like a
+    backup that does not exist, the backup would be read again there and, once
+    the component answers, its hidden definition handed out unchecked."""
     bak = "configuration.yaml.20260101_120000.bak"
     await write_config_files(
         hass,
@@ -344,23 +344,12 @@ async def test_a_legacy_backup_whose_read_failed_is_not_shown_on_the_retry(
         },
     )
     enforce_hiding(set_config, HIDDEN)
-    native = hass.services.async_services()[DOMAIN][SERVICE_READ_LEGACY_BACKUP]
-    unanswered = 0
-
-    async def fail_first_read(call: ServiceCall) -> Any:
-        nonlocal unanswered
-        if not unanswered:
-            unanswered += 1
-            raise HomeAssistantError("busy")
-        reply = native.job.target(call)
-        return await reply if inspect.isawaitable(reply) else reply
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_READ_LEGACY_BACKUP,
-        fail_first_read,
-        schema=native.schema,
-        supports_response=native.supports_response,
+    # Listing fetches the caller token, so the dropped call below is the read.
+    await manage_backup(component_core_client, scope="edits", action="list")
+    monkeypatch.setattr(
+        component_core_client,
+        "call_service",
+        AsyncMock(side_effect=HomeAssistantConnectionError("dropped")),
     )
 
     with pytest.raises(ToolError) as excinfo:
@@ -371,7 +360,9 @@ async def test_a_legacy_backup_whose_read_failed_is_not_shown_on_the_retry(
             backup_name=f"legacy:{bak}",
         )
 
-    assert unanswered == 1
+    dropped = component_core_client.call_service
+    assert isinstance(dropped, AsyncMock)
+    assert dropped.await_count == 1
     assert error_code(excinfo) == "ENTITY_VISIBILITY_ENFORCED"
 
 
@@ -419,3 +410,127 @@ async def test_a_backup_target_naming_no_file_is_refused_while_enforcing(
 
     assert error_code(excinfo) == "ENTITY_VISIBILITY_ENFORCED"
     assert _file_snapshots(manager) == []
+
+
+BROKEN = "www/broken.yaml"
+UNCLOSED = "a: [unclosed\n"
+
+
+async def _break_the_configuration(hass: HomeAssistant, tools: FilesystemTools) -> None:
+    """Write a YAML error into a file the configuration includes, as an agent
+    would: the write is checked while the configuration still loads."""
+    await write_config_files(
+        hass,
+        {
+            "configuration.yaml": (
+                f"script: !include {DEFINING}\nsensor: !include {BROKEN}\n"
+            ),
+            BROKEN: "[]\n",
+        },
+    )
+    await tools.ha_write_file(path=BROKEN, content=UNCLOSED, overwrite=True)
+
+
+def _names_the_way_out(exc: pytest.ExceptionInfo[ToolError]) -> bool:
+    suggestions = " ".join(error_body(exc)["error"]["suggestions"])
+    return "ha_write_file" in suggestions and "Enforce mode off" in suggestions
+
+
+async def test_a_configuration_that_does_not_load_can_be_repaired(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+) -> None:
+    """A YAML error anywhere leaves every file unchecked; the whole-file write
+    that fixes it must still run, or nothing an agent can call gets out."""
+    enforce_hiding(set_config, HIDDEN)
+    tools = FilesystemTools(component_core_client)
+    await _break_the_configuration(hass, tools)
+
+    with pytest.raises(ToolError) as excinfo:
+        await tools.ha_read_file(path=BROKEN)
+    assert error_code(excinfo) == "CONFIG_INVALID"
+    assert _names_the_way_out(excinfo)
+
+    await tools.ha_write_file(path=BROKEN, content="[]\n", overwrite=True)
+
+    assert await _read(hass, BROKEN) == "[]\n"
+    assert UNCLOSED in [
+        manager.read_snapshot(s["name"])["config"]
+        for s in _file_snapshots(manager)
+        if s["entity_id"] == BROKEN
+    ]
+    with pytest.raises(ToolError) as excinfo:
+        await tools.ha_read_file(path=DEFINING)
+    assert error_code(excinfo) == "ENTITY_VISIBILITY_ENFORCED"
+
+
+@pytest.mark.parametrize("call", ["delete", "restore"])
+async def test_a_delete_or_restore_runs_while_the_configuration_does_not_load(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+    call: str,
+) -> None:
+    tools = FilesystemTools(component_core_client)
+    await write_config_files(hass, {BROKEN: "[]\n"})
+    good = await manager.maybe_snapshot("file", BROKEN, force=True)
+    assert good is not None
+    enforce_hiding(set_config, HIDDEN)
+    await _break_the_configuration(hass, tools)
+
+    if call == "delete":
+        await tools.ha_delete_file(path=BROKEN, confirm=True)
+        assert await _read(hass, BROKEN) is None
+    else:
+        result = await manage_backup(
+            component_core_client,
+            scope="edits",
+            action="restore",
+            backup_name=good.name,
+        )
+        assert result["success"] is True
+        assert await _read(hass, BROKEN) == "[]\n"
+
+
+@pytest.mark.parametrize("call", ["edits", "create", "view", "diff"])
+async def test_what_the_check_must_judge_is_refused_with_the_way_out(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    manager: bm.BackupManager,
+    set_config: Callable[..., VisibilityConfig],
+    call: str,
+) -> None:
+    """These show or keep a file's content, which a failed load cannot clear."""
+    snapshot = await manager.maybe_snapshot("file", DEFINING, force=True)
+    assert snapshot is not None
+    enforce_hiding(set_config, HIDDEN)
+    tools = FilesystemTools(component_core_client)
+    await _break_the_configuration(hass, tools)
+
+    with pytest.raises(ToolError) as excinfo:
+        if call == "edits":
+            await tools.ha_write_file(
+                path=DEFINING, edits=[{"old": "30000", "new": "1"}]
+            )
+        elif call == "create":
+            await manage_backup(
+                component_core_client,
+                scope="edits",
+                action="create",
+                domain="file",
+                entity_id=DEFINING,
+            )
+        else:
+            await manage_backup(
+                component_core_client,
+                scope="edits",
+                action=call,
+                backup_name=snapshot.name,
+            )
+
+    assert error_code(excinfo) == "CONFIG_INVALID"
+    assert _names_the_way_out(excinfo)
+    assert await _read(hass, DEFINING) == SCRIPTS

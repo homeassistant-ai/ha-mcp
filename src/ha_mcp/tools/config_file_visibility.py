@@ -16,6 +16,11 @@ The check asks about the file as Core loads it now, so a backup keeps the
 content after the file stops defining the item: the file tools refuse before
 their pre-write snapshot, and the backup tool refuses to read, compare,
 restore or take a backup of a file while it defines a hidden item.
+
+A configuration that does not load leaves every file unchecked. The calls that
+can repair it (a whole-file write, a confirmed delete, a backup restore) then
+run anyway, so the file tools can fix the error; the calls that show or keep a
+file's content stay refused.
 """
 
 from __future__ import annotations
@@ -36,12 +41,16 @@ _CAPABILITY = "config_file_items"
 
 
 async def refuse_reading_hidden_definitions(
-    client: Any, tool_name: str, paths: Iterable[str | None]
+    client: Any,
+    tool_name: str,
+    paths: Iterable[str | None],
+    *,
+    repairs: bool = False,
 ) -> None:
     """Refuse the call when any file in ``paths`` defines a hidden item, or
     when the component or the visibility config cannot tell. ``None`` stands
     for a file that cannot be named (a backup whose file is not known), and is
-    refused."""
+    refused. A call that ``repairs`` runs when the configuration does not load."""
     from ..visibility.enforcement import (
         active_identifier_aliases,
         refuse_hidden_config_file,
@@ -79,7 +88,24 @@ async def refuse_reading_hidden_definitions(
     if items is None:
         _refuse_unchecked(tool_name, ErrorCode.SERVICE_CALL_FAILED, None)
     if "error" in items:
-        _refuse_unchecked(tool_name, ErrorCode.CONFIG_INVALID, items["error"])
+        if repairs:
+            return
+        _refuse_unchecked(
+            tool_name,
+            ErrorCode.CONFIG_INVALID,
+            items["error"],
+            suggestions=[
+                (
+                    "Fix the error in details: a whole-file ha_write_file, a "
+                    "confirmed ha_delete_file and a ha_manage_backup restore "
+                    "still run while the configuration does not load"
+                ),
+                (
+                    "Or turn Enforce mode off under Entity Visibility in the "
+                    "ha-mcp settings UI"
+                ),
+            ],
+        )
     scripts = aliases.script_services
     if any(key.casefold() in scripts for key in items["script"]) or any(
         config_id in aliases.storage_keys.get(domain, frozenset())
@@ -94,16 +120,19 @@ async def refuse_changing_hidden_definitions(
 ) -> None:
     """Refuse a write or delete of ``kwargs["path"]`` before its snapshot is
     taken (``with_auto_backup``'s ``precheck``). For ``edits=``, which edit
-    failed would also tell whether a guessed text is in the file. A missing
-    File & YAML Tools entry, which the user can fix, is reported first."""
+    failed would also tell whether a guessed text is in the file, so it does
+    not count as a repair. A missing File & YAML Tools entry, which the user can
+    fix, is reported first."""
     from .tools_filesystem import _assert_mcp_tools_available
 
     await _assert_mcp_tools_available(client)
-    await refuse_reading_hidden_definitions(client, tool_name, [kwargs["path"]])
+    await refuse_reading_hidden_definitions(
+        client, tool_name, [kwargs["path"]], repairs=kwargs.get("edits") is None
+    )
 
 
 async def refuse_reading_hidden_backup(
-    client: Any, domain: str, target: str | None
+    client: Any, domain: str, target: str | None, *, repairs: bool = False
 ) -> None:
     """Refuse ``ha_manage_backup`` on a backup of a config file that defines a
     hidden item. ``file`` and ``yaml_file`` backups name the file; a ``yaml``
@@ -115,16 +144,24 @@ async def refuse_reading_hidden_backup(
         return
     if not target or target.endswith("/"):
         target = None
-    await refuse_reading_hidden_definitions(client, "ha_manage_backup", [target])
+    await refuse_reading_hidden_definitions(
+        client, "ha_manage_backup", [target], repairs=repairs
+    )
 
 
-def _refuse_unchecked(tool_name: str, code: ErrorCode, details: str | None) -> NoReturn:
+def _refuse_unchecked(
+    tool_name: str,
+    code: ErrorCode,
+    details: str | None,
+    suggestions: list[str] | None = None,
+) -> NoReturn:
     raise_tool_error(
         create_error_response(
             code,
             "Could not check whether the file defines a hidden script, scene or "
             "automation, so the call is refused.",
             details=details,
+            suggestions=suggestions,
             context={"tool": tool_name},
         )
     )

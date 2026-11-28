@@ -176,7 +176,10 @@ file). The check judges the file as it is now: any backup whose file no longer
 defines the item stays readable, including one taken by an `ha_config_set_yaml`
 write, which is not checked. Those enforced paths fail closed when registry data
 or the configuration cannot be loaded, or the component cannot be reached or
-lacks the check.
+lacks the check. One exception keeps a broken configuration repairable: while
+the configuration does not load, a whole-file `ha_write_file`, a confirmed
+`ha_delete_file` and a backup `restore` still run, so the backup such a write,
+delete or restore takes is not checked and can hold a hidden definition.
 
 One shape-bounded exception preserves an allowed entity's state: JSON
 `ha_get_state` results omit fields, mapping keys, list items, or related records

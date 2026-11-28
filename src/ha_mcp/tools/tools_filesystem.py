@@ -834,7 +834,7 @@ class FilesystemTools:
         uses the file: a theme or custom template is reloaded (post_action,
         reload_service), a custom template Home Assistant cannot load (not
         *.jinja, or over its size limit) gets a warning, as does a www/ file
-        /local/ serves only after a restart, and a dashboards/ file lists the
+        that /local/ serves only after a restart, and a dashboards/ file lists the
         YAML dashboards that name it as their file (dashboards); they reread it
         when next opened. A file a dashboard !includes is not checked.
 
