@@ -791,7 +791,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_set_device` — Update device properties such as name, area, disabled state, or labels.
 
 ### Energy
-- `ha_manage_energy_prefs` — Manage the Home Assistant Energy Dashboard preferences: grid / solar /
+- `ha_manage_energy_prefs` — Manage the Home Assistant Energy dashboard preferences: its energy
 
 ### Entity Registry
 - `ha_get_entity` — Get entity registry entries, or without an entity the registry settings and exposed entities.

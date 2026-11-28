@@ -1497,52 +1497,27 @@
   {
     "name": "ha_manage_energy_prefs",
     "title": "Manage Energy Dashboard Preferences",
-    "description": "Manage the Home Assistant Energy Dashboard preferences: grid / solar /\nbattery / gas / water energy sources, device consumption sensors for\nelectricity and water, and cost tariffs.\n\nWHEN NOT TO USE:\n- To create the underlying statistics themselves — they must already\n  exist as HA entities before being referenced here; create them via\n  the relevant integration's config flow first.\n\nWHEN TO USE:\n- mode='get' / 'set': inspect or replace the full Energy Dashboard\n  config. Use 'set' for bulk edits or anything touching multiple\n  top-level keys at once.\n- mode='add_device' / 'remove_device': add or remove a single\n  device-consumption entry. The tool performs a fresh read-modify-write\n  internally.\n- mode='add_source': append a single entry to ``energy_sources``.\n  Same internal read-modify-write.\n\nRELATED TOOLS: Use ha_get_history(source=\"statistics\") with the returned\nstatistic IDs for consumption, totals, and trends. Metadata comes directly\nfrom the running Core, including stored and display units.\n\nCAVEATS:\n- ``energy/save_prefs`` has per-key FULL-REPLACE semantics. Passing\n  ``{\"device_consumption\": [<one entry>]}`` deletes every other device\n  the user had configured — silently, with no error.\n- The per-key ``config_hash`` form lets an agent submit only the\n  top-level key it wants to change: ``config`` keys must equal the dict\n  keys, and a per-key submission still fully replaces\n  that key's value. A mismatch on any locked key returns\n  ``RESOURCE_LOCKED`` with the offending keys in ``mismatched_keys``.\n- ``dry_run=True`` skips the hash check entirely for both forms.\n- Writes need an administrator token; Home Assistant rejects the save\n  otherwise.\n- After a successful write, the tool calls ``energy/validate`` and\n  returns residual issues (missing stats, unit mismatches) as\n  ``post_save_validation_errors``; the save persists regardless —\n  correct the config and write again if needed.\n- 'add_source' rejects duplicates by ``(type, stat_energy_from)`` for\n  solar/battery/gas/water; grid entries are appended without a duplicate\n  check (multiple grid variants are legitimate), so the caller\n  de-duplicates grid sources.\n\nEXAMPLES:\n- ha_manage_energy_prefs(mode=\"get\", include_schema=True)\n- Preview a device: ha_manage_energy_prefs(mode=\"add_device\", stat_consumption=\"sensor.fridge_energy\", dry_run=True)\n- Remove a device: ha_manage_energy_prefs(mode=\"remove_device\", stat_consumption=\"sensor.fridge_energy\")",
+    "description": "Manage the Home Assistant Energy dashboard preferences: its energy\nsources (grid, solar, battery, gas, water, home) and its device\nconsumption lists.\n\nWHEN NOT TO USE:\n- To create the statistics themselves: integrations and sensors\n  provide them, and they must exist before they are referenced here.\n\nWHEN TO USE:\n- To add, change or remove one source or device: read its list with\n  mode='get', edit it, and send that key back with its\n  config_hash_per_key entry, as Settings > Energy does. A key with no\n  entry there (nothing saved yet) is sent with the full config_hash.\n- To add a meter that is not in the dashboard yet: mode='get' with\n  include_suggestions=True names the slots each suggested meter fills.\n\nRELATED TOOLS: Use ha_get_history(source=\"statistics\") with the returned\nstatistic IDs for consumption, totals, and trends. Metadata comes directly\nfrom the running Core, including stored and display units.\n\nCAVEATS:\n- Core replaces each submitted key whole: a list sent with one entry\n  removes every other entry of that key.\n- A config_hash that no longer matches is refused with RESOURCE_LOCKED\n  (the offending keys in mismatched_keys) and nothing is saved.\n- Writes need an administrator token; Home Assistant rejects the save\n  otherwise.\n- After a save, the tool calls ``energy/validate`` and returns its\n  issues (missing statistics, unit mismatches) as\n  ``post_save_validation_errors``; the save stands regardless.\n\nEXAMPLES:\n- ha_manage_energy_prefs(mode=\"get\", include_schema=True)\n- Add a gas device after a get: ha_manage_energy_prefs(mode=\"set\", config={\"device_consumption_gas\": [<existing entries>, {\"stat_consumption\": \"sensor.boiler_gas\"}]}, config_hash={\"device_consumption_gas\": \"<its config_hash_per_key value>\"})",
     "inputSchema": {
       "properties": {
         "mode": {
-          "type": "Literal['get', 'set', 'add_device', 'remove_device', 'add_source']",
-          "description": "Operation mode. Primitives: 'get' reads the current prefs; 'set' writes a full prefs payload."
+          "type": "Literal['get', 'set']",
+          "description": "'get' reads the preferences; 'set' saves the top-level keys passed in config."
         },
         "config": {
           "type": "dict[str, Any] | None",
-          "description": "Full prefs payload for mode='set'. Must contain the top-level keys you intend to replace: 'energy_sources', 'device_consumption', 'device_consumption_water'. Any omitted key is preserved. Call with mode='get' first, mutate the returned config, then pass the whole object back. Ignored by convenience modes.",
+          "description": "Top-level keys to save for mode='set', each with its whole new value: a list from mode='get' with entries added, changed or removed. Keys left out are kept as they are.",
           "default": null
         },
         "config_hash": {
           "type": "str | dict[str, str] | None",
-          "description": "Hash from a previous mode='get' call. REQUIRED for mode='set' unless dry_run=True. Two forms: str (full-blob lock) or dict (per-key lock, taken from the config_hash_per_key field of mode='get'). Pass the dict form as a native object, NOT a JSON-encoded string — a stringified dict is treated as a full-blob token and will report RESOURCE_LOCKED; clients that can only send strings should use the str full-blob form. Ignored by convenience modes.",
+          "description": "Hash from a previous mode='get' call. REQUIRED for mode='set' unless dry_run=True. Two forms: str (full-blob lock) or dict (per-key lock, taken from the config_hash_per_key field of mode='get', with exactly the keys in config). Pass the dict form as a native object, NOT a JSON-encoded string — a stringified dict is treated as a full-blob token and will report RESOURCE_LOCKED; clients that can only send strings should use the str full-blob form.",
           "default": null
         },
         "dry_run": {
           "type": "bool",
           "description": "If True, preview without saving. With the component, validates the complete proposal through Core's registered save schema. Without that capability, explicitly reports proposal validation unavailable. Semantic energy/validate checks persisted state only.",
           "default": false
-        },
-        "stat_consumption": {
-          "type": "str | None",
-          "description": "Statistic entity_id for mode='add_device' / 'remove_device' (e.g. 'sensor.fridge_energy'). Required for those modes; ignored otherwise.",
-          "default": null
-        },
-        "name": {
-          "type": "str | None",
-          "description": "Display name for mode='add_device'; ignored otherwise.",
-          "default": null
-        },
-        "included_in_stat": {
-          "type": "str | None",
-          "description": "'Parent' statistic for mode='add_device'. Set this to a statistic that already INCLUDES this device's consumption (e.g., a whole-home or circuit-level meter that this device feeds into). The Energy Dashboard will subtract this device's reading from the parent so the parent's contribution is not double-counted. Ignored otherwise.",
-          "default": null
-        },
-        "water": {
-          "type": "bool",
-          "description": "If True, mode='add_device' / 'remove_device' targets 'device_consumption_water' instead of 'device_consumption'.",
-          "default": false
-        },
-        "source": {
-          "type": "dict[str, Any] | None",
-          "description": "Single native energy_sources entry for mode='add_source'. Use mode='get', include_schema=True to inspect the running Core's fields and requirements; dry_run=True validates without saving.",
-          "default": null
         },
         "include_schema": {
           "type": "bool",
@@ -1552,6 +1527,11 @@
         "include_statistics": {
           "type": "bool",
           "description": "With mode='get', include native recorder metadata and resolved output units for all configured statistic references. Ignored for other modes.",
+          "default": false
+        },
+        "include_suggestions": {
+          "type": "bool",
+          "description": "With mode='get', include the energy, gas and water meters Settings > Energy suggests adding (energy_suggestions): each statisticId with the slots it can fill, and editors, which names the source or device kind and field each slot fills. Dismissing is per person in Settings > Energy; the read leaves out the meters dismissed by the Home Assistant account HA-MCP connects as (dismissed_by), which may not be the person using the panel. Computed by the installed frontend through the component; Home Assistant 2026.12 and later.",
           "default": false
         }
       },
