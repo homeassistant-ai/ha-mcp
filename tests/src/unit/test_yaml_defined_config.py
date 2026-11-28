@@ -9,6 +9,7 @@ whose configuration Core's own YAML loader read.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -91,10 +92,12 @@ _FILES = {
         "        code: !secret office_code\n"
         "        pin: !secret office_pin\n"
         "        !secret office_key: open\n"
+        "        !secret office_key_2: shut\n"
     ),
     # Core resolves a !secret from the secrets.yaml nearest the file naming it.
     "automations/secrets.yaml": (
         "office_code: hunter2-office\noffice_pin: 471147\noffice_key: hunter2-key\n"
+        "office_key_2: hunter2-key2\n"
     ),
     "scripts/office.yaml": (
         "office_join:\n  alias: Office Join\n  sequence:\n    - event: office_join_only\n"
@@ -140,6 +143,17 @@ def automations(
 @pytest.fixture
 def scripts(routing: str, core_client: HomeAssistantClient) -> ConfigScriptTools:
     return ConfigScriptTools(core_client)
+
+
+async def _as_at_start(hass: HomeAssistant) -> None:
+    """Date the secrets files before this process started, as on an instance
+    whose secrets.yaml has not been touched since Home Assistant read it."""
+
+    def age() -> None:
+        for name in ("secrets.yaml", "automations/secrets.yaml"):
+            os.utime(hass.config.path(name), (946684800, 946684800))
+
+    await hass.async_add_executor_job(age)
 
 
 def _yaml_source(routing: str, file: str, line: int) -> dict[str, Any]:
@@ -237,15 +251,16 @@ class TestRead:
     ) -> None:
         """A number carries no trace of the secrets file it came from, so once
         that file changed, the loaded number passed as the automation's own."""
+        read = automations.ha_config_get_automation
+        await _as_at_start(hass)
+        assert "471147" not in str(await read(entity_id="automation.office_lights"))
+
         await write_config_files(
             hass, {"automations/secrets.yaml": "office_pin: 999999\n"}
         )
 
         with pytest.raises(ToolError) as exc:
-            await automations.ha_config_get_automation(
-                entity_id="automation.office_lights"
-            )
-
+            await read(entity_id="automation.office_lights")
         assert "471147" not in str(error_body(exc))
 
     async def test_numeric_secret_whose_file_was_deleted_is_withheld_under_redaction(
@@ -253,15 +268,29 @@ class TestRead:
     ) -> None:
         """Once its secrets.yaml is gone, nothing names the loaded number as a
         secret; it was returned as the automation's own."""
+        read = automations.ha_config_get_automation
+        await _as_at_start(hass)
+        assert "471147" not in str(await read(entity_id="automation.office_lights"))
+
         secrets = Path(hass.config.path("automations/secrets.yaml"))
         await hass.async_add_executor_job(secrets.unlink)
 
         with pytest.raises(ToolError) as exc:
-            await automations.ha_config_get_automation(
-                entity_id="automation.office_lights"
-            )
-
+            await read(entity_id="automation.office_lights")
         assert "471147" not in str(error_body(exc))
+
+    async def test_two_secret_keys_keep_both_entries(
+        self, hass: HomeAssistant, automations: AutomationConfigTools
+    ) -> None:
+        """Two keys from secrets were both replaced by the same text, and the
+        definition lost one of the entries."""
+        result = await automations.ha_config_get_automation(
+            entity_id="automation.office_lights"
+        )
+
+        data = result["config"]["actions"][0]["event_data"]
+        assert "hunter2-" not in str(data)
+        assert sorted(data.values()) == ["**redacted**", "**redacted**", "open", "shut"]
 
     async def test_secrets_file_that_contains_itself_is_read(
         self, hass: HomeAssistant, automations: AutomationConfigTools

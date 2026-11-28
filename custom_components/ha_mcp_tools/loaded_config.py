@@ -112,11 +112,14 @@ def _redacted(node: Any, secret_values: frozenset[str]) -> Any:
     if source is not None and os.path.basename(source) == SECRET_YAML:
         return REDACTED
     if isinstance(node, dict):
-        # A key can be a !secret too.
-        return {
-            _redacted(key, secret_values): _redacted(value, secret_values)
-            for key, value in node.items()
-        }
+        result: dict[Any, Any] = {}
+        for key, value in node.items():
+            # A key can be a !secret too; a second one must not replace the first.
+            shown = _redacted(key, secret_values)
+            while shown == REDACTED and shown in result:
+                shown = f"{REDACTED} ({len(result)})"
+            result[shown] = _redacted(value, secret_values)
+        return result
     if isinstance(node, list):
         return [_redacted(item, secret_values) for item in node]
     return _scrub_secret_values(node, secret_values)
