@@ -35,7 +35,6 @@ from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 from ha_mcp.tools.tools_config_helpers import HelperConfigTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
-from ha_mcp.tools.tools_energy import EnergyTools
 from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.tools.tools_groups import GroupTools
 from ha_mcp.tools.tools_hacs import HacsTools
@@ -369,20 +368,6 @@ BLANK_IDENTIFIER_CALLS = [
         lambda c, v: _manage_app(c, slug=v, path="/api/health"),
         "slug",
         name="manage_app",
-    ),
-    _case(
-        lambda c, v: EnergyTools(c).ha_manage_energy_prefs(
-            mode="add_device", stat_consumption=v
-        ),
-        "stat_consumption",
-        name="add_energy_device",
-    ),
-    _case(
-        lambda c, v: EnergyTools(c).ha_manage_energy_prefs(
-            mode="remove_device", stat_consumption=v
-        ),
-        "stat_consumption",
-        name="remove_energy_device",
     ),
     _case(
         lambda c, v: HacsTools(c).ha_manage_hacs(action="download", repository_id=v),

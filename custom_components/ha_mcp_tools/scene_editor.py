@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.exceptions import HomeAssistantError
 
-from .card_definitions import _MOD_RE, _balanced_end
+from .frontend_build import _MOD_RE, _balanced_end
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

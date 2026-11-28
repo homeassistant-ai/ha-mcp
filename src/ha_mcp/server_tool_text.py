@@ -171,8 +171,8 @@ SEARCH_KEYWORDS: dict[str, str] = {
     # #2322: the Energy Dashboard's tariffs live in .storage/energy, not
     # in the state machine, so an agent hunting for electricity prices
     # searches entities, finds none, and invents input_number helpers.
-    # The docstring says "cost tariffs" but never "price", "peak" or
-    # "kWh" — the words agents actually query with — and the title reads
+    # The docstring names no tariffs, prices or "kWh" — the words agents
+    # actually query with — and the title reads
     # write-only ("Manage ..."), so lead the boost with the read verbs.
     "ha_manage_energy_prefs": (
         "read get inspect energy dashboard preferences prefs "

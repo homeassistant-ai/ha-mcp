@@ -165,17 +165,12 @@ class TestExemptionRules:
             # allowed so a read-only agent can still sanity-check a
             # proposed energy config.
             ({"mode": "set", "config": {}, "dry_run": True}, True),
-            ({"mode": "add_device", "dry_run": True}, True),
-            ({"mode": "remove_device", "dry_run": True}, True),
-            ({"mode": "add_source", "dry_run": True}, True),
             # Strict ``is True``: the middleware sees raw pre-validation
             # arguments, so truthy non-bools (which schema coercion may
             # turn into False before the tool runs) must fail closed.
             ({"mode": "set", "config": {}, "dry_run": "true"}, False),
             ({"mode": "set", "config": {}, "dry_run": 1}, False),
             ({"mode": "set", "config": {}, "dry_run": False}, False),
-            ({"mode": "remove_device"}, False),
-            ({"mode": "add_source"}, False),
             ({}, False),
         ],
     )
@@ -793,11 +788,7 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "include_schema",
         "config",
         "config_hash",
-        "stat_consumption",
-        "name",
-        "included_in_stat",
-        "water",
-        "source",
+        "include_suggestions",
     },
     "ha_manage_pipeline": {
         # Selector for action='get' (read) and the blocked write actions.

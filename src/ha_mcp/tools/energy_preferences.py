@@ -1,14 +1,17 @@
 """Read native Energy preferences, hash saved state and enrich statistic references."""
 
+import json
 import logging
 from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
-from .core_contract import core_contract
-from .helpers import exception_to_structured_error, raise_tool_error
+from .core_contract import core_contract, energy_suggestions
+from .helpers import (
+    exception_to_structured_error,
+    raise_core_refusal,
+)
 from .statistics_helpers import fetch_statistics_metadata, statistics_unit
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,25 @@ async def include_energy_statistics(
     return result
 
 
+async def include_energy_suggestions(
+    client: Any, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Attach the meters Settings > Energy suggests; a failed read keeps the result."""
+    try:
+        suggestions = dict(await energy_suggestions(client))
+    except ToolError as err:
+        logger.warning("Energy meter suggestions failed", exc_info=True)
+        suggestions = {
+            "status": "unavailable",
+            "reason": f"{json.loads(str(err))['error']['message']}. If this "
+            "persists, update the HA-MCP component.",
+        }
+    if suggestions["status"] == "unavailable":
+        result.setdefault("warnings", []).append(suggestions["reason"])
+    result["energy_suggestions"] = suggestions
+    return result
+
+
 def compute_per_key_hashes(prefs: dict[str, Any]) -> dict[str, str]:
     """Hash every native preference slot without an allowlist or invented defaults."""
     return {key: compute_config_hash({key: value}) for key, value in prefs.items()}
@@ -69,12 +91,8 @@ async def get_energy_prefs(client: Any) -> dict[str, Any]:
         if not result.get("success"):
             # energy/get_prefs answers not_found only while nothing was ever saved.
             if result.get("error_code") != "not_found":
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to get energy prefs: {result.get('error', 'Unknown error')}",
-                        context={"mode": "get"},
-                    )
+                raise_core_refusal(
+                    "Failed to get energy prefs", result, context={"mode": "get"}
                 )
             try:
                 contract = await core_contract(client, "energy/save_prefs")

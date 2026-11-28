@@ -1,12 +1,12 @@
 """Energy preferences through native Core APIs and optional Core schema validation.
 
-Core owns payload validation, defaults and saved state. HA-MCP owns mutation
-previews, duplicate protection and optimistic locking. Semantic validation is
-post-save because energy/validate only examines persisted preferences.
+Core owns payload validation, defaults and saved state. HA-MCP owns previews
+and optimistic locking. Semantic validation is post-save because
+energy/validate only examines persisted preferences.
 """
 
 import logging
-from collections.abc import Callable
+from collections import Counter
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -26,17 +26,43 @@ from .energy_preferences import (
     compute_per_key_hashes,
     get_energy_prefs,
     include_energy_statistics,
+    include_energy_suggestions,
 )
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
+    raise_core_refusal,
     raise_tool_error,
     register_tool_methods,
-    validate_identifier_not_empty,
 )
 from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
+
+
+def _device_uses(entries: list[Any], field: str) -> Counter[Any]:
+    return Counter(
+        entry[field]
+        for entry in entries
+        if isinstance(entry, dict)
+        and "stat_consumption" in entry
+        and isinstance(entry.get(field), str)  # Core refuses anything else
+    )
+
+
+def _new_device_repeats(config: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    """Meters or power sensors a submitted device list uses twice where the
+    saved list did not. An HA-MCP policy: Core saves such a list, but the
+    Energy panel's device editors leave out what another device of the list
+    already uses, so the panel never builds one."""
+    return [
+        f"{key}: {value}"
+        for key, entries in config.items()
+        if isinstance(entries, list)
+        for field in ("stat_consumption", "stat_rate")
+        for value, n in _device_uses(entries, field).items()
+        if n > 1 and n > _device_uses(current.get(key) or [], field)[value]
+    ]
 
 
 def _flatten_validation_errors(raw: Any) -> list[dict[str, Any]]:
@@ -84,11 +110,11 @@ class EnergyTools:
     async def ha_manage_energy_prefs(
         self,
         mode: Annotated[
-            Literal["get", "set", "add_device", "remove_device", "add_source"],
+            Literal["get", "set"],
             Field(
                 description=(
-                    "Operation mode. Primitives: 'get' reads the current prefs; "
-                    "'set' writes a full prefs payload."
+                    "'get' reads the preferences; 'set' saves the top-level "
+                    "keys passed in config."
                 )
             ),
         ],
@@ -97,13 +123,9 @@ class EnergyTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Full prefs payload for mode='set'. Must contain the "
-                    "top-level keys you intend to replace: 'energy_sources', "
-                    "'device_consumption', 'device_consumption_water'. Any "
-                    "omitted key is preserved. "
-                    "Call with mode='get' first, mutate the returned config, "
-                    "then pass the whole object back. Ignored by convenience "
-                    "modes."
+                    "Top-level keys to save for mode='set', each with its whole "
+                    "new value: a list from mode='get' with entries added, "
+                    "changed or removed. Keys left out are kept as they are."
                 ),
                 default=None,
             ),
@@ -114,11 +136,11 @@ class EnergyTools:
                 description=(
                     "Hash from a previous mode='get' call. REQUIRED for mode='set' unless "
                     "dry_run=True. Two forms: str (full-blob lock) or dict (per-key lock, "
-                    "taken from the config_hash_per_key field of mode='get'). Pass the dict"
-                    " form as a native object, NOT a JSON-encoded string — a stringified "
-                    "dict is treated as a full-blob token and will report RESOURCE_LOCKED; "
-                    "clients that can only send strings should use the str full-blob form. "
-                    "Ignored by convenience modes."
+                    "taken from the config_hash_per_key field of mode='get', with exactly "
+                    "the keys in config). Pass the dict form as a native object, NOT a "
+                    "JSON-encoded string — a stringified dict is treated as a full-blob "
+                    "token and will report RESOURCE_LOCKED; clients that can only send "
+                    "strings should use the str full-blob form."
                 ),
                 default=None,
             ),
@@ -135,59 +157,6 @@ class EnergyTools:
                 default=False,
             ),
         ] = False,
-        stat_consumption: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "Statistic entity_id for mode='add_device' / "
-                    "'remove_device' (e.g. 'sensor.fridge_energy'). "
-                    "Required for those modes; ignored otherwise."
-                ),
-                default=None,
-            ),
-        ] = None,
-        name: Annotated[
-            str | None,
-            Field(
-                description=("Display name for mode='add_device'; ignored otherwise."),
-                default=None,
-            ),
-        ] = None,
-        included_in_stat: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "'Parent' statistic for mode='add_device'. Set this to a statistic that"
-                    " already INCLUDES this device's consumption (e.g., a whole-home or "
-                    "circuit-level meter that this device feeds into). The Energy Dashboard"
-                    " will subtract this device's reading from the parent so the parent's "
-                    "contribution is not double-counted. Ignored otherwise."
-                ),
-                default=None,
-            ),
-        ] = None,
-        water: Annotated[
-            bool,
-            Field(
-                description=(
-                    "If True, mode='add_device' / 'remove_device' targets "
-                    "'device_consumption_water' instead of 'device_consumption'."
-                ),
-                default=False,
-            ),
-        ] = False,
-        source: Annotated[
-            dict[str, Any] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description=(
-                    "Single native energy_sources entry for mode='add_source'. "
-                    "Use mode='get', include_schema=True to inspect the running "
-                    "Core's fields and requirements; dry_run=True validates without saving."
-                ),
-                default=None,
-            ),
-        ] = None,
         include_schema: Annotated[
             bool,
             Field(
@@ -200,86 +169,70 @@ class EnergyTools:
                 description="With mode='get', include native recorder metadata and resolved output units for all configured statistic references. Ignored for other modes."
             ),
         ] = False,
+        include_suggestions: Annotated[
+            bool,
+            Field(
+                description=(
+                    "With mode='get', include the energy, gas and water meters "
+                    "Settings > Energy suggests adding (energy_suggestions): each "
+                    "statisticId with the slots it can fill, and editors, which names "
+                    "the source or device kind and field each slot fills. Dismissing "
+                    "is per person in Settings > Energy; the read leaves out the "
+                    "meters dismissed by the Home Assistant account HA-MCP connects "
+                    "as (dismissed_by), which may not be the person using the panel. "
+                    "Computed by the installed frontend through the component; Home "
+                    "Assistant 2026.12 and later."
+                )
+            ),
+        ] = False,
     ) -> dict[str, Any]:
-        """Manage the Home Assistant Energy Dashboard preferences: grid / solar /
-        battery / gas / water energy sources, device consumption sensors for
-        electricity and water, and cost tariffs.
+        """Manage the Home Assistant Energy dashboard preferences: its energy
+        sources (grid, solar, battery, gas, water, home) and its device
+        consumption lists.
 
         WHEN NOT TO USE:
-        - To create the underlying statistics themselves — they must already
-          exist as HA entities before being referenced here; create them via
-          the relevant integration's config flow first.
+        - To create the statistics themselves: integrations and sensors
+          provide them, and they must exist before they are referenced here.
 
         WHEN TO USE:
-        - mode='get' / 'set': inspect or replace the full Energy Dashboard
-          config. Use 'set' for bulk edits or anything touching multiple
-          top-level keys at once.
-        - mode='add_device' / 'remove_device': add or remove a single
-          device-consumption entry. The tool performs a fresh read-modify-write
-          internally.
-        - mode='add_source': append a single entry to ``energy_sources``.
-          Same internal read-modify-write.
+        - To add, change or remove one source or device: read its list with
+          mode='get', edit it, and send that key back with its
+          config_hash_per_key entry, as Settings > Energy does. A key with no
+          entry there (nothing saved yet) is sent with the full config_hash.
+        - To add a meter that is not in the dashboard yet: mode='get' with
+          include_suggestions=True names the slots each suggested meter fills.
 
         RELATED TOOLS: Use ha_get_history(source="statistics") with the returned
         statistic IDs for consumption, totals, and trends. Metadata comes directly
         from the running Core, including stored and display units.
 
         CAVEATS:
-        - ``energy/save_prefs`` has per-key FULL-REPLACE semantics. Passing
-          ``{"device_consumption": [<one entry>]}`` deletes every other device
-          the user had configured — silently, with no error.
-        - The per-key ``config_hash`` form lets an agent submit only the
-          top-level key it wants to change: ``config`` keys must equal the dict
-          keys, and a per-key submission still fully replaces
-          that key's value. A mismatch on any locked key returns
-          ``RESOURCE_LOCKED`` with the offending keys in ``mismatched_keys``.
-        - ``dry_run=True`` skips the hash check entirely for both forms.
+        - Core replaces each submitted key whole: a list sent with one entry
+          removes every other entry of that key.
+        - A config_hash that no longer matches is refused with RESOURCE_LOCKED
+          (the offending keys in mismatched_keys) and nothing is saved.
         - Writes need an administrator token; Home Assistant rejects the save
           otherwise.
-        - After a successful write, the tool calls ``energy/validate`` and
-          returns residual issues (missing stats, unit mismatches) as
-          ``post_save_validation_errors``; the save persists regardless —
-          correct the config and write again if needed.
-        - 'add_source' rejects duplicates by ``(type, stat_energy_from)`` for
-          solar/battery/gas/water; grid entries are appended without a duplicate
-          check (multiple grid variants are legitimate), so the caller
-          de-duplicates grid sources.
+        - After a save, the tool calls ``energy/validate`` and returns its
+          issues (missing statistics, unit mismatches) as
+          ``post_save_validation_errors``; the save stands regardless.
 
         EXAMPLES:
         - ha_manage_energy_prefs(mode="get", include_schema=True)
-        - Preview a device: ha_manage_energy_prefs(mode="add_device", stat_consumption="sensor.fridge_energy", dry_run=True)
-        - Remove a device: ha_manage_energy_prefs(mode="remove_device", stat_consumption="sensor.fridge_energy")
+        - Add a gas device after a get: ha_manage_energy_prefs(mode="set", config={"device_consumption_gas": [<existing entries>, {"stat_consumption": "sensor.boiler_gas"}]}, config_hash={"device_consumption_gas": "<its config_hash_per_key value>"})
         """
         if mode == "get":
-            result = await self._get_prefs()
+            result = await get_energy_prefs(self._client)
             if include_schema:
                 await include_core_contract(self._client, result, "energy/save_prefs")
+            if include_suggestions:
+                await include_energy_suggestions(self._client, result)
             return (
                 await include_energy_statistics(self._client, result)
                 if include_statistics
                 else result
             )
 
-        if mode == "add_device":
-            return await self._add_device(
-                stat_consumption=stat_consumption,
-                name=name,
-                included_in_stat=included_in_stat,
-                water=water,
-                dry_run=dry_run,
-            )
-
-        if mode == "remove_device":
-            return await self._remove_device(
-                stat_consumption=stat_consumption,
-                water=water,
-                dry_run=dry_run,
-            )
-
-        if mode == "add_source":
-            return await self._add_source(source=source, dry_run=dry_run)
-
-        # mode == "set"
         if config is None:
             raise_tool_error(
                 create_error_response(
@@ -287,7 +240,7 @@ class EnergyTools:
                     "'config' is required when mode='set'",
                     context={"mode": mode},
                     suggestions=[
-                        "Call ha_manage_energy_prefs(mode='get') first, mutate the returned config, pass it back",
+                        "Call ha_manage_energy_prefs(mode='get') first, edit the lists you change, pass those keys back",
                     ],
                 )
             )
@@ -313,9 +266,6 @@ class EnergyTools:
     # ------------------------------------------------------------------
     # Internal handlers
     # ------------------------------------------------------------------
-
-    async def _get_prefs(self) -> dict[str, Any]:
-        return await get_energy_prefs(self._client)
 
     async def _dry_run(self, config: dict[str, Any]) -> dict[str, Any]:
         """Preview the actual native schema and label persisted-state checks separately."""
@@ -343,40 +293,39 @@ class EnergyTools:
     async def _set_prefs(
         self,
         config: dict[str, Any],
-        config_hash: str | dict[str, str] | None,
+        config_hash: str | dict[str, str],
     ) -> dict[str, Any]:
         """Hash-check, submit to Core, then report authoritative saved state.
 
-        Core validates every submitted entry. Existing siblings are never checked
-        against a narrower local schema. A ``config_hash`` from an earlier read
-        is checked against the current prefs; the per-key form locks exactly the
-        submitted keys. The convenience modes read, edit and save within one
-        call and pass none.
+        Core validates every submitted entry. The ``config_hash`` from an
+        earlier read is checked against the current prefs; the per-key form
+        locks exactly the submitted keys.
         """
         try:
-            command_payload("energy/save_prefs", config)
-            if config_hash is not None:
-                current_prefs: dict[str, Any] = (await self._get_prefs())["config"]
-                self._check_config_hash(config, config_hash, current_prefs)
-
-            # 3. Save
             save_payload = command_payload("energy/save_prefs", config)
-
-            save_result = await self._client.send_websocket_message(save_payload)
-            if not save_result.get("success"):
+            current_prefs: dict[str, Any] = (await get_energy_prefs(self._client))[
+                "config"
+            ]
+            self._check_config_hash(config, config_hash, current_prefs)
+            if repeats := _new_device_repeats(config, current_prefs):
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to save energy prefs: {save_result.get('error', 'Unknown error')}",
-                        context={"mode": "set"},
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "A device list would use the same meter or power sensor "
+                        f"twice: {', '.join(repeats)}",
+                        context={"mode": "set", "repeats": repeats},
                         suggestions=[
-                            "Verify the token has admin privileges (energy/save_prefs is admin-only)",
-                            "Check config shape against the energy/get_prefs response",
+                            "Each device of a list has its own meter and power sensor, as in Settings > Energy",
                         ],
                     )
                 )
 
-            # 4. Post-save validation against the newly-persisted state
+            save_result = await self._client.send_websocket_message(save_payload)
+            if not save_result.get("success"):
+                raise_core_refusal(
+                    "Failed to save energy prefs", save_result, context={"mode": "set"}
+                )
+
             (
                 post_save_errors,
                 post_save_validate_error,
@@ -387,15 +336,14 @@ class EnergyTools:
             # and coercions. Never predict the persisted state from the request.
             new_prefs = save_result.get("result")
             if not isinstance(new_prefs, dict):
-                new_prefs = (await self._get_prefs())["config"]
-            new_hash = compute_config_hash(new_prefs)
+                new_prefs = (await get_energy_prefs(self._client))["config"]
 
             response: dict[str, Any] = {
                 "success": True,
                 "mode": "set",
                 "post_save_validation": native_validation,
                 "config": new_prefs,
-                "config_hash": new_hash,
+                "config_hash": compute_config_hash(new_prefs),
                 "config_hash_per_key": compute_per_key_hashes(new_prefs),
                 "message": "Energy prefs updated.",
             }
@@ -424,7 +372,6 @@ class EnergyTools:
                 context={"mode": "set"},
                 suggestions=[
                     "Check Home Assistant connection",
-                    "Verify token has admin privileges",
                     "Re-read prefs and retry with a fresh config_hash",
                 ],
             )
@@ -439,11 +386,8 @@ class EnergyTools:
         """Verify ``config_hash`` against ``current_prefs``; raises
         ``ToolError`` on mismatch or malformed per-key input.
 
-        Extracted from ``_set_prefs`` step 2 (hash check). Handles both
-        hash forms: a ``dict[str, str]`` (per-key lock) and a plain
-        ``str`` (full-blob lock). See the ``_set_prefs`` docstring, and the
-        ``ha_manage_energy_prefs`` tool docstring, for the full agent-facing
-        contract this enforces.
+        A ``dict[str, str]`` locks exactly the submitted keys; a plain ``str``
+        locks the full prefs blob.
         """
         if isinstance(config_hash, dict):
             submitted_keys = set(config)
@@ -527,16 +471,10 @@ class EnergyTools:
                 )
 
     async def _post_save_validate(self) -> tuple[list[dict[str, Any]], str | None, Any]:
-        """Call ``energy/validate`` after a save and return
-        ``(errors, failure_message)``.
+        """Call ``energy/validate`` and return ``(errors, failure, native result)``.
 
-        Extracted from ``_set_prefs`` step 4 (post-save validation). A
-        post-save validate failure is non-fatal — the save itself already
-        succeeded — so failures are captured as a message rather than
-        raised. Returns a populated (possibly empty on success) error list
-        and ``None`` on a successful validate call, or an empty error list
-        and a failure message when the validate call itself fails
-        (transport/timeout, etc.).
+        A failed validate is non-fatal — a save it follows already succeeded —
+        so the failure comes back as a message rather than raised.
         """
         post_save_errors: list[dict[str, Any]] = []
         native_validation: Any = None
@@ -561,327 +499,6 @@ class EnergyTools:
             logger.warning("Post-save energy/validate failed", exc_info=True)
             post_save_validate_error = str(e)
         return post_save_errors, post_save_validate_error, native_validation
-
-    # ------------------------------------------------------------------
-    # Convenience modes — atomic read-modify-write (no caller hash)
-    # ------------------------------------------------------------------
-
-    async def _add_device(
-        self,
-        *,
-        stat_consumption: str | None,
-        name: str | None,
-        included_in_stat: str | None,
-        water: bool,
-        dry_run: bool,
-    ) -> dict[str, Any]:
-        """Add a device-consumption entry using a fresh snapshot.
-
-        Reads current prefs, checks for duplicate ``stat_consumption`` in the
-        target list, appends the new entry and writes the list back.
-        """
-        if stat_consumption is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "'stat_consumption' is required when mode='add_device'",
-                    context={"mode": "add_device"},
-                    suggestions=[
-                        "Pass stat_consumption='sensor.<your_device_energy>'",
-                    ],
-                )
-            )
-        # Empty/whitespace stat_consumption would write a ``{"stat_consumption": ""}``
-        # entry to energy prefs storage — a phantom row keyed on an empty
-        # sensor reference. Same multi-modal-destructive class as
-        # ``ha_manage_app`` slug guard.
-        validate_identifier_not_empty(
-            stat_consumption,
-            "stat_consumption",
-            suggestions=[
-                "Pass stat_consumption='sensor.<your_device_energy>'",
-            ],
-            context={"mode": "add_device"},
-        )
-
-        target_key = "device_consumption_water" if water else "device_consumption"
-
-        new_entry: dict[str, Any] = {"stat_consumption": stat_consumption}
-        if name is not None:
-            new_entry["name"] = name
-        if included_in_stat is not None:
-            new_entry["included_in_stat"] = included_in_stat
-
-        return await self._mutate_atomic(
-            mode="add_device",
-            target_key=target_key,
-            mutator=lambda existing: self._append_unique_device(
-                existing, new_entry, target_key
-            ),
-            dry_run=dry_run,
-            preview_payload={"would_add": new_entry, "target_key": target_key},
-        )
-
-    async def _remove_device(
-        self,
-        *,
-        stat_consumption: str | None,
-        water: bool,
-        dry_run: bool,
-    ) -> dict[str, Any]:
-        """Remove a device-consumption entry by ``stat_consumption``."""
-        if stat_consumption is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "'stat_consumption' is required when mode='remove_device'",
-                    context={"mode": "remove_device"},
-                    suggestions=[
-                        "Pass stat_consumption='sensor.<existing_device_energy>'",
-                    ],
-                )
-            )
-        # Empty/whitespace stat_consumption would search the prefs storage for
-        # an empty match (always missing) and surface as a misleading
-        # "Device with stat_consumption='' not found".
-        validate_identifier_not_empty(
-            stat_consumption,
-            "stat_consumption",
-            suggestions=[
-                "Pass stat_consumption='sensor.<existing_device_energy>'",
-            ],
-            context={"mode": "remove_device"},
-        )
-
-        target_key = "device_consumption_water" if water else "device_consumption"
-
-        return await self._mutate_atomic(
-            mode="remove_device",
-            target_key=target_key,
-            mutator=lambda existing: self._remove_device_by_stat(
-                existing, stat_consumption, target_key
-            ),
-            dry_run=dry_run,
-            preview_payload={
-                "would_remove": {"stat_consumption": stat_consumption},
-                "target_key": target_key,
-            },
-        )
-
-    async def _add_source(
-        self,
-        *,
-        source: dict[str, Any] | None,
-        dry_run: bool,
-    ) -> dict[str, Any]:
-        """Append a native source payload, keeping the wrapper's duplicate guard."""
-        if source is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "'source' is required when mode='add_source'",
-                    context={"mode": "add_source"},
-                    suggestions=[
-                        "Pass source={'type': 'grid'|'solar'|'battery'|'gas'|'water', ...}",
-                    ],
-                )
-            )
-
-        return await self._mutate_atomic(
-            mode="add_source",
-            target_key="energy_sources",
-            mutator=lambda existing: self._append_unique_source(existing, source),
-            dry_run=dry_run,
-            preview_payload={"would_add": source, "target_key": "energy_sources"},
-        )
-
-    @staticmethod
-    def _append_unique_device(
-        existing: list[dict[str, Any]],
-        new_entry: dict[str, Any],
-        target_key: str,
-    ) -> list[dict[str, Any]]:
-        """Append ``new_entry`` to ``existing`` if its ``stat_consumption`` is
-        not already present. Raises ToolError(RESOURCE_ALREADY_EXISTS) on
-        duplicate."""
-        stat = new_entry["stat_consumption"]
-        for entry in existing:
-            if entry.get("stat_consumption") == stat:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_ALREADY_EXISTS,
-                        f"Device with stat_consumption='{stat}' already in {target_key}",
-                        context={
-                            "mode": "add_device",
-                            "stat_consumption": stat,
-                            "target_key": target_key,
-                        },
-                        suggestions=[
-                            "Use mode='get' to inspect the current entries",
-                            "Use mode='remove_device' first if you want to replace it",
-                        ],
-                    )
-                )
-        return existing + [new_entry]
-
-    @staticmethod
-    def _append_unique_source(
-        existing: list[dict[str, Any]],
-        new_source: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        """Append ``new_source`` to ``existing`` with type-aware duplicate
-        detection.
-
-        Solar/battery/gas/water entries are keyed on
-        ``(type, stat_energy_from)`` — duplicates raise
-        ``RESOURCE_ALREADY_EXISTS``. Grid entries are appended without a
-        duplicate check (multiple grid variants are legitimate, and grid
-        does not have a single canonical uniqueness key — see
-        ``_add_source`` docstring for rationale). The post-save
-        ``energy/validate`` call still runs on the full payload as a
-        backstop for whatever HA Core flags.
-        """
-        source_type = new_source.get("type")
-        if source_type != "grid" and "stat_energy_from" in new_source:
-            stat = new_source.get("stat_energy_from")
-            for entry in existing:
-                if (
-                    entry.get("type") == source_type
-                    and entry.get("stat_energy_from") == stat
-                ):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_ALREADY_EXISTS,
-                            f"Source of type='{source_type}' with "
-                            f"stat_energy_from='{stat}' already in energy_sources",
-                            context={
-                                "mode": "add_source",
-                                "type": source_type,
-                                "stat_energy_from": stat,
-                                "target_key": "energy_sources",
-                            },
-                            suggestions=[
-                                "Use mode='get' to inspect the current sources",
-                                "Use mode='set' to replace the existing entry",
-                            ],
-                        )
-                    )
-        return existing + [new_source]
-
-    @staticmethod
-    def _remove_device_by_stat(
-        existing: list[dict[str, Any]],
-        stat_consumption: str,
-        target_key: str,
-    ) -> list[dict[str, Any]]:
-        """Return ``existing`` minus the entry whose ``stat_consumption``
-        matches. Raises ToolError(RESOURCE_NOT_FOUND) if no match."""
-        kept = [e for e in existing if e.get("stat_consumption") != stat_consumption]
-        if len(kept) == len(existing):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    f"No device with stat_consumption='{stat_consumption}' in {target_key}",
-                    context={
-                        "mode": "remove_device",
-                        "stat_consumption": stat_consumption,
-                        "target_key": target_key,
-                    },
-                    suggestions=[
-                        "Use mode='get' to inspect the current entries",
-                        "Check water=True/False targets the right list",
-                    ],
-                )
-            )
-        return kept
-
-    # Keys overridden on the convenience-mode response envelope. Anything
-    # else returned by ``_set_prefs`` (post_save_validation_errors, warning,
-    # partial, plus any future additions) passes through.
-    _CONVENIENCE_RESPONSE_OVERRIDES = frozenset(
-        {"success", "mode", "config_hash", "target_key", "new_count", "message"}
-    )
-
-    async def _mutate_atomic_preview(
-        self,
-        *,
-        mode: str,
-        target_key: str,
-        mutator: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
-        preview_payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Preview the mutation and validate the whole resulting native payload."""
-        current = await self._get_prefs()
-        current_config: dict[str, Any] = current["config"]
-        existing_list = list(current_config.get(target_key, []))
-        new_list = mutator(existing_list)
-
-        preview = await self._dry_run({target_key: new_list})
-
-        return {
-            **preview,
-            "mode": mode,
-            "dry_run": True,
-            **preview_payload,
-            "current_count": len(existing_list),
-            "new_count": len(new_list),
-        }
-
-    async def _mutate_atomic(
-        self,
-        *,
-        mode: str,
-        target_key: str,
-        mutator: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
-        dry_run: bool,
-        preview_payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Read the prefs, change one list and save it back in one call.
-
-        Dry runs validate the whole mutated proposal without saving. Core has
-        no conditional save, and the read and the save are one round trip
-        apart, so no hash is checked here.
-        """
-        try:
-            if dry_run:
-                return await self._mutate_atomic_preview(
-                    mode=mode,
-                    target_key=target_key,
-                    mutator=mutator,
-                    preview_payload=preview_payload,
-                )
-
-            current_config = (await self._get_prefs())["config"]
-            new_list = mutator(list(current_config.get(target_key, [])))
-            set_result = await self._set_prefs({target_key: new_list}, None)
-
-            return {
-                "success": True,
-                "mode": mode,
-                "config_hash": set_result["config_hash"],
-                "target_key": target_key,
-                "new_count": len(new_list),
-                "message": set_result.get("message", f"{mode} succeeded."),
-                **{
-                    k: v
-                    for k, v in set_result.items()
-                    if k not in self._CONVENIENCE_RESPONSE_OVERRIDES
-                },
-            }
-
-        except ToolError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Error in {mode} on {target_key}: {e}")
-            exception_to_structured_error(
-                e,
-                context={"mode": mode, "target_key": target_key},
-                suggestions=[
-                    "Check Home Assistant connection",
-                    "Verify WebSocket connection is active",
-                ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_energy_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

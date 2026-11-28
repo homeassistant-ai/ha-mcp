@@ -24,6 +24,7 @@ from custom_components.ha_mcp_tools import (
     config_keys,
     config_references,
     core_contract,
+    energy_suggestions,
     entity_restore,
     flow_format,
     flow_outline,
@@ -147,6 +148,7 @@ async def test_every_command_is_registered_and_config_get_is_not(
         flow_outline.WS_FLOW_OUTLINE,
         scene_editor.WS_SCENE_IGNORED_DOMAINS,
         config_keys.WS_CONFIG_KEYS,
+        energy_suggestions.WS_ENERGY_SUGGESTIONS,
     }
     assert "ha_mcp_tools/config_get" not in registered
 

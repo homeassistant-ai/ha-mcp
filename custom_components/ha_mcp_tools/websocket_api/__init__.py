@@ -167,6 +167,11 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/config_keys`` — the top-level keys an automation or script
   config takes, read from Core's schema for the domain and the blueprint
   instance fields. See ``config_keys.py``.
+* ``ha_mcp_tools/energy_suggestions`` — the energy, gas and water meters
+  Settings > Energy suggests adding, computed by the installed frontend's own
+  function on Core's statistics, preferences and states and the connected
+  user's dismissals, with its map of the field each slot fills. Read only. See
+  ``energy_suggestions.py``.
 * ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set
@@ -398,6 +403,7 @@ from .. import (
     config_references,
     core_contract,
     dashboard_cards_ws,
+    energy_suggestions,
     entity_restore,
     flow_format,
     flow_outline,
@@ -601,6 +607,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *flow_outline.command_specs(vol),
         *scene_editor.command_specs(vol),
         *config_keys.command_specs(vol),
+        *energy_suggestions.command_specs(vol),
         *automation_config.command_specs(vol),
         *config_references.command_specs(vol),
         *config_file_items.command_specs(vol),
