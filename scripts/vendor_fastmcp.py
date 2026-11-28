@@ -1,8 +1,9 @@
 """Sync the vendored FastMCP / MCP SDK copies from their pinned versions.
 
 ha-mcp imports private copies of ``fastmcp`` (the ``fastmcp-slim`` wheel),
-``mcp`` and ``mcp_types`` under ``ha_mcp._vendor``, so Home Assistant Core's
-own ``mcp`` pin can never conflict with ours. These packages import themselves
+``mcp`` and ``mcp_types`` under ``ha_mcp._vendor``. Home Assistant Core pins
+``mcp`` to one exact version, and the embedded server shares Core's Python
+environment, so vendoring lets ours differ from it. These packages import themselves
 by absolute name, so every such import is rewritten to the vendored path.
 
 Pins live in ``src/ha_mcp/_vendor/requirements.txt``; Renovate runs this script

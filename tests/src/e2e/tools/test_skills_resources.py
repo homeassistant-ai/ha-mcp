@@ -77,8 +77,7 @@ async def test_skills_bootstrap_instructions(mcp_client):
 @pytest.mark.asyncio
 async def test_skills_resources_listed(mcp_client):
     """Resource-capable clients must see SKILL.md and the reference files
-    as skill:// resources. Reference files are listed only because the
-    provider is registered with ``supporting_files="resources"``."""
+    as skill:// resources."""
     resources = await mcp_client.list_resources()
     uris = [str(r.uri) for r in resources if str(r.uri).startswith("skill://")]
     base = f"skill://{EXPECTED_BUNDLED_SKILL}/"

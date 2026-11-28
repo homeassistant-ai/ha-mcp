@@ -232,7 +232,7 @@ class TestHandleSkillGuideCall:
         skill = root / BEST_PRACTICES_SKILL_NAME
         (skill / "references").mkdir(parents=True)
         (skill / "SKILL.md").write_text(
-            "---\nname: best-practices\n"
+            f"---\nname: {BEST_PRACTICES_SKILL_NAME}\n"
             "description: |\n"
             "  Best practices for HA tasks.\n"
             "---\n# Best practices\nWorkflow content here.\n"
@@ -436,7 +436,7 @@ def populated_dir(tmp_path):
     skill = tmp_path / BEST_PRACTICES_SKILL_NAME
     skill.mkdir()
     (skill / "SKILL.md").write_text(
-        "---\nname: best-practices\ndescription: Best practices.\n---\n"
+        f"---\nname: {BEST_PRACTICES_SKILL_NAME}\ndescription: Best practices.\n---\n"
     )
     (skill / "reference.md").write_text("# Ref\n")
     return tmp_path
@@ -490,28 +490,44 @@ def test_registration_summary_reports_available_skill_count(
     assert f"guidance_count={int(available)}" in summaries[0].message
 
 
-@pytest.mark.parametrize("failure", ["import", "add"])
+async def test_skills_extension_lists_and_gets_the_bundled_skill(server, populated_dir):
+    """A client using the SEP-2640 Skills extension finds no skills when the
+    server does not advertise the extension or lists the skill wrongly."""
+    from ha_mcp._vendor.fastmcp import Client
+    from ha_mcp._vendor.fastmcp.skills.client import SkillsClientExtension
+
+    uri = f"skill://{BEST_PRACTICES_SKILL_NAME}/SKILL.md"
+    mcp = server(populated_dir).mcp
+    async with Client(mcp, extensions=[SkillsClientExtension()]) as client:
+        listed = await client.list_skills()
+        fetched = await client.get_skill(uri)
+    assert [skill.uri for skill in listed] == [uri]
+    assert fetched.frontmatter.name == BEST_PRACTICES_SKILL_NAME
+    assert isinstance(fetched.resources, list)
+    assert {str(resource.uri) for resource in fetched.resources} == {
+        uri,
+        f"skill://{BEST_PRACTICES_SKILL_NAME}/reference.md",
+    }
+
+
+@pytest.mark.parametrize("failure", ["invalid_skill", "add"])
 async def test_resource_provider_failure_keeps_guide_tool(
     server, populated_dir, monkeypatch, caplog, failure
 ):
-    import builtins
+    """A skills folder the provider rejects, or a provider that fails to
+    register, must not take the skill guide tool down with it."""
     import logging
 
     from ha_mcp.http_transport import HttpTransportFastMCP
 
-    if failure == "import":
-        original_import = builtins.__import__
-
-        def import_module(name, *args, **kwargs):
-            if name == "ha_mcp._vendor.fastmcp.server.providers.skills":
-                raise ImportError("simulated missing provider")
-            return original_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", import_module)
-    else:
-        from ha_mcp._vendor.fastmcp.server.providers.skills import (
-            SkillsDirectoryProvider,
+    if failure == "invalid_skill":
+        stray = populated_dir / "stray-skill"
+        stray.mkdir()
+        (stray / "SKILL.md").write_text(
+            "---\nname: other-name\ndescription: Name does not match.\n---\n"
         )
+    else:
+        from ha_mcp._vendor.fastmcp.skills.provider import SkillsDirectoryProvider
 
         original_add = HttpTransportFastMCP.add_provider
 

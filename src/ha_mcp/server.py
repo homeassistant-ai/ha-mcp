@@ -800,12 +800,13 @@ class HomeAssistantSmartMCPServer:
 
         Two paths to the same content:
 
-        - **Resources**: ``SkillsDirectoryProvider`` serves every skill
-          file at ``skill://<skill>/<path>``. Resource-capable clients
-          (Claude Code, Cursor, anything that supports the MCP
-          ``resources/list`` / ``resources/read`` methods) discover and
-          read skills natively. Best-effort: skipped if the provider
-          can't be loaded or the skills dir is missing.
+        - **Resources and the Skills extension**: ``SkillsDirectoryProvider``
+          serves every skill file at ``skill://<skill>/<path>`` and
+          registers the SEP-2640 Skills extension, so clients on protocol
+          2026-07-28 also discover skills through ``skills/list`` and
+          ``skills/get``. Best-effort: skipped if the skills dir is
+          missing, and reported as failed if a skill folder is not a
+          valid Agent Skill.
         - **Tool**: ``ha_get_skill_guide`` serves the best-practices
           skill to tool-only clients (claude.ai, etc. that don't read
           server instructions). No arguments returns SKILL.md; ``file``
@@ -837,28 +838,17 @@ class HomeAssistantSmartMCPServer:
                 SKILL_TOOL_NAME,
             )
         else:
+            from ha_mcp._vendor.fastmcp.skills.provider import (
+                SkillsDirectoryProvider,
+            )
+
             try:
-                from ha_mcp._vendor.fastmcp.server.providers.skills import (
-                    SkillsDirectoryProvider,
-                )
-            except ImportError:
-                logger.warning(
-                    "SkillsDirectoryProvider not available in fastmcp; "
-                    "skill resources unavailable. %s will still be registered.",
-                    SKILL_TOOL_NAME,
-                )
-            else:
-                try:
-                    self.mcp.add_provider(
-                        SkillsDirectoryProvider(
-                            roots=[skills_dir], supporting_files="resources"
-                        )
-                    )
-                    logger.info("Registered bundled skills as MCP resources")
-                    status["provider"] = "ok"
-                except Exception:
-                    logger.exception("Failed to register skills as resources")
-                    status["provider"] = "failed"
+                self.mcp.add_provider(SkillsDirectoryProvider([skills_dir]))
+                logger.info("Registered bundled skills as MCP resources")
+                status["provider"] = "ok"
+            except Exception:
+                logger.exception("Failed to register skills as resources")
+                status["provider"] = "failed"
 
         # Phase 3: Register the skill tool unconditionally. Tool
         # absence would be a silent failure for tool-only clients; an
