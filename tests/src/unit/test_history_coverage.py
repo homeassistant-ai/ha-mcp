@@ -31,7 +31,7 @@ from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
 from ha_mcp.tools.tools_history import HistoryTools
 
 from ._client_spies import sent_messages
-from ._command_faults import before_handling, unanswered
+from ._command_faults import before_handling, registry_lookup_failing, unanswered
 from ._recorded_history import import_statistic, migrating, record_states, statistics
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -240,6 +240,27 @@ async def test_a_refusal_carries_cores_code_and_no_retention_guess(
     assert "retention" not in str(refusal.value)
 
 
+async def test_the_history_schema_carries_cores_own_attribute_domains(
+    recorded: Recorder, component_core_client: HomeAssistantClient
+) -> None:
+    from homeassistant.components.recorder.history import NEED_ATTRIBUTE_DOMAINS
+
+    history = await _history(
+        component_core_client, START, START + HOUR, include_schema=True
+    )
+    statistics_schema = await statistics(
+        component_core_client,
+        ["sensor.energy"],
+        START,
+        START + DAY,
+        include_schema=True,
+    )
+
+    contract = history["data"]["core_contract"]
+    assert contract["need_attribute_domains"] == sorted(NEED_ATTRIBUTE_DOMAINS)
+    assert "need_attribute_domains" not in statistics_schema["data"]["core_contract"]
+
+
 # --- statistics ----------------------------------------------------------------
 
 
@@ -257,11 +278,28 @@ async def test_a_statistic_the_recorder_does_not_have_is_told_from_an_empty_wind
         START + 31 * DAY,
     )
 
-    assert "statistics converter could not be read" in result["warnings"][0]
-    assert result["warnings"][1:] == [
+    # Core's own metadata serves this read in full, so no component is named.
+    assert result["warnings"] == [
         "The recorder has no statistics under: sensor.enrgy.",
         "No statistics in this window for: sensor.energy.",
     ]
+
+
+async def test_rows_read_with_a_component_that_fails_its_part_says_so(
+    recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """A component install that answers from Core's API never does so silently."""
+    await import_statistic(
+        hass, "sensor.energy", "kWh", "energy", [{"start": START, "sum": 1.0}]
+    )
+
+    with registry_lookup_failing(hass, "ha_mcp_tools/statistics_units"):
+        result = await statistics(
+            component_core_client, ["sensor.energy"], START, START + DAY
+        )
+
+    assert result["data"]["entities"][0]["statistics"]
+    assert "statistics converter could not be read" in _warnings(result)
 
 
 async def test_cores_own_statistics_issue_explains_an_empty_statistic(

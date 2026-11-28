@@ -7,6 +7,7 @@ recorded after the tool's ``now`` comes back from Core as it would when Core's
 clock runs ahead of the reading the tool took before its query.
 """
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Self
 from unittest.mock import AsyncMock, patch
@@ -42,13 +43,28 @@ async def client(
     request: pytest.FixtureRequest,
     hass: HomeAssistant,
     core_client: HomeAssistantClient,
-) -> HomeAssistantClient:
-    """``core_client``, with and without the component's commands."""
-    if request.param == "component":
-        from custom_components.ha_mcp_tools import websocket_api
+) -> AsyncIterator[HomeAssistantClient]:
+    """``core_client``, with and without the component's commands.
 
-        websocket_api.async_register_commands(hass)
-    return core_client
+    With them the component serves the read: Core's own history command being
+    sent means the tool fell back, which returns the same totals.
+    """
+    if request.param == "core":
+        yield core_client
+        return
+    from custom_components.ha_mcp_tools import websocket_api
+
+    websocket_api.async_register_commands(hass)
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        new_callable=AsyncMock,
+        wraps=core_client.send_websocket_message,
+    ) as sent:
+        yield core_client
+    types = [call.args[0]["type"] for call in sent.call_args_list]
+    assert "ha_mcp_tools/history_page" in types
+    assert "history/history_during_period" not in types
 
 
 async def _record(

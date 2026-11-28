@@ -103,10 +103,20 @@ def statistics_warnings(entities: list[dict[str, Any]]) -> list[str]:
 
 
 async def converter_records(
-    client: Any, statistic_ids: list[str], units: dict[str, Any], warnings: list[str]
+    client: Any,
+    statistic_ids: list[str],
+    units: dict[str, Any],
+    warnings: list[str],
+    *,
+    needed: bool = True,
 ) -> dict[str, dict[str, Any]] | None:
     """Core's converter choice and output unit for each statistic, through the
-    component; None when its answer was unavailable."""
+    component; None when its answer was unavailable.
+
+    ``needed`` is False for a read Core's own metadata serves in full. An
+    install without the component then gets no warning; an install whose
+    component could not answer still does.
+    """
     from ..client.websocket_client import get_websocket_client
     from .component_api import (
         component_supports,
@@ -117,6 +127,8 @@ async def converter_records(
     )
 
     caps = await get_component_caps(client)
+    if caps is None and not needed:
+        return None
     warning = component_unusable_warning(
         caps, "Core's statistics converter could not be read"
     )

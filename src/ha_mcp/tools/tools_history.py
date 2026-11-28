@@ -208,7 +208,7 @@ class HistoryTools:
             bool,
             Field(
                 description="Core's compact rows: after an entity's first row, rows carry only the state and its time, "
-                "and attribute-only updates are dropped (climate, humidifier and water heater rows keep attributes). "
+                "and attribute-only updates are dropped. Rows of the domains in need_attribute_domains (see include_schema=True) keep attributes. "
                 'Ignored when source="statistics"',
                 default=True,
             ),
@@ -216,7 +216,7 @@ class HistoryTools:
         no_attributes: Annotated[
             bool,
             Field(
-                description="Read no state attributes at all, the first row and climate or water heater rows included. Less recorder work."
+                description="Read no state attributes at all, the first row and the need_attribute_domains rows included. Less recorder work."
             ),
         ] = False,
         significant_changes_only: Annotated[
@@ -313,7 +313,7 @@ class HistoryTools:
         include_schema: Annotated[
             bool,
             Field(
-                description="Include the running Core's native request schema when the component supports discovery."
+                description="Include the running Core's native request schema when the component supports discovery; a history read also gets Core's need_attribute_domains."
             ),
         ] = False,
         core_options: Annotated[

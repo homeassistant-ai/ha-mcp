@@ -120,7 +120,13 @@ def describe_contract(hass: HomeAssistant, command: str) -> dict[str, Any]:
     schema = _schema(hass, command)
     if schema is None:
         return {"status": "unavailable", "reason": "Core command is not registered"}
-    return {"status": "available", "command": command, **_describe(schema)}
+    described = {"status": "available", "command": command, **_describe(schema)}
+    if command == "history/history_during_period":
+        from homeassistant.components.recorder.history import NEED_ATTRIBUTE_DOMAINS
+
+        # Core's own set: rows of these domains keep attributes in a minimal response.
+        described["need_attribute_domains"] = sorted(NEED_ATTRIBUTE_DOMAINS)
+    return described
 
 
 def _describe(schema: Any) -> dict[str, Any]:

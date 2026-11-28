@@ -23,9 +23,14 @@ _DEFAULT_LIMIT = 100
 
 
 async def _statistics_metadata(
-    client: Any, ids: list[str], units: dict[str, Any], warnings: list[str]
+    client: Any,
+    ids: list[str],
+    units: dict[str, Any],
+    warnings: list[str],
+    *,
+    needed: bool,
 ) -> tuple[dict[str, dict[str, Any]], str | None, dict[str, dict[str, Any]]]:
-    converted = await converter_records(client, ids, units, warnings)
+    converted = await converter_records(client, ids, units, warnings, needed=needed)
     if converted is not None:
         metadata = {
             key: {
@@ -83,8 +88,9 @@ async def fetch_statistics(
     result_data = response.get("result", {})
     units = command_params.get("units", {})
     warnings: list[str] = []
+    # Rows use the converter's answer only to label units that were asked for.
     metadata, metadata_failure, converted = await _statistics_metadata(
-        client, entity_id_list, units, warnings
+        client, entity_id_list, units, warnings, needed=bool(units)
     )
     entities_statistics = format_entity_statistics(
         result_data,
@@ -201,7 +207,7 @@ async def fetch_statistics_totals(
     requested = params.get("units")
     warnings: list[str] = []
     metadata, metadata_failure, converted = await _statistics_metadata(
-        client, statistic_ids, requested or {}, warnings
+        client, statistic_ids, requested or {}, warnings, needed=True
     )
     entities = []
     for statistic_id in statistic_ids:
