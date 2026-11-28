@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.util import package
 
 import custom_components.ha_mcp_tools as comp
 from custom_components.ha_mcp_tools import (
@@ -48,7 +49,8 @@ async def write_file(hass: HomeAssistant, volume_root: Path) -> FileService:
 def mounts(monkeypatch: pytest.MonkeyPatch) -> set[str]:
     """Mount points as /proc/self/mountinfo lists them, inside a container."""
     mounted: set[str] = set()
-    monkeypatch.setattr(volume_mounts, "in_container", lambda: True)
+    # Reaches volume_mounts only while it calls package.is_docker_env().
+    monkeypatch.setattr(package, "is_docker_env", lambda: True)
     monkeypatch.setattr(volume_mounts, "mount_points", lambda: mounted)
     return mounted
 
@@ -140,7 +142,7 @@ async def test_core_install_writes_to_an_existing_plain_volume(
     write_file: FileService,
 ) -> None:
     # No container: /share on a Core (venv) install is the host's own folder.
-    monkeypatch.setattr(volume_mounts, "in_container", lambda: False)
+    monkeypatch.setattr(package, "is_docker_env", lambda: False)
     await hass.async_add_executor_job(volume_root.mkdir)
     target = volume_root / "x.txt"
 

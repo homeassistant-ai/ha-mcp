@@ -317,9 +317,9 @@ _MIXED_LINE_ENDINGS = (
 )
 
 
-def file_read_error(code: str, message: str) -> dict[str, Any]:
+def file_read_error(code: str, message: str, **extra: Any) -> dict[str, Any]:
     """Return a file service refusal with its machine-readable reason."""
-    return {"success": False, "error_code": code, "error": message}
+    return {"success": False, "error_code": code, "error": message, **extra}
 
 
 def refusal_text(reason: str, path: str, details: dict[str, Any]) -> str:

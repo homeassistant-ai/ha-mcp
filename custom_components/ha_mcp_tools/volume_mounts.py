@@ -7,16 +7,13 @@ import errno
 import os
 from pathlib import Path
 
+from homeassistant.util import package
+
 # write_file refusals that name a directory, keyed by _write_file_sync's _error.
 PARENT_ERRORS = {
     "no_parent": "Parent directory does not exist: {}",
     "not_mounted": "{} is not mounted into Home Assistant Core on this install",
 }
-
-
-def in_container() -> bool:
-    """True when Core runs in a container (HAOS, Supervised, Container)."""
-    return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
 
 
 def mount_points() -> set[str]:
@@ -45,7 +42,7 @@ def on_mounted_volume(target: Path, root: str) -> bool:
     /media/music alone still counts. Outside a container (a Core install) the
     root is the host's own directory, so it only has to exist.
     """
-    if not in_container():
+    if not package.is_docker_env():
         return os.path.isdir(root)
     top = Path(os.path.realpath(root))
     probe = Path(os.path.realpath(target.parent))

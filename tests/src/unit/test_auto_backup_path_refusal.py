@@ -9,7 +9,6 @@ or re-capturing a snapshot of such a path says the live file is unreadable.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +20,11 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.ha_mcp_tools.config_flow import HaMcpToolsConfigFlow
-from custom_components.ha_mcp_tools.const import DOMAIN, TOOLS_ENTRY_TITLE
+from custom_components.ha_mcp_tools.const import (
+    ALLOWED_VOLUME_ROOTS,
+    DOMAIN,
+    TOOLS_ENTRY_TITLE,
+)
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import (
     BackupManager,
@@ -38,6 +41,7 @@ from ._backup_core import snapshot_manager as snapshot_manager
 from ._tool_errors import error_body
 
 READ_REFUSAL = "Path not allowed. Allowed paths: www/**, blueprints/**"
+ONLY_UNDER_ROOTS = f"only under {', '.join(ALLOWED_VOLUME_ROOTS)};"
 
 
 @pytest.fixture
@@ -104,26 +108,53 @@ async def test_refused_path_write_reports_the_refusal(
 
 
 @pytest.mark.parametrize(
-    ("path", "offers_custom_path"),
+    ("path", "suggestion"),
     [
-        ("pyscript/x.py", True),
-        ("/share/notes.md", True),
-        ("/backup/x.txt", False),
-        (".storage/auth", False),
+        ("pyscript/x.py", "add it"),
+        ("/share/notes.md", "add it"),
+        ("/backup/x.txt", ONLY_UNDER_ROOTS),
+        ("/sharefoo/x.txt", ONLY_UNDER_ROOTS),
+        (".storage/auth", "never available"),
+        ("pyscript/.storage/x", "never available"),
+        ("www/secrets.yaml", "never available"),
+        ("www/Secrets.YAML", "never available"),
     ],
 )
-async def test_custom_path_is_suggested_only_where_it_can_be_added(
-    path: str, offers_custom_path: bool
+async def test_the_refusal_says_whether_the_settings_can_allow_the_path(
+    tmp_path: Path, tools_client: HomeAssistantClient, path: str, suggestion: str
 ) -> None:
-    error = json.loads(str(PathNotAllowedError(path, READ_REFUSAL)))["error"]
+    """The component tells, with its refusal, whether the path could be added
+    under Custom filesystem paths."""
+    mgr = get_backup_manager(tools_client, _settings(tmp_path))
 
-    assert ("add it" in json.dumps(error)) is offers_custom_path
+    with pytest.raises(ToolError) as exc:
+        await capture_on_demand(mgr, "file", path)
+
+    assert suggestion in json.dumps(error_body(exc)["error"])
+
+
+async def test_a_refusal_without_the_verdict_suggests_no_custom_path() -> None:
+    """A component that predates the verdict sends only its text, so whether
+    the path could be allowed is unknown."""
+    error = str(PathNotAllowedError("pyscript/x.py", READ_REFUSAL))
+
+    assert "Custom filesystem paths" not in error
+    assert "never available" not in error
+
+
+def _refusal() -> PathNotAllowedError:
+    return PathNotAllowedError(
+        "/backup/x.txt",
+        READ_REFUSAL,
+        custom_path_allowed=False,
+        volume_roots=list(ALLOWED_VOLUME_ROOTS),
+    )
 
 
 def _capture_failure() -> MandatoryBackupError:
     # How maybe_snapshot(mandatory=True) wraps a refused live-file read.
     try:
-        raise PathNotAllowedError("/backup/x.txt", READ_REFUSAL)
+        raise _refusal()
     except PathNotAllowedError as refusal:
         try:
             raise MandatoryBackupError("could not back up") from refusal
@@ -134,7 +165,7 @@ def _capture_failure() -> MandatoryBackupError:
 @pytest.mark.parametrize(
     ("action", "err"),
     [
-        ("diff", PathNotAllowedError("/backup/x.txt", READ_REFUSAL)),
+        ("diff", _refusal()),
         ("restore", _capture_failure()),
     ],
 )
@@ -160,6 +191,7 @@ async def test_snapshot_of_a_refused_path_says_the_live_file_is_unreadable(
     assert message.startswith(f"Cannot {action} 'file-x': its live file")
     assert payload["backup_name"] == "file-x"
     assert payload["path"] == "/backup/x.txt"
+    assert ONLY_UNDER_ROOTS in json.dumps(payload["error"])
     if action == "restore":
         assert payload["data"]["apply_status"] == "not_applied"
 
@@ -175,25 +207,3 @@ async def test_on_demand_capture_of_a_refused_path_reports_the_refusal(
     payload = error_body(exc)
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert payload["path"] == "/backup/x.txt"
-
-
-def test_suggestion_rules_match_the_component_allowlist() -> None:
-    # Loaded by file path, without importing the component package.
-    const_py = Path(__file__).parents[3] / "custom_components/ha_mcp_tools/const.py"
-    spec = importlib.util.spec_from_file_location("_component_const", const_py)
-    assert spec is not None and spec.loader is not None
-    const = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(const)
-
-    def suggestions(path: str) -> str:
-        error = json.loads(str(PathNotAllowedError(path, READ_REFUSAL)))["error"]
-        return json.dumps(error)
-
-    roots = ", ".join(const.ALLOWED_VOLUME_ROOTS)
-    assert f"only under {roots};" in suggestions("/backup/x.txt")
-    for root in const.ALLOWED_VOLUME_ROOTS:
-        assert "add it" in suggestions(f"{root}/x.txt")
-    for segment in const.DENY_PATH_SEGMENTS:
-        assert "never available" in suggestions(f"{segment}/x")
-    for basename in const.DENY_READ_BASENAMES:
-        assert "never available" in suggestions(f"www/{basename}")

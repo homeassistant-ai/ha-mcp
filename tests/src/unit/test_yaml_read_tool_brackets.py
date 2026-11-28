@@ -17,7 +17,8 @@ from homeassistant.core import HomeAssistant
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 
-from ._component_filesystem import put
+from ._component_filesystem import config_dir, put
+from ._symlink_support import symlink_or_skip
 from ._tool_errors import error_of
 from ._yaml_read_tool_core import (
     FAILS_TO_READ,
@@ -178,6 +179,19 @@ async def test_absent_bracketed_file_is_reported_not_implied(
     ]
     # The warning is the resolver's; the one read succeeded.
     assert out["files_unreadable"] == 0
+
+
+async def test_dangling_link_with_the_bracketed_name_is_a_missing_file(
+    hass: HomeAssistant, get_yaml: GetYaml
+) -> None:
+    """The literal lookup lists the link, so the named file is read and is not
+    there."""
+    await _packages(hass, {"svca.yaml": REST})
+    folder = config_dir(hass) / "packages"
+    symlink_or_skip(folder / "svc[a].yaml", folder / "gone.yaml")
+
+    with pytest.raises(ToolError, match=r"File does not exist: packages/svc\[a\]"):
+        await get_yaml(yaml_path="rest", file="packages/svc[a].yaml")
 
 
 async def test_bracket_class_searches_every_file_it_matches(

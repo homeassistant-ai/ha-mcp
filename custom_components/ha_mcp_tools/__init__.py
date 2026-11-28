@@ -85,7 +85,7 @@ from .file_ops import (
     run_locked,
     write_text_atomic,
 )
-from .file_post_action import after_file_write, reload_after_edit
+from .file_post_action import after_file_delete, after_file_write, reload_after_edit
 from .tools_settings_store import (
     ALLOWED_PATHS_KEY,
     EXTRA_YAML_KEYS_KEY,
@@ -1073,7 +1073,6 @@ def _is_path_allowed_for_dir(
     if rel_path.startswith("/"):
         return _is_volume_path_allowed(rel_path, extra_dirs)
 
-    # Normalize the path
     normalized = os.path.normpath(rel_path)
 
     # Check for path traversal attempts
@@ -1160,11 +1159,9 @@ def _is_path_allowed_for_read(
     if not _resolves_within(config_dir, rel_path):
         return False
 
-    # Check if it's one of the explicitly allowed files in config root
     if normalized in ALLOWED_READ_FILES:
         return True
 
-    # Check if path starts with an allowed directory
     parts = normalized.split(os.sep)
     if parts and parts[0] in ALLOWED_READ_DIRS:
         return True
@@ -1272,13 +1269,13 @@ def _list_files_sync(
         # coming back from it, so a name it protects would otherwise be
         # enumerable inside an allowed directory -- reporting its size and
         # mtime for a file no handler will open. Matched on the entry's own
-        # name, which is what the floor denies; nothing here resolves a
+        # name, which is what the floor denies; the match does not resolve a
         # symlink, because a link's own name is not the protected one and
         # reading through it is refused anyway.
         lowered = item.name.lower()
         if lowered in DENY_READ_BASENAMES or lowered in DENY_PATH_SEGMENTS:
             continue
-        stat = item.stat()
+        stat = item.stat() if item.exists() else item.lstat()  # broken or looping link
         # Config-relative paths report relative to the config dir; absolute
         # HAOS sibling-volume paths (issue #1586) are not under it, so report
         # them absolute (the caller passes absolute paths for volumes too).
@@ -1292,7 +1289,7 @@ def _list_files_sync(
                 "path": reported_path,
                 "is_dir": item.is_dir(),
                 "size": stat.st_size if item.is_file() else 0,
-                "modified": stat.st_mtime,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
             }
         )
     files.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
@@ -2763,6 +2760,9 @@ async def _resolve_read(
         return file_read_error(
             "path_not_allowed",
             f"Path not allowed. Allowed paths: {', '.join(allowed_patterns)}",
+            # Whether the settings UI's Custom filesystem paths would take it.
+            custom_path_allowed=_normalize_extra_dir(rel_path, config_dir) is not None,
+            volume_roots=list(ALLOWED_VOLUME_ROOTS),
         )
     target_file, why = read_target(hass, config_dir, rel_path)
     if target_file is None:
@@ -2965,14 +2965,14 @@ def _build_delete_file_handler(
                 "error": f"Path is not a file (cannot delete directories): {rel_path}",
             }
 
-        size = result["size"]
-        _LOGGER.info("Deleted file: %s (%d bytes)", rel_path, size)
+        _LOGGER.info("Deleted file: %s (%d bytes)", rel_path, result["size"])
 
         return {
             "success": True,
             "path": rel_path,
-            "deleted_size": size,
+            "deleted_size": result["size"],
             "message": f"File deleted successfully: {rel_path}",
+            **(await after_file_delete(hass, rel_path)),
         }
 
     return handle_delete_file

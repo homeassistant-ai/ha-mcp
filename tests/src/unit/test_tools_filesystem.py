@@ -355,8 +355,13 @@ async def test_a_write_replaces_the_file_when_told_to_overwrite(
 @pytest.mark.usefixtures("auto_backup")
 @pytest.mark.parametrize(("confirm", "kept"), [(False, True), (True, False)])
 async def test_a_file_is_deleted_only_when_confirmed(
-    hass: HomeAssistant, core_client: HomeAssistantClient, confirm: bool, kept: bool
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    tmp_path: Path,
+    confirm: bool,
+    kept: bool,
 ) -> None:
+    """An unconfirmed delete changes nothing, so it takes no backup either."""
     await make_file_service(hass)
     target = await _file(hass, "www/test.css")
     tools = FilesystemTools(core_client)
@@ -371,3 +376,25 @@ async def test_a_file_is_deleted_only_when_confirmed(
         assert "not confirmed" in error_of(exc)["message"].lower()
 
     assert await hass.async_add_executor_job(target.exists) is kept
+    snapshots = list((tmp_path / "backups").glob("file.*.yaml"))
+    assert len(snapshots) == int(confirm)
+
+
+@pytest.mark.usefixtures("auto_backup")
+async def test_an_unanswered_registry_read_before_a_change_is_a_structured_error(
+    core_client: HomeAssistantClient,
+) -> None:
+    """The check before the backup runs outside the tool's own error handling,
+    so a connection failure there still comes back classified."""
+    tools = FilesystemTools(core_client)
+    with (
+        patch.object(
+            core_client,
+            "get_services",
+            side_effect=HomeAssistantConnectionError("no answer"),
+        ),
+        pytest.raises(ToolError) as exc,
+    ):
+        await tools.ha_write_file(path="www/test.css", content="a{}")
+
+    assert error_of(exc)["code"] == "CONNECTION_FAILED"

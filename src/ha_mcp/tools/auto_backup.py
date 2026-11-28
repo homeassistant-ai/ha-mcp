@@ -69,7 +69,10 @@ class PathNotAllowedError(ToolError):
     subset of the read gate, so a path the read refuses, the wrapped write or
     delete would refuse too (#2908). The message names no operation and leaves
     out the component's read allowlist, which would mislead a write; the
-    component's own text stays in ``context``.
+    component's own text stays in ``context``. The component's refusal also
+    says whether its settings UI would take the path as a custom path
+    (``custom_path_allowed``, ``None`` from a component that predates it) and
+    which absolute roots that UI accepts (``volume_roots``).
     """
 
     def __init__(
@@ -77,18 +80,22 @@ class PathNotAllowedError(ToolError):
         path: str,
         component_error: str,
         *,
+        custom_path_allowed: bool | None = None,
+        volume_roots: list[str] | None = None,
         message: str | None = None,
         suggestions: list[str] | None = None,
         context: dict[str, Any] | None = None,
     ) -> None:
         self.path = path
         self.component_error = component_error
+        self.custom_path_allowed = custom_path_allowed
+        self.volume_roots = volume_roots or []
         super().__init__(
             json.dumps(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     message or f"Path not allowed: {path}",
-                    suggestions=suggestions or _custom_path_suggestions(path),
+                    suggestions=suggestions or self.custom_path_suggestions(),
                     context={
                         **(context or {}),
                         "path": path,
@@ -101,31 +108,24 @@ class PathNotAllowedError(ToolError):
             log_level=TOOL_ERROR_LOG_LEVEL,
         )
 
-
-# The component's volume roots and deny floor, which it doesn't publish to the
-# server on a refusal (custom_components/ha_mcp_tools/const.py: ALLOWED_VOLUME_
-# ROOTS, DENY_PATH_SEGMENTS, DENY_READ_BASENAMES). A unit test pins the copies.
-_VOLUME_ROOTS = ("/share", "/media", "/ssl")
-_DENY_SEGMENTS = frozenset({".storage"})
-_DENY_BASENAMES = frozenset({"secrets.yaml", "approval_pin.json"})
-
-
-def _custom_path_suggestions(path: str) -> list[str]:
-    """Suggest a custom path only where the settings UI can accept one."""
-    parts = path.lower().split("/")
-    if _DENY_SEGMENTS.intersection(parts) or parts[-1] in _DENY_BASENAMES:
+    def custom_path_suggestions(self) -> list[str]:
+        """Suggest a custom path only where the settings UI can accept one."""
+        if self.custom_path_allowed is None:
+            return []
+        if self.custom_path_allowed:
+            return [
+                "If it isn't listed already, add it or a folder above it under "
+                "Custom filesystem paths in the ha-mcp settings UI"
+            ]
+        roots = self.volume_roots
+        if self.path.startswith("/") and not any(
+            self.path == root or self.path.startswith(root + "/") for root in roots
+        ):
+            return [
+                "Custom filesystem paths accept absolute paths only under "
+                f"{', '.join(roots)}; this one cannot be allowed"
+            ]
         return ["This path is never available to the file tools"]
-    if path.startswith("/") and not any(
-        path == root or path.startswith(root + "/") for root in _VOLUME_ROOTS
-    ):
-        return [
-            "Custom filesystem paths accept absolute paths only under "
-            f"{', '.join(_VOLUME_ROOTS)}; this one cannot be allowed"
-        ]
-    return [
-        "If it isn't listed already, add it or a folder above it under "
-        "Custom filesystem paths in the ha-mcp settings UI"
-    ]
 
 
 def path_refusal(err: BaseException) -> PathNotAllowedError | None:
@@ -154,6 +154,8 @@ def raise_if_snapshot_path_refused(
     raise PathNotAllowedError(
         refusal.path,
         refusal.component_error,
+        custom_path_allowed=refusal.custom_path_allowed,
+        volume_roots=refusal.volume_roots,
         message=(
             f"Cannot {action} {backup_name!r}: its live file {refusal.path} is "
             "no longer readable through the file tools (the path is not allowed)"
@@ -161,7 +163,7 @@ def raise_if_snapshot_path_refused(
         suggestions=[
             "View the snapshot with ha_manage_backup(scope='edits', "
             f"action='view', backup_name={backup_name!r}) to recover its content",
-            *_custom_path_suggestions(refusal.path),
+            *refusal.custom_path_suggestions(),
         ],
         context={
             "backup_name": backup_name,
@@ -306,6 +308,7 @@ def with_auto_backup(
     skip_fn: Callable[[dict[str, Any]], bool] | None = None,
     domain_resolver: Callable[[Any, dict[str, Any], str, str], Awaitable[str]]
     | None = None,
+    precheck: Callable[[Any, str, dict[str, Any]], Awaitable[None]] | None = None,
 ) -> Callable[..., Any]:
     """Decorate a write/destructive tool with pre-write auto-backup capture.
 
@@ -332,6 +335,15 @@ def with_auto_backup(
     It receives the client, tool kwargs, initial domain and entity ID inside
     the write guard, before capture. Its failures follow the capture policy.
 
+    ``precheck`` optionally refuses the call before anything is captured, with
+    the client, the tool's name and its kwargs, so a refused call leaves no
+    snapshot behind. It runs after the mandatory toggle check, inside the write
+    guard and whether or not a capture would be taken, so another file or YAML
+    write tool of this server cannot change the file between the check and the
+    capture (a ``scope="edits"`` restore takes no such lock); it must not take
+    the guard's lock. An error it raises other than a ``ToolError`` is reported
+    as a structured error.
+
     ``mandatory=True`` makes auto-backup a precondition (file/YAML writes,
     #1579 — those formerly kept their own private backups). It fails the
     write closed in two cases, both with a structured error and without
@@ -357,9 +369,10 @@ def with_auto_backup(
     def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Read-only previews need no capture. Delegated writes acquire
-            # their own guard and snapshot after resolving or confirming the
-            # target, so they also bypass this outer capture and refusal.
+            # Calls that cannot write (previews, unconfirmed deletes) need no
+            # capture or precheck. Delegated writes acquire their own guard and
+            # snapshot after resolving or confirming the target, so they also
+            # bypass this outer capture and refusal.
             if skip_fn is not None and skip_fn(kwargs):
                 return await func(*args, **kwargs)
             # Settings + target resolution happen OUTSIDE the best-effort
@@ -393,6 +406,7 @@ def with_auto_backup(
                         },
                     )
                 )
+            backup_client = _resolve_backup_client(explicit_client, args)
             snap_domain, entity_id = _resolve_snapshot_target(
                 kwargs,
                 domain=domain,
@@ -401,11 +415,12 @@ def with_auto_backup(
                 id_fn=id_fn,
             )
             async with _template_write_context(
-                _resolve_backup_client(explicit_client, args),
+                backup_client,
                 settings,
                 snap_domain,
                 entity_id,
             ):
+                await _run_precheck(precheck, backup_client, func.__name__, kwargs)
                 skipped = None
                 if enabled:
                     skipped = await _capture_pre_write_snapshot(
@@ -436,7 +451,7 @@ def with_auto_backup(
 async def _template_write_context(
     client: Any, settings: Any, domain: str, entity_id: str
 ) -> AsyncIterator[None]:
-    """Keep a write's capture and mutation in one critical section.
+    """Keep a write's check, capture and mutation in one critical section.
 
     Flow helpers and integrations share the restore critical section. The lock
     is needed even when ordinary auto-backup is disabled: restores of existing
@@ -473,6 +488,23 @@ async def _template_write_context(
             yield
     else:
         yield
+
+
+async def _run_precheck(
+    precheck: Callable[[Any, str, dict[str, Any]], Awaitable[None]] | None,
+    client: Any,
+    tool_name: str,
+    kwargs: dict[str, Any],
+) -> None:
+    """Run ``with_auto_backup``'s precheck, outside the tool's own error handling."""
+    if precheck is None:
+        return
+    try:
+        await precheck(client, tool_name, kwargs)
+    except ToolError:
+        raise
+    except Exception as err:  # noqa: BLE001 - classified, not swallowed
+        exception_to_structured_error(err, {"tool_name": tool_name})
 
 
 def _resolve_backup_client(explicit_client: Any, args: tuple[Any, ...]) -> Any:

@@ -13,6 +13,7 @@ ha-mcp does. Which paths a service accepts is covered in
 import glob
 import logging
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from custom_components.ha_mcp_tools import (
     SERVICE_GET_CALLER_TOKEN,
     SERVICE_GET_EXTRA_YAML_KEYS,
     SERVICE_LIST_FILES,
+    SERVICE_READ_FILE,
     SERVICE_SET_EXTRA_YAML_KEYS,
     SERVICE_WRITE_FILE,
 )
@@ -40,6 +42,7 @@ from ._component_filesystem import (
     use_volume_root,
 )
 from ._file_services import FileService, make_file_service
+from ._symlink_support import symlink_or_skip
 
 
 @pytest.fixture
@@ -139,6 +142,68 @@ class TestListFiles:
 
         assert result["success"] is True, result
         assert [f["path"] for f in result["files"]] == [str(volume / "note.txt")]
+
+    async def test_a_broken_symlink_does_not_fail_the_listing(
+        self, hass: HomeAssistant, files: FileService
+    ) -> None:
+        """The link itself is listed; a working link keeps its target's size."""
+        await put(hass, {"www/a.txt": "hello world"})
+        www = config_dir(hass) / "www"
+        symlink_or_skip(www / "broken.txt", www / "missing.txt")
+        symlink_or_skip(www / "link.txt", www / "a.txt")
+
+        result = await files(SERVICE_LIST_FILES, {"path": "www"})
+
+        assert result["success"] is True, result
+        entries = {f["name"]: f for f in result["files"]}
+        assert entries["link.txt"]["size"] == len("hello world")
+        assert entries["broken.txt"]["size"] == 0
+        assert entries["broken.txt"]["is_dir"] is False
+
+    async def test_modified_is_the_same_iso_time_the_read_reply_gives(
+        self, hass: HomeAssistant, files: FileService
+    ) -> None:
+        await put(hass, {"www/a.txt": "hello"})
+        mtime = 1_700_000_000.5
+        await hass.async_add_executor_job(
+            os.utime, config_dir(hass) / "www" / "a.txt", (mtime, mtime)
+        )
+
+        result = await files(SERVICE_LIST_FILES, {"path": "www"})
+        read = await files(SERVICE_READ_FILE, {"path": "www/a.txt"})
+
+        (entry,) = result["files"]
+        assert entry["modified"] == read["modified"]
+
+    @pytest.mark.parametrize(
+        ("error", "message"),
+        [
+            (PermissionError("denied"), "Permission denied: www"),
+            (OSError("disk gone"), "disk gone"),
+        ],
+    )
+    async def test_a_folder_that_cannot_be_read_fails_the_listing(
+        self,
+        hass: HomeAssistant,
+        files: FileService,
+        monkeypatch: pytest.MonkeyPatch,
+        error: OSError,
+        message: str,
+    ) -> None:
+        await put(hass, {"www/a.txt": "hello"})
+        www = config_dir(hass) / "www"
+        original = Path.iterdir
+
+        def refuse(path: Path) -> Iterator[Path]:
+            if path == www:
+                raise error
+            return original(path)
+
+        monkeypatch.setattr(Path, "iterdir", refuse)
+
+        result = await files(SERVICE_LIST_FILES, {"path": "www"})
+
+        assert result == {"success": False, "error": message, "files": []}
 
 
 class TestWriteFile:

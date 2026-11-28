@@ -66,7 +66,8 @@ async def _load(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         )
     except Exception as err:  # noqa: BLE001
         # A YAML error, a missing include or an include loop alike leave the
-        # files unchecked; the caller refuses them.
+        # files unchecked; the caller refuses the call unless it can repair
+        # the configuration (a whole-file write, confirmed delete or restore).
         return {"result": {"error": str(err) or type(err).__name__}}
     return {"result": items}
 

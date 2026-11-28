@@ -57,6 +57,7 @@ from .backup_update_settings import (
     configure_update_backup_settings,
 )
 from .coercion import JSON_STRING_COERCION
+from .config_file_visibility import refuse_reading_hidden_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -383,6 +384,7 @@ survives an agent's own mistakes.
         # scope == "edits"
         mgr = get_backup_manager(client, settings)
         return await _dispatch_edits_action(
+            client,
             mgr,
             settings,
             action,
@@ -441,6 +443,7 @@ async def _dispatch_snapshot_action(
 
 
 async def _dispatch_edits_action(
+    client: Any,
     mgr: BackupManager,
     settings: Any,
     action: str,
@@ -455,6 +458,12 @@ async def _dispatch_edits_action(
     """Route a ``scope="edits"`` action to its per-entity auto-backup handler."""
     # Entity snapshots are filed under Core's lowercase id (maybe_snapshot).
     entity_id = entity_id.lower() if domain == "entity" and entity_id else entity_id
+    if action == "create" and domain and entity_id:
+        await refuse_reading_hidden_backup(client, domain, entity_id)
+    if action in ("view", "diff", "restore") and backup_name:
+        await _refuse_hidden_file_backup(
+            client, mgr, backup_name, repairs=action == "restore"
+        )
     if action == "create":
         return await _edits_create(mgr, scope, action, domain, entity_id)
     if action == "list":
@@ -467,6 +476,34 @@ async def _dispatch_edits_action(
         return await _edits_restore(mgr, scope, action, backup_name)
     # action == "delete"
     return await _edits_delete(mgr, domain, entity_id, backup_name, older_than_days)
+
+
+async def _refuse_hidden_file_backup(
+    client: Any, mgr: BackupManager, bname: str, *, repairs: bool
+) -> None:
+    """Refuse a backup of a config file that defines a hidden item. A backup
+    that does not exist, or a snapshot that cannot be parsed, is left to the
+    action, which reports it. A legacy backup that cannot be read counts as
+    naming no file: when the component could not be reached, the action asks
+    again and may get its content. With ``repairs`` (a restore) the call runs
+    while the configuration does not load."""
+    domain, target = "yaml_file", None
+    try:
+        if bname.startswith(LEGACY_PREFIX):
+            info = await mgr.read_legacy(bname[len(LEGACY_PREFIX) :])
+            if not info.get("path_ambiguous", True):
+                target = info.get("file_path")
+        else:
+            data = await asyncio.to_thread(mgr.read_snapshot, bname)
+            domain, target = data.get("domain", domain), data.get("entity_id")
+    except FileNotFoundError:
+        return
+    except ValueError:
+        if not bname.startswith(LEGACY_PREFIX):
+            return
+    except OSError:
+        pass  # unreadable: counts as naming no file
+    await refuse_reading_hidden_backup(client, domain, target, repairs=repairs)
 
 
 async def _edits_create(
