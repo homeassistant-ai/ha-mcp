@@ -12,7 +12,9 @@ definition from (``__config_file__`` / ``__line__``).
 
 from __future__ import annotations
 
+import functools
 import os
+import time
 from typing import TYPE_CHECKING, Any
 
 from annotatedyaml import SECRET_YAML
@@ -24,12 +26,16 @@ from .websocket_api.secrets import (
     REDACTED,
     _load_secret_scrub,
     _scrub_secret_values,
+    _secret_files,
 )
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 WS_LOADED_CONFIG = "ha_mcp_tools/loaded_config"
+# The fallback for the process start, and the secrets.yaml files seen so far.
+_IMPORTED = time.time()
+_EXISTED: set[str] = set()
 # Advertised by websocket_api's info; without it the server reads the body
 # from Core's own WebSocket command and cannot name the file.
 CAPABILITY = "loaded_config"
@@ -90,7 +96,7 @@ def loaded_config(
         # for an item removed there while Core still holds it, until the reload.
         "in_storage": file == _STORAGE[domain]
         and (domain == "script" or CONF_ID in raw),
-        # secrets.yaml could not be read, so config is not redacted.
+        # A secret in config may not be redacted: see _scrub_inputs.
         "scrub_degraded": scrub_degraded,
     }
 
@@ -121,16 +127,58 @@ def _loaded(hass: HomeAssistant, entity_id: str) -> tuple[str, Any, Any]:
     return domain, entity, getattr(entity, "raw_config", None)
 
 
+def _has_number(node: Any) -> bool:
+    if isinstance(node, dict):
+        return any(_has_number(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_has_number(item) for item in node)
+    return isinstance(node, (int, float)) and not isinstance(node, bool)
+
+
+@functools.cache
+def _process_started() -> float:
+    """When this Home Assistant process started, before it loaded any config."""
+    try:
+        with open("/proc/self/stat", encoding="utf-8") as stat:
+            ticks = int(stat.read().rsplit(")", 1)[1].split()[19])
+        with open("/proc/stat", encoding="utf-8") as stat:
+            boot = next(int(line.split()[1]) for line in stat if line[:5] == "btime")
+        return boot + ticks / os.sysconf("SC_CLK_TCK")
+    except OSError, ValueError, IndexError, StopIteration:
+        return _IMPORTED
+
+
+def _changed_since_start(path: str) -> bool:
+    """Whether a secrets.yaml differs from the one Core read at its start."""
+    try:
+        changed = os.path.getmtime(path) > _process_started()
+    except FileNotFoundError:
+        # Gone now, but an earlier read found it.
+        return path in _EXISTED
+    except OSError:
+        return True
+    _EXISTED.add(path)
+    return changed
+
+
+def _scrub_inputs(hass: HomeAssistant, raw: Any) -> tuple[frozenset[str], bool]:
+    """The values to scrub from ``raw`` and whether the scrub can miss one."""
+    # Every file the definition draws on: Core resolves a !secret from the
+    # secrets.yaml nearest the file that names it.
+    files = sorted(set(_files(raw)))
+    values, degraded = _load_secret_scrub(hass, files)
+    # A number carries no source name: one Core resolved from a secrets.yaml
+    # that has changed since cannot be told from the definition's own numbers.
+    consulted = _secret_files(hass.config.path(SECRET_YAML), files)
+    changed = any(_changed_since_start(path) for path in consulted)
+    return values, degraded or (changed and _has_number(raw))
+
+
 async def _prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     # Read once: a reload during the file read below must not swap in another
     # definition than the one the secrets were read for.
     loaded = _loaded(hass, msg["entity_id"])
-    # Every file the definition draws on: Core resolves a !secret from the
-    # secrets.yaml nearest the file that names it.
-    files = sorted(set(_files(loaded[2])))
-    values, degraded = await hass.async_add_executor_job(
-        _load_secret_scrub, hass, files
-    )
+    values, degraded = await hass.async_add_executor_job(_scrub_inputs, hass, loaded[2])
     return {"secret_values": values, "scrub_degraded": degraded, "loaded": loaded}
 
 

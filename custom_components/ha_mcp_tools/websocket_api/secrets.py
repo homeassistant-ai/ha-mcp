@@ -109,12 +109,14 @@ def _collect_secret_strings(raw: dict[Any, Any]) -> frozenset[str]:
     """
     values: set[str] = set()
     pending = list(raw.values())
+    # A YAML alias can make a mapping or list contain itself.
+    seen: set[int] = set()
     while pending:
         v = pending.pop()
-        if isinstance(v, dict):
-            pending.extend(v.values())
-        elif isinstance(v, list):
-            pending.extend(v)
+        if isinstance(v, (dict, list)):
+            if id(v) not in seen:
+                seen.add(id(v))
+                pending.extend(v.values() if isinstance(v, dict) else v)
         elif isinstance(v, str):
             if v:
                 values.add(v)

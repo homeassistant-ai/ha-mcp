@@ -100,14 +100,16 @@ ENABLE_TO_READ = (
     "Enable its entity with ha_set_entity to read the definition Home Assistant loads"
 )
 SECRETS_UNREAD = (
-    "secrets.yaml could not be read, so !secret values in config are not redacted"
+    "a secrets.yaml could not be read or has changed since Home Assistant "
+    "started, so !secret values in config may not be redacted"
 )
 WITHHELD = (
     " Its definition is withheld: redact_secrets is on, and the !secret "
     "values Home Assistant resolved in it could not be redacted"
 )
 WITHHELD_WHY = {
-    True: f"{WITHHELD}, since secrets.yaml could not be read.",
+    True: f"{WITHHELD}, since a secrets.yaml could not be read or has changed "
+    "since Home Assistant started.",
     False: f"{WITHHELD} without the ha_mcp_tools component. {COMPONENT_INSTALL_HINT}",
 }
 
@@ -165,9 +167,18 @@ async def _from_component(client: Any, entity_id: str) -> dict[str, Any] | None:
         logger.warning("%s failed: %s", WS_LOADED_CONFIG, result.get("error"))
         return None
     reply = result.get("result")
-    # A reply without the verdict is malformed: read from Core instead.
-    usable = isinstance(reply, dict) and isinstance(reply.get("loaded"), bool)
-    return reply if usable else None
+    return reply if _well_formed(reply) else None
+
+
+def _well_formed(reply: Any) -> bool:
+    """A reply that says nothing is loaded, or one with the definition and
+    whether its secrets were redacted; anything else is read from Core."""
+    if not isinstance(reply, dict) or not isinstance(reply.get("loaded"), bool):
+        return False
+    return not reply["loaded"] or (
+        isinstance(reply.get("config"), dict)
+        and isinstance(reply.get("scrub_degraded"), bool)
+    )
 
 
 async def loaded_definition(

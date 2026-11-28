@@ -89,9 +89,10 @@ _FILES = {
         "    - event: office_only\n"
         "      event_data:\n"
         "        code: !secret office_code\n"
+        "        pin: !secret office_pin\n"
     ),
     # Core resolves a !secret from the secrets.yaml nearest the file naming it.
-    "automations/secrets.yaml": "office_code: hunter2-office\n",
+    "automations/secrets.yaml": "office_code: hunter2-office\noffice_pin: 471147\n",
     "scripts/office.yaml": (
         "office_join:\n  alias: Office Join\n  sequence:\n    - event: office_join_only\n"
     ),
@@ -226,7 +227,38 @@ class TestRead:
             entity_id="automation.packaged_night"
         )
 
-        assert any("not redacted" in w for w in result["warnings"])
+        assert any("may not be redacted" in w for w in result["warnings"])
+
+    async def test_numeric_secret_changed_after_load_is_withheld_under_redaction(
+        self, hass: HomeAssistant, automations: AutomationConfigTools, redact_on: None
+    ) -> None:
+        """A number carries no trace of the secrets file it came from, so once
+        that file changed, the loaded number passed as the automation's own."""
+        await write_config_files(
+            hass, {"automations/secrets.yaml": "office_pin: 999999\n"}
+        )
+
+        with pytest.raises(ToolError) as exc:
+            await automations.ha_config_get_automation(
+                entity_id="automation.office_lights"
+            )
+
+        assert "471147" not in str(error_body(exc))
+
+    async def test_secrets_file_that_contains_itself_is_read(
+        self, hass: HomeAssistant, automations: AutomationConfigTools
+    ) -> None:
+        """A YAML alias can make a secret contain itself; collecting its values
+        then never ended."""
+        await write_config_files(
+            hass, {"secrets.yaml": "door_code: hunter2-door\nloop: &loop [*loop]\n"}
+        )
+
+        result = await automations.ha_config_get_automation(
+            entity_id="automation.packaged_night"
+        )
+
+        assert "hunter2-door" not in str(result)
 
     async def test_unreadable_secrets_file_withholds_under_redaction(
         self, hass: HomeAssistant, automations: AutomationConfigTools, redact_on: None
