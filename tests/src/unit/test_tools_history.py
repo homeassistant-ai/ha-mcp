@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock
 import pytest
 from homeassistant.components.recorder import Recorder
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
@@ -84,6 +86,113 @@ async def _refusal(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]
         await HistoryTools(client).ha_get_history(**kwargs)
     response: dict[str, Any] = json.loads(str(exc_info.value))
     return response
+
+
+async def test_history_resolves_a_target_with_core(
+    recorded: None,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    sent: AsyncMock,
+) -> None:
+    hass.states.async_set("sensor.outside", "8")
+    result = await _history(
+        component_core_client, target={"entity_id": "sensor.outside"}
+    )
+    assert [e["entity_id"] for e in result["data"]["entities"]] == ["sensor.outside"]
+    assert any(
+        call.args[0]["type"] == "extract_from_target" for call in sent.call_args_list
+    )
+
+
+async def test_a_target_area_is_read_beside_the_named_entities(
+    recorded: None,
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    area_registry: ar.AreaRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    kitchen = area_registry.async_create("Kitchen")
+    entry = entity_registry.async_get_or_create("sensor", "test", "kitchen")
+    entity_registry.async_update_entity(entry.entity_id, area_id=kitchen.id)
+    hass.states.async_set(entry.entity_id, "5")
+    hass.states.async_set("sensor.outside", "8")
+
+    result = await _history(
+        component_core_client,
+        entity_ids="sensor.outside",
+        target={"area_id": [kitchen.id, "no_such_area"]},
+    )
+
+    assert [e["entity_id"] for e in result["data"]["entities"]] == [
+        "sensor.outside",
+        entry.entity_id,
+    ]
+    assert any("no area no_such_area" in warning for warning in result["warnings"])
+
+
+async def test_an_empty_entity_list_beside_a_target_reads_the_target(
+    recorded: None, hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    hass.states.async_set("sensor.outside", "8")
+
+    result = await _history(
+        component_core_client, entity_ids=[], target={"entity_id": "sensor.outside"}
+    )
+
+    assert [e["entity_id"] for e in result["data"]["entities"]] == ["sensor.outside"]
+
+
+async def test_no_attributes_leaves_the_attributes_out_of_every_row(
+    recorded: None, hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    await record_states(
+        hass,
+        "climate.hall",
+        ("heat", {"temperature": 20}, START.timestamp() + 60),
+        ("off", {"temperature": 21}, START.timestamp() + 120),
+    )
+
+    async def attributes(**kwargs: Any) -> list[Any]:
+        result = await _history(
+            component_core_client, entity_ids="climate.hall", **_window(1), **kwargs
+        )
+        return [
+            row.get("attributes") for row in result["data"]["entities"][0]["states"]
+        ]
+
+    assert [row["temperature"] for row in await attributes(order="asc")] == [20, 21]
+    assert not any(await attributes(no_attributes=True))
+
+
+@pytest.mark.usefixtures("guardrails")
+async def test_the_workload_budget_doubles_when_attributes_are_read(
+    recorded: None, core_client: HomeAssistantClient
+) -> None:
+    """Seven entity-days fit the budget once and not doubled."""
+    query = {"entity_ids": "sensor.temp", **_window(7)}
+
+    refusal = await _refusal(core_client, **query)
+    result = await _history(core_client, **query, no_attributes=True)
+
+    assert any("no_attributes=true" in hint for hint in refusal["error"]["suggestions"])
+    assert result["data"]["success"] is True
+
+
+async def test_an_empty_entity_id_gets_cores_own_refusal(
+    recorded: None, component_core_client: HomeAssistantClient
+) -> None:
+    error = await _refusal(component_core_client, entity_ids="")
+
+    assert error["ha_error_code"] == "invalid_entity_ids"
+
+
+async def test_a_target_that_matches_nothing_names_what_core_missed(
+    recorded: None, component_core_client: HomeAssistantClient
+) -> None:
+    error = await _refusal(component_core_client, target={"area_id": "no_such_area"})
+
+    assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert error["missing_areas"] == ["no_such_area"]
 
 
 def _window(days: int) -> dict[str, str]:
@@ -240,7 +349,10 @@ async def test_raw_history_over_the_entity_hour_budget_is_refused(
     core_client: HomeAssistantClient, sent: AsyncMock
 ) -> None:
     response = await _refusal(
-        core_client, entity_ids=["sensor.one", "sensor.two"], **_window(6)
+        core_client,
+        entity_ids=["sensor.one", "sensor.two"],
+        no_attributes=True,
+        **_window(6),
     )
 
     assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -253,7 +365,9 @@ async def test_relative_window_exactly_at_the_budget_runs(
     core_client: HomeAssistantClient, sent: AsyncMock
 ) -> None:
     """Ten days of one entity is the 240 entity-hour budget, not over it."""
-    result = await _history(core_client, entity_ids="sensor.temp", start_time="10d")
+    result = await _history(
+        core_client, entity_ids="sensor.temp", start_time="10d", no_attributes=True
+    )
 
     assert result["data"]["success"] is True
     assert _recorder_queries(sent) == ["history/history_during_period"]
@@ -271,10 +385,10 @@ async def test_history_refusal_names_the_detail_flags_that_raise_the_cost(
         **_window(2),
     )
 
-    assert response["minimal_response"] is False
+    assert response["reads_attributes"] is True
     assert response["significant_changes_only"] is False
     suggestions = response["error"]["suggestions"]
-    assert any("minimal_response=true" in item for item in suggestions)
+    assert any("no_attributes=true" in item for item in suggestions)
     assert any("significant_changes_only=true" in item for item in suggestions)
 
 

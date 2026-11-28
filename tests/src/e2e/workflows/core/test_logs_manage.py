@@ -10,6 +10,7 @@ from ha_mcp._vendor.fastmcp import Client
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.cleanup import CleanupSteps
+from ...utilities.component_path import assert_component_path
 from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
 
@@ -80,6 +81,7 @@ async def test_statistic_import_adjust_and_clear(mcp_client: Client) -> None:
             },
         )
         assert [row["statistic_id"] for row in searched["result"]] == [statistic_id]
+        assert_component_path(searched)
         aliases_skipped = any("aliases" in w for w in searched.get("warnings", []))
         assert aliases_skipped is not component_surface_available()
         await wait_for_tool_result(
@@ -103,6 +105,7 @@ async def test_statistic_import_adjust_and_clear(mcp_client: Client) -> None:
                 },
             },
         )
+        assert_component_path(adjusted)
         assert [row["statistic_id"] for row in adjusted["statistics_metadata"]] == [
             statistic_id
         ]
@@ -157,13 +160,15 @@ async def test_a_recorder_service_reports_how_it_waited(mcp_client: Client) -> N
         "ha_manage_logs", {"action": "recorder.enable"}
     )
 
+    assert_component_path(result)
+    assert result["recorder"]["recording"] is True
     if component_surface_available():
-        assert set(result["recorder"]) == {
+        assert set(result["recorder"]) >= {
             "purge_keep_days",
             "auto_purge",
             "oldest_state",
         }
+        assert result["recorder"]["enabled"] is True
         assert "warnings" not in result
     else:
-        assert "recorder" not in result
         assert any("may still be running" in warning for warning in result["warnings"])

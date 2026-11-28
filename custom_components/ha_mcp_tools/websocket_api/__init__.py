@@ -409,6 +409,7 @@ from .. import (
     flow_outline,
     flow_record,
     helper_collections,
+    history_page,
     recorder_status,
     scene_editor,
     todo_items,
@@ -614,6 +615,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         *recorder_status.command_specs(vol),
         *dashboard_cards_ws.command_specs(vol),
         *_oauth_callback_specs(),
+        *history_page.command_specs(vol),
     ]
 
 

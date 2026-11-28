@@ -30,6 +30,7 @@ from homeassistant.components.websocket_api.const import (
     ERR_UNAUTHORIZED,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import STORAGE_SEMAPHORE
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.typing import MockHAClientWebSocket, WebSocketGenerator
 
@@ -261,7 +262,9 @@ async def test_extended_trace_keeps_cores_json_types(
 
 @pytest.mark.usefixtures("trace_store")
 async def test_saved_traces_are_restored_before_the_match(
-    hass: HomeAssistant, component_ws: MockHAClientWebSocket
+    hass: HomeAssistant,
+    component_ws: MockHAClientWebSocket,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A restart leaves traces on disk only; the command restores them first."""
     saved = automation_run("r1", context_id="ctx-1")
@@ -275,7 +278,19 @@ async def test_saved_traces_are_restored_before_the_match(
     hass.data[DATA_TRACE] = {}
     hass.data.pop(DATA_TRACES_RESTORED, None)
 
-    result = await ws_result(component_ws, _COMMAND, context_id="ctx-1")
+    semaphore = asyncio.Semaphore(0)
+    monkeypatch.setitem(hass.data, STORAGE_SEMAPHORE, semaphore)
+    restoring = asyncio.create_task(trace_context.async_restore_traces(hass))
+    await asyncio.sleep(0)
+    assert DATA_TRACES_RESTORED in hass.data and not restoring.done()
+    lookup = asyncio.create_task(ws_result(component_ws, _COMMAND, context_id="ctx-1"))
+    try:
+        done, _ = await asyncio.wait({lookup}, timeout=0.3)
+        assert not done
+    finally:
+        semaphore.release()
+        await restoring
+        result = await lookup
 
     assert result["match"] == "trace"
     assert result["run_id"] == "r1"

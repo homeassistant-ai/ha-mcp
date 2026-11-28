@@ -331,6 +331,7 @@ async def test_describe_returns_cores_command_schema_through_the_component(
     )
 
     assert result["result"]["status"] == "available"
+    assert not result.get("warnings")
     assert "adjustment" in result["result"]["schema"]["properties"]
     sent.assert_not_called()
 
@@ -343,6 +344,24 @@ async def test_describe_without_the_component_says_why_it_cannot(
     assert result["result"]["status"] == "unavailable"
     assert result["result"]["reason"] in result["warnings"]
     sent.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("action", "kwargs"),
+    [
+        ("recorder/list_statistic_ids", {"query": "energy"}),
+        ("recorder/clear_statistics", {"describe": True}),
+        ("recorder.enable", {}),
+    ],
+)
+async def test_without_the_component_core_answers_and_the_component_is_named(
+    client: HomeAssistantClient, action: str, kwargs: dict[str, Any]
+) -> None:
+    from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
+
+    result = await _manage(client, action, **kwargs)
+    assert result["success"]
+    assert any(COMPONENT_VIA_MARKETPLACE in w for w in result["warnings"])
 
 
 # --- Waiting for the recorder ------------------------------------------------
@@ -383,6 +402,7 @@ async def test_a_recorder_write_returns_after_the_recorder_finished_it(
     assert [row["statistic_id"] for row in result["statistics_metadata"]] == [
         "test:meter"
     ]
+    assert result["recorder"]["enabled"] is True
     assert "warnings" not in result
 
 
@@ -403,6 +423,10 @@ async def test_a_purge_returns_the_recorders_oldest_state(
     oldest = recorder_mock.states_manager.oldest_ts
     assert oldest is not None and oldest > old
     assert result["recorder"] == {
+        **(await component_client.send_websocket_message({"type": "recorder/info"}))[
+            "result"
+        ],
+        "enabled": True,
         "purge_keep_days": recorder_mock.keep_days,
         "auto_purge": recorder_mock.auto_purge,
         "oldest_state": datetime.fromtimestamp(oldest, UTC).isoformat(
@@ -412,14 +436,34 @@ async def test_a_purge_returns_the_recorders_oldest_state(
     assert "warnings" not in result
 
 
+async def test_disabling_the_recorder_reads_back_cores_enabled_flag(
+    component_client: HomeAssistantClient,
+) -> None:
+    """recorder/info's `recording` stays true while the recorder is disabled."""
+    disabled = await _manage(component_client, "recorder.disable")
+    enabled = await _manage(component_client, "recorder.enable")
+
+    assert disabled["recorder"]["enabled"] is False
+    assert disabled["recorder"]["recording"] is True
+    assert enabled["recorder"]["enabled"] is True
+
+
+async def test_a_log_action_returns_no_recorder_status(
+    client: HomeAssistantClient,
+) -> None:
+    result = await _manage(client, "system_log.write", data={"message": "noted"})
+
+    assert "recorder" not in result
+
+
 async def test_without_the_component_the_wait_names_what_it_cannot_see(
     client: HomeAssistantClient,
 ) -> None:
-    """Core's API shows the recorder's queue, not the job it is running."""
+    """Nothing in Core's own API says whether the recorder finished the job."""
     result = await _manage(client, "recorder.purge", data={"keep_days": 5})
 
     assert result["success"] is True
-    assert "recorder" not in result
+    assert result["recorder"]["recording"] is True
     assert any("may still be running" in warning for warning in result["warnings"])
 
 
@@ -566,24 +610,6 @@ async def test_cores_own_timeout_on_a_clear_is_not_a_refusal(
     assert await _sums(hass, ENERGY) == []
 
 
-async def test_without_the_component_a_busy_recorder_is_a_warning(
-    recorder_mock: Recorder,
-    hass: HomeAssistant,
-    client: HomeAssistantClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(tools_logs_manage, "RECORDER_DRAIN_SECONDS", 0.5)
-    assert await recorder_mock.lock_database()
-    try:
-        result = await _manage(client, "recorder.purge")
-    finally:
-        recorder_mock.unlock_database()
-    await async_wait_recording_done(hass)
-
-    assert result["success"] is True
-    assert any("still working" in warning for warning in result["warnings"])
-
-
 async def test_describe_of_a_service_core_does_not_have_says_so(
     core_client: HomeAssistantClient,
 ) -> None:
@@ -706,6 +732,33 @@ async def test_service_data_may_use_the_websocket_envelope_keys(
         logging.setLoggerClass(logger_class)
 
 
+async def test_a_modules_log_level_is_set_with_no_word_about_the_recorder(
+    recorder_mock: Recorder, hass: HomeAssistant, client: HomeAssistantClient
+) -> None:
+    """Core's command changes a logger; the recorder stores nothing for it."""
+    named = logging.getLogger("ha_mcp_log_level_probe")
+    level, logger_class = named.level, logging.getLoggerClass()
+    try:
+        assert await async_setup_component(hass, "logger", {})
+
+        result = await _manage(
+            client,
+            "logger/log_level",
+            data={
+                "module": "ha_mcp_log_level_probe",
+                "level": "DEBUG",
+                "persistence": "none",
+            },
+        )
+
+        assert named.level == logging.DEBUG
+        assert "warnings" not in result
+    finally:
+        # Core's logger setup changes process-wide state.
+        named.setLevel(level)
+        logging.setLoggerClass(logger_class)
+
+
 async def test_a_timed_out_clear_says_it_may_not_have_run(
     recorder_mock: Recorder,
     hass: HomeAssistant,
@@ -724,28 +777,19 @@ async def test_a_timed_out_clear_says_it_may_not_have_run(
     assert any("may not have run" in warning for warning in result["warnings"])
 
 
-async def test_the_queue_watch_ends_at_its_deadline(
+async def test_a_write_whose_outcome_read_gets_no_answer_still_succeeds(
     recorder_mock: Recorder,
     hass: HomeAssistant,
     client: HomeAssistantClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A recorder/info question still open at the deadline does not extend it."""
+    """The write ran; failing it would invite a repeat."""
     monkeypatch.setattr(tools_logs_manage, "RECORDER_DRAIN_SECONDS", 0.3)
-    with patch.object(
-        client, "send_websocket_message", wraps=client.send_websocket_message
-    ) as sent:
-        async with unanswered(hass, "recorder/info", monkeypatch):
-            result = await _manage(client, "recorder.enable")
+    async with unanswered(hass, "recorder/info", monkeypatch):
+        result = await _manage(client, "recorder.enable")
 
-    budgets = [
-        call.args[0]["_wait_timeout"]
-        for call in sent.call_args_list
-        if call.args[0].get("type") == "recorder/info"
-    ]
-    assert budgets and all(0 < budget <= 0.3 for budget in budgets)
-    assert any("still working" in warning for warning in result["warnings"])
-    assert not any("gave no answer" in warning for warning in result["warnings"])
+    assert result["success"] is True
+    assert any("gave no answer" in warning for warning in result["warnings"])
 
 
 async def test_a_logbook_entry_is_recorded_when_the_call_returns(

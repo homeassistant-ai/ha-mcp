@@ -88,6 +88,9 @@ async def test_history_warnings_are_one_top_level_list_in_order(
     )
     assert "warnings" not in result["data"]
     *payload, timezone, typo = result["warnings"]
-    assert payload[0].startswith("No recorded states in this window for: sensor.temp")
+    assert any(
+        warning.startswith("No recorded states in this window for: sensor.temp")
+        for warning in payload
+    )
     assert "timezone" in timezone
     assert "nonexistent" in typo

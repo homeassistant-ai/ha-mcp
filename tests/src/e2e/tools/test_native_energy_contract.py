@@ -6,6 +6,7 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
 
 from ..utilities.assertions import MCPAssertions, assert_mcp_success
 from ..utilities.core_version import core_at_least
@@ -206,7 +207,7 @@ async def test_energy_suggestions_come_from_the_frontend_through_the_component(
     assert "config" in result
     if not component_surface_available():
         assert suggestions["status"] == "unavailable"
-        assert "HA-MCP component" in suggestions["reason"]
+        assert COMPONENT_VIA_MARKETPLACE in suggestions["reason"]
         return
     if not await core_at_least(ha_client, (2026, 12)):
         assert "frontend suggests no energy meters" in suggestions["reason"]

@@ -103,22 +103,39 @@ def statistics_warnings(entities: list[dict[str, Any]]) -> list[str]:
 
 
 async def converter_records(
-    client: Any, statistic_ids: list[str], units: dict[str, Any]
-) -> dict[str, dict[str, Any]]:
+    client: Any,
+    statistic_ids: list[str],
+    units: dict[str, Any],
+    warnings: list[str],
+    *,
+    needed: bool = True,
+) -> dict[str, dict[str, Any]] | None:
     """Core's converter choice and output unit for each statistic, through the
-    component; empty without it."""
+    component; None when its answer was unavailable.
+
+    ``needed`` is False for a read Core's own metadata serves in full. An
+    install without the component then gets no warning; an install whose
+    component could not answer still does.
+    """
     from ..client.websocket_client import get_websocket_client
     from .component_api import (
         component_supports,
+        component_unusable_warning,
         get_component_caps,
         invalidate_caps,
         is_unknown_command,
     )
 
+    caps = await get_component_caps(client)
+    if caps is None and not needed:
+        return None
+    warning = component_unusable_warning(
+        caps, "Core's statistics converter could not be read"
+    )
     try:
-        caps = await get_component_caps(client)
         if not component_supports(caps, "core_contract"):
-            return {}
+            warnings.append(warning)
+            return None
         ws = await get_websocket_client(
             url=client.base_url,
             token=client.token,
@@ -132,20 +149,8 @@ async def converter_records(
         if is_unknown_command(exc):
             invalidate_caps(client)
         logger.warning("Statistics converter resolution failed", exc_info=True)
-        return {}
-
-
-async def resolve_requested_units(
-    client: Any, entities: list[dict[str, Any]], units: dict[str, Any]
-) -> None:
-    """Label each entity with the unit Core converts to for explicitly requested ``units``."""
-    if not units or not entities:
-        return
-    label_requested_units(
-        entities,
-        await converter_records(client, [e["entity_id"] for e in entities], units),
-        units,
-    )
+        warnings.append(warning)
+        return None
 
 
 def label_requested_units(

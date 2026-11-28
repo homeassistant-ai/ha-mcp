@@ -22,6 +22,7 @@ from ...utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ...utilities.component_path import assert_component_path
 from ...utilities.topology import component_surface_available
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class TestGetHistory:
         )
 
         data = assert_mcp_success(result, "Get history for sun.sun")
+        assert_component_path(data)
 
         # Verify response structure - history data is nested in 'data' key
         inner_data = data.get("data", data)
@@ -332,7 +334,7 @@ class TestGetHistory:
                 "end_time": end.isoformat(),
                 "minimal_response": minimal,
                 "significant_changes_only": False,
-                "no_attributes": minimal,
+                "no_attributes": False,
             }
         )
         assert native["success"], native
@@ -403,7 +405,7 @@ class TestGetHistory:
                     "end_time": end.isoformat(),
                     "minimal_response": True,
                     "significant_changes_only": True,
-                    "no_attributes": True,
+                    "no_attributes": False,
                 }
             )
             assert native["success"], native
@@ -438,8 +440,11 @@ class TestGetHistory:
         ) == pytest.approx((end - start).total_seconds(), abs=0.01)
         assert result["data"]["entities"][1]["summary"]["distinct_states"] == 0
         # Only the unrecorded entity is flagged; the seed has a window-start state.
-        assert "No recorded states" in result["warnings"][0]
-        assert missing in result["warnings"][0]
+        assert_component_path(result)
+        assert any(
+            "No recorded states" in warning and missing in warning
+            for warning in result["warnings"]
+        )
         assert not any(target in warning for warning in result["warnings"])
 
 
@@ -467,6 +472,7 @@ class TestGetHistoryStatisticsSource:
             },
         )
         data = assert_mcp_success(result, "Energy statistics with units")
+        assert_component_path(data)
         data = data.get("data", data)
         entities = {row["entity_id"]: row for row in data["entities"]}
         for entity_id, unit in [
@@ -502,6 +508,7 @@ class TestGetHistoryStatisticsSource:
             )
         (entity,) = result.get("data", result)["entities"]
         assert "statistics" not in entity
+        assert_component_path(result)
         # The seeded total only rises, so a week of it is a positive change.
         assert entity["summary"]["change"] > 0
         assert entity["unit_of_measurement"] == "kWh"

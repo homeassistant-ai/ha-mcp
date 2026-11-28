@@ -372,8 +372,10 @@ rejected by the wrapper because it requests timestamps without any values. Name 
 not Core validation rules. Generic native options must not override the entity,
 time or response-size inputs that the wrapper has already bounded.
 
-Recorder scan estimation is a safety policy: Core currently performs calendar
-alignment inside its query implementation and exposes no independent estimator.
+HA-MCP estimates recorder scans as a safety policy. Core aligns calendar
+periods inside its query and, since 2026.12, exposes per-entity and
+per-statistic row counts through `recorder/database_usage`: whole-table
+counts, not counts for a time window, so they do not replace the estimate.
 Keep this conservative model explicit, fail closed for periods it cannot
 estimate, and compare it against live Core queries. Do not disguise it as a
 complete list of valid Core periods. Disabling this operator-controlled guard

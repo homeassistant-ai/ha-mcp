@@ -9,6 +9,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
     component_supports,
+    component_unusable_warning,
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
@@ -30,6 +31,12 @@ async def include_core_contract(
             "status": "unavailable",
             "reason": "Core schema discovery failed; the read result is preserved.",
         }
+        contract["warnings"] = [
+            component_unusable_warning(
+                await get_component_caps(client),
+                "the requested Core schema could not be described",
+            )
+        ]
     warnings = contract.pop("warnings", [])
     if contract.get("status") == "unavailable":
         warnings.append(contract["reason"])
@@ -67,7 +74,7 @@ async def energy_suggestions(client: Any) -> dict[str, Any]:
         "energy_suggestions",
         {},
         "the energy meter suggestions of Settings > Energy",
-        absent_note="Install or update the HA-MCP component to read them.",
+        absent_note="",
     )
 
 
@@ -80,12 +87,13 @@ async def _contract_bridge(
 ) -> dict[str, Any]:
     """Ask the component's ``capability`` bridge; ``feature`` names it in
     the reason and error texts."""
-    unavailable = {
-        "status": "unavailable",
-        "reason": f"The installed component does not expose {feature}. {absent_note}",
-    }
+    unavailable = {"status": "unavailable", "reason": ""}
     try:
         caps = await get_component_caps(client, strict=True)
+        unavailable["reason"] = (
+            component_unusable_warning(caps, f"{feature} is unavailable")
+            + f" {absent_note}"
+        ).rstrip()
         if not component_supports(caps, capability):
             return unavailable
         ws = await get_websocket_client(

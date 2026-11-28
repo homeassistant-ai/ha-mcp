@@ -12,6 +12,7 @@ import pytest
 
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.cleanup import CleanupSteps
+from ...utilities.component_path import assert_component_path
 from ...utilities.entity_finders import find_test_light_entity
 from ...utilities.wait_helpers import wait_for_entity_state, wait_for_tool_result
 from .conftest import create_trace_automation, create_trace_script
@@ -263,6 +264,7 @@ action:
             {"entity_id": automation_id, "context_id": own_context_id},
         )
         assert by_own_context["context_match"] == "trace"
+        assert_component_path(by_own_context)
         assert by_own_context["run_id"] == run_id
         assert by_own_context["context_id"] == own_context_id
 

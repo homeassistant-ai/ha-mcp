@@ -1,6 +1,5 @@
 """Home Assistant's own write operations on the recorder, its statistics and the logs."""
 
-import asyncio
 from typing import Annotated, Any, Literal, NoReturn
 
 from pydantic import Field
@@ -55,11 +54,11 @@ LogsAction = Literal[
     "recorder/change_statistics_unit",
     "recorder/adjust_sum_statistics",
     "recorder/import_statistics",
+    "logger/log_level",
 ]
 
-# How long a recorder write waits for the recorder to finish it.
+# How long a write waits for the recorder to finish it, and for recorder/info.
 RECORDER_DRAIN_SECONDS = 30.0
-_DRAIN_POLL_SECONDS = 0.2
 _PAGED_ACTION = "recorder/list_statistic_ids"
 _SETTLED_FIELDS = {"settled", "purge_keep_days", "auto_purge", "oldest_state"}
 # The client's wait for the bridge's reply outlasts the wait asked of it.
@@ -67,6 +66,13 @@ _REPLY_MARGIN_SECONDS = 10.0
 # The recorder actions that change nothing, so nothing is waited for; Read
 # Only Mode allows exactly these (read_only._logs_write).
 RECORDER_READS = (_PAGED_ACTION, "recorder/validate_statistics")
+
+
+def _stores_through_recorder(action: str) -> bool:
+    """A service fires an event the recorder stores; of Core's commands only the recorder's write."""
+    return action not in RECORDER_READS and (
+        "/" not in action or action.startswith("recorder/")
+    )
 
 
 def _still_working() -> str:
@@ -174,6 +180,8 @@ class LogsManageTools:
                         "Do not repeat it automatically: a repeat can apply the "
                         "change twice. Read its effect first with ha_get_history, "
                         "ha_get_logs or action='recorder/list_statistic_ids'."
+                        if _stores_through_recorder(action)
+                        else "Repeating it sets the same value again."
                     ],
                 )
             )
@@ -218,35 +226,16 @@ class LogsManageTools:
             )
         return entry
 
-    async def _recorder_drain_warning(self) -> str | None:
-        """Wait until Core's recorder reports an empty queue; a warning when it
-        does not within the bound or cannot be asked."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + RECORDER_DRAIN_SECONDS
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                return _still_working()
-            try:
-                reply = await self._client.send_websocket_message(
-                    {"type": "recorder/info", "_wait_timeout": remaining}
-                )
-            except HomeAssistantCommandNotSent:
-                raise
-            except HomeAssistantConnectionError:
-                if loop.time() < deadline:
-                    raise
-                return _still_working()
-            if not reply.get("success"):
-                return (
-                    "Could not read recorder/info to wait for the recorder: "
-                    f"{core_error_message(reply.get('error', 'Unknown error'))}"
-                )
-            if reply["result"]["backlog"] == 0:
-                return None
-            await asyncio.sleep(
-                min(_DRAIN_POLL_SECONDS, max(deadline - loop.time(), 0))
-            )
+    async def _recorder_info(self, warnings: list[str]) -> dict[str, Any]:
+        reply = await self._client.send_websocket_message(
+            {"type": "recorder/info", "_wait_timeout": RECORDER_DRAIN_SECONDS}
+        )
+        if reply.get("success"):
+            return dict(reply["result"])
+        warnings.append(
+            f"Could not read recorder/info: {core_error_message(reply.get('error'))}"
+        )
+        return {}
 
     async def _recorder_settled(
         self, warnings: list[str]
@@ -272,22 +261,20 @@ class LogsManageTools:
             settled: bool = status["settled"]
             if not settled:
                 warnings.append(_still_working())
-            # A component released before the field came answers without it.
+            # A component released before these two fields came answers without them.
             if status.get("migration_in_progress"):
                 warnings.append(MIGRATING)
             oldest = status["oldest_state"]
             return {
+                **({"enabled": status["enabled"]} if "enabled" in status else {}),
                 "purge_keep_days": status["purge_keep_days"],
                 "auto_purge": status["auto_purge"],
                 "oldest_state": None if oldest is None else when(oldest),
             }, settled
-        if warning := await self._recorder_drain_warning():
-            warnings.append(warning)
         warnings.append(
             component_unusable_warning(
                 await get_component_caps(self._client),
-                "only the recorder's queue was watched: a job leaves it when it "
-                "starts and may still be running",
+                "the recorder may still be running the operation",
             )
         )
         return None, False
@@ -315,11 +302,12 @@ class LogsManageTools:
         """Wait for the recorder and read back what the operation left."""
         settled = False
         # Services outside the recorder write through it too (a logbook entry
-        # is an event it stores), so every write waits, with no list of them.
-        if action not in RECORDER_READS:
+        # is an event it stores), so every service waits, with no list of them.
+        if _stores_through_recorder(action):
             status, settled = await self._recorder_settled(warnings)
-            if status is not None and action.startswith("recorder."):
-                response["recorder"] = status
+            if action.startswith("recorder"):
+                info = await self._recorder_info(warnings)
+                response["recorder"] = {**info, **(status or {})}
         if not named:
             return
         after, failure = await self._statistics_metadata(named)
@@ -398,9 +386,9 @@ class LogsManageTools:
             LogsAction,
             Field(
                 description=(
-                    "The Home Assistant operation, named as Core names it: a dot "
-                    "is a service, a slash a WebSocket command (Developer Tools > "
-                    "Statistics)."
+                    "Core's recorder and log write operations, plus statistic listings "
+                    "and validation. "
+                    "A dot names a service and a slash names a WebSocket command."
                 )
             ),
         ],
@@ -469,9 +457,10 @@ class LogsManageTools:
         refusal comes back with its own error code. Call with describe=True
         first when the fields are not known. With the HA-MCP component a
         recorder write returns once the recorder has finished it, and a
-        recorder service returns the recorder's purge settings and oldest
-        state as `recorder`; without it the tool watches the recorder's queue
-        and says what that cannot show. A statistics command that names
+        recorder action returns `recorder`: Core's recorder/info fields plus
+        `enabled` (what recorder.disable turns off; `recording` does not
+        change), the purge settings and the oldest state. Without the
+        component it holds recorder/info only. A statistics command that names
         statistics (Core's `statistic_id` / `statistic_ids` fields) also
         returns Core's metadata for them as `statistics_metadata`, read
         after the write. Core also lists a statistic a sensor still

@@ -19,8 +19,7 @@ if TYPE_CHECKING:
 
 WS_RECORDER_STATUS = "ha_mcp_tools/recorder_status"
 # Advertised by websocket_api's info; without it a short or empty history read
-# says only what Core's own commands tell, and a recorder write is waited for
-# by its queue length alone.
+# says only what Core's own commands tell, and a recorder write is not waited for.
 CAPABILITY = "recorder_status"
 # The longest a caller may ask the bridge to wait for the recorder.
 _MAX_WAIT_SECONDS = 120
@@ -28,15 +27,21 @@ _WAITS_KEY = "ha_mcp_tools_recorder_waits"
 
 
 def recorder_status(
-    hass: HomeAssistant, msg: dict[str, Any], settled: bool | None = None
+    hass: HomeAssistant,
+    msg: dict[str, Any],
+    settled: bool | None = None,
+    first_statistics: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """The recorder's purge settings and oldest state, and per entity whether
-    it is recorded and has a state now."""
+    """Whether the recorder is enabled, its purge settings and oldest state, per
+    entity whether it is recorded and has a state now, and what the caller's
+    wait and first-statistic lookup found."""
     from homeassistant.components.recorder.entity_options import is_entity_recorded
     from homeassistant.helpers.recorder import get_instance
 
     instance = get_instance(hass)
     status: dict[str, Any] = {
+        # What recorder.disable turns off; recorder/info's `recording` is not it.
+        "enabled": instance.enabled,
         "purge_keep_days": instance.keep_days,
         "auto_purge": instance.auto_purge,
         "oldest_state": instance.states_manager.oldest_ts,
@@ -52,6 +57,8 @@ def recorder_status(
     }
     if settled is not None:
         status["settled"] = settled
+    if first_statistics is not None:
+        status["first_short_term_statistics"] = first_statistics
     return status
 
 
@@ -111,6 +118,38 @@ async def _settle(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         return {"settled": False}
 
 
+def _first_statistics(hass: HomeAssistant, ids: list[str]) -> dict[str, float]:
+    from homeassistant.components.recorder.db_schema import StatisticsShortTerm
+    from homeassistant.components.recorder.statistics import (
+        _first_statistic,
+        get_metadata_with_session,
+    )
+    from homeassistant.components.recorder.util import session_scope
+    from homeassistant.helpers.recorder import get_instance
+
+    with session_scope(hass=hass, read_only=True) as session:
+        records = get_metadata_with_session(
+            get_instance(hass), session, statistic_ids=set(ids)
+        )
+        return {
+            statistic_id: first.timestamp()
+            for statistic_id, (metadata_id, _) in records.items()
+            if (first := _first_statistic(session, StatisticsShortTerm, metadata_id))
+            is not None
+        }
+
+
+async def _prepare(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    from homeassistant.helpers.recorder import get_instance
+
+    result = await _settle(hass, msg)
+    if ids := msg.get("statistic_ids"):
+        result["first_statistics"] = await get_instance(hass).async_add_executor_job(
+            _first_statistics, hass, ids
+        )
+    return result
+
+
 def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
     """The (schema, handler, async prep) row websocket_api registers."""
     return [
@@ -118,11 +157,12 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
             {
                 vol.Required("type"): WS_RECORDER_STATUS,
                 vol.Required("entity_ids"): [str],
+                vol.Optional("statistic_ids"): [str],
                 vol.Optional("wait"): vol.All(
                     vol.Coerce(float), vol.Range(min=0, max=_MAX_WAIT_SECONDS)
                 ),
             },
             recorder_status,
-            _settle,
+            _prepare,
         )
     ]

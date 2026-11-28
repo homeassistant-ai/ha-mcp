@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from freezegun import freeze_time
@@ -38,6 +39,7 @@ class TestComponentContextLookup:
         self,
         hass: HomeAssistant,
         component_core_client: HomeAssistantClient,
+        sent: AsyncMock,
     ) -> None:
         """A parent context resolves from the live store, earliest match first."""
         # The stores run under a frozen clock so Core's own start timestamps
@@ -59,6 +61,11 @@ class TestComponentContextLookup:
         )
 
         assert result["success"] is True
+        assert not result.get("warnings")
+        assert all(
+            call.args[0]["type"] not in {"trace/get", "trace/contexts"}
+            for call in sent.call_args_list
+        )
         assert result["context_match"] == "parent"
         assert result["context_id"] == "parent-1"
         assert result["context_scanned"] == 2
@@ -117,3 +124,20 @@ class TestComponentContextLookup:
         assert "Install the ha_mcp_tools component" not in hints
         assert "Pass the trace's own `context.id`" not in hints
         assert "component checked" in hints
+
+
+async def test_without_the_component_a_context_lookup_names_the_component(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
+
+    await store_runs(
+        hass, automation_run("auto-run", context_id="own-auto", parent_id="parent-1")
+    )
+
+    result = await TraceTools(core_client).ha_get_automation_traces(
+        context_id="own-auto"
+    )
+
+    assert result["success"] is True
+    assert any(COMPONENT_VIA_MARKETPLACE in w for w in result["warnings"])

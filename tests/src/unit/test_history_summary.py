@@ -7,9 +7,10 @@ recorded after the tool's ``now`` comes back from Core as it would when Core's
 clock runs ahead of the reading the tool took before its query.
 """
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Self
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.recorder import Recorder
@@ -35,6 +36,35 @@ async def recorder(recorder_mock: Recorder, hass: HomeAssistant) -> None:
     """Core's recorder and history, in UTC unless a test sets another zone."""
     assert await async_setup_component(hass, "history", {})
     await hass.config.async_set_time_zone("UTC")
+
+
+@pytest.fixture(params=["component", "core"])
+async def client(
+    request: pytest.FixtureRequest,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+) -> AsyncIterator[HomeAssistantClient]:
+    """``core_client``, with and without the component's commands.
+
+    With them the component serves the read: Core's own history command being
+    sent means the tool fell back, which returns the same totals.
+    """
+    if request.param == "core":
+        yield core_client
+        return
+    from custom_components.ha_mcp_tools import websocket_api
+
+    websocket_api.async_register_commands(hass)
+    with patch.object(
+        core_client,
+        "send_websocket_message",
+        new_callable=AsyncMock,
+        wraps=core_client.send_websocket_message,
+    ) as sent:
+        yield core_client
+    types = [call.args[0]["type"] for call in sent.call_args_list]
+    assert "ha_mcp_tools/history_page" in types
+    assert "history/history_during_period" not in types
 
 
 async def _record(
@@ -83,8 +113,82 @@ def _summary(result: dict[str, Any], entity_id: str) -> dict[str, Any]:
 
 
 @pytest.mark.usefixtures("recorder")
+@pytest.mark.parametrize(
+    ("minimal", "no_attributes", "significant", "include_start"),
+    [
+        (True, False, True, True),
+        (False, False, False, True),
+        (True, True, False, False),
+    ],
+)
+async def test_a_page_holds_the_rows_cores_own_read_returns(
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    minimal: bool,
+    no_attributes: bool,
+    significant: bool,
+    include_start: bool,
+) -> None:
+    client = component_core_client
+    await _record(
+        hass,
+        "climate.hall",
+        ("heat", _BEFORE),
+        ("heat", 5),
+        ("off", 20),
+        temperature={_BEFORE: 19, 5: 20, 20: 20},
+    )
+    await _record(hass, "switch.pump", ("off", _BEFORE), ("on", 5), ("off", 9))
+    query = {
+        "entity_ids": ["climate.hall", "switch.pump", "switch.never_recorded"],
+        "start_time": _iso(0),
+        "end_time": _iso(30),
+        "minimal_response": minimal,
+        "no_attributes": no_attributes,
+        "significant_changes_only": significant,
+        "include_start_time_state": include_start,
+    }
+    native = (
+        await client.send_websocket_message(
+            {"type": "history/history_during_period", **query}
+        )
+    )["result"]
+    assert set(native) == {"climate.hall", "switch.pump"}
+    for order in ("asc", "desc"):
+        reply = await client.send_websocket_message(
+            {
+                "type": "ha_mcp_tools/history_page",
+                "query": query,
+                "limit": 1,
+                "offset": 1,
+                "order": order,
+            }
+        )
+        assert reply["result"]["entities"] == {
+            entity_id: {
+                "states": (rows if order == "asc" else rows[::-1])[1:2],
+                "total_count": len(rows),
+                "first": rows[0]["lu"],
+            }
+            for entity_id, rows in native.items()
+        }
+    with patch.object(
+        client,
+        "send_websocket_message",
+        new_callable=AsyncMock,
+        wraps=client.send_websocket_message,
+    ) as sent:
+        result = await _query(client, "climate.hall", 30, limit=1)
+    assert not result.get("warnings")
+    assert all(
+        call.args[0]["type"] != "history/history_during_period"
+        for call in sent.call_args_list
+    )
+
+
+@pytest.mark.usefixtures("recorder")
 async def test_totals_count_each_change_and_the_time_in_each_state(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     await _record(
         hass,
@@ -95,7 +199,7 @@ async def test_totals_count_each_change_and_the_time_in_each_state(
         ("unavailable", 45),
     )
 
-    result = await _query(core_client, "switch.pump", 100, summary=True)
+    result = await _query(client, "switch.pump", 100, summary=True)
 
     assert _summary(result, "switch.pump") == {
         "changes": 3,
@@ -112,13 +216,13 @@ async def test_totals_count_each_change_and_the_time_in_each_state(
 
 @pytest.mark.usefixtures("recorder")
 async def test_first_state_after_the_window_start_is_a_change(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     # No window-start state: the entity appeared later, older history was
     # purged, or include_start_time_state=false.
     await _record(hass, "switch.pump", ("off", 10), ("on", 30))
 
-    result = await _query(core_client, "switch.pump", 100, summary=True)
+    result = await _query(client, "switch.pump", 100, summary=True)
 
     totals = _summary(result, "switch.pump")
     assert totals["changes"] == 2
@@ -141,6 +245,10 @@ async def test_attribute_update_is_not_counted_as_a_state_change(
 
     result = await _query(core_client, "climate.hall", 30, summary=True)
     rows = await _query(core_client, "climate.hall", 30, order="asc")
+    assert [
+        row["attributes"]["temperature"]
+        for row in rows["data"]["entities"][0]["states"]
+    ] == [20, 21, 21]
 
     assert [row["state"] for row in rows["data"]["entities"][0]["states"]] == [
         "heat",
@@ -154,11 +262,11 @@ async def test_attribute_update_is_not_counted_as_a_state_change(
 
 @pytest.mark.usefixtures("recorder")
 async def test_limit_keeps_the_longest_states_and_reports_how_many_exist(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     await _record(hass, "sensor.mode", ("1", _BEFORE), ("2", 1), ("3", 4), ("4", 10))
 
-    result = await _query(core_client, "sensor.mode", 20, summary=True, limit=2)
+    result = await _query(client, "sensor.mode", 20, summary=True, limit=2)
 
     totals = _summary(result, "sensor.mode")
     assert list(totals["states"]) == ["4", "3"]
@@ -196,30 +304,30 @@ async def test_summary_replaces_rows_with_totals_in_ha_time(
     assert changed_at.timestamp() == _START + 3600
     assert changed_at.utcoffset() == timedelta(hours=-5)
     assert result["data"]["query_params"]["summary"] is True
-    # The window is fully covered, so nothing is flagged.
-    assert "warnings" not in result
+    assert len(result["warnings"]) == 1
+    assert "full history window" in result["warnings"][0]
 
 
 @pytest.mark.usefixtures("recorder")
 async def test_future_end_time_does_not_count_time_that_has_not_passed(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     await _record(hass, "switch.pump", ("on", _BEFORE))
 
-    result = await _query(core_client, "switch.pump", 86400, now=600, summary=True)
+    result = await _query(client, "switch.pump", 86400, now=600, summary=True)
 
     assert _summary(result, "switch.pump")["states"]["on"]["duration_s"] == 600.0
 
 
 @pytest.mark.usefixtures("recorder")
 async def test_states_from_after_now_are_not_counted_as_changes(
-    hass: HomeAssistant, core_client: HomeAssistantClient
+    hass: HomeAssistant, client: HomeAssistantClient
 ) -> None:
     # Core answers a future end_time up to its own clock, which can run past
     # the `now` the summary stops at, by a fraction of a second or more.
     await _record(hass, "switch.pump", ("on", _BEFORE), ("off", 600.001), ("on", 800))
 
-    result = await _query(core_client, "switch.pump", 86400, now=600, summary=True)
+    result = await _query(client, "switch.pump", 86400, now=600, summary=True)
 
     totals = _summary(result, "switch.pump")
     assert totals["changes"] == 0
@@ -308,7 +416,7 @@ async def test_without_summary_the_rows_are_returned_unchanged(
     assert "summary" not in entity
     assert [row["state"] for row in entity["states"]] == ["off", "on"]
     assert result["data"]["query_params"]["summary"] is False
-    assert "warnings" not in result
+    assert any("full history window" in warning for warning in result["warnings"])
 
 
 async def test_offset_with_summary_is_rejected_before_querying(

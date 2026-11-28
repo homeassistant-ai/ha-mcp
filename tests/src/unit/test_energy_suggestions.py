@@ -21,6 +21,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockUser
 
 from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
 from ha_mcp.tools.tools_energy import EnergyTools
 
 from ._card_definitions_core import cd
@@ -123,7 +124,7 @@ async def test_suggestions_without_the_component_say_it_is_needed(
 
     assert result["config"]["device_consumption"]
     assert result["energy_suggestions"]["status"] == "unavailable"
-    assert any("HA-MCP component" in w for w in result["warnings"])
+    assert any(COMPONENT_VIA_MARKETPLACE in w for w in result["warnings"])
 
 
 @_NEEDS_SUGGESTIONS

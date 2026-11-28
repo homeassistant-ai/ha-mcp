@@ -6,8 +6,13 @@ from typing import Any, Literal, NoReturn, cast
 
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
-from .component_api import component_supports, get_component_caps, invalidate_caps
-from .helpers import raise_tool_error
+from .component_api import (
+    component_supports,
+    component_unusable_warning,
+    get_component_caps,
+    invalidate_caps,
+)
+from .helpers import raise_core_refusal, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,7 @@ class ContextTraceMatch:
     item_id: str
     trace_data: dict[str, Any] | None = None
     other_matches: tuple[dict[str, str], ...] = ()
+    warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -144,17 +150,6 @@ def _normalize_other_matches(value: Any) -> tuple[dict[str, str], ...]:
     return tuple(result)
 
 
-def _raise_trace_ws_failure(error_msg: Any, context: dict[str, Any]) -> NoReturn:
-    """The server refused a trace command. A lost transport raises separately."""
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            error_msg,
-            context=context,
-        )
-    )
-
-
 async def resolve_context_trace(
     client: Any,
     domain: str,
@@ -185,8 +180,9 @@ async def resolve_context_trace(
         {"type": "trace/contexts", "domain": domain, "item_id": item_id}
     )
     if not result.get("success"):
-        _raise_trace_ws_failure(
-            result.get("error", "Failed to resolve trace context"),
+        raise_core_refusal(
+            "trace/contexts failed",
+            result,
             {"context_id": context_id, "domain": domain, "item_id": item_id},
         )
 
@@ -200,6 +196,10 @@ async def resolve_context_trace(
         scanned=0,
         domain=domain,
         item_id=item_id,
+        warning=component_unusable_warning(
+            await get_component_caps(client),
+            "only a run's own context could be searched",
+        ),
     )
 
 
@@ -228,8 +228,9 @@ async def resolve_global_context(
 
     result = await client.send_websocket_message({"type": "trace/contexts"})
     if not result.get("success"):
-        _raise_trace_ws_failure(
-            result.get("error", "Failed to resolve trace context"),
+        raise_core_refusal(
+            "trace/contexts failed",
+            result,
             {"context_id": context_id},
         )
     contexts = result.get("result")
@@ -262,6 +263,10 @@ async def resolve_global_context(
         scanned=0,
         domain=entry_domain,
         item_id=entry_item_id,
+        warning=component_unusable_warning(
+            await get_component_caps(client),
+            "only a run's own context could be searched",
+        ),
     )
 
 

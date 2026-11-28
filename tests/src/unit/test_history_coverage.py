@@ -27,10 +27,11 @@ from pytest_homeassistant.components.recorder.common import (
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import tools_history
+from ha_mcp.tools.component_api import COMPONENT_VIA_MARKETPLACE
 from ha_mcp.tools.tools_history import HistoryTools
 
 from ._client_spies import sent_messages
-from ._command_faults import before_handling, unanswered
+from ._command_faults import before_handling, registry_lookup_failing, unanswered
 from ._recorded_history import import_statistic, migrating, record_states, statistics
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -56,6 +57,17 @@ async def _history(
 
 def _warnings(result: dict[str, Any]) -> str:
     return " ".join(result.get("warnings", []))
+
+
+@pytest.mark.parametrize("read", ["history", "statistics summary"])
+async def test_without_the_component_a_read_names_the_component_it_lacks(
+    recorded: Recorder, core_client: HomeAssistantClient, read: str
+) -> None:
+    if read == "history":
+        result = await _history(core_client, START, START + HOUR)
+    else:
+        result = await _summary(core_client, entity_ids=ENTITY)
+    assert COMPONENT_VIA_MARKETPLACE in _warnings(result)
 
 
 @pytest.fixture
@@ -170,8 +182,13 @@ async def _unrecorded(hass: HomeAssistant, client: HomeAssistantClient) -> str:
 async def test_an_entity_the_recorder_excludes_is_named(
     recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    assert f"The recorder does not record: {ENTITY}." in await _unrecorded(
-        hass, component_core_client
+    with sent_messages(component_core_client) as sent:
+        warnings = await _unrecorded(hass, component_core_client)
+    assert f"The recorder does not record: {ENTITY}." in warnings
+    assert "Marketplace" not in warnings
+    assert all(
+        call.args[0]["type"] != "recorder/entity_options/get"
+        for call in sent.call_args_list
     )
 
 
@@ -223,6 +240,27 @@ async def test_a_refusal_carries_cores_code_and_no_retention_guess(
     assert "retention" not in str(refusal.value)
 
 
+async def test_the_history_schema_carries_cores_own_attribute_domains(
+    recorded: Recorder, component_core_client: HomeAssistantClient
+) -> None:
+    from homeassistant.components.recorder.history import NEED_ATTRIBUTE_DOMAINS
+
+    history = await _history(
+        component_core_client, START, START + HOUR, include_schema=True
+    )
+    statistics_schema = await statistics(
+        component_core_client,
+        ["sensor.energy"],
+        START,
+        START + DAY,
+        include_schema=True,
+    )
+
+    contract = history["data"]["core_contract"]
+    assert contract["need_attribute_domains"] == sorted(NEED_ATTRIBUTE_DOMAINS)
+    assert "need_attribute_domains" not in statistics_schema["data"]["core_contract"]
+
+
 # --- statistics ----------------------------------------------------------------
 
 
@@ -240,10 +278,28 @@ async def test_a_statistic_the_recorder_does_not_have_is_told_from_an_empty_wind
         START + 31 * DAY,
     )
 
+    # Core's own metadata serves this read in full, so no component is named.
     assert result["warnings"] == [
         "The recorder has no statistics under: sensor.enrgy.",
         "No statistics in this window for: sensor.energy.",
     ]
+
+
+async def test_rows_read_with_a_component_that_fails_its_part_says_so(
+    recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    """A component install that answers from Core's API never does so silently."""
+    await import_statistic(
+        hass, "sensor.energy", "kWh", "energy", [{"start": START, "sum": 1.0}]
+    )
+
+    with registry_lookup_failing(hass, "ha_mcp_tools/statistics_units"):
+        result = await statistics(
+            component_core_client, ["sensor.energy"], START, START + DAY
+        )
+
+    assert result["data"]["entities"][0]["statistics"]
+    assert "statistics converter could not be read" in _warnings(result)
 
 
 async def test_cores_own_statistics_issue_explains_an_empty_statistic(
@@ -465,12 +521,16 @@ async def test_a_removed_entity_whose_rows_came_back_is_not_called_a_wrong_id(
     assert "No entity has a state under" not in _warnings(result)
 
 
-async def test_five_minute_statistics_carry_the_recorders_oldest_state(
+async def test_five_minute_statistics_carry_their_own_first_row(
     recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
     result = await _late_five_minute_statistics(hass, component_core_client)
 
     assert f"purge_keep_days: {recorded.keep_days}" in _warnings(result)
+    assert (
+        f"First short-term statistic for sensor.power: {(START + HOUR).isoformat()}"
+        in _warnings(result)
+    )
 
 
 async def test_a_recorder_without_states_says_so(
@@ -495,6 +555,81 @@ async def _summary(client: HomeAssistantClient, **kwargs: Any) -> dict[str, Any]
     return result
 
 
+# Noon on the recorded day; ticking, since the client waits on the clock.
+@pytest.mark.freeze_time(START + 12 * HOUR, tick=True)
+@pytest.mark.parametrize(
+    ("native_period", "hours"),
+    [
+        ({"calendar": {"period": "day"}}, (0, 24)),
+        # The ticking clock is past noon, so the 08:00 hour starts before the window.
+        ({"rolling_window": {"duration": {"hours": 4}}}, (9, 12)),
+    ],
+)
+async def test_a_summary_over_cores_own_period_totals_that_period(
+    recorded: Recorder,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    native_period: dict[str, Any],
+    hours: tuple[int, int],
+) -> None:
+    """The tool's own window, the first four hours, gives another total."""
+    await import_statistic(
+        hass,
+        "sensor.energy",
+        "kWh",
+        "energy",
+        [{"start": START + hour * HOUR, "sum": hour * hour} for hour in range(10)],
+    )
+
+    async def change(**kwargs: Any) -> Any:
+        result = await HistoryTools(core_client).ha_get_history(
+            entity_ids="sensor.energy",
+            source="statistics",
+            summary=True,
+            statistic_types="change",
+            **kwargs,
+        )
+        return result["data"]["entities"][0]["summary"]["change"]
+
+    first_four_hours = {
+        "start_time": START.isoformat(),
+        "end_time": (START + 4 * HOUR).isoformat(),
+    }
+    native = await change(**first_four_hours, core_options=native_period)
+
+    assert native == await change(
+        start_time=(START + hours[0] * HOUR).isoformat(),
+        end_time=(START + hours[1] * HOUR).isoformat(),
+    )
+    assert native != await change(**first_four_hours)
+
+
+async def test_with_guardrails_a_summary_over_cores_own_period_is_refused_unsent(
+    recorded: Recorder, core_client: HomeAssistantClient
+) -> None:
+    """Its window is Core's to work out, so its cost cannot be estimated."""
+    with (
+        patch.object(
+            tools_history,
+            "get_global_settings",
+            return_value=MagicMock(enable_history_query_guardrails=True),
+        ),
+        sent_messages(core_client) as sent,
+        pytest.raises(ToolError) as refused,
+    ):
+        await _summary(
+            core_client,
+            entity_ids="sensor.energy",
+            core_options={"calendar": {"period": "day"}},
+        )
+
+    assert json.loads(str(refused.value))["error"]["code"] == "VALIDATION_FAILED"
+    assert all(
+        call.args[0]["type"] != "recorder/statistic_during_period"
+        for call in sent.call_args_list
+    )
+
+
 async def test_a_summary_without_types_takes_cores_defaults_for_each_statistic(
     recorded: Recorder, hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
@@ -512,7 +647,7 @@ async def test_a_summary_without_types_takes_cores_defaults_for_each_statistic(
     changes = [entity["summary"]["change"] for entity in result["data"]["entities"]]
     assert len(changes) == 2
     assert all(isinstance(change, float) for change in changes)
-    assert "warnings" not in result
+    assert "statistics converter could not be read" in _warnings(result)
 
 
 async def test_a_summary_of_an_unknown_statistic_says_the_recorder_has_none(
@@ -651,8 +786,7 @@ async def test_a_summary_through_the_component_keeps_value_and_label_together(
 async def test_a_summary_labels_its_total_from_the_read_that_gave_its_unit(
     recorded: Recorder, hass: HomeAssistant, component_core_client: HomeAssistantClient
 ) -> None:
-    """The metadata and Core's converter choice are two reads; the unit asked
-    for comes from the second, so the label does too."""
+    """Read metadata and the unit for the totals from one component reply."""
     hass.states.async_set("sensor.energy", "1", {"unit_of_measurement": "kWh"})
     await import_statistic(
         hass,
@@ -665,11 +799,19 @@ async def test_a_summary_labels_its_total_from_the_read_that_gave_its_unit(
     def to_watt_hours(msg: dict[str, Any]) -> None:
         hass.states.async_set("sensor.energy", "1", {"unit_of_measurement": "Wh"})
 
-    with before_handling(hass, "ha_mcp_tools/statistics_units", to_watt_hours):
+    with (
+        before_handling(hass, "ha_mcp_tools/statistics_units", to_watt_hours),
+        sent_messages(component_core_client) as sent,
+    ):
         result = await _summary(
             component_core_client, entity_ids="sensor.energy", statistic_types="change"
         )
 
+    assert not result.get("warnings")
+    assert all(
+        call.args[0]["type"] != "recorder/get_statistics_metadata"
+        for call in sent.call_args_list
+    )
     entity = result["data"]["entities"][0]
     assert (entity["summary"]["change"], entity["unit_of_measurement"]) == (
         3000.0,

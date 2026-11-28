@@ -1,7 +1,8 @@
 # Statistics and Energy Dashboard inspection
 
-`ha_get_history(source="statistics")` reads recorder values and
-`recorder/get_statistics_metadata` from the connected Home Assistant.
+`ha_get_history(source="statistics")` reads recorder values and their
+metadata from the connected Home Assistant: through the `ha_mcp_tools`
+component, or Core's `recorder/get_statistics_metadata` without it.
 `unit_of_measurement` is Core's **display unit**, the unit Core uses for the
 returned numbers with its default conversion. `statistics_metadata` preserves
 Core's response, including `statistics_unit_of_measurement`,
@@ -45,7 +46,10 @@ Reset timestamps come from the same query as the values: Core converts the
 numeric values to the requested unit and leaves `last_reset` as stored.
 
 With `summary=True` the tool asks Core's `recorder/statistic_during_period`
-for one total per statistic over the window instead of rows. A statistic that
+for one total per statistic over the window instead of rows. `core_options`
+can name one of Core's own periods in place of the window, `calendar` (for
+example `{"calendar": {"period": "month"}}`) or `rolling_window`; recorder
+workload guardrails refuse those, because their size cannot be estimated. A statistic that
 returns nothing is named in `warnings`: the recorder has no statistics under
 that ID, or none in the window, with Core's own `recorder/validate_statistics`
 issues for it. `ha_manage_logs` lists the recorder's statistics and runs Core's
