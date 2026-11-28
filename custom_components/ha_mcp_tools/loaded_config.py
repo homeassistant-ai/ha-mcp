@@ -114,10 +114,13 @@ def _redacted(node: Any, secret_values: frozenset[str]) -> Any:
     if isinstance(node, dict):
         result: dict[Any, Any] = {}
         for key, value in node.items():
-            # A key can be a !secret too; a second one must not replace the first.
+            # A key can be a !secret too. Its placeholder must not replace
+            # another entry: an earlier secret key's, or a key the mapping keeps.
             shown = _redacted(key, secret_values)
-            while shown == REDACTED and shown in result:
-                shown = f"{REDACTED} ({len(result)})"
+            taken = 1
+            while shown != key and (shown in result or shown in node):
+                taken += 1
+                shown = f"{REDACTED} ({taken})"
             result[shown] = _redacted(value, secret_values)
         return result
     if isinstance(node, list):

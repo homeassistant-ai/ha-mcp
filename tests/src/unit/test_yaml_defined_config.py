@@ -93,6 +93,7 @@ _FILES = {
         "        pin: !secret office_pin\n"
         "        !secret office_key: open\n"
         "        !secret office_key_2: shut\n"
+        "        '**redacted** (3)': kept\n"
         "- id: office_keyed\n"
         "  alias: Office Keyed\n"
         "  triggers: []\n"
@@ -313,7 +314,14 @@ class TestRead:
 
         data = result["config"]["actions"][0]["event_data"]
         assert "hunter2-" not in str(data)
-        assert sorted(data.values()) == ["**redacted**", "**redacted**", "open", "shut"]
+        # The fixture also has an ordinary key spelled like a placeholder.
+        assert sorted(data.values()) == [
+            "**redacted**",
+            "**redacted**",
+            "kept",
+            "open",
+            "shut",
+        ]
 
     async def test_secrets_file_that_contains_itself_is_read(
         self, hass: HomeAssistant, automations: AutomationConfigTools
