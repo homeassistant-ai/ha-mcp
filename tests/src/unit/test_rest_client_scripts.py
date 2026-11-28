@@ -23,9 +23,6 @@ from ha_mcp.client.rest_client import (
 )
 
 from ._command_faults import dropped_on, pooled_socket, registry_lookup_failing
-from ._gateway import Gateway
-from ._gateway import gateway as gateway
-from ._gateway import gateway_client as gateway_client
 from ._rest_client_config_core import (
     config_client as config_client,
 )
@@ -74,27 +71,6 @@ async def test_removing_a_missing_script_reports_not_found(
 
     assert exc_info.value.status_code == 404
     assert "not found" in str(exc_info.value).lower()
-
-
-async def test_a_proxy_refusing_removal_explains_the_way_around_it(
-    hass: HomeAssistant,
-    config_client: HomeAssistantClient,
-    gateway: Gateway,
-    gateway_client: HomeAssistantClient,
-) -> None:
-    """Supervisor's ingress proxy answers DELETE with 405 (#261, #414)."""
-    await load(hass, "script", {"test_script": SCRIPT})
-    gateway.outages.append(405)
-
-    with pytest.raises(HomeAssistantAPIError) as exc_info:
-        await gateway_client.delete_script_config("test_script")
-
-    assert exc_info.value.status_code == 405
-    message = str(exc_info.value).lower()
-    for hint in ("cannot delete", "add-on", "supervisor", "yaml", "workaround"):
-        assert hint in message
-    assert "delete_test_script" in message
-    assert gateway.requests == ["DELETE /api/config/script/config/test_script"]
 
 
 async def test_a_server_error_on_removal_is_not_reported_as_not_found(
@@ -155,17 +131,6 @@ async def test_a_script_from_a_blueprint_is_written_without_a_sequence(
 
     assert result["script_id"] == "test_script"
     assert (await _stored(config_client, "test_script"))["use_blueprint"] == use
-
-
-async def test_a_script_with_neither_sequence_nor_blueprint_is_refused(
-    config_client: HomeAssistantClient,
-) -> None:
-    with pytest.raises(ValueError) as exc_info:
-        await config_client.upsert_script_config({"alias": "x"}, "test_script")
-
-    assert "sequence" in str(exc_info.value)
-    assert "use_blueprint" in str(exc_info.value)
-    assert await error_status(config_client.get_script_config("test_script")) == 404
 
 
 @pytest.mark.parametrize("identifier", ["test_script", "script.test_script"])

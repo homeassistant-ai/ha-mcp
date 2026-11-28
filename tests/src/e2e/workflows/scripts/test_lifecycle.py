@@ -1311,31 +1311,3 @@ async def test_blueprint_script_with_empty_sequence(
         logger.info(f"✅ Created blueprint script with empty sequence: {script_id}")
 
         logger.info("✅ Empty sequence test completed")
-
-
-@pytest.mark.e2e
-@pytest.mark.asyncio
-async def test_regular_script_still_requires_sequence(mcp_client):
-    """
-    Test: Regular scripts still require sequence field
-
-    Validates that non-blueprint scripts still require sequence field (issue #466).
-    """
-    logger.info("Testing that regular scripts still require sequence...")
-
-    async with MCPAssertions(mcp_client) as mcp:
-        # Try to create a script without sequence or use_blueprint
-        script_config = {
-            "alias": "Test Regular Script No Sequence",
-            # Missing both sequence and use_blueprint
-        }
-
-        result = await mcp.call_tool_failure(
-            "ha_config_set_script",
-            {"script_id": "test_regular_no_seq", "config": script_config},
-            expected_error="either 'sequence'",
-        )
-
-        assert "required_fields" in result
-        logger.info("✅ Regular script properly requires sequence or use_blueprint")
-        logger.info("✅ Regular script validation test completed")

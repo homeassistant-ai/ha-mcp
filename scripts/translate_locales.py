@@ -512,7 +512,7 @@ def _validate(item: WorkItem, translated: Any) -> str | None:
     # push is held back whole, the progress file is discarded, and the run
     # re-spends its quota planning the same work again. Rejecting the one
     # string instead costs one retry and leaves the key for tomorrow.
-    fault = locale_rules.parity_fault(item.english, translated)
+    fault = locale_rules.parity_fault(item.english, translated, locale=item.locale)
     if fault:
         return f"contradicts the English source: {fault}"
     return None

@@ -780,3 +780,20 @@ async def test_a_backup_a_list_removal_could_not_take_is_named(
     assert [w.split(" was taken")[0] for w in result["warnings"]] == [
         "No pre-write backup of entity:not an entity id"
     ]
+
+
+async def test_an_entity_snapshot_of_a_group_keeps_its_entity_id(
+    entity_manager: bm.BackupManager, entity_registry: er.EntityRegistry
+) -> None:
+    """Only the group domain keeps a group under its object id; an entity
+    snapshot is restored by the entity id it names."""
+    entity_registry.async_get_or_create(
+        "group", "test", "lights", suggested_object_id="lights"
+    )
+
+    path = await entity_manager.maybe_snapshot(
+        "entity", "group.lights", force=True, mandatory=True
+    )
+
+    assert path is not None
+    assert entity_manager.read_snapshot(path.name)["entity_id"] == "group.lights"

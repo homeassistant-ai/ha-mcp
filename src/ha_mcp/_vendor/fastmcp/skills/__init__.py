@@ -1,19 +1,23 @@
-"""Protocol support for the MCP Skills extension (SEP-2640)."""
+"""Agent skills and protocol support for the MCP Skills extension (SEP-2640)."""
 
 from typing import TYPE_CHECKING
 from ha_mcp._vendor.fastmcp.skills.models import (
     GetSkillResult,
     ListSkillsResult,
-    Skill,
+    MCPSkill,
     SkillFrontmatter,
     SkillResource,
 )
+from ha_mcp._vendor.fastmcp.skills.skill import Skill, SkillFile, SkillManifest
 
 __all__ = [
     "GetSkillResult",
     "ListSkillsResult",
+    "MCPSkill",
     "Skill",
+    "SkillFile",
     "SkillFrontmatter",
+    "SkillManifest",
     "SkillResource",
     "SkillsClientExtension",
 ]

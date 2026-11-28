@@ -108,6 +108,12 @@ class TestBareIdentifierConcealment:
                 id="automation-config-id",
             ),
             pytest.param(
+                "ha_config_get_automation",
+                {"entity_id": "1700000000001"},
+                ("automation.hidden_disabled", "1700000000001", "automation"),
+                id="automation-registry-disabled-stateless",
+            ),
+            pytest.param(
                 "ha_config_get_script",
                 {"script_id": "front_door"},
                 _RENAMED_HIDDEN_SCRIPT,
@@ -143,6 +149,11 @@ class TestBareIdentifierConcealment:
     ) -> None:
         """The bare key never reaches the tool, and the answer is a plain not-found."""
         _register_rows(hass, entity_registry, row)
+        if row[0] == "automation.hidden_disabled":
+            entity_registry.async_update_entity(
+                row[0], disabled_by=er.RegistryEntryDisabler.USER
+            )
+            hass.states.async_remove(row[0])
         enforce_hiding(set_config, row[0])
         mw = _ChainedEnforcement(lambda: core_client)
 
@@ -371,7 +382,7 @@ def _takes_bare_identifier(tool_name: str, param_name: str) -> bool:
     return (
         param_name == "entity_id"
         and tool_name.startswith("ha_config_")
-        and (tool_name.endswith("_automation"))
+        and tool_name.endswith("_automation")
     )
 
 

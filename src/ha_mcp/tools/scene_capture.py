@@ -132,7 +132,6 @@ async def read_captures(
         state["entity_id"]: {**state.get("attributes", {}), "state": state["state"]}
         for state in states
     }
-    # Judged by the reply's entity_id: a REST read of ``a/../b`` answers ``b``.
     missing = [e for e in entity_ids if e.lower() not in captured]
     empty = [
         d for d, members in devices.items() if not any(m in captured for m in members)

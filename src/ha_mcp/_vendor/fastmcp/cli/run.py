@@ -330,10 +330,10 @@ async def run_v1_server_async(
     stateless: bool = False,
     log_level: LogLevelType | None = None,
 ) -> None:
-    """Run a FastMCP 1.x server using async methods.
+    """Run the MCP SDK's high-level `MCPServer` using async methods.
 
     Args:
-        server: FastMCP 1.x server instance
+        server: SDK `MCPServer` instance
         host: Host to bind to
         port: Port to bind to
         transport: Transport protocol to use
@@ -397,7 +397,7 @@ async def _terminate_process(process: asyncio.subprocess.Process) -> None:
         try:
             await asyncio.wait_for(process.wait(), timeout=3.0)
             return
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         # Force kill the entire process group

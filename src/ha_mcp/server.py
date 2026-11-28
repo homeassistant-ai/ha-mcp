@@ -239,7 +239,7 @@ class HomeAssistantSmartMCPServer:
         # models get actionable guidance instead of raw Pydantic messages.
         from .tools.validation_middleware import ValidationErrorMiddleware
 
-        self.mcp.add_middleware(ValidationErrorMiddleware())
+        self.mcp.add_middleware(ValidationErrorMiddleware(lambda: self.client))
 
         # Replace the opaque "Unknown tool" FastMCP raises when a client calls
         # ha_search_tools / the ha_call_* proxies on a full-catalog connection

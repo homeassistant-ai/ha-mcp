@@ -9,6 +9,7 @@ state, rejection and reply comes from Core.
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -17,7 +18,7 @@ from homeassistant.core import HomeAssistant, State
 from homeassistant.setup import async_setup_component
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.backup_manager import get_backup_manager
+from ha_mcp.backup_manager import BackupManager, get_backup_manager
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
     HomeAssistantClient,
@@ -27,6 +28,9 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.config import get_global_settings
 from ha_mcp.tools.tools_groups import GroupTools
 
+from ._backup_core import backup_settings as backup_settings
+from ._backup_core import handler_for, manage_backup, place_snapshot
+from ._backup_core import snapshot_manager as snapshot_manager
 from ._client_spies import sent_messages
 from ._tool_errors import error_of
 
@@ -54,6 +58,24 @@ async def _group_set(hass: HomeAssistant, object_id: str, **data: Any) -> None:
         "group", "set", {"object_id": object_id, **data}, blocking=True
     )
     await hass.async_block_till_done()
+
+
+def _prefixed_snapshot(manager: BackupManager) -> Path:
+    """A snapshot of ``lights`` kept under ``group.lights``, as captures by the
+    prefixed id were before."""
+    return place_snapshot(
+        manager.backup_dir,
+        "group.group.lights.20260903_120000.yaml",
+        "group.lights",
+        domain="group",
+        held={
+            "object_id": "lights",
+            "name": None,
+            "entities": ["light.a"],
+            "icon": None,
+        },
+        text=False,
+    )
 
 
 def _members(hass: HomeAssistant, entity_id: str) -> list[str]:
@@ -481,6 +503,91 @@ class TestRemoveGroup:
 
 
 class TestGroupBackupRestore:
+    @pytest.mark.parametrize("entity_id", ["lights", "group.lights"])
+    async def test_a_backup_holds_the_groups_name_icon_and_members(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient, entity_id: str
+    ) -> None:
+        await _setup_groups(hass)
+        await _group_set(
+            hass, "lights", name="Lights", icon="mdi:lamp", entities=["light.a"]
+        )
+        handler = handler_for(
+            get_backup_manager(core_client, get_global_settings()), "group"
+        )
+
+        held = await handler.fetch(core_client, entity_id)
+
+        assert held == {
+            "object_id": "lights",
+            "name": "Lights",
+            "icon": "mdi:lamp",
+            "entities": ["light.a"],
+        }
+
+    async def test_a_backup_of_an_unknown_group_holds_nothing(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        await _setup_groups(hass)
+        handler = handler_for(
+            get_backup_manager(core_client, get_global_settings()), "group"
+        )
+
+        assert await handler.fetch(core_client, "nope") is None
+
+    async def test_a_capture_by_the_prefixed_id_joins_the_object_ids_history(
+        self, hass: HomeAssistant, core_client: HomeAssistantClient
+    ) -> None:
+        """The group tools' own captures use the object id, so an explicit one
+        by ``group.<object_id>`` is kept under it, not in a second history."""
+        await _setup_groups(hass)
+        await _group_set(hass, "lights", entities=["light.a"])
+
+        created = await manage_backup(
+            core_client,
+            scope="edits",
+            action="create",
+            domain="group",
+            entity_id="group.lights",
+        )
+
+        assert created["data"]["entity_id"] == "lights"
+
+    async def test_restoring_a_prefixed_snapshot_keeps_its_safety_copy_under_the_object_id(
+        self, hass: HomeAssistant, snapshot_manager: BackupManager
+    ) -> None:
+        await _setup_groups(hass)
+        await _group_set(hass, "lights", entities=["light.a", "light.b"])
+        older = _prefixed_snapshot(snapshot_manager)
+
+        outcome = await snapshot_manager.restore_snapshot(older.name)
+
+        safety = snapshot_manager.read_snapshot(outcome["safety_backup"])
+        assert safety["entity_id"] == "lights"
+
+    async def test_a_capture_rotates_out_the_prefixed_snapshots_of_its_group(
+        self,
+        hass: HomeAssistant,
+        core_client: HomeAssistantClient,
+        snapshot_manager: BackupManager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(get_global_settings(), "auto_backup_retain_per_entity", 1)
+        await _setup_groups(hass)
+        await _group_set(hass, "lights", entities=["light.a"])
+        older = _prefixed_snapshot(snapshot_manager)
+
+        created = await manage_backup(
+            core_client,
+            scope="edits",
+            action="create",
+            domain="group",
+            entity_id="lights",
+        )
+
+        assert not older.exists()
+        listed = snapshot_manager.list_snapshots(domain="group", entity_id="lights")
+        assert [row["name"] for row in listed] == [created["data"]["backup_name"]]
+
     async def test_restore_clears_members_added_after_the_snapshot(
         self, hass: HomeAssistant, core_client: HomeAssistantClient
     ) -> None:

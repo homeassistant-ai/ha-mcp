@@ -3,8 +3,8 @@
 
 ``validate`` runs Core's own automation validator in process, ``describe``
 returns Core's trigger or condition descriptions, and ``lookup`` returns the
-automation's registry row, the validation status Core reported in its repair
-issue and the references Core's automation helpers find. Each helper returns
+automation's (or a script's) registry row, the validation status Core reported
+in its repair issue and the references Core's helpers find. Each helper returns
 ``None`` when the component did not answer, and the caller uses Core's
 REST/WebSocket API instead: the capability is absent, the command was not sent
 or got no answer, Core answered ``unknown_command``, the component failed, or
@@ -25,13 +25,15 @@ logger = logging.getLogger(__name__)
 
 WS_AUTOMATION_CONFIG = "ha_mcp_tools/automation_config"
 CAPABILITY = "automation_config"
+# A component that advertises it also looks up scripts (``domain: "script"``).
+SCRIPT_LOOKUP_CAPABILITY = "script_lookup"
 
 
 async def _automation_config(
-    client: Any, action: str, **fields: Any
+    client: Any, action: str, *, capability: str = CAPABILITY, **fields: Any
 ) -> dict[str, Any] | None:
     """The component's reply to one action; None when it gave no usable one."""
-    if not component_supports(await get_component_caps(client), CAPABILITY):
+    if not component_supports(await get_component_caps(client), capability):
         return None
     try:
         result = await client.send_websocket_message(
@@ -78,15 +80,24 @@ async def automation_describe(
 
 
 async def automation_lookup(
-    client: Any, *, entity_id: str | None = None, unique_id: str | None = None
+    client: Any,
+    *,
+    entity_id: str | None = None,
+    unique_id: str | None = None,
+    domain: str = "automation",
 ) -> dict[str, Any] | None:
-    """The automation's ``{found, entity, loaded, validation, references}``."""
+    """The automation's (or script's) ``{found, entity, loaded, validation,
+    references}``."""
     fields: dict[str, str] = {}
     if entity_id is not None:
         fields["entity_id"] = entity_id
     if unique_id is not None:
         fields["unique_id"] = unique_id
-    reply = await _automation_config(client, "lookup", **fields)
+    capability = CAPABILITY
+    if domain == "script":
+        fields["domain"] = domain
+        capability = SCRIPT_LOOKUP_CAPABILITY
+    reply = await _automation_config(client, "lookup", capability=capability, **fields)
     if reply is None or not isinstance(reply.get("found"), bool):
         return None
     return reply

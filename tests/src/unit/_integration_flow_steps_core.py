@@ -2,8 +2,10 @@
 runs, for the ``ha_set_integration`` flow-step tests.
 
 Every flow is a mock integration's own ``ConfigFlow``, run by Core's flow
-managers; the server's client (``core_client``) drives them over Core's flow
-endpoints, and Core's ``frontend/get_translations`` reads their strings.
+managers; the server's client (``flow_client``: without the component, and
+with it, where Home Assistant 2026.12 formats the texts) drives them over
+Core's flow endpoints, and Core's ``frontend/get_translations`` reads their
+strings.
 """
 
 from __future__ import annotations
@@ -309,7 +311,7 @@ _FLOWS: dict[str, type[ConfigFlow]] = {
 @pytest.fixture
 async def flow_tools(
     hass: HomeAssistant,
-    core_client: HomeAssistantClient,
+    flow_client: HomeAssistantClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[IntegrationTools]:
@@ -326,7 +328,7 @@ async def flow_tools(
     with ExitStack() as stack:
         for domain, flow in _FLOWS.items():
             stack.enter_context(mock_config_flow(domain, flow))
-        yield IntegrationTools(core_client)
+        yield IntegrationTools(flow_client)
 
 
 @pytest.fixture

@@ -5,7 +5,10 @@ top-level category, flattened by Core to ``component.<domain>.<category>.<...>``
 keys (``homeassistant.helpers.translation.recursive_flatten``). These are the
 texts the UI shows for a flow's fields, errors and abort reasons, a repair's
 title and description, a system health key's label and an integration's name,
-so the tools read them from Core instead of keeping their own wording.
+so the tools read them from Core instead of keeping their own wording. A flow
+step's texts come from Home Assistant's own flow formatter where it runs
+(2026.12, through the component: ``component_flow.core_flow_step``); the flow
+lookups here serve an older Core and an install without the component.
 """
 
 from __future__ import annotations
@@ -82,24 +85,36 @@ async def fetch_flow_strings(
     return resources if isinstance(resources, dict) else {}
 
 
+async def strings_in_language(
+    client: Any, domain: str, category: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """``fetch_flow_strings`` in Core's configured language, and the warning
+    when that language could not be read (English is read then)."""
+    language, unread = await configured_language(
+        client, f"Home Assistant's texts for {domain}"
+    )
+    strings = await fetch_flow_strings(client, domain, category, language=language)
+    return strings, unread
+
+
 def field_help(
     strings: Mapping[str, Any],
     domain: str,
     path: str,
     step_id: str,
     placeholders: Mapping[str, Any] | None = None,
-) -> dict[str, str]:
-    """HA's help text for a flow step's fields, keyed by field name, or by
-    ``<section>.<field>`` for a field inside a section, filled with
-    ``placeholders`` as ``flow_text`` fills a text.
+) -> dict[str, dict[str, str]]:
+    """HA's ``label`` and help ``description`` for a flow step's fields, keyed
+    by field name, or by ``<section>.<field>`` for a field inside a section,
+    filled with ``placeholders`` as ``flow_text`` fills a text: the field
+    keys Home Assistant's flow formatter reads, for a Core that does not ship
+    it. A section's own ``name`` and ``description`` are not read.
 
     ``path`` is the flow's place in ``strings.json``: ``config``, ``options``,
-    ``config_subentries.<type>`` or ``issues.<key>.fix_flow``. A field with no
-    help text of its own gets its UI label instead.
+    ``config_subentries.<type>`` or ``issues.<key>.fix_flow``.
     """
     prefix = f"component.{domain}.{path}.step.{step_id}."
-    descriptions: dict[str, str] = {}
-    labels: dict[str, str] = {}
+    texts: dict[str, dict[str, str]] = {}
     for key, text in strings.items():
         if not key.startswith(prefix) or not isinstance(text, str):
             continue
@@ -109,11 +124,9 @@ def field_help(
         if len(parts) < 2 or parts[-2] not in ("data", "data_description"):
             continue
         name = f"{parts[1]}.{parts[-1]}" if parts[0] == "sections" else parts[-1]
-        if parts[-2] == "data_description":
-            descriptions[name] = _filled(text, placeholders)
-        else:
-            labels[name] = _filled(text, placeholders)
-    return {**labels, **descriptions}
+        kind = "description" if parts[-2] == "data_description" else "label"
+        texts.setdefault(name, {})[kind] = _filled(text, placeholders)
+    return texts
 
 
 def _filled(text: str, placeholders: Mapping[str, Any] | None) -> str:

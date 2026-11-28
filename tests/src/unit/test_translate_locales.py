@@ -92,6 +92,41 @@ class TestValidate:
     def test_accepts_the_numbers_the_english_states(self, repo: LocaleRepo) -> None:
         assert _translate(repo, "Range 1-600.", "Bereich 1-600.") == "Bereich 1-600."
 
+    @pytest.mark.parametrize(
+        ("english", "translated", "accepted_locales"),
+        [
+            ("90%", "%90", {"tr"}),
+            ("90%", "90 %", {"de", "tr"}),
+            ("90%", "90", set()),
+            ("90%", "%95", set()),
+            ("90.5%", "%90,5", {"tr"}),
+            ("1 000%", "1.000%", {"de", "tr"}),
+            ("1.000%", "%1\u202f000", {"tr"}),
+            ("1\u00a0000%", "%1.000", {"tr"}),
+            ("5% and 90.5", "5 ve %90,5", set()),
+        ],
+    )
+    def test_percentage_placement(
+        self,
+        repo: LocaleRepo,
+        english: str,
+        translated: str,
+        accepted_locales: set[str],
+    ) -> None:
+        repo.write_settings(
+            "en", {"saving": english}, native_name="English", tools=False
+        )
+        repo.write_settings("tr", {}, native_name="Türkçe")
+        repo.engine.reply = lambda request: answer(
+            dict.fromkeys(request.strings, translated)
+        )
+
+        run = repo.run()
+        for locale in ("de", "tr"):
+            written = repo.settings(locale)["messages"].get("saving")
+            assert written == (translated if locale in accepted_locales else None), run
+        assert run.code == (0 if accepted_locales == {"de", "tr"} else 2), run
+
     @pytest.mark.parametrize("bad", ["", "   ", None, 42])
     def test_rejects_empty_and_non_string(self, repo: LocaleRepo, bad: object) -> None:
         assert _translate(repo, "Hello", bad) is None

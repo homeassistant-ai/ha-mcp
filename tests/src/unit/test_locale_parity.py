@@ -1774,8 +1774,7 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
     a maintainer decision rather than something to infer here.
 
     A tool string has more than one English rendering, and the check compares
-    against the one the sync sends rather than whichever one matches: seven of
-    the 176 tool keys differ between renderings, and accepting any of them
+    against the one the sync sends. Accepting any of the renderings
     would let a fault in the real source hide behind another. Which one that is
     needs no guessing -- ``_plan_settings`` builds its ``tool_texts`` from
     ``_english_tool_texts()`` and feeds the engine that alone.
@@ -1788,6 +1787,7 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
         fault = parity_fault(
             english,
             text,
+            locale=locale,
             tolerated_losses=tolerated_losses,
             tolerated_additions=tolerated_additions,
         )

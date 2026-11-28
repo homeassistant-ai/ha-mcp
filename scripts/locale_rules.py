@@ -90,11 +90,12 @@ def _pipeline() -> Any:
 _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,   ]\d+)*")
 # A magnitude suffix is part of the claim: "5K" and "5M" share their digits.
 _MAGNITUDE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)([KMGT])(?![A-Za-z])")
-# A percentage is a unit every catalog keeps, spaced or not: four write
-# "90 %" and four "90%", so the sign is required but the space is free. The
-# fullwidth sign counts as the sign: a CJK catalog may set U+FF05, and
-# demanding the ASCII one would fail a correct rendering.
+# English and translated suffixes may use a space and a fullwidth sign.
 _PERCENT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s?[%％]")
+# Match the whole amount when comparing Turkish prefix and suffix forms.
+# Otherwise "%90,5" could satisfy "5%" when both numbers occur in the text.
+_TR_SUFFIX_PERCENT_RE = re.compile(rf"({_NUMBER_RE.pattern})\s?[%％](?!\d)")
+_TR_PREFIX_PERCENT_RE = re.compile(rf"(?<!\d)%({_NUMBER_RE.pattern})")
 # A storage unit is part of the claim too: "1-256 MB" and "1-256 GB" differ by
 # three orders of magnitude while the digits match.
 _COMPOUND_UNIT_RE = re.compile(
@@ -368,13 +369,32 @@ def _unit_fault(
     return None
 
 
-def _lost_magnitudes(english: str, translated: str) -> list[str]:
+def _lost_percentages(english: str, translated: str, locale: str | None) -> set[str]:
+    if locale != "tr":
+        return {
+            f"{digits}%"
+            for digits in _PERCENT_RE.findall(english)
+            if not re.search(rf"(?<![A-Za-z0-9]){digits}\s?[%％]", translated)
+        }
+
+    carried = {
+        _canonical_number(amount)
+        for pattern in (_TR_PREFIX_PERCENT_RE, _TR_SUFFIX_PERCENT_RE)
+        for amount in pattern.findall(translated)
+    }
+    return {
+        f"{amount}%"
+        for amount in _TR_SUFFIX_PERCENT_RE.findall(english)
+        if _canonical_number(amount) not in carried
+    }
+
+
+def _lost_magnitudes(english: str, translated: str, locale: str | None) -> list[str]:
     """Magnitude suffixes the translation contradicts or drops.
 
     A unit is part of the claim, and the value comparison cannot see it: "5K"
     and "5M" carry the same digits, and so do "90%" and a bare "90". The
-    percent sign is required outright because every catalog keeps it -- four
-    write "90 %" and four "90%", so only the space is free. Requiring a
+    percent sign is required, including when Turkish puts it first. Requiring a
     magnitude suffix outright would be wrong, though: Polish writes
     "5 tys." and Russian "5 тыс." for it, and both are correct. So the suffix
     is only compared when the translation itself puts a letter straight
@@ -431,9 +451,7 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
             translated,
         ):
             contradicted.add(f"{name} {operator} {digits}")
-    for digits in _PERCENT_RE.findall(english):
-        if not re.search(rf"(?<![A-Za-z0-9]){re.escape(digits)}\s?[%％]", translated):
-            contradicted.add(f"{digits}%")
+    contradicted.update(_lost_percentages(english, translated, locale))
     for digits, suffix in _MAGNITUDE_RE.findall(english):
         fault = _unit_fault(
             digits,
@@ -504,6 +522,7 @@ def parity_fault(
     english: str,
     translated: str,
     *,
+    locale: str | None = None,
     tolerated_losses: Counter[tuple[str, ...]] | None = None,
     tolerated_additions: Counter[tuple[str, ...]] | None = None,
 ) -> str:
@@ -535,7 +554,7 @@ def parity_fault(
     ) - additions
     lost = (
         _lost_literals(english, translated)
-        + _lost_magnitudes(english, translated)
+        + _lost_magnitudes(english, translated, locale)
         + _reversed_ordered_pairs(english, translated)
         + _localised_hardcoded_name(english, translated)
         + _invented_files(english, translated)

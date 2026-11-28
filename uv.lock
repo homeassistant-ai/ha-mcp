@@ -1584,7 +1584,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.20.0" },
     { name = "jsonschema-path", specifier = ">=0.3.4" },
     { name = "openapi-pydantic", specifier = ">=0.6.0" },
-    { name = "opentelemetry-api", specifier = ">=1.28.0" },
+    { name = "opentelemetry-api", specifier = ">=1.45.2" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "platformdirs", specifier = ">=4.0.0" },
     { name = "psutil", specifier = ">=7.0.0" },
@@ -1606,7 +1606,7 @@ requires-dist = [
     { name = "typing-inspection", specifier = ">=0.4.1" },
     { name = "tzdata", specifier = ">=2024.1" },
     { name = "ulid-transform", specifier = ">=2.2.9,<3" },
-    { name = "uncalled-for", specifier = ">=0.4.0" },
+    { name = "uncalled-for", specifier = ">=0.6.1" },
     { name = "uvicorn", marker = "sys_platform != 'emscripten'", specifier = ">=0.35" },
     { name = "watchfiles", specifier = ">=1.0.0" },
 ]

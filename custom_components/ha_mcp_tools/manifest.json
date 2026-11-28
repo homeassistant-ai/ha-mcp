@@ -10,6 +10,7 @@
         "frontend",
         "hassio",
         "http",
+        "llm",
         "logbook",
         "lovelace",
         "network",

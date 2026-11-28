@@ -67,9 +67,8 @@ def _stamp_prefab_marker(tool: Tool) -> None:
 
     Sets ``meta["ui"]["resourceUri"]`` to a placeholder URI. The server
     recognizes the placeholder at list_tools / list_resources / read_resource
-    time and synthesizes a per-tool resource on the fly with a hashed URI
-    derived from the tool's mount-point address. Nothing is stored — the
-    renderer HTML and CSP are generated on demand from the tool's own meta.
+    time and synthesizes a shared renderer URI from its effective configuration.
+    Resource metadata comes from the tool; HTML is loaded only when read.
     """
     from ha_mcp._vendor.fastmcp.apps.config import AppConfig, app_config_to_meta_dict
 
@@ -320,7 +319,7 @@ class ToolDecoratorMixin:
                 run_in_thread=run_in_thread,
             )
             target = fn.__func__ if hasattr(fn, "__func__") else fn
-            target.__fastmcp__ = metadata  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+            target.__fastmcp__ = metadata  # type: ignore[attr-defined]  # ty:ignore[missing-attribute]
             self.add_tool(fn)
             return fn
 

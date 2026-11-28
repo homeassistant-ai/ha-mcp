@@ -113,6 +113,34 @@ async def component_core_client(
     return core_client
 
 
+@pytest.fixture(params=["without_component", "with_component"])
+async def flow_client(
+    request: pytest.FixtureRequest,
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+) -> HomeAssistantClient:
+    """``core_client``, once as is and once on a ``hass`` that also answers
+    ``ha_mcp_tools/*``. On Home Assistant 2026.12 the component formats a
+    flow's texts with Core's own formatter, so a flow test covers both routes."""
+    if request.param == "with_component":
+        from custom_components.ha_mcp_tools import websocket_api
+
+        websocket_api.async_register_commands(hass)
+    return core_client
+
+
+def formats_flow_texts(hass: HomeAssistant) -> bool:
+    """Whether a flow's texts come from Core's own formatter here: the
+    component's commands are registered and Core ships ``llm.flow``
+    (Home Assistant 2026.12)."""
+    from homeassistant.components import websocket_api
+    from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
+
+    return (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12) and (
+        "ha_mcp_tools/flow_format" in hass.data[websocket_api.DOMAIN]
+    )
+
+
 @pytest.fixture
 async def backup_manager(
     hass: HomeAssistant, core_client: HomeAssistantClient, tmp_path: Path

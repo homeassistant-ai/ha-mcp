@@ -37,12 +37,13 @@ from ha_mcp._vendor.fastmcp.tools.base import (
     Tool,
     ToolResult,
 )
-from ha_mcp._vendor.fastmcp.tools.function_parsing import ParsedFunction, _is_object_schema
+from ha_mcp._vendor.fastmcp.tools.function_parsing import ParsedFunction
 from ha_mcp._vendor.fastmcp.utilities.async_utils import (
     call_sync_fn_in_threadpool,
     is_coroutine_function,
 )
 from ha_mcp._vendor.fastmcp.utilities.authorization import AuthCheck
+from ha_mcp._vendor.fastmcp.utilities.json_schema import is_object_schema
 from ha_mcp._vendor.fastmcp.utilities.logging import get_logger
 from ha_mcp._vendor.fastmcp.utilities.tasks import TaskConfig
 from ha_mcp._vendor.fastmcp.utilities.types import (
@@ -393,7 +394,7 @@ class FunctionTool(Tool):
             final_output_schema = metadata.output_schema
 
         if final_output_schema is not None and isinstance(final_output_schema, dict):
-            if not _is_object_schema(final_output_schema):
+            if not is_object_schema(final_output_schema):
                 raise ValueError(
                     f"Output schemas must represent object types due to MCP spec limitations. "
                     f"Received: {final_output_schema!r}"

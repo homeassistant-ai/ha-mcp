@@ -27,7 +27,7 @@ from __future__ import annotations
 import datetime
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, cast
 from urllib.parse import urlparse
 
 import httpx2
@@ -39,7 +39,7 @@ from pydantic import (
     PrivateAttr,
     model_validator,
 )
-from typing_extensions import Self, override
+from typing_extensions import override
 
 from ha_mcp._vendor.fastmcp import _install_hints
 
@@ -138,7 +138,7 @@ class _TransformingMCPServerMixin(BaseModel):
                 )
             ) from exc
 
-        transport = cast("ClientTransport", super().to_transport())  # ty: ignore[unresolved-attribute]
+        transport = cast("ClientTransport", super().to_transport())  # ty: ignore[missing-attribute]
         # The proxy that wraps this client forwards the initialize handshake and
         # server-initiated features, which require the legacy era.
         config = cast("MCPServerTypes", self)

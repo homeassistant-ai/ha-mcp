@@ -25,7 +25,6 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.client.websocket_client import get_websocket_client
 from ha_mcp.tools import automation_errors
 from ha_mcp.tools.automation_errors import (
-    REJECTION_PREFIX,
     closest_matches,
     core_rejection_text,
     failed_section_from_core,
@@ -36,6 +35,8 @@ from ha_mcp.tools.automation_errors import (
 )
 from ha_mcp.tools.best_practice_checker import check_automation_config
 from ha_mcp.visibility.result_payloads import serialize_error
+
+REJECTION_PREFIX = "Home Assistant rejected the automation: "
 
 # --- the failed section ---------------------------------------------------------
 
@@ -123,6 +124,39 @@ async def _core_rejection(
     return text
 
 
+def test_a_400_page_core_did_not_send_is_no_rejection_of_cores() -> None:
+    """A proxy's 400 page, in the shape the client gives a body that is not JSON."""
+    page = "<html><body>400 Bad Request</body></html>"
+    error = HomeAssistantAPIError(
+        f"API error: 400 - {page}", status_code=400, response_data={"message": page}
+    )
+
+    assert core_rejection_text(error) is None
+
+
+async def test_a_missing_blueprint_points_to_the_blueprint_list(
+    hass: HomeAssistant, core_client: HomeAssistantClient
+) -> None:
+    config = {"use_blueprint": {"path": "missing.yaml", "input": {}}}
+    core_text = await _core_rejection(hass, core_client, config)
+
+    with pytest.raises(ToolError) as exc:
+        await raise_core_rejection(
+            core_client,
+            core_text,
+            config,
+            failed_section="blueprint",
+            context={},
+            bp_warnings=[],
+        )
+
+    suggestions = json.loads(str(exc.value))["error"]["suggestions"]
+    assert any(
+        "ha_manage_blueprints(action='list', domain='automation')" in s
+        for s in suggestions
+    )
+
+
 async def _rejection(
     client: HomeAssistantClient, core_text: str, config: dict[str, Any]
 ) -> dict[str, Any]:
@@ -165,6 +199,42 @@ async def test_rejection_offers_the_registered_trigger_closest_to_the_typo(
 
     assert body["error"]["message"] == f"{REJECTION_PREFIX}{core_text}"
     assert body["closest_matches"] == ["schedule.block_started", "schedule.block_ended"]
+
+
+async def test_each_error_core_lists_gets_its_closest_triggers(
+    hass: HomeAssistant,
+    core_client: HomeAssistantClient,
+    schedule_triggers: None,
+) -> None:
+    """Core's message names its first error only; the hint for a later one
+    comes from Core's errors list, and the first is not hinted twice."""
+    texts = [
+        await _core_rejection(
+            hass,
+            core_client,
+            {"alias": "porch", "triggers": [{"trigger": key}], "actions": []},
+        )
+        for key in ("schedule.block_strt", "schedule.turned_on")
+    ]
+
+    with pytest.raises(ToolError) as exc:
+        await raise_core_rejection(
+            core_client,
+            texts[0],
+            {},
+            failed_section="triggers",
+            context={"errors": [{"message": text} for text in texts]},
+            bp_warnings=[],
+        )
+    body = json.loads(str(exc.value))
+
+    hints = [s for s in body["error"]["suggestions"] if "has no trigger" in s]
+    assert [hint.split("'")[1] for hint in hints] == [
+        "schedule.block_strt",
+        "schedule.turned_on",
+    ]
+    assert "schedule.block_started" in body["closest_matches"]
+    assert len(body["closest_matches"]) == len(set(body["closest_matches"]))
 
 
 async def test_component_describe_offers_the_same_closest_trigger(

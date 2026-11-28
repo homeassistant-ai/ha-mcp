@@ -131,6 +131,21 @@ def config_resource_not_found(response_data: dict[str, Any] | None) -> bool:
     return (response_data or {}).get("message") == "Resource not found"
 
 
+# BaseEditConfigView.post, shared by the id- and key-based views, sends these two
+# verdicts on a write: a key its key schema refuses (checked first) and a config
+# its validator refuses. Its other 400 ("Invalid JSON specified") and any other
+# 400 text, such as a proxy's page, are not Core judging the config.
+_KEY_MALFORMED = "Key malformed: "
+
+
+def config_view_rejection(text: str) -> bool:
+    return text.startswith((_KEY_MALFORMED, "Message malformed: "))
+
+
+def config_key_malformed(text: str) -> bool:
+    return text.startswith(_KEY_MALFORMED)
+
+
 # --- Supervisor --------------------------------------------------------------
 # JobGroup.acquire raises "Another job is running for job group <name>" for the
 # transient per-app collision. The job-level JobConcurrency.REJECT path raises

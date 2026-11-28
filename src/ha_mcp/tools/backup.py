@@ -536,8 +536,8 @@ async def _edits_create(
         )
     path = await capture_on_demand(mgr, dom, eid)
     # The id the snapshot is stored under: a flow helper's config entry id
-    # when the caller passed an entity_id alias, else the id maybe_snapshot
-    # filed it under (Core's lowercase id for an entity).
+    # when the caller passed an entity_id alias, a group's object id, else the
+    # id maybe_snapshot filed it under (Core's lowercase id for an entity).
     eid = await asyncio.to_thread(mgr._payload_entity_id, path) or eid
     return {
         "success": True,

@@ -306,7 +306,7 @@ class TestCapture:
                 capture_entities=["input_boolean.tv"],
             )
 
-        assert body["error"]["code"] != "ENTITY_NOT_FOUND"
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert body["entity_id"] == "input_boolean.tv"
         assert body["action"] == "capture"
         upsert.assert_not_awaited()
@@ -314,8 +314,10 @@ class TestCapture:
     async def test_an_id_naming_another_entity_by_path_is_refused_unwritten(
         self, hass: HomeAssistant, tools: ConfigSceneTools
     ) -> None:
-        """The REST read of ``a/../b`` answers ``b``'s state: no capture of ``a``,
-        and ``b`` is not what the call named."""
+        """The REST read of ``a/../b`` stays in the whole id's state path, which
+        Core refuses with 400: no capture of ``b``, and no missing entity
+        either, as Core's filter answers 400 for some valid ids too. Nothing
+        is written."""
         before = await stored_scenes(hass)
         body = await set_refused(
             tools,
@@ -324,7 +326,7 @@ class TestCapture:
             capture_entities=["light.nope/../input_boolean.tv"],
         )
 
-        assert body["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert body["error"]["code"] == "VALIDATION_FAILED"
         assert await stored_scenes(hass) == before
 
     async def test_a_lost_connection_names_the_entity_unwritten(

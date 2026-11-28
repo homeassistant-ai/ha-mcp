@@ -43,7 +43,8 @@ from .config_entry_flow import (
 from .config_entry_flow_errors import (
     FlowRef,
     ReconfigureStatus,
-    _flow_texts,
+    create_entry_text,
+    error_texts,
     raise_flow_abort,
     raise_form_errors,
     step_texts,
@@ -519,7 +520,7 @@ async def open_step_answer(
         if errors:
             body["errors"] = errors
             if isinstance(errors, dict):
-                texts = await _flow_texts(client, target.ref, step, "error", errors)
+                texts = await error_texts(client, target.ref, step)
                 warnings += texts.pop("warnings", [])
                 if texts:
                     body["error_text"] = texts
@@ -570,14 +571,11 @@ async def _repair_finished(
     if fixed:
         response["message"] = _FIXED
         # The frontend fills the finish text with the step's placeholders only.
-        texts = await _flow_texts(
-            client,
-            replace(target.ref, placeholders=None),
-            step,
-            "create_entry",
-            {"create_entry_text": step.get("description") or "default"},
+        response.update(
+            await create_entry_text(
+                client, replace(target.ref, placeholders=None), step
+            )
         )
-        response.update(texts)
     if next_flow := step.get("next_flow"):
         response["next_flow"] = next_flow
         response["result"] = step.get("result")
@@ -639,6 +637,7 @@ async def _finished_response(
         "title": result.get("title", step.get("title")),
         "domain": target.domain,
         "message": f"{target.domain} integration created successfully",
+        **await create_entry_text(client, target.ref, step),
     }
     if next_flow := step.get("next_flow"):
         # Core opened a flow the setup dialog goes on to (scrape, ntfy and smtp

@@ -14,8 +14,9 @@ from typing import Any, NoReturn
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
+from .component_flow import core_flow_step
 from .config_entry_flow_introspect import menu_choices
-from .flow_translations import fetch_flow_strings, flow_text, strings_unread_warning
+from .flow_translations import flow_text, strings_in_language, strings_unread_warning
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ async def _flow_texts(
             }
     if not isinstance(domain, str):
         return {}
-    strings = await fetch_flow_strings(client, domain, path.split(".")[0])
+    strings, unread = await strings_in_language(client, domain, path.split(".")[0])
     if strings is None:
         return {"warnings": [strings_unread_warning(domain)]}
     placeholders = {
@@ -105,7 +106,52 @@ async def _flow_texts(
         for name, key in keys.items()
         if isinstance(key, str)
     }
-    return {name: text for name, text in texts.items() if text}
+    found: dict[str, Any] = {name: text for name, text in texts.items() if text}
+    if unread:
+        found["warnings"] = [unread]
+    return found
+
+
+async def _core_step(
+    client: Any, flow: FlowRef | None, step: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Home Assistant's own formatting of ``step`` (2026.12, through the
+    component), or ``None``: the texts are then read by ``_flow_texts``."""
+    if flow is None:
+        return None
+    return await core_flow_step(client, flow.path, step, flow.placeholders)
+
+
+async def error_texts(
+    client: Any, flow: FlowRef | None, step: dict[str, Any]
+) -> dict[str, Any]:
+    """Core's text for each error of a form returned with ``errors``, by
+    field, plus ``warnings`` when Core's strings could not be read."""
+    errors = step.get("errors")
+    if not isinstance(errors, dict) or not errors:
+        return {}
+    core = await _core_step(client, flow, step)
+    if core is not None:
+        texts = core.get("errors")
+        # Core's formatter repeats the code where it has no string for it.
+        return {
+            name: text
+            for name, text in (texts.items() if isinstance(texts, dict) else ())
+            if text != errors.get(name)
+        }
+    return await _flow_texts(client, flow, step, "error", errors)
+
+
+async def _core_description(
+    client: Any, flow: FlowRef | None, step: dict[str, Any], name: str
+) -> dict[str, Any] | None:
+    """``{name: <Core's description of step>}``; ``{}`` when Core has none,
+    ``None`` when Core's formatter is not available."""
+    core = await _core_step(client, flow, step)
+    if core is None:
+        return None
+    text = core.get("description")
+    return {name: text} if isinstance(text, str) and text else {}
 
 
 class ReconfigureStatus(StrEnum):
@@ -336,7 +382,7 @@ async def raise_form_errors(
     if is_reconfigure:
         context["status"] = ReconfigureStatus.APPLY_FAILED
     if isinstance(errors, dict):
-        texts = await _flow_texts(client, flow, current_step, "error", errors)
+        texts = await error_texts(client, flow, current_step)
         if warnings := texts.pop("warnings", None):
             context["warnings"] = warnings
         if texts:
@@ -358,6 +404,9 @@ async def abort_reason_text(
     client: Any, flow: FlowRef | None, current_step: dict[str, Any]
 ) -> dict[str, Any]:
     """``{"reason_text": ...}`` for an abort step, or ``{}`` without a string."""
+    core = await _core_description(client, flow, current_step, "reason_text")
+    if core is not None:
+        return core
     return await _flow_texts(
         client, flow, current_step, "abort", {"reason_text": current_step.get("reason")}
     )
@@ -367,12 +416,31 @@ async def progress_action_text(
     client: Any, flow: FlowRef | None, current_step: dict[str, Any]
 ) -> dict[str, Any]:
     """``{"progress_action_text": ...}`` for a progress step, or ``{}``."""
+    core = await _core_description(client, flow, current_step, "progress_action_text")
+    if core is not None:
+        return core
     return await _flow_texts(
         client,
         flow,
         current_step,
         "progress",
         {"progress_action_text": current_step.get("progress_action")},
+    )
+
+
+async def create_entry_text(
+    client: Any, flow: FlowRef | None, step: dict[str, Any]
+) -> dict[str, Any]:
+    """``{"create_entry_text": ...}`` for a finished flow, or ``{}``."""
+    core = await _core_description(client, flow, step, "create_entry_text")
+    if core is not None:
+        return core
+    return await _flow_texts(
+        client,
+        flow,
+        step,
+        "create_entry",
+        {"create_entry_text": step.get("description") or "default"},
     )
 
 
@@ -387,21 +455,44 @@ async def step_texts(
 ) -> dict[str, Any]:
     """Core's ``title``, ``description`` and ``submit`` label of a form or menu
     step, and a menu's option labels and descriptions, as the frontend shows
-    them; a text Core ships no string for is left out."""
+    them; a text Core ships no string for is left out. Where Home Assistant's
+    own formatter runs it gives the title (the integration's name for a step
+    without one), the description and the option labels."""
     step_id = step.get("step_id")
     if not isinstance(step_id, str):
         return {}
-    keys = {name: f"{step_id}.{name}" for name in ("title", "description", "submit")}
     options = menu_choices(step) if step.get("type") == "menu" else []
-    for group in _MENU_TEXTS:
+    core = await _core_step(client, flow, step)
+    names = ("submit",) if core else ("title", "description", "submit")
+    groups = ("menu_option_descriptions",) if core else tuple(_MENU_TEXTS)
+    keys = {name: f"{step_id}.{name}" for name in names}
+    for group in groups:
         keys.update({f"{group}.{o}": f"{step_id}.{group}.{o}" for o in options})
     texts = await _flow_texts(client, flow, step, "step", keys)
-    for group, name in _MENU_TEXTS.items():
+    for group in groups:
         found = {
             o: texts.pop(f"{group}.{o}") for o in options if f"{group}.{o}" in texts
         }
         if found:
-            texts[name] = found
+            texts[_MENU_TEXTS[group]] = found
+    if core:
+        texts.update(
+            {
+                k: core[k]
+                for k in ("title", "description")
+                if isinstance(core.get(k), str)
+            }
+        )
+        labels = core.get("menu_options")
+        # The formatter labels an option it has no string for with its key.
+        labels = {
+            o: label
+            for o, label in (labels.items() if isinstance(labels, dict) else ())
+            if label != o
+        }
+        if options and labels:
+            texts["menu_option_labels"] = labels
+        return texts
     supplied = step.get("menu_options")
     if options and isinstance(supplied, dict):
         # A flow may label its options itself ({step_id: label}); the frontend

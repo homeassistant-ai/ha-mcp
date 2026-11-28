@@ -17,6 +17,7 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
+    HomeAssistantError,
 )
 from ..errors import ErrorCode, create_error_response
 from ..strict_bps import BestPracticeKeyParam
@@ -28,6 +29,8 @@ from ..utils.python_sandbox import (
     safe_execute,
 )
 from .auto_backup import with_auto_backup
+from .automation_errors import raise_if_core_rejected
+from .automation_registry_details import registry_details
 from .best_practice_checker import (
     BestPracticeCheckResult,
 )
@@ -40,13 +43,14 @@ from .blueprint_substitute import (
     validate_write_modes,
 )
 from .coercion import JSON_STRING_COERCION, parse_json_param
+from .component_automation import automation_lookup
 from .config_helpers.registry import validate_registry_ids
 from .config_write_helpers import (
     apply_entity_category,
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
-    fetch_entity_category,
+    entry_category,
     merge_validation_meta,
     refuse_write_by_bare_id_of_another_key,
 )
@@ -66,6 +70,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references as ref_check
+from .script_sequence_run import refuse_misused_run_control, run_script_sequence
 from .tool_hints import read_only_hints, write_hints
 from .util_helpers import list_visible_registry_ids
 from .ws_waiters import verify_entity_removed, wait_for_entity_registered
@@ -107,8 +112,8 @@ def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _skip_script_run_backup(kwargs: dict[str, Any]) -> bool:
-    """Skip config snapshots for a run start/stop (no config change)."""
-    return kwargs.get("run") is not None
+    """Skip config snapshots for a run (no config change)."""
+    return kwargs.get("run") is not None or kwargs.get("run_sequence") is not None
 
 
 class ConfigScriptTools:
@@ -139,6 +144,8 @@ class ConfigScriptTools:
 
         The returned `config_hash` stays the same across consecutive reads of an unchanged config.
 
+        `entity` is the script's entity registry row, `validation` holds Home Assistant's status and error when the script failed to load (None when it loaded), and `references` lists the entities, devices, areas, floors, labels and blueprint it uses. `references` is None without the ha_mcp_tools component's lookup, while Home Assistant has not loaded the script (its entity is disabled or it failed to load), and before Home Assistant registers an entity for a new script (`entity` is None then); `warnings` says which.
+
         The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A bare id names the script stored under that key first; `script.<x>` names that entity's script, or the script stored under key `<x>` when no entity has that id.
 
         EXAMPLES:
@@ -160,17 +167,10 @@ class ConfigScriptTools:
                 ],
             )
 
-            # Script gets ALWAYS take the legacy path — the component's
-            # in-process ``config_get`` was withdrawn. It served
-            # ``entity.raw_config``, which is only the storage body as of the
-            # last COMPLETED async reload, with no version marker to tell a
-            # fresh body from a stale one. A get racing a reload returned the
-            # pre-edit body and broke the get -> python_transform -> set
-            # round-trip (caught live by the automation/script config e2e on the
-            # arm/HAOS runners). The legacy REST config endpoint reads the config
-            # FILE, which is fresh the instant a write lands, so it stays the
-            # sole path. Scenes were already legacy-only (no storage body in
-            # memory at all); scripts join them here for freshness.
+            # The body ALWAYS comes from the REST config endpoint, which reads
+            # the config file. The entity's in-memory raw_config lags it until
+            # the reload after a write completes, so a get racing that reload
+            # would return the pre-edit body.
             return await self._legacy_get_script(script_id)
         except ToolError:
             raise
@@ -187,67 +187,70 @@ class ConfigScriptTools:
             return None  # unreachable: exception_to_structured_error always raises
 
     async def _legacy_get_script(self, script_id: str) -> dict[str, Any]:
-        """Assemble the script-get response from the REST/WS pipeline.
-
-        The multi-fetch path: id-resolution WS + per-id config REST + entity
-        lookup + ``fetch_entity_category`` WS call. This is the ONLY script-get path —
-        see ``ha_config_get_script`` for why script gets never route through the
-        component's ``config_get`` (its ``raw_config`` freshness lags the config
-        file between a write and the next completed reload).
-        """
+        """Assemble the script-get response: the body from REST; the registry
+        row, load failure and references from the component's lookup, or,
+        without it, the row and load failure from Core's registry and repairs
+        commands (no references)."""
         config_result = await self._fetch_script_config_envelope(script_id)
-        # Extract actual script config body and compute hash before category injection
         actual_config = config_result.get("config", config_result)
         config_hash_value = compute_config_hash(actual_config)
 
-        # Fetch category from entity registry (best-effort)
-        # (injected after hash so transient registry failures don't affect the hash)
-        cat_warnings: list[str] = []
+        # The category is injected after hashing so a failed registry read
+        # does not change the hash.
+        warnings: list[str] = []
         key = config_result.get("script_id")
-        entity_id = await script_entity_or_warning(
-            self._client, script_id, key, cat_warnings, "category unavailable"
+        lookup = (
+            await automation_lookup(self._client, unique_id=key, domain="script")
+            if key
+            else None
         )
-        if entity_id:
-            cat_id = await fetch_entity_category(
-                self._client, entity_id, "script", cat_warnings
+        entity_id: str | None = None
+        if lookup is None:
+            entity_id = await script_entity_or_warning(
+                self._client, script_id, key, warnings, "registry entry unavailable"
             )
-            if cat_id:
-                actual_config["category"] = cat_id
+        elif lookup.get("found") is False:
+            warnings.append(
+                "registry entry, validation and references unavailable: Home "
+                "Assistant has no script entity for this config yet"
+            )
+        entity, validation, references = await registry_details(
+            self._client,
+            lookup,
+            entity_id,
+            warnings,
+            domain="script",
+            related_fallback=False,
+        )
+        cat_id = entry_category(entity, "script")
+        if cat_id:
+            actual_config["category"] = cat_id
 
-        # Issue #1334: return the canonical storage key from the
-        # rest_client envelope so callers can thread the result into
-        # subsequent ha_config_*_script calls without re-resolving.
-        # Falls back to the input when the rest_client response omits
-        # the key — a contract violation that we surface via warning
-        # rather than mask silently.
-        canonical_id = config_result.get("script_id")
-        if canonical_id is None:
+        # The canonical storage key, for later ha_config_*_script calls; an
+        # envelope without it is a client contract violation, logged.
+        if key is None:
             logger.warning(
                 "get_script_config envelope missing 'script_id' for "
                 "input %r; falling back to caller input. This indicates "
                 "a rest_client contract violation.",
                 script_id,
             )
-            canonical_id = script_id
+            key = script_id
 
         response: dict[str, Any] = {
             "success": True,
             "action": "get",
-            "script_id": canonical_id,
-            # The script BODY, not the REST envelope. Returning the envelope
-            # here put ``{success, script_id, config}`` under ``config``, so
-            # ``response["config"]["sequence"]`` did not exist and every caller
-            # had to unwrap twice -- the e2e carried a helper to do exactly
-            # that. ``ha_config_get_automation`` returns the body, this
-            # docstring promises the body, and the hash is already computed
-            # over the body.
+            "script_id": key,
+            # The script body, not the REST envelope, as the automation get
+            # returns it; the hash is computed over the body too.
             "config": actual_config,
             "config_hash": config_hash_value,
+            "entity": entity,
+            "validation": validation,
+            "references": references,
         }
-        # Top level, not inside ``config``: warnings are a top-level list[str]
-        # by contract.
-        if cat_warnings:
-            response.setdefault("warnings", []).extend(cat_warnings)
+        if warnings:
+            response["warnings"] = warnings
         return response
 
     async def _raise_script_not_found(
@@ -308,7 +311,7 @@ class ConfigScriptTools:
         ``actual_config`` is the inner script body (not the REST wrapper) and
         ``resolved_id`` is the storage key the REST client resolved the input to
         (from the envelope's ``script_id``). Threading ``resolved_id`` lets the
-        upsert call site skip the redundant re-resolve (issue #1813 Phase 0).
+        upsert call site skip a second entity-registry lookup.
         Used internally by _fetch_and_verify_hash and _take_control_config.
 
         ``resolved_id`` is ``None`` when the envelope omits ``script_id`` — the
@@ -333,9 +336,9 @@ class ConfigScriptTools:
 
         Returns ``(actual_config, resolved_id)`` — the inner script body and the
         storage key the REST client resolved the input to. Threading
-        ``resolved_id`` lets the upsert call site skip the redundant re-resolve
-        (issue #1813 Phase 0); it is ``None`` when the envelope omitted the key,
-        so the upsert re-resolves rather than writing to the caller slug. Raises
+        ``resolved_id`` lets the upsert call site skip a second lookup; it is
+        ``None`` when the envelope omitted the key, so the upsert resolves the
+        id again rather than writing to the caller slug. Raises
         ToolError when a bare ``script_id`` resolved to another script's key, or
         when the hash does not match (conflict).
         """
@@ -360,20 +363,37 @@ class ConfigScriptTools:
         return actual_config, resolved_id
 
     async def _upsert_script(
-        self, config: dict[str, Any], script_id: str, resolved_id: str | None
+        self,
+        config: dict[str, Any],
+        script_id: str,
+        resolved_id: str | None,
+        bp_warnings: BestPracticeCheckResult,
     ) -> dict[str, Any]:
         """Upsert, threading a pre-resolved storage key when available.
 
         ``script_id`` is always the CALLER's identifier (used to default a
         missing alias). ``resolved_id``, the storage key the tool resolved, is
         passed as the write target so the REST client skips the redundant
-        entity-registry lookup (issue #1813 Phase 0); ``None`` lets the REST
-        client resolve. Passing the caller id
-        separately keeps a renamed script's alias caller-facing (#1935).
+        entity-registry lookup; ``None`` lets the REST
+        client resolve. Passing the caller id separately keeps a renamed
+        script's alias caller-facing. A 400 carrying the config view's
+        verdict is raised with Core's text and its hints, as for automations;
+        any other API error propagates unchanged.
         """
-        result: dict[str, Any] = await self._client.upsert_script_config(
-            config, script_id, resolved_id=resolved_id
-        )
+        try:
+            result: dict[str, Any] = await self._client.upsert_script_config(
+                config, script_id, resolved_id=resolved_id
+            )
+        except HomeAssistantAPIError as e:
+            await raise_if_core_rejected(
+                self._client,
+                e,
+                config,
+                context={"script_id": script_id},
+                bp_warnings=bp_warnings,
+                domain="script",
+            )
+            raise
         return result
 
     @staticmethod
@@ -384,9 +404,10 @@ class ConfigScriptTools:
     ) -> tuple[dict[str, Any], str | None]:
         """Parse and validate script config, returning (config_dict, effective_category).
 
-        Parses JSON string config, validates it is a dict, checks for required
-        fields (sequence or use_blueprint), extracts category, and strips empty
-        blueprint fields.
+        Parses JSON string config, validates it is a dict, extracts category,
+        drops an empty ``sequence`` beside ``use_blueprint`` and refuses a
+        ``sequence`` sent as ``{"item": ...}`` or ``""``. Core's config API
+        judges the rest.
         """
         # Parse JSON config if provided as string
         try:
@@ -426,22 +447,9 @@ class ConfigScriptTools:
         config_category = config_dict.pop("category", None)
         effective_category = category if category is not None else config_category
 
-        # Validate required fields based on script type
-        # Blueprint scripts only need use_blueprint, regular scripts need sequence
         if "use_blueprint" in config_dict:
             # Strip empty sequence array that would override blueprint
             config_dict = _strip_empty_script_fields(config_dict)
-        elif "sequence" not in config_dict:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "config must include either 'sequence' field (for regular scripts) or 'use_blueprint' field (for blueprint-based scripts)",
-                    context={
-                        "script_id": script_id,
-                        "required_fields": ["sequence OR use_blueprint"],
-                    },
-                )
-            )
 
         return config_dict, effective_category
 
@@ -519,8 +527,8 @@ class ConfigScriptTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for script to be queryable before returning. Set to False for "
-                "bulk operations.",
+                description="Wait for script to be queryable before returning; entity_id is in the "
+                "reply only with this or a category, once the entity resolves. Set to False for bulk operations.",
                 default=True,
             ),
         ] = True,
@@ -538,13 +546,28 @@ class ConfigScriptTools:
                 default=None,
             ),
         ] = None,
+        run_sequence: Annotated[
+            list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Run these actions now without storing them, as the script "
+                    "editor's Run on a single action does (Core's execute_script). "
+                    "Waits up to 30 s for the run to end; `response` is what a "
+                    "`stop` step with `response_variable` returned. A failed "
+                    "condition, or a `stop` with `error: true`, ends the run "
+                    "early with the same success reply."
+                ),
+                default=None,
+            ),
+        ] = None,
         variables: Annotated[
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "With run='start': values for the script's fields, passed to "
-                    "the run as its variables."
+                    "With run='start' or run_sequence: the run's variables (for "
+                    "run='start', values for the script's fields)."
                 ),
                 default=None,
             ),
@@ -583,6 +606,10 @@ class ConfigScriptTools:
           variables), 'stop' stops its running executions. Write config changes
           in a separate call first: Home Assistant signals no completion of the
           script reload a write triggers.
+        - run_sequence (alone with script_id, which is not sent): run actions
+          without storing them, e.g. one step of the script; the script's own
+          variables and field defaults do not apply, so pass what the steps
+          read in variables.
 
         EXAMPLES:
         - Create: ha_config_set_script(script_id="blink_light", config={"alias": "Light Blink", "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.living_room"}}, {"delay": {"seconds": 2}}, {"action": "light.turn_off", "target": {"entity_id": "light.living_room"}}]})
@@ -609,11 +636,12 @@ class ConfigScriptTools:
                 ],
                 context={"action": "set"},
             )
-            if run is not None or variables is not None:
+            if run is not None or run_sequence is not None or variables is not None:
                 return await self._run_script_control(
                     script_id,
                     run,
                     variables,
+                    run_sequence,
                     has_write=config is not None
                     or python_transform is not None
                     or take_control_of_blueprint,
@@ -692,16 +720,18 @@ class ConfigScriptTools:
             )
 
             # The storage key is resolved here, by the hash check when it runs,
-            # and threaded through so the upsert doesn't re-resolve (#1813).
+            # and threaded through so the upsert doesn't resolve it again.
             if config_hash:
                 _, resolved_key = await self._fetch_and_verify_hash(
                     script_id, config_hash, "set"
                 )
+                stored = True
             else:
                 resolved_key = await self._client._resolve_script_id(script_id)
                 refuse_write_by_bare_id_of_another_key(
                     "script", script_id, resolved_key
                 )
+                stored = await self._client._config_exists("script", resolved_key)
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(config_dict)
@@ -726,16 +756,13 @@ class ConfigScriptTools:
                 bp_warnings,
                 MandatoryBPS,
                 detached_blueprint,
+                operation="updated" if stored else "created",
             )
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
         except Exception as e:  # noqa: BLE001
             suggestions = [
-                "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
-                "For blueprint scripts, use ha_manage_blueprints(action='list', domain='script') to list available blueprints",
-                "Validate sequence actions syntax for regular scripts",
-                "Check entity_ids exist if using service calls",
                 "Use ha_search(domain_filter='script') to find scripts",
                 "Use ha_get_skill_guide for help",
             ]
@@ -774,37 +801,23 @@ class ConfigScriptTools:
         script_id: str,
         run: str | None,
         variables: dict[str, Any] | None,
+        run_sequence: list[dict[str, Any]] | None,
         *,
         has_write: bool,
         category: str | None,
         MandatoryBPS: bool,
     ) -> dict[str, Any]:
-        """Start or stop a script without touching its config."""
-        problem = None
-        if run is None:
-            problem = "variables only apply with run='start'"
-        elif has_write:
-            problem = (
-                "run cannot be combined with config, python_transform or "
-                "take_control_of_blueprint"
-            )
-        elif category is not None:
-            problem = "category requires a config update"
-        elif variables is not None and run != "start":
-            problem = "variables only apply with run='start'"
-        if problem:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    problem,
-                    suggestions=[
-                        "Write the script config in one call, then start or stop "
-                        + "it in a second call with only script_id and run",
-                        "Pass variables together with run='start'",
-                    ],
-                    context={"action": "run", "script_id": script_id, "run": run},
-                )
-            )
+        """Start or stop a script, or run actions, without touching its config."""
+        refuse_misused_run_control(
+            script_id,
+            run,
+            variables,
+            run_sequence,
+            has_write=has_write,
+            category=category,
+        )
+        if run_sequence is not None:
+            return await run_script_sequence(self._client, run_sequence, variables)
         entity_id = await self._run_target(script_id, run)
         # HA's script services are a silent no-op on an unknown entity.
         try:
@@ -847,12 +860,10 @@ class ConfigScriptTools:
     ) -> tuple[dict[str, Any], str | None]:
         """Validate + run a script python_transform.
 
-        Returns ``(transformed_config, resolved_id)``. Extracted verbatim from
-        ``ha_config_set_script``'s python_transform branch (the pre-
-        ``_check_best_practices`` head): enforces config_hash, fetches +
-        hash-verifies, executes the sandboxed transform, and validates the
-        result still has a sequence or blueprint. Raises a structured ToolError
-        on any violation.
+        Returns ``(transformed_config, resolved_id)``. Enforces config_hash,
+        fetches + hash-verifies and executes the sandboxed transform, and
+        refuses a transformed ``sequence`` shaped ``{"item": ...}`` or ``""``.
+        Raises a structured ToolError on any violation.
         """
         if config_hash is None:
             raise_tool_error(
@@ -898,25 +909,6 @@ class ConfigScriptTools:
             {"action": "python_transform", "script_id": script_id},
             source="python_transform",
         )
-        # Validate transformed config
-        if (
-            "sequence" not in transformed_config
-            and "use_blueprint" not in transformed_config
-        ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_FAILED,
-                    "Transformed config must include either 'sequence' or 'use_blueprint'",
-                    suggestions=[
-                        "The transform may have removed required fields",
-                        "Ensure the config still has a 'sequence' or 'use_blueprint' key",
-                    ],
-                    context={
-                        "action": "python_transform",
-                        "script_id": script_id,
-                    },
-                )
-            )
         return transformed_config, resolved_id
 
     async def _finalize_script_write(
@@ -927,7 +919,17 @@ class ConfigScriptTools:
         wait: bool,
         category: str | None,
     ) -> None:
-        """Resolve, wait, and apply a category for either script write mode."""
+        """Hash the config Core stored (read by key: no registry read), then
+        resolve, wait, and apply a category; a failed read only adds a warning."""
+        try:
+            readback = await self._client.get_script_config(
+                script_id, result["script_id"]
+            )
+            result["config_hash"] = compute_config_hash(readback["config"])
+        except HomeAssistantError as e:
+            result.setdefault("warnings", []).append(
+                f"Saved; reading it back failed ({e}), re-read it for a config_hash"
+            )
         if not wait and not category:
             return
         storage_key = result.get("script_id") or resolved_key or script_id
@@ -940,6 +942,8 @@ class ConfigScriptTools:
             category=category,
             caller_id=script_id,
         )
+        if entity_id:
+            result["entity_id"] = entity_id
         if wait and entity_id:
             try:
                 registered = await wait_for_entity_registered(self._client, entity_id)
@@ -968,22 +972,17 @@ class ConfigScriptTools:
         wait: bool,
         effective_category: str | None = None,
     ) -> dict[str, Any]:
-        """Upsert, refresh the hash, finalize wait/category, and build the response."""
+        """Validate references, upsert, finalize (hash, wait, category), and build the response."""
+        references = await ref_check(self._client, transformed_config, "script")
         # Save transformed config. ``_fetch_and_verify_hash`` already
         # resolved the storage key; pass it as the write target so the
-        # upsert skips the redundant re-resolve (issue #1813 Phase 0).
+        # upsert skips a second entity-registry lookup.
         # ``script_id`` stays the caller id (the fetched config already
         # carries an alias here, so the default is a no-op, but keep the
-        # contract consistent — #1935).
-        references = await ref_check(self._client, transformed_config, "script")
-        result = await self._client.upsert_script_config(
-            transformed_config, script_id, resolved_id=resolved_id
+        # contract consistent).
+        result = await self._upsert_script(
+            transformed_config, script_id, resolved_id, bp_warnings
         )
-
-        # Re-read the written key for the hash (HA may normalize): no registry read
-        readback = await self._client.get_script_config(script_id, result["script_id"])
-        new_config_hash = compute_config_hash(readback["config"])
-
         await self._finalize_script_write(
             result, script_id, resolved_id, wait, effective_category
         )
@@ -992,7 +991,7 @@ class ConfigScriptTools:
             "success": True,
             "action": "python_transform",
             "script_id": script_id,
-            "config_hash": new_config_hash,
+            "operation": "updated",
             "python_expression": python_transform,
             "message": f"Script {script_id} updated via Python transform",
             # Merge upsert result, excluding "success" (we set it ourselves)
@@ -1036,10 +1035,14 @@ class ConfigScriptTools:
         bp_warnings: BestPracticeCheckResult,
         MandatoryBPS: bool,
         detached_blueprint: str | None = None,
+        *,
+        operation: str,
     ) -> dict[str, Any]:
-        """Validate references, upsert, finalize wait/category, and build the response."""
+        """Validate references, upsert, finalize (hash, wait, category), and build the response."""
         references = await ref_check(self._client, config_dict, "script")
-        result = await self._upsert_script(config_dict, script_id, resolved_key)
+        result = await self._upsert_script(
+            config_dict, script_id, resolved_key, bp_warnings
+        )
 
         await self._finalize_script_write(
             result, script_id, resolved_key, wait, effective_category
@@ -1050,10 +1053,7 @@ class ConfigScriptTools:
 
         merge_validation_meta(result, references)
 
-        response = {
-            "success": True,
-            **result,
-        }
+        response = {"success": True, "operation": operation, **result}
         if detached_blueprint:
             response["took_control_of_blueprint"] = detached_blueprint
         # attach AFTER the outer dict is built so hint lands at
@@ -1096,10 +1096,9 @@ class ConfigScriptTools:
 
         EXAMPLE: ha_config_remove_script("old_script")
 
-        Only scripts created via the Home Assistant UI can be deleted. Scripts
-        defined in YAML configuration files (scripts.yaml or configuration.yaml)
-        cannot be deleted through the API and return a 405 Method Not Allowed
-        error; edit the configuration file directly instead.
+        Deletes a script from Home Assistant's editable script storage
+        (``scripts.yaml``, as the UI and ha_config_set_script write it); a
+        script defined elsewhere in YAML is not found there.
 
         WARNING: Deleting a script that is used by automations may cause those automations to fail.
         """
