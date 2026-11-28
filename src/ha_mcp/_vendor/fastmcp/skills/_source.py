@@ -7,7 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from ha_mcp._vendor.mcp.server.context import ServerRequestContext
 
-from ha_mcp._vendor.fastmcp.skills.models import Skill
+from ha_mcp._vendor.fastmcp.skills.models import MCPSkill
 
 
 @runtime_checkable
@@ -16,15 +16,11 @@ class _SkillSource(Protocol):
 
     async def _list_skill_entries(
         self, context: ServerRequestContext[Any, Any]
-    ) -> Sequence[Skill]: ...
+    ) -> Sequence[MCPSkill]: ...
 
     async def _get_skill_entry(
         self, uri: str, context: ServerRequestContext[Any, Any]
-    ) -> Skill | None: ...
-
-    def _validate_skill_source(self) -> None:
-        """Reject sources that have not opted into protocol publication."""
-        ...
+    ) -> MCPSkill | None: ...
 
     async def _skill_uris(self, uri: str | None = None) -> Sequence[str]:
         """Return identities before authorization/validation, preserving duplicates."""

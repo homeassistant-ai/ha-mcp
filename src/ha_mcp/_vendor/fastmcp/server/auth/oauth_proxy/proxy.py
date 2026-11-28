@@ -248,7 +248,7 @@ class OAuthProxy(OAuthProvider, ConsentMixin):
     5. Token Management:
        - Clients may expect different token formats/claims than upstream provides
        - Need to track tokens for revocation and refresh
-       - Solution: Store token relationships, forward upstream tokens transparently
+       - Solution: Issue FastMCP-signed JWTs and map their JTIs to the stored upstream tokens
 
     OAuth Flow Implementation
     ------------------------
@@ -268,7 +268,7 @@ class OAuthProxy(OAuthProvider, ConsentMixin):
 
     4. Token Exchange:
        - Validate client's code and PKCE verifier
-       - Return previously obtained upstream tokens
+       - Issue FastMCP access/refresh tokens backed by the stored upstream tokens
        - Clean up one-time use authorization code
 
     5. Token Refresh:
@@ -279,8 +279,9 @@ class OAuthProxy(OAuthProvider, ConsentMixin):
     State Management
     ---------------
     The proxy maintains minimal but crucial state via pluggable storage (client_storage):
-    - _oauth_transactions: Active authorization flows with client context
-    - _client_codes: Authorization codes with PKCE challenges and upstream tokens
+    - _transaction_store: Active authorization flows with client context
+    - _code_store: Authorization codes with PKCE challenges and upstream tokens
+    - _upstream_token_store: Upstream token sets
     - _jti_mapping_store: Maps FastMCP token JTIs to upstream token IDs
     - _refresh_token_store: Refresh token metadata (keyed by token hash)
 
@@ -589,7 +590,7 @@ class OAuthProxy(OAuthProvider, ConsentMixin):
         if isinstance(jwt_signing_key, str):
             if len(jwt_signing_key) < 12:
                 logger.warning(
-                    "jwt_signing_key is less than 12 characters; it is recommended to use a longer. "
+                    "jwt_signing_key is less than 12 characters; it is recommended to use a longer "
                     "string for the key derivation."
                 )
             jwt_signing_key = derive_jwt_key(
@@ -1995,18 +1996,25 @@ class OAuthProxy(OAuthProvider, ConsentMixin):
         # Guard against past expiry (e.g. existing upstream refresh has already
         # ticked past its recorded expiry). Storage TTL must be > 0.
         refresh_ttl = max(refresh_ttl, 1)
-        await self._upstream_token_store.put(
-            key=upstream_token_set.upstream_token_id,
-            value=upstream_token_set,
-            ttl=max(
-                refresh_ttl, new_expires_in, fastmcp_access_expires_in, 1
-            ),  # Keep until longest-lived token expires (min 1s for safety)
-        )
 
-        # Re-extract upstream claims from refreshed token response
-        upstream_claims = await self._extract_upstream_claims(
-            upstream_token_set.raw_token_data
-        )
+        # Re-extract upstream claims from refreshed token response. Record them
+        # on the token set as well, so load_access_token serves them for every
+        # FastMCP token that points at this upstream session. The refreshed
+        # (possibly rotated) upstream tokens are persisted even if the
+        # extraction raises.
+        try:
+            upstream_claims = await self._extract_upstream_claims(
+                upstream_token_set.raw_token_data
+            )
+            upstream_token_set.upstream_claims = upstream_claims or {}
+        finally:
+            await self._upstream_token_store.put(
+                key=upstream_token_set.upstream_token_id,
+                value=upstream_token_set,
+                ttl=max(
+                    refresh_ttl, new_expires_in, fastmcp_access_expires_in, 1
+                ),  # Keep until longest-lived token expires (min 1s for safety)
+            )
 
         # Issue new minimal FastMCP access token (just a reference via JTI)
         if client.client_id is None:
@@ -2199,6 +2207,21 @@ class OAuthProxy(OAuthProvider, ConsentMixin):
             **token_response,
         }
 
+        # Re-extract upstream claims from the refreshed token response, as the
+        # refresh grant does. The FastMCP JWT cannot be re-issued here, so the
+        # claims are recorded on the token set and load_access_token prefers
+        # them over the copy embedded in the JWT at issuance. A failed
+        # extraction must not lose the (possibly rotated) upstream tokens, so
+        # it drops the claims instead of raising.
+        try:
+            refreshed_claims = await self._extract_upstream_claims(
+                upstream_token_set.raw_token_data
+            )
+        except Exception as e:
+            logger.debug("Upstream claim extraction failed after refresh: %s", e)
+            refreshed_claims = None
+        upstream_token_set.upstream_claims = refreshed_claims or {}
+
         refresh_ttl = new_refresh_expires_in or (
             int(upstream_token_set.refresh_token_expires_at - time.time())
             if upstream_token_set.refresh_token_expires_at
@@ -2219,7 +2242,7 @@ class OAuthProxy(OAuthProvider, ConsentMixin):
 
         return upstream_token_set
 
-    async def load_access_token(self, token: str) -> AccessToken | None:  # type: ignore[override]  # ty:ignore[invalid-method-override]
+    async def load_access_token(self, token: str) -> AccessToken | None:  # type: ignore[override]  # ty:ignore[incompatible-method-override]
         """Validate FastMCP JWT by swapping for upstream token.
 
         This implements the token swap pattern:
@@ -2390,10 +2413,34 @@ class OAuthProxy(OAuthProvider, ConsentMixin):
                         "expires_at": int(upstream_token_set.expires_at),
                     }
                 )
+                # A verifier without its own required_scopes (e.g. one that
+                # checks an opaque token via userinfo, or an id_token) cannot
+                # enforce the provider's required_scopes. Check them here
+                # against the patched upstream scopes, so the requirement
+                # holds even when an outer layer (e.g. MultiAuth with
+                # required_scopes=[]) does not enforce it.
+                missing_scopes = (
+                    set()
+                    if self._token_validator.required_scopes
+                    else set(self.required_scopes or []) - set(validated.scopes)
+                )
+                if missing_scopes:
+                    logger.debug(
+                        "Upstream token is missing required scopes: %s",
+                        sorted(missing_scopes),
+                    )
+                    return None
 
-            # Propagate upstream claims from the verified FastMCP JWT into the
+            # The upstream session may have been refreshed since this JWT was
+            # issued. The claims extracted at that refresh are the current ones;
+            # the copy embedded in the JWT dates from issuance.
+            if upstream_token_set.upstream_claims is not None:
+                upstream_claims = upstream_token_set.upstream_claims
+
+            # Propagate upstream claims (recorded at the latest refresh, or
+            # else embedded in the verified FastMCP JWT at issuance) into the
             # final AccessToken object. This allows subclasses to access custom
-            # identity data extracted during the initial authorization flow.
+            # identity data extracted from the upstream token response.
             # We perform a model copy to avoid mutating a potentially cached
             # reference shared across concurrent requests.
             if validated and upstream_claims:

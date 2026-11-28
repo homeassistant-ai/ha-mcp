@@ -20,6 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 _FUNCTION_CACHES = {
     "uncalled_for.annotations": ("_metadata_cache", "_annotation_cache"),
     "uncalled_for.introspection": ("_signature_cache", "_parameter_cache"),
+    "uncalled_for.references": ("_reference_cache",),
 }
 
 

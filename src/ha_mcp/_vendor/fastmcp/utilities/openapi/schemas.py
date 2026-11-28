@@ -4,9 +4,13 @@ import re
 from collections import Counter
 from typing import Any
 
+from ha_mcp._vendor.fastmcp.utilities.json_schema import ref_target_name
 from ha_mcp._vendor.fastmcp.utilities.logging import get_logger
 
-from .json_schema_converter import convert_openapi_schema_to_json_schema
+from .json_schema_converter import (
+    convert_openapi_schema_to_json_schema,
+    resolve_definition_pointer,
+)
 from .models import HTTPRoute, JsonSchema, ResponseInfo
 
 logger = get_logger(__name__.removeprefix("ha_mcp._vendor."))
@@ -88,6 +92,18 @@ _SUBSCHEMA_KEYWORDS = (
 )
 
 
+def _ref_component_name(ref: str) -> str | None:
+    """Return the component schema a local `$ref` points into, if any.
+
+    The name is the decoded segment after `#/$defs/` or
+    `#/components/schemas/`, so `#/$defs/Pet/properties/status` needs the
+    `Pet` definition and `#/$defs/a~1b` needs `a/b`.
+    """
+    if not ref.startswith("#/"):
+        return None
+    return ref_target_name(ref, roots=(("$defs",), ("components", "schemas")))
+
+
 def _replace_ref_with_defs(
     info: dict[str, Any], description: str | None = None
 ) -> dict[str, Any]:
@@ -114,8 +130,11 @@ def _replace_ref_with_defs(
     if ref_path := schema.get("$ref"):
         if isinstance(ref_path, str):
             if ref_path.startswith("#/components/schemas/"):
-                schema_name = ref_path.split("/")[-1]
-                schema["$ref"] = f"#/$defs/{schema_name}"
+                # Keep the whole pointer: one into a component, such as
+                # #/components/schemas/Pet/properties/status, has the same path
+                # under $defs.
+                pointer = ref_path.removeprefix("#/components/schemas/")
+                schema["$ref"] = f"#/$defs/{pointer}"
             elif not ref_path.startswith("#/"):
                 raise ValueError(
                     f"External or non-local reference not supported: {ref_path}. "
@@ -295,7 +314,11 @@ def _allof_members(
                 if ref.startswith(prefix):
                     name = ref.removeprefix(prefix)
                     dependencies.add(name)
-                    referenced = schema_defs.get(name) if name not in refs else None
+                    referenced = (
+                        resolve_definition_pointer(schema_defs, name)
+                        if name not in refs
+                        else None
+                    )
                     contextual |= name in refs
                     break
         children: list[tuple[dict[str, Any], set[str]]] = []
@@ -761,8 +784,10 @@ def _combine_schemas_and_map_params(
                 if isinstance(value, dict):
                     if "$ref" in value and isinstance(value["$ref"], str):
                         ref = value["$ref"]
-                        if ref.startswith("#/$defs/"):
-                            used_refs.add(ref.split("/")[-1])
+                        if ref.startswith("#/$defs/") and (
+                            name := _ref_component_name(ref)
+                        ):
+                            used_refs.add(name)
                     for v in value.values():
                         find_refs_in_value(v)
                 elif isinstance(value, list):
@@ -792,9 +817,59 @@ def _combine_schemas_and_map_params(
             result["$defs"] = schema_defs
 
     if route.openapi_version and route.openapi_version.startswith("3"):
-        result = convert_openapi_schema_to_json_schema(result, route.openapi_version)
+        result = _convert_input_schema(result, set(body_props), route.openapi_version)
 
     return result, parameter_map
+
+
+def _convert_input_schema(
+    schema: dict[str, Any], body_property_names: set[str], openapi_version: str
+) -> dict[str, Any]:
+    """Convert a combined tool input schema to JSON Schema.
+
+    readOnly properties are removed: the server sets them, so a request does
+    not send them, and OpenAPI applies their ``required`` entries to responses
+    only. readOnly describes a property of an object, so at the top level only
+    the request body properties flattened into arguments (``body_property_names``)
+    can be removed. Parameters and a whole-body argument stay arguments even
+    when their own schema is marked readOnly; the objects inside them, and the
+    component schemas in ``$defs``, lose their readOnly properties.
+    """
+    properties = schema["properties"]
+    definitions = schema.get("$defs")
+
+    def convert(sub_schema: Any) -> Any:
+        return convert_openapi_schema_to_json_schema(
+            sub_schema, openapi_version, remove_read_only=True, definitions=definitions
+        )
+
+    body = convert(
+        {
+            "properties": {
+                k: v for k, v in properties.items() if k in body_property_names
+            },
+            "required": [n for n in schema["required"] if n in body_property_names],
+        }
+    )
+    converted = {
+        name: body["properties"][name]
+        if name in body_property_names
+        else convert(prop_schema)
+        for name, prop_schema in properties.items()
+        if name not in body_property_names or name in body["properties"]
+    }
+    result: dict[str, Any] = {
+        "type": "object",
+        "properties": converted,
+        "required": [
+            name
+            for name in schema["required"]
+            if name not in body_property_names or name in body.get("required", [])
+        ],
+    }
+    if definitions is not None:
+        result["$defs"] = {name: convert(d) for name, d in definitions.items()}
+    return result
 
 
 def _combine_schemas(route: HTTPRoute) -> dict[str, Any]:
@@ -900,7 +975,8 @@ def extract_output_schema_from_responses(
     if "$ref" in output_schema and schema_definitions:
         ref_path = output_schema["$ref"]
         if ref_path.startswith("#/$defs/"):
-            schema_name = ref_path.split("/")[-1]
+            # Only a reference to a whole definition can be replaced by it.
+            schema_name = ref_path.removeprefix("#/$defs/")
             if schema_name in schema_definitions:
                 # Replace $ref with the actual schema definition
                 output_schema = _replace_ref_with_defs(schema_definitions[schema_name])

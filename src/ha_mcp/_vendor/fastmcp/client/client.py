@@ -196,12 +196,12 @@ async def _conformant_discover_only(
     # A transport may itself have installed a `send_discover` override, so restore
     # whatever was there rather than assuming the class attribute.
     had_own = "send_discover" in vars(session)
-    session.send_discover = _checked_send_discover  # ty: ignore[invalid-assignment]
+    session.send_discover = _checked_send_discover
     try:
         yield
     finally:
         if had_own:
-            session.send_discover = send_discover  # ty: ignore[invalid-assignment]
+            session.send_discover = send_discover
         else:
             del session.send_discover
 
@@ -306,7 +306,7 @@ class Client(
                 - ClientTransport: Direct transport instance
                 - FastMCP: In-process FastMCP server
                 - AnyUrl or str: URL to connect to
-                - Path: File path for local socket
+                - Path: Python (.py) or Node (.js) script to run over stdio
                 - MCPConfig: MCP server configuration
                 - dict: Transport configuration
 
@@ -318,6 +318,8 @@ class Client(
         timeout: Optional timeout for requests (seconds or timedelta)
         init_timeout: Optional timeout for initial connection (seconds or timedelta).
             Set to 0 to disable. If None, uses the value in the FastMCP global settings.
+        client_info: The identity this client declares to servers. Defaults to
+            `fastmcp` and the installed FastMCP version.
         mode: Protocol-era negotiation at connect time. `"auto"` (the default) probes
             `server/discover` and negotiates the modern era, denylist-falling-back to the
             initialize handshake for any server that is not positive evidence of a modern
@@ -569,7 +571,8 @@ class Client(
             "log_level": "debug",
             "message_handler": effective_message_handler,
             "read_timeout_seconds": read_timeout_seconds,
-            "client_info": client_info,
+            "client_info": client_info
+            or mcp_types.Implementation(name="fastmcp", version=fastmcp.__version__),
             **self._build_extension_kwargs(),
         }
 
