@@ -47,6 +47,17 @@ def _requests(
     ]
 
 
+async def _file_source(hass: HomeAssistant, *page: Any) -> dict[str, Any]:
+    """Core's log file as one source; a file that cannot be read is its error."""
+    try:
+        return await hass.async_add_executor_job(_file_page, *page)
+    except OSError as exc:
+        return {
+            "error": f"Core's log file could not be read ({type(exc).__name__}).",
+            "status": 404 if isinstance(exc, FileNotFoundError) else None,
+        }
+
+
 async def _source(
     hass: HomeAssistant,
     name: str,
@@ -57,9 +68,7 @@ async def _source(
     skip: int,
 ) -> dict[str, Any]:
     if name == "core" and (path := hass.data.get(KEY_DATA_LOGGING)):
-        return await hass.async_add_executor_job(
-            _file_page, path, start, end, count, skip, raw
-        )
+        return await _file_source(hass, path, start, end, count, skip, raw)
     wanted = entries = count - 1 if raw else count
     while True:
         reads = _requests(name, start, end, entries, raw, skip)

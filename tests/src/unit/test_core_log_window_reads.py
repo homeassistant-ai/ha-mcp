@@ -94,6 +94,31 @@ async def test_a_supervisor_install_with_a_log_file_merges_it_with_the_journal(
     assert [row["source"] for row in page["records"]] == ["core", "host"]
 
 
+@pytest.mark.skipif(
+    not hasattr(aiohasupervisor.models, "LogsOptions"),
+    reason="Core 2026.11's Supervisor client does not implement native journal reads",
+)
+async def test_a_timeline_keeps_the_journal_when_cores_log_file_cannot_be_read(
+    hass: HomeAssistant,
+    log_file: Path,
+    component_core_client: HomeAssistantClient,
+    core_supervisor: Supervisor,
+) -> None:
+    await serve_log(log_file, f"{_line(1, 'a', 'from the file')}\n")
+    await hass.async_add_executor_job(log_file.unlink)
+    core_supervisor.reply(
+        "GET", "/host/logs", text=f"{_DAY} 10:00:02.000+00:00 host kernel: journal\n"
+    )
+    page = await call_logs(
+        component_core_client,
+        sources=["core", "host"],
+        start_time=f"{_DAY}T10:00:00+00:00",
+        end_time=f"{_DAY}T10:00:09+00:00",
+    )
+    assert [row["source"] for row in page["records"]] == ["host"]
+    assert list(page["errors"]) == ["core"]
+
+
 async def test_a_timeline_whose_sources_all_lack_a_journal_is_not_found(
     component_core_client: HomeAssistantClient,
 ) -> None:
