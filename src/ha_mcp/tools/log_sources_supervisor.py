@@ -1,6 +1,6 @@
 """Supervisor-backed log sources served by ``ha_get_logs``.
 
-App (add-on) container logs and the six Supervisor-managed system services.
+App (add-on) container logs and the Supervisor-managed system services.
 Separate from ``log_sources`` because these two reach Home Assistant through
 Supervisor rather than Core, and carry the whole token/role error vocabulary
 that follows from it. Mixed into ``LogTools`` (``tools_logs``).
@@ -16,14 +16,17 @@ from typing import Any, Literal, NoReturn
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_running_in_addon
+from ..client.error_log_journald import JournaldFetch, JournaldPage, range_header
 from ..client.journal_window import (
     WindowRestart,
+    fetch_range,
     parse_window_token,
     read_logs_page,
     read_logs_window,
     window_start,
 )
 from ..client.rest_client import (
+    MIN_LOG_WINDOW_LINES,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
@@ -34,9 +37,14 @@ from .log_common import (
     DEFAULT_LOG_LIMIT,
     MAX_LIMIT,
     SUPERVISOR_SEARCH_WINDOW_LINES,
-    SYSTEM_SERVICE_SLUGS,
     _addon_auth_error_suggestions,
     _coerce_limit,
+)
+from .supervisor_log_reader import (
+    component_journal_page,
+    journal_fallback_warning,
+    journal_name,
+    proxy_refused_path,
 )
 
 
@@ -48,6 +56,23 @@ class SupervisorLogSourcesMixin:
     """
 
     _client: Any
+
+    def _range_reader(self, path: str, warnings: list[str]) -> JournaldFetch:
+        async def fetch(range_: str) -> JournaldPage:
+            page = await component_journal_page(
+                self._client, journal_name(path), whole=True, range=range_
+            )
+            if page is not None:
+                return page
+            warning = await journal_fallback_warning(
+                self._client,
+                "the journal range was read through the Supervisor API",
+            )
+            if warning not in warnings:
+                warnings.append(warning)
+            return await fetch_range(self._client, path, range_)
+
+        return fetch
 
     @staticmethod
     def _window_call(
@@ -127,6 +152,7 @@ class SupervisorLogSourcesMixin:
                 limit,
                 resume,
                 offset if isinstance(offset, int) else 0,
+                fetch=self._range_reader(path, warnings),
             )
         except WindowRestart as e:
             raise_tool_error(
@@ -179,7 +205,10 @@ class SupervisorLogSourcesMixin:
         """
         read_at = now or datetime.now(UTC)
         since = window_start(read_at, hours_back)
-        read = await read_logs_window(self._client, path, since)
+        warnings: list[str] = []
+        read = await read_logs_window(
+            self._client, path, since, self._range_reader(path, warnings)
+        )
         fields: dict[str, Any] = {
             "hours_back": hours_back,
             "window_start": since.isoformat(timespec="seconds"),
@@ -187,11 +216,13 @@ class SupervisorLogSourcesMixin:
             "window_complete": read.complete,
         }
         if not read.complete:
-            fields["warnings"] = [
+            warnings.append(
                 f"The {hours_back}-hour window holds more than {read.cap} "
                 f"entries; only the newest {read.cap} were searched, so older "
                 "entries in the window were not."
-            ]
+            )
+        if warnings:
+            fields["warnings"] = warnings
         return read.lines, fields, read.cap
 
     def _search_paging(
@@ -220,6 +251,25 @@ class SupervisorLogSourcesMixin:
                 f"(max {MAX_LIMIT}) or narrow 'search'."
             )
         return paging
+
+    async def _service_tail(
+        self, path: str, lines: int, read_tail: Callable[[int], Awaitable[str]]
+    ) -> tuple[str, dict[str, Any]]:
+        # Supervisor reads its ``lines`` parameter as this same range. A
+        # one-entry range starts at the journal's head, so two are asked for.
+        page = await component_journal_page(
+            self._client,
+            journal_name(path),
+            whole=True,
+            range=range_header(max(lines, MIN_LOG_WINDOW_LINES)),
+        )
+        if page is not None:
+            return page.text, {}
+        warning = await journal_fallback_warning(
+            self._client,
+            "the journal was read through the Supervisor API",
+        )
+        return await read_tail(lines), {"warnings": [warning]}
 
     async def _read_service_log(
         self,
@@ -261,10 +311,12 @@ class SupervisorLogSourcesMixin:
             # Supervisor's /logs endpoints default to their last 100 lines,
             # so the tail is sized to the caller's limit (found via #1721's
             # e2e), or to the search window when filtering.
-            log_text = await read_tail(
+            log_text, window = await self._service_tail(
+                path,
                 max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
                 if search
-                else effective_limit
+                else effective_limit,
+                read_tail,
             )
             lines = log_text.splitlines() if log_text else []
 
@@ -292,8 +344,8 @@ class SupervisorLogSourcesMixin:
         }
         if filters_applied:
             data["filters_applied"] = filters_applied
+        data.update(window)
         if hours_back is not None:
-            data.update(window)
             data.update(
                 self._search_paging(
                     source,
@@ -359,7 +411,8 @@ class SupervisorLogSourcesMixin:
                 suggestions=_addon_auth_error_suggestions(),
             )
         except HomeAssistantAPIError as e:
-            status = getattr(e, "status_code", None)
+            status = e.status_code
+            context = {"source": "supervisor", "slug": slug, "status": status}
             if status == 400:
                 # Supervisor-side rejection — not caller validation. The default
                 # `exception_to_structured_error` path would map 400 →
@@ -370,7 +423,7 @@ class SupervisorLogSourcesMixin:
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
                         str(e),
-                        context={"source": "supervisor", "slug": slug},
+                        context=context,
                         suggestions=[
                             f"Supervisor rejected the request for '{slug}' — "
                             "verify slug format or that the app (add-on) is installed "
@@ -386,7 +439,7 @@ class SupervisorLogSourcesMixin:
                 first_suggestion = f"Verify app (add-on) slug '{slug}' is correct"
             exception_to_structured_error(
                 e,
-                context={"source": "supervisor", "slug": slug},
+                context=context,
                 suggestions=[
                     first_suggestion,
                     "Use ha_get_app() to list installed app slugs",
@@ -422,7 +475,8 @@ class SupervisorLogSourcesMixin:
         confirmed unsupervised install), else falls through to a generic
         Supervisor-error message.
         """
-        status = getattr(e, "status_code", None)
+        status = e.status_code
+        context = {"source": "system_service", "slug": service, "status": status}
         if status == 403:
             # In-addon: Supervisor returns 403 when the addon's hassio_role
             # is below 'manager'. Non-addon: HA Core's hassio proxy returns
@@ -444,11 +498,10 @@ class SupervisorLogSourcesMixin:
                 ]
             exception_to_structured_error(
                 e,
-                context={"source": "system_service", "slug": service},
+                context=context,
                 suggestions=suggestions,
             )
         if status == 404:
-            allowed = f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}"
             if is_running_in_addon():
                 # The request went straight to Supervisor, so a 404 is
                 # Supervisor's own answer: the service is not exposed.
@@ -456,7 +509,6 @@ class SupervisorLogSourcesMixin:
                     f"Service '{service}' not found at "
                     f"http://supervisor/{service}/logs — Supervisor may "
                     "not expose it on this HA OS version",
-                    allowed,
                 ]
             else:
                 await self._client._is_supervised_install()
@@ -465,14 +517,12 @@ class SupervisorLogSourcesMixin:
                         f"Service '{service}' not found at "
                         f"http://supervisor/{service}/logs — Supervisor may "
                         "not expose it on this HA OS version",
-                        allowed,
                     ]
                 elif self._client._supervised_detected is False:
                     suggestions = [
                         "These log sources need a Supervisor-managed install "
                         "(Home Assistant OS or Supervised); this instance is "
                         "not managed by Supervisor",
-                        allowed,
                     ]
                 else:
                     # The probe could not confirm either way (transport
@@ -482,16 +532,15 @@ class SupervisorLogSourcesMixin:
                         "Supervisor management could not be confirmed (the "
                         "probe failed): the instance may be unsupervised or "
                         "this HA OS version may not expose the service",
-                        allowed,
                     ]
             exception_to_structured_error(
                 e,
-                context={"source": "system_service", "slug": service},
+                context=context,
                 suggestions=suggestions,
             )
         exception_to_structured_error(
             e,
-            context={"source": "system_service", "slug": service},
+            context=context,
             suggestions=[
                 f"Supervisor returned an error for /{service}/logs",
                 "Ensure Supervisor is available (HA OS or Supervised install)",
@@ -510,10 +559,7 @@ class SupervisorLogSourcesMixin:
     ) -> dict[str, Any]:
         """Fetch HA system-service logs; the routes are ``_read_service_log``'s.
 
-        ``service`` ∈ ``SYSTEM_SERVICE_SLUGS`` (the six Supervisor-managed
-        services: supervisor, host, core, dns, audio, multicast).
-        Caller (``ha_get_logs(source='system_service')``) validates against
-        ``SYSTEM_SERVICE_SLUGS`` before dispatch. The tail goes through
+        The tail goes through
         ``HomeAssistantClient._get_system_service_logs`` and the
         ``hours_back`` window through ``journal_window``; both gate on
         ``is_running_in_addon()``: addon installs hit Supervisor directly at
@@ -545,6 +591,18 @@ class SupervisorLogSourcesMixin:
             # _supervisor_logs_get / _raw_request propagates raw to FastMCP and
             # surfaces without a structured `code` field.
             #
+            # Core's proxy also answers 401 for a path it does not serve.
+            if await proxy_refused_path(self._client):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Home Assistant serves no logs for a system service named '{service}'.",
+                        context={"source": "system_service", "slug": service},
+                        suggestions=[
+                            "Check the service name, e.g. host, supervisor or core"
+                        ],
+                    )
+                )
             # Suggestions branch on is_running_in_addon() (see _get_supervisor_log
             # for the rationale): SUPERVISOR_TOKEN suggestions only make sense
             # inside the addon container; non-addon installs need admin-LLA hints.

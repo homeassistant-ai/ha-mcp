@@ -81,6 +81,15 @@ def parse_cursor_token(token: str) -> tuple[str, int]:
     return cursor, int(skip)
 
 
+def log_lines(text: str) -> list[str]:
+    """The lines of log text as its readers count them: split at newlines only.
+
+    ``str.splitlines`` also splits at a carriage return or a form feed inside
+    a line, which a journal entry and a file line can both hold.
+    """
+    return text.removesuffix("\n").split("\n") if text else []
+
+
 def range_header(lines: int, offset: int = 0) -> str:
     """The ``Range`` expression for the ``offset``-th window back from newest."""
     return f"entries=:{-(offset + lines - 1)}:{lines}"
@@ -143,7 +152,7 @@ async def journald_page(
 
 async def _newest_page(lines: int, offset: int, fetch: JournaldFetch) -> ErrorLogPage:
     page = await fetch(range_header(lines, offset))
-    text_lines = page.text.splitlines()
+    text_lines = log_lines(page.text)
     if len(text_lines) < lines:
         # Nothing clamps a window smaller than asked for, so a short window is
         # the end of the journal.
@@ -160,7 +169,7 @@ async def _cursor_page(
     lines: int, cursor: str, skip: int, fetch: JournaldFetch
 ) -> ErrorLogPage:
     page = await fetch(cursor_range_header(cursor, skip, lines))
-    entries = page.text.splitlines()
+    entries = log_lines(page.text)
     has_more = await _has_older_than(page.first_cursor, fetch)
     if entries and not has_more and page.first_cursor:
         # The block starts at the journal's head, so gatewayd clamped its start
@@ -223,6 +232,6 @@ async def _has_older_than(cursor: str | None, fetch: JournaldFetch) -> bool:
     if not cursor:
         return False
     probe = await fetch(cursor_range_header(cursor, 0, 2))
-    if not probe.text.splitlines():
+    if not log_lines(probe.text):
         return False
     return probe.first_cursor != cursor

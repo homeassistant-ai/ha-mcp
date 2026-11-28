@@ -45,6 +45,12 @@ def _host(**params: Any) -> dict[str, Any]:
     return {"source": "system_service", "slug": "host", **params}
 
 
+async def test_current_boot_is_discoverable(mcp_client: Any) -> None:
+    async with MCPAssertions(mcp_client) as mcp:
+        data = await mcp.call_tool_success("ha_get_logs", _host(listing="boots"))
+    assert "0" in data["boots"]
+
+
 async def test_host_entries_all_fall_inside_the_window(mcp_client: Any) -> None:
     """The first oldest-first page of a 1-hour window starts inside it."""
     async with MCPAssertions(mcp_client) as mcp:

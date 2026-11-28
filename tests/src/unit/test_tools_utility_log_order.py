@@ -240,9 +240,9 @@ async def test_system_log_level_and_search_keep_only_matching_entries(
 
 
 async def test_error_log_newest_reverses_recent_records(
-    error_log_file: object, core_client: HomeAssistantClient
+    error_log_file: object, component_core_client: HomeAssistantClient
 ) -> None:
-    result = await get_logs(core_client, source="error_log", limit=2)
+    result = await get_logs(component_core_client, source="error_log", limit=2)
     assert result["order"] == "newest"
     assert [ln.split()[-1] for ln in result["log"].splitlines()] == ["l3", "l2"]
     assert result["returned_lines"] == 2
@@ -294,9 +294,10 @@ async def test_logger_non_default_order_warns_and_is_ignored(
     assert any("order" in w for w in result["warnings"])
 
 
-async def test_logger_default_order_emits_no_warning(
+async def test_logger_levels_come_from_core_with_no_warning(
     hass: HomeAssistant, core_client: HomeAssistantClient
 ) -> None:
+    """Core's own command is the whole read, so no component is asked for."""
     assert await async_setup_component(hass, "logger", {})
     result = await get_logs(core_client, source="logger")
     assert result["loggers"]

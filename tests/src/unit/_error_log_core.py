@@ -73,6 +73,17 @@ async def structured(
     return await error_log(log_file, client, text, structured=True, **arguments)
 
 
+async def assert_cursor_resumes_at(
+    client: HomeAssistantClient, page: dict[str, Any], offset: int
+) -> None:
+    """Use the returned token and compare its next line to an independent numeric read."""
+    token = page["next_offset"]
+    resumed = await call_logs(client, source="error_log", offset=token, limit=1)
+    expected = await call_logs(client, source="error_log", offset=offset, limit=1)
+    assert resumed["log"] == expected["log"]
+    assert repr(token) in page["pagination_hint"]
+
+
 @asynccontextmanager
 async def expired_token_client(
     client: HomeAssistantClient,

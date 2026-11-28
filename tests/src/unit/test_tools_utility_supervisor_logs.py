@@ -210,21 +210,21 @@ class TestTheRoute:
 
 
 class TestTheSlugParameter:
-    async def test_a_service_outside_the_allowed_set_is_refused_before_asking(
-        self, app_route: Route
-    ):
+    async def test_unknown_service_reaches_supervisor(self, app_route: Route):
+        app_route.supervisor.reply("No such log route", status=404)
         with pytest.raises(ToolError) as refused:
             await ask(
                 app_route.client,
                 Target("system_service", "not_a_real_service", ""),
             )
 
-        error = error_body(refused)["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-        # The caller sees what is allowed.
-        listed = error["message"] + " ".join(error.get("suggestions", []))
-        assert all(service in listed for service in SERVICES)
-        assert app_route.supervisor.requests == []
+        body = error_body(refused)
+        assert body["status"] == 404
+        error = body["error"]
+        assert error["code"] == "RESOURCE_NOT_FOUND"
+        assert [r.path for r in app_route.supervisor.requests] == [
+            "/not_a_real_service/logs"
+        ]
 
     @pytest.mark.parametrize("slug", ["x/../../../states?", "a/b", ".", ".."])
     async def test_an_app_slug_that_could_leave_its_path_is_refused_before_asking(
@@ -310,6 +310,84 @@ class TestTheCredentialToFix:
             # Docker and uvx callers have no Supervisor token to look for.
             assert any("Long-Lived Access Token" in s for s in suggestions)
             assert not any("SUPERVISOR_TOKEN" in s for s in suggestions)
+
+    @pytest.mark.parametrize(
+        ("selection", "path"),
+        [
+            ({"boot": -1}, "/host/logs/boots/-1"),
+            ({"identifier": "kernel"}, "/host/logs/identifiers/kernel"),
+            ({"latest": True, "slug": "core"}, "/core/logs/latest"),
+        ],
+    )
+    async def test_a_journal_selection_inside_the_app_goes_to_supervisor(
+        self, app_route: Route, selection: dict[str, Any], path: str
+    ):
+        """Supervisor's proxy to Core refuses an app's /api/hassio requests (#1116)."""
+        app_route.supervisor.reply("selected line\n")
+
+        result = await ask(
+            app_route.client, Target("system_service", "host", ""), **selection
+        )
+
+        assert result["log"] == "selected line"
+        assert [seen.path for seen in app_route.supervisor.requests] == [path]
+
+    async def test_a_boot_offset_outside_the_app_goes_through_cores_proxy(
+        self, core_route: Route
+    ):
+        core_route.supervisor.reply("previous boot line\n")
+
+        result = await ask(
+            core_route.client, Target("system_service", "host", ""), boot=-1
+        )
+
+        assert result["log"] == "previous boot line"
+        assert result["warnings"]
+        assert [seen.path for seen in core_route.supervisor.requests] == [
+            "/host/logs/boots/-1"
+        ]
+
+    @pytest.mark.parametrize(
+        ("target", "selection"),
+        [
+            (Target("system_service", "host", ""), {"identifier": "kernel"}),
+            (Target("system_service", "host", ""), {"boot": "a" * 32}),
+            (Target("supervisor", "core_mosquitto", ""), {"latest": True}),
+        ],
+    )
+    async def test_a_selection_cores_proxy_does_not_serve_is_refused_before_any_read(
+        self, core_route: Route, target: Target, selection: dict[str, Any]
+    ):
+        with pytest.raises(ToolError) as refused:
+            await ask(core_route.client, target, **selection)
+
+        assert error_body(refused)["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert core_route.supervisor.requests == []
+
+    async def test_a_boots_listing_inside_the_app_goes_to_supervisor(
+        self, app_route: Route
+    ):
+        app_route.supervisor.reply('{"result": "ok", "data": {"boots": {"0": "abc"}}}')
+
+        result = await ask(
+            app_route.client, Target("system_service", "host", ""), listing="boots"
+        )
+
+        assert result["boots"] == {"0": "abc"}
+        assert [seen.path for seen in app_route.supervisor.requests] == [
+            "/host/logs/boots"
+        ]
+
+    async def test_a_service_cores_proxy_does_not_serve_is_not_found(
+        self, core_route: Route
+    ):
+        """Core's proxy answers 401 for a path outside its list, as for a bad token."""
+        with pytest.raises(ToolError) as refused:
+            await ask(
+                core_route.client, Target("system_service", "not_a_real_service", "")
+            )
+
+        assert error_body(refused)["error"]["code"] == "RESOURCE_NOT_FOUND"
 
     async def test_a_403_inside_the_app_names_every_authorization_boundary(
         self, app_route: Route, target: Target, caplog: pytest.LogCaptureFixture

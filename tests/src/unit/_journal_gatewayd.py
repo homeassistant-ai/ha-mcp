@@ -25,10 +25,11 @@ from __future__ import annotations
 import ast
 import asyncio
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 import pytest
 from aiohttp import web
@@ -273,10 +274,16 @@ def journal_client(request: pytest.FixtureRequest) -> HomeAssistantClient:
 
 
 @pytest.fixture
-def clock(freezer: FrozenDateTimeFactory) -> FrozenDateTimeFactory:
-    """The clock, stopped at ``NOW``; a test moves it with ``tick``."""
-    freezer.move_to(NOW)
-    return freezer
+def clock() -> Iterator[FrozenDateTimeFactory]:
+    """Freeze journal query time while Core's authentication and socket timers run."""
+    frozen = FrozenDateTimeFactory(NOW.replace(tzinfo=None))
+    with patch(
+        "ha_mcp.tools.log_sources_supervisor.datetime", wraps=datetime
+    ) as clock_type:
+        clock_type.now.side_effect = lambda tz: (
+            frozen().replace(tzinfo=UTC).astimezone(tz)
+        )
+        yield frozen
 
 
 async def ask(client: HomeAssistantClient, **overrides: Any) -> dict[str, Any]:

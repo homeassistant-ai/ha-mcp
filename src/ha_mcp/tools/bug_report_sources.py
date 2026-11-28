@@ -17,6 +17,7 @@ from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import get_global_settings
 from .bug_report_redaction import KnownIdentifiers, sanitize_log_text
 from .coercion import ANSI_ESCAPE_RE
+from .core_log_reader import core_log_window
 from .helpers import get_connected_ws_client
 
 logger = logging.getLogger(__name__)
@@ -92,13 +93,9 @@ async def _fetch_addon_logs() -> str:
 async def _fetch_core_error_log(client: Any) -> str:
     """Fetch the Home Assistant error log (home-assistant.log) via the client.
 
-    Works on every install type — ``HomeAssistantClient.get_error_log`` routes
-    add-on installs to the Supervisor, supervised/HAOS to the hassio proxy, and
-    container/pip to ``/api/error_log``. Captured over REST, which stays up even
-    when the WebSocket path is failing; that is exactly the failure mode in
-    issue #1694, where the high-value auth lines
-    (``InsecureKeyLengthWarning``, "invalid authentication") only appeared in
-    home-assistant.log, not in the add-on log this tool already captured.
+    Read through the shared component window when available. Without it the
+    read goes to Core's public logging APIs, and the report opens with a
+    bracketed notice saying so.
 
     Best-effort: returns sanitized text (last ``_CORE_LOG_MAX_CHARS`` chars of a
     ``_CORE_LOG_WINDOW_LINES`` window, with a truncation marker prepended) or an
@@ -106,7 +103,7 @@ async def _fetch_core_error_log(client: Any) -> str:
     bug-report path.
     """
     try:
-        page = await client.get_error_log(lines=_CORE_LOG_WINDOW_LINES)
+        page = await core_log_window(client, lines=_CORE_LOG_WINDOW_LINES)
     except Exception as e:  # noqa: BLE001
         # Broad by design — the bug-report path must stay robust whatever the
         # client raises (auth, role, connection, transport). Logged at INFO so
@@ -118,8 +115,9 @@ async def _fetch_core_error_log(client: Any) -> str:
         )
         return ""
 
+    notice = f"[{page.warning}]\n" if page.warning else ""
     if not page.text:
-        return ""
+        return notice.rstrip()
 
     # Strip ANSI, then sanitize, then truncate — sanitizing before truncating
     # keeps a secret straddling the cut boundary from leaking through.
@@ -129,8 +127,8 @@ async def _fetch_core_error_log(client: Any) -> str:
             f"[...truncated, showing last {_CORE_LOG_MAX_CHARS} of "
             f"{len(sanitized)} chars...]\n"
         )
-        return marker + sanitized[-_CORE_LOG_MAX_CHARS:]
-    return sanitized
+        return notice + marker + sanitized[-_CORE_LOG_MAX_CHARS:]
+    return notice + sanitized
 
 
 # Kept from system_health's ``homeassistant`` block. The rest (user,

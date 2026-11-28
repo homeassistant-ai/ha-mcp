@@ -173,6 +173,47 @@ async def test_tied_state_and_event_follow_native_order(
 
 
 @pytest.mark.usefixtures("logbook")
+async def test_start_time_bounds_the_window_and_its_cursor_continues_it(
+    hass: HomeAssistant, component_core_client: HomeAssistantClient
+) -> None:
+    before = dt_util.utcnow()
+    hass.bus.async_fire(
+        "logbook_entry",
+        {"name": "too early", "message": "probe"},
+        time_fired=(before - timedelta(minutes=20)).timestamp(),
+    )
+    expected = [f"row {index}" for index in range(3)]
+    for name in expected:
+        hass.bus.async_fire("logbook_entry", {"name": name, "message": "probe"})
+    await async_wait_recording_done(hass)
+    tools = LogTools(component_core_client)
+    window = {
+        "start_time": (before - timedelta(minutes=10)).isoformat(),
+        "end_time": (before + timedelta(minutes=10)).isoformat(),
+    }
+    params = call_kwargs(search="probe", limit=2, order="oldest", **window)
+
+    page = (await tools.get_logs(**params))["data"]
+    names = [row["name"] for row in page["entries"]]
+    assert page["start_time"] == window["start_time"]
+    names += [
+        row["name"]
+        for row in (await tools.get_logs(**(params | {"offset": page["next_offset"]})))[
+            "data"
+        ]["entries"]
+    ]
+
+    assert names == expected
+    for other in ({"hours_back": 1}, {"start_time": window["end_time"]}):
+        error = await logbook_error(tools, **(window | other))
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+    error = await logbook_error(
+        tools, offset=page["next_offset"], order="oldest", search="probe", hours_back=1
+    )
+    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+@pytest.mark.usefixtures("logbook")
 @pytest.mark.parametrize(("early", "late_rows"), [(4, 2), (3, 1)])
 async def test_a_cursor_reaches_rows_recorded_after_its_first_page(
     hass: HomeAssistant,

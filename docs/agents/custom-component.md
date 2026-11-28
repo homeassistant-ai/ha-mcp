@@ -46,7 +46,7 @@ and the pin.
 
 `MIN_COMPONENT_VERSION` is the component version every call to the File & YAML
 Tools entry's services needs: the release's own. That covers the file and YAML
-tools, their backups, the fault log read (`ha_get_logs`) and the settings UI's
+tools, their backups and the settings UI's
 file handlers. An external server (app (add-on), Docker, pip) refuses them on a
 component older than itself and says to update it, so every stable release
 asks its users for the matching component.

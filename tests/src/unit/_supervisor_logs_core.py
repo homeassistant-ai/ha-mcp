@@ -161,6 +161,7 @@ async def app_route(
     supervisor = Supervisor()
     app = web.Application()
     app.router.add_get("/{path:.+}/logs", supervisor.serve_app)
+    app.router.add_get("/{path:.+}/logs/{selection:.+}", supervisor.serve_app)
     server = await aiohttp_client(app)
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     monkeypatch.setenv("SUPERVISOR_TOKEN", SUPERVISOR_TOKEN)

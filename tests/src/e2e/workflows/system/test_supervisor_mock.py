@@ -94,20 +94,16 @@ class TestGetLogsSystemService:
         assert f"[{service}]" in result["log"]
         assert result["total_lines"] == 3
 
-    async def test_unknown_service_rejected_by_caller_validation(
+    async def test_unknown_service_returns_supervisor_error(
         self, mcp_client, supervisor_mock
     ):
-        """The tool validates the slug against SYSTEM_SERVICE_SLUGS before dispatch.
-
-        Provides regression coverage that an unknown service never reaches the
-        mock — caller-side validation short-circuits.
-        """
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_get_logs",
-            {"source": "system_service", "slug": "not_a_real_service"},
-        )
-        assert result.get("success") is False
+        """An unknown route is rejected by the journal server."""
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_failure(
+                "ha_get_logs",
+                {"source": "system_service", "slug": "notarealservice"},
+            )
+        assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 @pytest.mark.system

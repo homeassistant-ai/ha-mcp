@@ -273,6 +273,12 @@ CAPABILITIES: list[str] = [
     recorder_status.CAPABILITY,
     *card_definitions.CAPABILITIES,
     history_page.CAPABILITY,
+    "fault_log",
+    "system_log_entries",
+    "core_log_window",
+    "core_log_records",
+    "supervisor_log",
+    "log_time_window",
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates

@@ -12,9 +12,11 @@
         "http",
         "llm",
         "logbook",
+        "logger",
         "lovelace",
         "network",
         "recorder",
+        "system_log",
         "trace"
     ],
     "categories": [

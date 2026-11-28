@@ -51,8 +51,7 @@ MOCK_SUPERVISOR_TOKEN = "test-supervisor-token"
 # role-mismatch branch.
 MOCK_INSUFFICIENT_ROLE_TOKEN = "test-supervisor-token-low-role"
 
-# The six Supervisor-managed system services exposed at /<service>/logs.
-# Mirrors SYSTEM_SERVICE_SLUGS in src/ha_mcp/tools/log_common.py.
+# The system services this test sidecar exposes at /<service>/logs.
 SYSTEM_SERVICES = frozenset({"supervisor", "host", "core", "dns", "audio", "multicast"})
 
 _SERVICE_LOGS_RE = re.compile(r"^/([a-z]+)/logs$")

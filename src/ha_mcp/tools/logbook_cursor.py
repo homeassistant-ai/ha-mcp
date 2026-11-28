@@ -11,6 +11,8 @@ LOGBOOK_CURSOR_PREFIX = "logbook:"
 
 class LogbookCursor(BaseModel):
     hours_back: int = Field(default=1, ge=1)
+    # The window's start when start_time set it; hours_back sets it otherwise.
+    start: datetime | None = None
     # None until a call has counted to the end of the window.
     total: int | None = Field(ge=0)
     # Matches counted so far, shown when total is None.

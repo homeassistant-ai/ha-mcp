@@ -176,6 +176,7 @@ class _Answer:
     status: int = 200
     payload: Any = None
     text: str | None = None
+    headers: dict[str, str] | None = None
     drop: bool = False
     hang: bool = False
 
@@ -260,9 +261,10 @@ class Supervisor:
         status: int = 200,
         payload: Any = None,
         text: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         """Supervisor answers with this exact body."""
-        self._queue(method, path, _Answer(status, payload, text))
+        self._queue(method, path, _Answer(status, payload, text, headers))
 
     def drop(self, method: str, path: str) -> None:
         """Supervisor reads the request and closes the connection unanswered."""
@@ -303,7 +305,9 @@ class Supervisor:
             request.transport.close()
             raise ConnectionResetError
         if answer.text is not None:
-            return web.Response(status=answer.status, text=answer.text)
+            return web.Response(
+                status=answer.status, text=answer.text, headers=answer.headers
+            )
         return web.json_response(answer.payload, status=answer.status)
 
     async def _ingress(self, request: web.Request, path: str) -> web.StreamResponse:
