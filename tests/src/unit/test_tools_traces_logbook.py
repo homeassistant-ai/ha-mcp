@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components.automation.trace import AutomationTrace
@@ -106,7 +106,13 @@ class TestFetchTraceLogbook:
             ],
         )
 
-        logbook = await fetch_trace_logbook(component_core_client, trace)
+        with patch.object(
+            component_core_client,
+            "get_logbook",
+            AsyncMock(wraps=component_core_client.get_logbook),
+        ) as rest:
+            logbook = await fetch_trace_logbook(component_core_client, trace)
+        rest.assert_not_awaited()
 
         assert logbook.transport == "component"
         assert [(row["entity_id"], row["state"]) for row in logbook.entries] == [
@@ -136,6 +142,7 @@ class TestFetchTraceLogbook:
         logbook = await fetch_trace_logbook(core_client, trace)
 
         assert logbook.transport == "rest"
+        assert any("ha_mcp_tools" in warning for warning in logbook.warnings)
         assert [(row["entity_id"], row["state"]) for row in logbook.entries] == [
             ("light.matched", "on")
         ]
@@ -182,6 +189,41 @@ class TestFetchTraceLogbook:
         ]
         assert logbook.total == len(changes)
         assert logbook.truncated is True
+
+    @pytest.mark.asyncio
+    async def test_a_run_longer_than_the_read_says_how_many_rows_it_saw(
+        self,
+        hass: HomeAssistant,
+        hass_ws_client: WebSocketGenerator,
+        component_core_client: HomeAssistantClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The read stops at the rows it returns, so it has no total."""
+        from custom_components.ha_mcp_tools.websocket_api import logbook_page
+
+        monkeypatch.setattr(logbook_page, "RAW_PAGE_ROWS", 10)
+        context = Context()
+        trace = await _trace(hass, hass_ws_client, context=context)
+        for index in range(LOGBOOK_ROW_LIMIT + 5):
+            await _record(hass, [(f"light.row_{index}", f"state_{index}", context)])
+
+        logbook = await fetch_trace_logbook(component_core_client, trace)
+
+        assert len(logbook.entries) == LOGBOOK_ROW_LIMIT
+        assert logbook.truncated is True
+        assert logbook.total is None
+        assert logbook.lower_bound == LOGBOOK_ROW_LIMIT
+
+        named = await TraceTools(component_core_client).ha_get_automation_traces(
+            domain="automation",
+            item_id="uid_1",
+            run_id="r1",
+            sections="logbook",
+            detailed=True,
+        )
+
+        assert named["logbook_total"] is None
+        assert named["logbook_total_lower_bound"] == LOGBOOK_ROW_LIMIT
 
     @pytest.mark.asyncio
     async def test_a_component_timeout_is_not_replayed_over_rest(

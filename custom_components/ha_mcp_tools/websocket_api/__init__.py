@@ -176,7 +176,8 @@ the info handshake carries no capability entry:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set
   (``entity_ids`` / ``device_ids`` / ``context_id``), so names, context fields
-  and row shape come from Core itself. The recorder read AND the result
+  and row shape come from Core itself; ``action_calls`` reads Core's action-call
+  view, and ``page`` one bounded recorder page. The recorder read AND the result
   encoding run in the async prep (Core's own approach for this command), so
   the handler sends finished bytes instead of encoding on the event loop; the
   server's ``ha_get_logs`` logbook source prefers this command and keeps

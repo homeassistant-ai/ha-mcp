@@ -9,7 +9,10 @@ reimplementation of Core's naming rules.
 
 Filters are the superset Core's ``logbook/get_events`` WebSocket command takes —
 ``entity_ids``, ``device_ids`` and ``context_id`` (the latter cannot be combined
-with the other two; Core's ``EventProcessor`` asserts on it). Validation and the
+with the other two; Core's ``EventProcessor`` asserts on it). ``action_calls``
+reads Core's ``logbook/get_action_calls`` view instead, for a time window only
+and without entity names. ``page`` asks for one bounded recorder page
+(``logbook_page``). Validation and the
 event-type/entity filters run on the loop; the recorder query AND the result
 encoding run in the executor (Core's own ``_ws_formatted_get_events`` approach),
 and the finished message goes out through :class:`seam.PreSerializedResult` so
@@ -28,6 +31,7 @@ from homeassistant.components.logbook.helpers import (
 from homeassistant.components.logbook.processor import EventProcessor
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.websocket_api import messages
+from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.json import json_bytes
@@ -36,7 +40,10 @@ from homeassistant.util import dt as dt_util
 from .logbook_page import read_logbook_page
 from .seam import PreSerializedResult
 
-CAPABILITIES = ("logbook_events", "logbook_page_counts", "logbook_match_keys")
+CAPABILITIES = (
+    "logbook_events",
+    "logbook_scoped_pages",
+)
 
 
 def _parse_time(value: str, label: str) -> datetime:
@@ -48,9 +55,22 @@ def _parse_time(value: str, label: str) -> datetime:
     return result
 
 
-def _empty_result(msg_id: int) -> bytes:
+def _empty_result(msg_id: int, page: dict[str, Any] | None) -> bytes:
     """The pre-serialized empty result message (tiny; safe on the loop)."""
-    payload: bytes = json_bytes(messages.result_message(msg_id, []))
+    payload: bytes = json_bytes(
+        messages.result_message(
+            msg_id,
+            []
+            if page is None
+            else {
+                "entries": [],
+                "total": 0,
+                "skip": page["skip"],
+                "matched": 0,
+                "after": None,
+            },
+        )
+    )
     return payload
 
 
@@ -90,10 +110,9 @@ async def _logbook_events_prep(
     device_ids = msg.get("device_ids")
     context_id = msg.get("context_id")
     page = msg.get("page")
-    if page is not None and (entity_ids or device_ids or context_id):
-        raise HomeAssistantError(
-            "Recorder pages require a whole-instance Logbook query"
-        )
+    action_calls = msg.get("action_calls", False)
+    if action_calls and (entity_ids or device_ids or context_id):
+        raise HomeAssistantError("Action calls accept a time window only")
     if context_id and (entity_ids or device_ids):
         # Core's processor asserts on this; fail with a shaped error instead.
         raise HomeAssistantError(
@@ -104,10 +123,10 @@ async def _logbook_events_prep(
         entity_ids = async_filter_entities(hass, entity_ids)
         if not entity_ids and not device_ids:
             # Everything has been filtered away
-            return {"payload": _empty_result(msg["id"])}
+            return {"payload": _empty_result(msg["id"], page)}
 
-    if start_time > dt_util.utcnow() and page is None:
-        return {"payload": _empty_result(msg["id"])}
+    if start_time > dt_util.utcnow():
+        return {"payload": _empty_result(msg["id"], page)}
 
     if "logbook" not in hass.data:
         # Core's processor reads its config from ``hass.data[DOMAIN]``; without
@@ -119,7 +138,11 @@ async def _logbook_events_prep(
             "to query logbook events."
         )
 
-    event_types = async_determine_event_types(hass, entity_ids, device_ids)
+    event_types = (
+        (EVENT_CALL_SERVICE,)
+        if action_calls
+        else async_determine_event_types(hass, entity_ids, device_ids)
+    )
     event_processor = EventProcessor(
         hass,
         event_types,
@@ -127,7 +150,8 @@ async def _logbook_events_prep(
         device_ids,
         context_id,
         timestamp=False,
-        include_entity_name=True,
+        include_entity_name=not action_calls,
+        action_calls=action_calls,
     )
     payload = await get_instance(hass).async_add_executor_job(
         _serialize_logbook_result,

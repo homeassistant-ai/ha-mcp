@@ -1,10 +1,9 @@
-"""Bound a whole-instance Logbook read before Core loads or encodes its rows."""
+"""Bound a Logbook read before Core loads or encodes its rows."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from heapq import nlargest, nsmallest
 from typing import Any, cast
 
 from homeassistant.components.logbook.models import (
@@ -16,9 +15,14 @@ from homeassistant.components.logbook.models import (
 )
 from homeassistant.components.logbook.processor import EventProcessor
 from homeassistant.components.logbook.queries import statement_for_request
+from homeassistant.components.logbook.queries.action_calls import action_calls_stmt
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.db_schema import Events, States
-from homeassistant.components.recorder.models import extract_event_type_ids
+from homeassistant.components.recorder.models import (
+    extract_event_type_ids,
+    extract_metadata_ids,
+)
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.json import json_bytes
 from homeassistant.helpers.recorder import session_scope
 from sqlalchemy import case, func, literal, select, tuple_
@@ -33,8 +37,7 @@ type RowKey = tuple[float, int, int]
 
 
 def _key(row: Row[Any]) -> RowKey:
-    # Events and states have separate primary-key sequences. Preserve Core's
-    # event-then-state union order at a tie and disambiguate with the primary key.
+    # Core orders by time only. HA-MCP breaks ties by kind and primary key.
     return (row[TIME_FIRED_TS_POS], int(row[EVENT_TYPE_POS] is None), row[ROW_ID_POS])
 
 
@@ -44,9 +47,36 @@ def _columns(source: Subquery) -> tuple[Any, Any, Any]:
 
 
 def _branches(source: Subquery) -> Sequence[Select[Any]]:
-    """Core's whole-instance Logbook statement is the UNION of events and states."""
-    union = cast(CompoundSelect[Any], source.element)
-    return cast("Sequence[Select[Any]]", union.selects)
+    """Validate Core's visible branches and optional context-only suffix.
+
+    Two branches are Core's whole-instance and context statements, three its
+    device and action-call ones, four its entity and entity-plus-device ones.
+    """
+    union = source.element
+    if isinstance(union, CompoundSelect):
+        branches = union.selects
+        shape = []
+        for branch in branches:
+            if not isinstance(branch, Select):
+                break
+            cols = branch.selected_columns
+            pk = cols.get("row_id")
+            flag = cols.get("context_only")
+            if pk is None or flag is None:
+                break
+            state = pk.shares_lineage(States.__table__.c.state_id)
+            if not state and not pk.shares_lineage(Events.__table__.c.event_id):
+                break
+            shape.append(
+                (state, getattr(getattr(flag, "element", None), "value", "unsupported"))
+            )
+        if len(shape) == len(branches) and shape in (
+            [(False, None), (True, None)],
+            [(False, None), (False, "1"), (True, "1")],
+            [(False, None), (True, None), (False, "1"), (True, "1")],
+        ):
+            return cast("Sequence[Select[Any]]", branches)
+    raise HomeAssistantError("Unsupported Core logbook statement shape for paging")
 
 
 def _context_origins(
@@ -119,6 +149,8 @@ def _read_rows(
         c = branch.selected_columns
         kind = int(c.row_id.shares_lineage(States.__table__.c.state_id))
         cols = (c.time_fired_ts, c.row_id)
+        if c.context_only.element.value is not None:
+            continue
         query = branch.with_only_columns(*cols)
         if after := page.get("after"):
             stamp, anchor_kind, row_id = after
@@ -158,8 +190,8 @@ def _hydrate_rows(
     keys = tuple_(*cols)
     if not candidates:
         return [], False
-    # Probe sizes without bringing the event JSON/attributes into Python. Use
-    # a conservative UTF-8 allowance for databases where LENGTH counts chars.
+    # Probe sizes without bringing the event JSON/attributes into Python.
+    # LENGTH may count characters, so pages are budgeted at four bytes each.
     size = sum(
         (
             func.coalesce(func.length(col), 0)
@@ -170,7 +202,9 @@ def _hydrate_rows(
     sizes = {
         (stamp, kind, row_id): chars
         for stamp, kind, row_id, chars in session.connection().execute(
-            select(*cols, size).where(keys.in_(candidates[:RAW_PAGE_ROWS]))
+            select(*cols, size).where(
+                source.c.context_only.is_(None), keys.in_(candidates[:RAW_PAGE_ROWS])
+            )
         )
     }
     chosen: list[RowKey] = []
@@ -179,6 +213,12 @@ def _hydrate_rows(
         # A purge can remove a probed row before its size is read.
         if (chars := sizes.get((stamp, kind, row_id))) is None:
             continue
+        if chars > PAGE_BYTES:
+            if chosen:
+                break
+            raise HomeAssistantError(
+                "A single raw Logbook row exceeds the HA-MCP page size budget"
+            )
         if chosen and used + chars * 4 > PAGE_BYTES:
             break
         chosen.append((stamp, kind, row_id))
@@ -186,7 +226,9 @@ def _hydrate_rows(
     # Core always humanifies in chronological order, including newest-first pages.
     rows = list(
         session.connection().execute(
-            select(source).where(keys.in_(chosen)).order_by(*cols)
+            select(source)
+            .where(source.c.context_only.is_(None), keys.in_(chosen))
+            .order_by(*cols)
         )
     )
     return rows, len(chosen) < len(candidates)
@@ -197,6 +239,7 @@ def _source(
     period: tuple[datetime, datetime],
     types: tuple[int, ...],
     page: dict[str, Any] | None = None,
+    metadata_ids: list[int] | None = None,
 ) -> Subquery:
     start, end = period
     if page and (after := page.get("after")):
@@ -207,11 +250,27 @@ def _source(
             end = min(end, anchor + timedelta(microseconds=1))
         else:
             start = max(start, anchor - timedelta(microseconds=1))
-    source: Subquery = (
-        statement_for_request(start, end, types, filters=processor.filters)
-        .order_by(None)
-        .subquery()
+    statement = (
+        action_calls_stmt(start.timestamp(), end.timestamp(), types)
+        if processor.action_calls
+        else statement_for_request(
+            start,
+            end,
+            types,
+            processor.entity_ids,
+            metadata_ids,
+            processor.device_ids,
+            processor.filters,
+            processor.context_id,
+        )
     )
+    # These three/four-branch statements contain a CTE. Nested for paging,
+    # Core's cached lambda would run with an earlier request's bind values.
+    with_context = (
+        processor.entity_ids or processor.device_ids or processor.action_calls
+    )
+    bound = statement.spoil() if with_context else statement
+    source: Subquery = bound.order_by(None).subquery()
     return source
 
 
@@ -220,26 +279,51 @@ def read_logbook_page(
 ) -> dict[str, Any]:
     """Use Core's query and renderer, keeping just one bounded database page."""
     with session_scope(hass=processor.hass, read_only=True) as session:
-        manager = get_instance(processor.hass).event_type_manager
+        instance = get_instance(processor.hass)
+        manager = instance.event_type_manager
         types = tuple(
             extract_event_type_ids(manager.get_many(processor.event_types, session))
         )
         period = (start, end)
-        source = _source(processor, period, types)
-        if bounds := page.get("count_range"):
-            return _count_matches(
-                session, processor, source, bounds, page, types, period
+        metadata = (
+            extract_metadata_ids(
+                instance.states_meta_manager.get_many(
+                    processor.entity_ids, session, False
+                )
             )
-        if "keys" in page:
-            return _render_keys(session, processor, source, page)
-        probe = _source(processor, period, types, page) if page.get("after") else source
+            if processor.entity_ids
+            else None
+        )
+        source = _source(processor, period, types, metadata_ids=metadata)
+        probe = (
+            _source(processor, period, types, page, metadata)
+            if page.get("after")
+            else source
+        )
         rows, more = _read_rows(session, probe, page, types)
-        if rows and (page.get("after") or (more and page["order"] == "newest")):
-            for context, origin in _context_origins(
-                session, source, rows, _key(rows[0])
-            ).items():
-                processor.logbook_run.context_lookup[context] = origin
-        rendered = [(row, processor.humanify([row])) for row in rows]
+        origins = {}
+        # A page holds no context-only rows, so what caused its rows is looked up.
+        if rows and (
+            page.get("after")
+            or more
+            or processor.entity_ids
+            or processor.device_ids
+            or processor.action_calls
+        ):
+            origins = _context_origins(session, source, rows, _key(rows[-1]))
+        # Core's get_events does the same: a filtered query drops the parent
+        # call_service rows that name the user.
+        parent_users = (
+            processor._fetch_parent_user_ids(session, rows, instance.max_bind_vars)
+            if processor.entity_ids or processor.device_ids
+            else None
+        )
+        rendered = []
+        for row in rows:
+            for pos in (CONTEXT_ID_BIN_POS, CONTEXT_PARENT_ID_BIN_POS):
+                if (origin := origins.get(row[pos])) is not None:
+                    processor.logbook_run.context_lookup.setdefault(row[pos], origin)
+            rendered.append((row, processor.humanify([row], parent_users)))
     if page["order"] == "newest":
         rendered.reverse()
     return _select_page(rendered, page, more)
@@ -250,144 +334,13 @@ def _matches(entry: dict[str, Any], search: str) -> bool:
         return True
     name = entry.get("name") or ""
     message = entry.get("message") or ""
+    # An action-call row has neither; its action is domain.service.
+    action = f"{entry.get('domain') or ''}.{entry.get('service') or ''}"
     return (
         search in f"{name} {message}".strip().lower()
-        or search in str(entry.get("entity_id", "")).lower()
+        or search in str(entry.get("entity_id") or "").lower()
+        or ("service" in entry and search in action.lower())
     )
-
-
-def _count_matches(
-    session: Session,
-    processor: EventProcessor,
-    source: Subquery,
-    bounds: list[float],
-    page: dict[str, Any],
-    event_types: tuple[int, ...],
-    period: tuple[datetime, datetime],
-) -> dict[str, Any]:
-    """Keep at most one public page of identities while computing its exact count."""
-    stamp = source.c.time_fired_ts
-    stmt = select(source).where(stamp >= bounds[0], stamp < bounds[1])
-    newest = page["order"] == "newest"
-    if after := page.get("after"):
-        keys = tuple_(*_columns(source))
-        stmt = stmt.where(keys < tuple(after) if newest else keys > tuple(after))
-    needle = page.get("search", "").lower()
-    total = 0
-    take = page.get("collect_keys", 0)
-    skip = page["skip"]
-    with session.connection().execute(stmt.execution_options(yield_per=4)) as result:
-        if not take:
-            for rows in result.partitions(4):
-                processor.switch_to_live()
-                total += sum(
-                    _matches(entry, needle) for entry in processor.humanify(rows)
-                )
-            return {"entries": [], "total": total, "keys": []}
-
-        def matches() -> Iterator[RowKey]:
-            nonlocal total
-            for rows in result.partitions(4):
-                processor.switch_to_live()
-                for row in rows:
-                    events = processor.humanify([row])
-                    if events and _matches(events[0], needle):
-                        total += 1
-                        yield _key(row)
-
-        # A deep numeric offset skips whole hours by count. Resolve only
-        # its boundary hour separately, without an offset-sized heap.
-        select_keys = nlargest if newest else nsmallest
-        selected = select_keys(min(skip + take, 500), matches())
-    if skip < total and min(skip + take, total) > len(selected):
-        selected = _deep_keys(session, processor, bounds, page, event_types, period)
-    else:
-        selected = selected[skip : skip + take]
-    return {"entries": [], "total": total, "keys": selected}
-
-
-def _deep_keys(
-    session: Session,
-    processor: EventProcessor,
-    bounds: list[float],
-    page: dict[str, Any],
-    event_types: tuple[int, ...],
-    period: tuple[datetime, datetime],
-) -> list[RowKey]:
-    """Only the hour containing a deep numeric offset needs a second pass."""
-    skip = page["skip"]
-    selected: list[RowKey] = []
-    needle = page.get("search", "").lower()
-    while True:
-        probe = _source(processor, period, event_types, page)
-        rows, more = _read_rows(session, probe, page, event_types)
-        if not rows:
-            break
-        if page["order"] == "newest":
-            rows.reverse()
-        processor.switch_to_live()
-        for row in rows:
-            key = _key(row)
-            if bounds[0] <= key[0] < bounds[1]:
-                events = processor.humanify([row])
-                if events and _matches(events[0], needle):
-                    if skip:
-                        skip -= 1
-                    else:
-                        selected.append(key)
-                        if len(selected) == page["collect_keys"]:
-                            return selected
-        if not more:
-            break
-        page = {**page, "after": _key(rows[-1])}
-    return selected
-
-
-def _render_keys(
-    session: Session, processor: EventProcessor, source: Subquery, page: dict[str, Any]
-) -> dict[str, Any]:
-    """Hydrate only the requested matches, keeping the public page byte-bounded."""
-    newest = page["order"] == "newest"
-    pending = sorted({tuple(key) for key in page["keys"]}, reverse=newest)
-    entries: list[dict[str, Any]] = []
-    last_selected = pending[-1]
-    needle = page.get("search", "").lower()
-    used = 0
-    after = None
-    while pending:
-        rows, _ = _hydrate_rows(session, source, pending)
-        if not rows:
-            # Recorder can purge rows between the count and render.
-            pending = pending[RAW_PAGE_ROWS:]
-            continue
-        processor.logbook_run.event_cache.clear()
-        origins = _context_origins(session, source, rows, _key(rows[-1]))
-        # Selected matches can have earlier context origins between them.
-        for row in reversed(rows) if newest else rows:
-            lookup = processor.logbook_run.context_lookup
-            lookup.clear()
-            for pos in (CONTEXT_ID_BIN_POS, CONTEXT_PARENT_ID_BIN_POS):
-                if (origin := origins.get(row[pos])) is not None and _key(
-                    origin
-                ) < _key(row):
-                    lookup[row[pos]] = origin
-            for entry in processor.humanify([row]):
-                if not _matches(entry, needle):
-                    continue
-                size = len(json_bytes(entry))
-                if entries and used + size > PAGE_BYTES:
-                    return {
-                        "entries": entries,
-                        "after": after,
-                        "used_bytes": used,
-                        "byte_limited": True,
-                    }
-                entries.append(entry)
-                used += size
-            after = _key(row)
-        last = _key(rows[0] if newest else rows[-1])
-        pending = [key for key in pending if (key < last if newest else key > last)]
-    return {"entries": entries, "after": last_selected, "used_bytes": used}
 
 
 def _select_page(
@@ -402,7 +355,16 @@ def _select_page(
         (row, events[0] if events and _matches(events[0], search) else None)
         for row, events in rendered
     ]
-    total = None if more else sum(entry is not None for _, entry in candidates)
+    batch_count = sum(entry is not None for _, entry in candidates)
+    total = None if more else batch_count
+    if page.get("count_only"):
+        return {
+            "entries": [],
+            "matched": batch_count,
+            "total": total,
+            "skip": 0,
+            "after": _key(candidates[-1][0]) if more and candidates else None,
+        }
     skip = page["skip"]
     matched = 0
     used = page.get("used_bytes", 0)
@@ -411,6 +373,10 @@ def _select_page(
     for row, entry in candidates:
         if entry is not None:
             size = len(json_bytes(entry))
+            if not skip and size > PAGE_BYTES:
+                raise HomeAssistantError(
+                    "A single Logbook row exceeds the HA-MCP page byte budget"
+                )
             byte_limited = bool(not skip and used and used + size > PAGE_BYTES)
             if not skip and (len(entries) == page["limit"] or byte_limited):
                 after = after or page.get("after")

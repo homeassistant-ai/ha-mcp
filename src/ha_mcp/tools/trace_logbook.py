@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from .component_api import component_unusable_warning, get_component_caps
 from .log_sources_logbook import LogbookLogSourceMixin
+from .logbook_cursor import fill_logbook_page
 
 LOGBOOK_ROW_LIMIT = 50
 
@@ -16,8 +18,10 @@ class TraceLogbook:
     entries: list[dict[str, Any]]
     transport: Literal["component", "rest"] | None
     warnings: list[str]
-    total: int = 0
+    # None when the run has more rows than were read; then lower_bound counts them.
+    total: int | None = 0
     truncated: bool = False
+    lower_bound: int | None = None
 
 
 class _TraceLogbookReader(LogbookLogSourceMixin):
@@ -36,9 +40,9 @@ async def fetch_trace_logbook(
     The trace page asks Core for ``logbook/get_events`` with the trace's
     start time and the run's context id, and no end time (Core reads that as
     now). The component's ``ha_mcp_tools/logbook_events`` command runs the same
-    processor in process; REST is the explicit no-component fallback. REST
-    defaults an omitted end to ``start + 1 day``, so the fallback sends now
-    explicitly to keep the same window.
+    processor in process and returns one bounded page; REST is the explicit
+    no-component fallback. REST defaults an omitted end to ``start + 1 day``,
+    so both paths send now as the end.
     """
     context = trace.get("context")
     if not isinstance(context, dict):
@@ -61,30 +65,44 @@ async def fetch_trace_logbook(
         )
 
     reader = _TraceLogbookReader(client)
-    entries = await reader._fetch_logbook_component(
-        {"start_time": start_time, "context_id": str(context_id)}
-    )
-    transport: Literal["component", "rest"] = "component"
-    if entries is None:
-        transport = "rest"
-        entries = await client.get_logbook(
-            start_time=start_time,
-            end_time=datetime.now(UTC).isoformat(),
-            context_id=str(context_id),
+    command = {
+        "start_time": start_time,
+        "end_time": datetime.now(UTC).isoformat(),
+        "context_id": str(context_id),
+    }
+    request = {"order": "oldest", "limit": LOGBOOK_ROW_LIMIT, "skip": 0}
+    page = await reader._fetch_logbook_component(command, request)
+    if isinstance(page, dict):
+        result = await fill_logbook_page(
+            reader._required_component_page,
+            command,
+            request,
+            page,
+            None,
+            count_ahead=False,
         )
-    if not isinstance(entries, list):
         return TraceLogbook(
+            result["entries"],
+            "component",
             [],
-            transport,
-            ["The logbook reply was not a row list."],
+            result["total"],
+            bool(result.get("after")),
+            None if result["total"] is not None else result["lower_bound"],
         )
-
-    total = len(entries)
-    capped = entries[:LOGBOOK_ROW_LIMIT]
+    rows = await client.get_logbook(**command)
+    warnings = [
+        component_unusable_warning(
+            await get_component_caps(client), "the trace Logbook uses REST"
+        )
+    ]
+    if not isinstance(rows, list):
+        return TraceLogbook(
+            [], "rest", [*warnings, "The logbook reply was not a row list."]
+        )
     return TraceLogbook(
-        capped,
-        transport,
-        [],
-        total,
-        total > LOGBOOK_ROW_LIMIT,
+        rows[:LOGBOOK_ROW_LIMIT],
+        "rest",
+        warnings,
+        len(rows),
+        len(rows) > LOGBOOK_ROW_LIMIT,
     )

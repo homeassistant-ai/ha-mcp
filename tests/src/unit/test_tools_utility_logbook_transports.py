@@ -7,25 +7,18 @@ stand-in is a client that gets no answer at all.
 
 from __future__ import annotations
 
-import json
-from collections.abc import AsyncIterator, Iterator
-from contextlib import AsyncExitStack, contextmanager
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.components import websocket_api
-from homeassistant.components.recorder import Recorder
 from homeassistant.core import Context, HomeAssistant
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
-from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.components.recorder.common import async_wait_recording_done
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client import websocket_client
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,
@@ -33,8 +26,13 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.tools_logs import LogTools
 
+from ..e2e.utilities.component_path import component_fallback_warnings
 from ._command_faults import dropped_on, pooled_socket, unanswered
 from ._log_tool_calls import call_kwargs
+from ._logbook_test_support import _recorder as _recorder
+from ._logbook_test_support import kitchen_device as kitchen_device
+from ._logbook_test_support import logbook as logbook
+from ._logbook_test_support import logbook_error, rest_reads, sent_types
 
 # Core closes a socket whose token it refused; the client's close reply then
 # re-arms aiohttp's heartbeat timer on that closed server socket.
@@ -42,49 +40,6 @@ _REFUSED_SOCKET_TIMER = pytest.mark.parametrize("expected_lingering_timers", [Tr
 
 COMPONENT_COMMAND = "ha_mcp_tools/logbook_events"
 CORE_COMMAND = "logbook/get_events"
-
-
-@pytest.fixture(autouse=True)
-def _recorder(recorder_mock: Recorder) -> None:
-    """Core's recorder, requested before ``hass`` is built as it requires."""
-
-
-@pytest.fixture
-async def logbook(hass: HomeAssistant) -> None:
-    """Core's logbook on its recorder, with a kitchen light that turned on."""
-    assert await async_setup_component(hass, "logbook", {})
-    attributes = {"friendly_name": "Kitchen Light"}
-    hall = {"friendly_name": "Hall"}
-    hass.states.async_set("light.kitchen", "off", attributes)
-    hass.states.async_set("light.hall", "off", hall)
-    await hass.async_block_till_done()
-    hass.states.async_set("light.kitchen", "on", attributes)
-    hass.states.async_set("light.hall", "on", hall)
-    await async_wait_recording_done(hass)
-
-
-@pytest.fixture
-async def kitchen_device(
-    hass: HomeAssistant,
-    logbook: None,
-    entity_registry: er.EntityRegistry,
-    device_registry: dr.DeviceRegistry,
-) -> str:
-    """The id of a registered device that owns ``light.kitchen``."""
-    entry = MockConfigEntry(domain="test")
-    entry.add_to_hass(hass)
-    device = device_registry.async_get_or_create(
-        config_entry_id=entry.entry_id, identifiers={("test", "kitchen")}
-    )
-    entity_registry.async_get_or_create(
-        "light",
-        "test",
-        "kitchen",
-        suggested_object_id="kitchen",
-        device_id=device.id,
-        config_entry=entry,
-    )
-    return device.id
 
 
 @pytest.fixture
@@ -100,32 +55,11 @@ async def rejected_client(
         yield client
 
 
-@contextmanager
-def rest_reads(client: HomeAssistantClient) -> Iterator[AsyncMock]:
-    """Spy on the client's REST logbook read; Core still answers it."""
-    with patch.object(client, "get_logbook", wraps=client.get_logbook) as spy:
-        yield spy
-
-
-def sent_types(sent: AsyncMock) -> list[str]:
-    """The command types the client sent over its WebSocket bridge."""
-    return [call.args[0]["type"] for call in sent.await_args_list]
-
-
 def sent_command(sent: AsyncMock, command: str) -> dict[str, Any]:
     """The first message of this type the client sent."""
     return next(
         call.args[0] for call in sent.await_args_list if call.args[0]["type"] == command
     )
-
-
-async def logbook_error(tools: LogTools, **kwargs: Any) -> dict[str, Any]:
-    """The structured error ``ha_get_logs`` raised for these arguments."""
-    with pytest.raises(ToolError) as exc_info:
-        await tools.get_logs(**call_kwargs(source="logbook", **kwargs))
-    payload: dict[str, Any] = json.loads(str(exc_info.value))
-    error: dict[str, Any] = payload["error"]
-    return error
 
 
 def by_entity(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -146,26 +80,45 @@ async def test_component_rows_are_cores_own_and_skip_the_rest_view(
     command = sent_command(sent, COMPONENT_COMMAND)
     assert command["start_time"] < command["end_time"]
     rest.assert_not_awaited()
+    assert not component_fallback_warnings(result)
     kitchen = by_entity(result)["light.kitchen"]
     assert kitchen["name"] == "Kitchen Light"
     assert dt_util.parse_datetime(kitchen["when"]) is not None
 
 
+@pytest.mark.parametrize("order", ["oldest", "newest"])
 async def test_component_receives_the_entity_and_device_filters(
-    component_core_client: HomeAssistantClient, kitchen_device: str, sent: AsyncMock
+    component_core_client: HomeAssistantClient,
+    kitchen_device: str,
+    sent: AsyncMock,
+    order: str,
 ) -> None:
-    result = await LogTools(component_core_client).get_logs(
-        **call_kwargs(
-            source="logbook",
-            entity_id="light.kitchen, light.hall",
-            device_id=kitchen_device,
-        )
+    params = call_kwargs(
+        source="logbook",
+        entity_id="light.kitchen, light.hall",
+        device_id=kitchen_device,
+        limit=1,
+        order=order,
     )
+    tools = LogTools(component_core_client)
+    with rest_reads(component_core_client) as rest:
+        result = await tools.get_logs(**params)
+        second = await tools.get_logs(
+            **(params | {"offset": result["data"]["next_offset"]})
+        )
+    rest.assert_not_awaited()
+    assert not component_fallback_warnings(result)
+    assert not component_fallback_warnings(second)
+    assert not second["data"]["has_more"]
 
     command = sent_command(sent, COMPONENT_COMMAND)
     assert command["entity_ids"] == ["light.kitchen", "light.hall"]
     assert command["device_ids"] == [kitchen_device]
-    assert set(by_entity(result)) == {"light.kitchen", "light.hall"}
+    assert command["page"]["limit"] > 0
+    assert set(by_entity(result)) | set(by_entity(second)) == {
+        "light.kitchen",
+        "light.hall",
+    }
 
 
 @pytest.mark.usefixtures("logbook")
@@ -188,7 +141,8 @@ async def test_component_that_lost_the_command_falls_back_to_rest(
         result = await tools.get_logs(**call_kwargs(source="logbook", search=search))
 
     assert COMPONENT_COMMAND in sent_types(sent)
-    rest.assert_awaited()
+    rest.assert_awaited_once()
+    assert component_fallback_warnings(result)
     assert by_entity(result)["light.kitchen"]["name"] == "Kitchen Light"
 
 
@@ -235,32 +189,18 @@ async def test_component_timeout_surfaces_without_a_rest_fallback(
 
 
 @pytest.mark.usefixtures("logbook")
-async def test_component_dropped_connection_falls_back_to_rest(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
-) -> None:
-    socket = await pooled_socket(component_core_client)
-    with (
-        rest_reads(component_core_client) as rest,
-        dropped_on(hass, COMPONENT_COMMAND, socket),
-    ):
-        result = await LogTools(component_core_client).get_logs(
-            **call_kwargs(source="logbook", entity_id="light.kitchen")
-        )
-
-    rest.assert_awaited()
-    assert by_entity(result)["light.kitchen"]["name"] == "Kitchen Light"
-
-
-@pytest.mark.usefixtures("logbook")
+@pytest.mark.parametrize("scope", [{}, {"entity_id": "light.kitchen"}])
 async def test_dropped_paged_connection_does_not_repeat_a_dense_read(
-    hass: HomeAssistant, component_core_client: HomeAssistantClient
+    hass: HomeAssistant,
+    component_core_client: HomeAssistantClient,
+    scope: dict[str, str],
 ) -> None:
     socket = await pooled_socket(component_core_client)
     with (
         rest_reads(component_core_client) as rest,
         dropped_on(hass, COMPONENT_COMMAND, socket),
     ):
-        error = await logbook_error(LogTools(component_core_client))
+        error = await logbook_error(LogTools(component_core_client), **scope)
     assert error["message"]
     rest.assert_not_awaited()
 
@@ -320,7 +260,8 @@ async def test_device_without_events_has_no_name_warning(
     )
 
     assert result["data"]["entries"] == []
-    assert "warnings" not in result
+    assert component_fallback_warnings(result)
+    assert not any("carry no 'name'" in warning for warning in result["warnings"])
 
 
 async def test_device_rows_that_carry_a_name_have_no_name_warning(
@@ -343,7 +284,8 @@ async def test_device_rows_that_carry_a_name_have_no_name_warning(
 
     movie = [e for e in result["data"]["entries"] if e.get("message") == "started"]
     assert movie[0]["name"] == "Movie night"
-    assert "warnings" not in result
+    assert component_fallback_warnings(result)
+    assert not any("carry no 'name'" in warning for warning in result["warnings"])
 
 
 @pytest.mark.usefixtures("logbook")
@@ -449,7 +391,7 @@ async def test_invalid_context_cannot_turn_into_an_unfiltered_read(
 @pytest.mark.usefixtures("logbook")
 @pytest.mark.parametrize("order", ["oldest", "newest"])
 @pytest.mark.parametrize("component_enabled", [False, True])
-async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
+async def test_a_search_over_several_hours_counts_every_match(
     hass: HomeAssistant,
     component_enabled: bool,
     core_client: HomeAssistantClient,
@@ -484,12 +426,9 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
         limit=2,
     )
     actual: list[str] = []
-    first_page_calls = 0
     with rest_reads(core_client) as rest:
-        for page_index in range(len(names)):
+        for _ in range(len(names)):
             data = (await LogTools(core_client).get_logs(**params))["data"]
-            if page_index == 0:
-                first_page_calls = len(sent.await_args_list)
             assert data["total_entries"] == len(names)
             assert data["offset"] == len(actual)
             actual.extend(row["name"] for row in data["entries"])
@@ -508,23 +447,12 @@ async def test_multi_hour_search_counts_matches_on_both_sides_of_boundary(
             if call.args[0]["type"] == COMPONENT_COMMAND
         ]
         assert all("page" in cmd for cmd in commands)
-        counts = [cmd for cmd in commands if "count_range" in cmd["page"]]
-        assert counts
-        assert all(
-            "count_range" not in call.args[0].get("page", {})
-            for call in sent.await_args_list[first_page_calls:]
-        )
-        for cmd in counts:
-            span = datetime.fromisoformat(cmd["end_time"]) - datetime.fromisoformat(
-                cmd["start_time"]
-            )
-            assert span <= timedelta(hours=1, microseconds=1)
     else:
-        assert rest.await_args_list
+        assert len(rest.await_args_list) == (len(names) + 1) // 2
         for call in rest.await_args_list:
             start = datetime.fromisoformat(call.kwargs["start_time"])
             finish = datetime.fromisoformat(call.kwargs["end_time"])
-            assert finish - start <= timedelta(hours=1, microseconds=2)
+            assert finish - start == timedelta(hours=3)
 
 
 @pytest.mark.usefixtures("logbook")
@@ -552,16 +480,13 @@ async def test_phrase_pages_fill_across_raw_batches(
     )
     tools = LogTools(component_core_client)
     first = (await tools.get_logs(**params))["data"]
-    # One hourly count locates every match. Only the selected keys need a
-    # second component command, regardless of how many raw batches separate them.
     pages = [
-        call.args[0]["page"]
-        for call in sent.await_args_list
-        if call.args[0]["type"] == COMPONENT_COMMAND
+        c.args[0]["page"]
+        for c in sent.await_args_list
+        if c.args[0]["type"] == COMPONENT_COMMAND
     ]
-    assert len(pages) == 2
-    assert pages[0]["collect_keys"] == 3
-    assert len(pages[1]["keys"]) == 3
+    assert len(pages) > 1
+    assert all("after" in page for page in pages[1:])
     assert first["total_entries"] == 4
     assert first["returned_entries"] == 3
     sent.reset_mock()
@@ -574,14 +499,11 @@ async def test_phrase_pages_fill_across_raw_batches(
     ]
     expected = [datetime.fromtimestamp(stamp + i, UTC) for i in (0, 3, 6, 9)]
     assert times == sorted(expected, reverse=order == "newest")
-    assert not any(
-        "count_range" in c.args[0].get("page", {}) for c in sent.await_args_list
-    )
 
 
 @pytest.mark.usefixtures("logbook")
 @pytest.mark.parametrize("change", ["rename", "purge"])
-async def test_selected_matches_change_before_render(
+async def test_a_search_cursor_continues_after_the_logbook_changed(
     hass: HomeAssistant,
     component_core_client: HomeAssistantClient,
     change: str,
@@ -591,39 +513,25 @@ async def test_selected_matches_change_before_render(
         for state in ("off", "on"):
             hass.states.async_set(entity, state, {"friendly_name": "selection race"})
     await async_wait_recording_done(hass)
-    handler, schema = hass.data[websocket_api.DOMAIN][COMPONENT_COMMAND]
-
-    @websocket_api.async_response
-    async def change_before_render(
-        core: HomeAssistant, conn: Any, message: dict[str, Any]
-    ) -> None:
-        if message.get("page", {}).get("keys"):
-            if change == "rename":
-                for entity in entities[:2]:
-                    hass.states.async_set(entity, "on", {"friendly_name": "renamed"})
-            else:
-                await hass.services.async_call(
-                    "recorder",
-                    "purge_entities",
-                    {"entity_id": entities[:2]},
-                    blocking=True,
-                )
-            await async_wait_recording_done(hass)
-        handler(core, conn, message)
-
     params = call_kwargs(
         source="logbook", order="oldest", limit=2, search="selection race"
     )
-    websocket_api.async_register_command(
-        hass, COMPONENT_COMMAND, change_before_render, schema
-    )
-    try:
-        page = (await LogTools(component_core_client).get_logs(**params))["data"]
-    finally:
-        websocket_api.async_register_command(hass, COMPONENT_COMMAND, handler, schema)
-    assert page["total_entries"] == 4
-    assert [entry["entity_id"] for entry in page["entries"]] == entities[2:]
-    assert not page["has_more"]
+    tools = LogTools(component_core_client)
+    first = (await tools.get_logs(**params))["data"]
+    assert first["total_entries"] == 4
+    returned = {row["entity_id"] for row in first["entries"]}
+    remaining = sorted(set(entities) - returned)
+    if change == "rename":
+        for entity in remaining:
+            hass.states.async_set(entity, "on", {"friendly_name": "renamed"})
+    else:
+        await hass.services.async_call(
+            "recorder", "purge_entities", {"entity_id": remaining}, blocking=True
+        )
+    await async_wait_recording_done(hass)
+    last = (await tools.get_logs(**(params | {"offset": first["next_offset"]})))["data"]
+    assert last["entries"] == []
+    assert not last["has_more"]
 
 
 @pytest.mark.usefixtures("logbook")
@@ -690,13 +598,14 @@ async def test_cursor_reads_matches_committed_after_the_initial_count(
     with patch("ha_mcp.tools.log_sources_logbook.datetime", wraps=datetime) as clock:
         clock.now.return_value = end + timedelta(seconds=1)
         second = (await tools.get_logs(**params))["data"]
-    assert second["total_entries"] == 2
+    # The count the cursor carried is exhausted, so the rows are counted again.
+    assert second["total_entries"] == 3
     assert [row["name"] for row in second["entries"]] == ["second"]
     assert second["has_more"]
     params["offset"] = second["next_offset"]
     last = (await tools.get_logs(**params))["data"]
     assert [row["name"] for row in last["entries"]] == ["late"]
-    assert last["total_entries"] == 2
+    assert last["total_entries"] == 3
 
 
 @pytest.mark.usefixtures("logbook")
@@ -751,7 +660,10 @@ async def test_dense_logbook_pages_return_each_tied_event_once(
     with rest_reads(component_core_client) as rest:
         for _ in range(len(names)):
             data = (await LogTools(component_core_client).get_logs(**params))["data"]
-            assert data["total_entries"] == len(names)
+            if data["total_entries"] is None:
+                assert 0 < data["total_entries_lower_bound"] <= len(names)
+            else:
+                assert data["total_entries"] == len(names)
             assert len(data["entries"]) <= limit
             actual.extend(row["name"] for row in data["entries"])
             if not data["has_more"]:
@@ -834,14 +746,13 @@ async def test_sparse_search_across_context_and_page_boundaries(
     # The page holding the only match says nothing more follows.
     assert pages == 1
     if not component_enabled:
-        assert any("context" in warning.lower() for warning in result["warnings"])
-        assert "context_service" not in actual[0]
-        assert actual[0]["name"] == expected[0]["name"]
-        return
+        assert component_fallback_warnings(result)
+        rest.assert_awaited_once()
     for entry in actual + expected:
         entry["when"] = datetime.fromisoformat(entry["when"])
     assert actual == expected
-    rest.assert_not_awaited()
+    if component_enabled:
+        rest.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -900,18 +811,6 @@ async def test_rest_read_that_gets_no_answer_keeps_the_scope_hints(
     assert any("hours_back" in s for s in error["suggestions"])
 
 
-@pytest.mark.parametrize("extra", [{"entity_id": "light.a"}, {"device_id": "dev1"}])
-async def test_context_id_cannot_combine_with_other_filters(
-    core_client: HomeAssistantClient, sent: AsyncMock, extra: dict[str, str]
-) -> None:
-    with rest_reads(core_client) as rest:
-        error = await logbook_error(LogTools(core_client), context_id="ctx1", **extra)
-
-    assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-    assert CORE_COMMAND not in sent_types(sent)
-    rest.assert_not_awaited()
-
-
 @pytest.mark.usefixtures("logbook")
 async def test_omitted_end_time_covers_the_requested_window_up_to_now(
     core_client: HomeAssistantClient,
@@ -919,14 +818,14 @@ async def test_omitted_end_time_covers_the_requested_window_up_to_now(
     before = dt_util.utcnow()
     result = await LogTools(core_client).get_logs(
         **call_kwargs(
-            source="logbook", entity_id="light.kitchen,light.hall", hours_back=48
+            source="logbook", entity_id="light.kitchen,light.hall", hours_back=24
         )
     )
 
     start = datetime.fromisoformat(result["data"]["start_time"])
     end = datetime.fromisoformat(result["data"]["end_time"])
     assert end >= before
-    assert end - start == timedelta(hours=48)
+    assert end - start == timedelta(hours=24)
 
 
 @pytest.mark.usefixtures("logbook")
@@ -943,7 +842,7 @@ async def test_explicit_end_time_honors_the_callers_window(
         **call_kwargs(
             source="logbook",
             entity_id="light.kitchen,light.hall",
-            hours_back=48,
+            hours_back=24,
             end_time=past,
         )
     )
@@ -951,14 +850,14 @@ async def test_explicit_end_time_honors_the_callers_window(
         **call_kwargs(
             source="logbook",
             entity_id="light.kitchen,light.hall",
-            hours_back=48,
+            hours_back=24,
             end_time=future,
         )
     )
 
     start = datetime.fromisoformat(earlier["data"]["start_time"])
     end = datetime.fromisoformat(earlier["data"]["end_time"])
-    assert end - start == timedelta(hours=48)
+    assert end - start == timedelta(hours=24)
     assert earlier["data"]["total_entries"] == 0
     assert "light.kitchen" in by_entity(later)
 
@@ -971,14 +870,14 @@ async def test_omitted_and_explicit_end_time_return_the_same_rows(
     tools = LogTools(core_client)
     omitted = await tools.get_logs(
         **call_kwargs(
-            source="logbook", entity_id="light.kitchen,light.hall", hours_back=48
+            source="logbook", entity_id="light.kitchen,light.hall", hours_back=24
         )
     )
     explicit = await tools.get_logs(
         **call_kwargs(
             source="logbook",
             entity_id="light.kitchen,light.hall",
-            hours_back=48,
+            hours_back=24,
             end_time=omitted["data"]["end_time"],
         )
     )

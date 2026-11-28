@@ -120,6 +120,7 @@ class LogTools(
         order: Literal["newest", "oldest"] | None,
         structured: bool = False,
         top_n: int | None = None,
+        action_calls: bool = False,
     ) -> dict[str, Any]:
         # Only a supervisor/system_service page read can take its order from a
         # token, so only those two are given ``order`` as it came.
@@ -137,6 +138,7 @@ class LogTools(
                 search=search,
                 compact=compact,
                 order=chosen,
+                action_calls=action_calls,
             )
         if source == "system":
             return await self._get_system_log(
@@ -197,6 +199,7 @@ class LogTools(
         order: Literal["newest", "oldest"] | None = None,
         structured: bool = False,
         top_n: int | None = None,
+        action_calls: bool = False,
     ) -> dict[str, Any]:
         level = _validate_log_level(level)
         offset = _validate_log_offset(source, offset)
@@ -212,6 +215,7 @@ class LogTools(
             offset,
             hours_back=hours_back,
             search=search,
+            action_calls=action_calls,
         )
         structured_error_log = structured and source == "error_log"
         if structured and source != "error_log":
@@ -249,6 +253,7 @@ class LogTools(
             order,
             structured=structured_error_log,
             top_n=top_n,
+            action_calls=action_calls,
         )
         if warnings:
             # Prepend, don't overwrite: the structured error_log path emits its
@@ -280,7 +285,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ],
             Field(
                 description=(
-                    "'logbook': entity state-change history. 'system': HA's "
+                    "'logbook': entity state-change history, or the actions "
+                    "called with action_calls. 'system': HA's "
                     "structured system_log entries (errors, warnings) with full "
                     "exception tracebacks; search also matches those exceptions. "
                     "'error_log': raw log text (home-assistant.log on "
@@ -325,7 +331,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Keyword filter on entries/lines. Logbook searches the displayed "
                     "name and message together (e.g. 'Home Assistant started'), "
-                    "and the entity ID. For source='system' it "
+                    "and the entity ID; an action call matches on domain.service. "
+                    "For source='system' it "
                     "matches message, name and exception text; for the raw "
                     "error_log path it matches any line of a record, so a "
                     "traceback frame brings back its header and siblings. "
@@ -361,7 +368,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ge=1,
                 description=(
                     "How many hours back to read. Logbook (default 1), "
-                    "supervisor and system_service. For Logbook continuation see offset. "
+                    "supervisor and system_service. Without a current component, HA-MCP caps Logbook reads at 24 hours. "
                     "For the journal sources, only "
                     "when given: the journal serves that window, from its "
                     "start to the journal's end, one page at a time, "
@@ -410,10 +417,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             int | str,
             Field(
                 description=(
-                    "For a whole-instance Logbook cursor, pass next_offset as offset with the same "
-                    "search and order. The cursor pins the window and its first-page match count. "
-                    "For an integer next_offset, reuse the original hours_back and returned end_time. "
-                    "Scoped Logbook reads provide pagination_hint with those arguments. "
+                    "For a Logbook cursor, pass next_offset as offset with the same filters, "
+                    "search and order. HA-MCP caps recorder pages per call. When total_entries is null, "
+                    "total_entries_lower_bound counts verified matches, and a page can come back short or empty with has_more true: keep following next_offset. For integer offsets reuse hours_back and end_time. "
                     "Page deeper into source='logbook', 'error_log', "
                     "'fault_log', and supervisor/system_service on a page "
                     "read: hours_back and no search (ignored otherwise). "
@@ -437,8 +443,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             bool,
             Field(
                 description=(
-                    f"logbook / system only: save context. Logbook strips "
-                    f"attribute dicts; system keeps the start and end of each "
+                    "Logbook returns every native field in either mode. For system logs, "
+                    f"compact mode keeps the start and end of each "
                     f"message string within {_SYSTEM_LOG_MESSAGE_CAP} characters "
                     f"(counted in 'truncated_messages'). search still matches the "
                     f"full message; text inside the cut is not shown. To read one "
@@ -446,6 +452,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             ),
         ] = True,
+        action_calls: Annotated[
+            bool,
+            Field(
+                description="Logbook only. Read admin-only action calls and their service data for the time window. Omit entity, device and context filters."
+            ),
+        ] = False,
         # System/error_log-specific
         level: Annotated[
             str | None,
@@ -532,4 +544,5 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             order=order,
             structured=structured,
             top_n=top_n,
+            action_calls=action_calls,
         )
