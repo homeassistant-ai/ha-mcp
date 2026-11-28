@@ -74,7 +74,7 @@ async def energy_suggestions(client: Any) -> dict[str, Any]:
         "energy_suggestions",
         {},
         "the energy meter suggestions of Settings > Energy",
-        absent_note="Install or update the HA-MCP component to read them.",
+        absent_note="",
     )
 
 
@@ -93,7 +93,7 @@ async def _contract_bridge(
         unavailable["reason"] = (
             component_unusable_warning(caps, f"{feature} is unavailable")
             + f" {absent_note}"
-        )
+        ).rstrip()
         if not component_supports(caps, capability):
             return unavailable
         ws = await get_websocket_client(
