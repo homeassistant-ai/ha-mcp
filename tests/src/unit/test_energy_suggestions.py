@@ -13,7 +13,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from homeassistant.components.frontend.storage import async_user_store
+from homeassistant.components.frontend.storage import UserStore, async_user_store
 from homeassistant.components.recorder import Recorder
 from homeassistant.const import MAJOR_VERSION, MINOR_VERSION
 from homeassistant.core import HomeAssistant
@@ -24,6 +24,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_energy import EnergyTools
 
+from ._card_definitions_core import cd
 from ._card_definitions_core import fresh_card_state as fresh_card_state
 
 _SUGGESTS = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 12)
@@ -329,3 +330,38 @@ async def test_a_null_dismissed_list_reads_as_empty(
     assert await _stored(hass, hass_admin_user) == {
         "dismissed_suggestions": ["sensor.oven_energy"]
     }
+
+
+@pytest.mark.usefixtures("fresh_card_state")
+async def test_a_timed_out_read_leaves_the_users_frontend_data_loading(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    hass_admin_user: MockUser,
+    component_core_client: HomeAssistantClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A suggestions read that times out while the browser is loading the same
+    user's frontend data stops waiting without cancelling that load: the
+    browser's load finishes and later reads of the user's data work."""
+    await _meters(hass, hass_storage)
+    assert await cd.async_get_definitions(hass) is not None
+    release = asyncio.Event()
+    load = UserStore.async_load
+
+    async def held_load(store: UserStore) -> None:
+        await release.wait()
+        await load(store)
+
+    monkeypatch.setattr(UserStore, "async_load", held_load)
+    monkeypatch.setattr(cd, "CARD_WORK_SECONDS", 0.5)
+    browser = hass.async_create_task(async_user_store(hass, hass_admin_user.id))
+
+    result = await EnergyTools(component_core_client).ha_manage_energy_prefs(
+        mode="get", include_suggestions=True
+    )
+    release.set()
+
+    assert result["energy_suggestions"]["status"] == "unavailable"
+    assert (await browser).data == {}
+    assert (await async_user_store(hass, hass_admin_user.id)).data == {}
