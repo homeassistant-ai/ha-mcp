@@ -57,7 +57,7 @@ import pytest
 import requests
 
 from ..utilities.assertions import parse_mcp_result, safe_call_tool
-from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
+from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS, wait_for_tool_result
 
 LOG = logging.getLogger(__name__)
 
@@ -253,10 +253,15 @@ async def test_addon_logs_fetch_shape(
     mcp_client: Any, webhook_proxy_started: Any
 ) -> None:
     """``ha_get_logs(source='supervisor')`` returns substantial log text."""
-    log_text = await _get_addon_logs(mcp_client, WEBHOOK_PROXY_SLUG)
-    assert len(log_text.strip()) >= 100, (
-        f"Webhook-proxy stdout should have substantial content "
-        f"(>=100 chars), got {len(log_text)} chars: {log_text[:200]!r}"
+    # The app has only just started: its first lines can take a moment to
+    # reach Supervisor's log, so an empty read right after the start is polled.
+    await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_get_logs",
+        arguments={"source": "supervisor", "slug": WEBHOOK_PROXY_SLUG},
+        predicate=lambda data: len((data.get("log") or "").strip()) >= 100,
+        timeout=60,
+        description="webhook-proxy stdout with substantial content (>=100 chars)",
     )
 
 
