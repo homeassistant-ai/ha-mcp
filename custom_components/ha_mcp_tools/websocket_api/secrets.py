@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+import os
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
@@ -14,8 +15,12 @@ from homeassistant.core import HomeAssistant
 # setting covers the whole command surface.
 _LOGGER = logging.getLogger(__package__)
 
+REDACTED = "**redacted**"
 
-def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:
+
+def _load_secret_scrub(
+    hass: HomeAssistant, files: Iterable[str] = ()
+) -> tuple[frozenset[str], bool]:
     """Load the ``secrets.yaml`` scrub values, plus a ``degraded`` flag.
 
     Returns ``(values, degraded)``. ``values`` are the plaintext string forms of the
@@ -31,6 +36,10 @@ def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:
     that secret back as an int leaf, so the scrub must be able to match it whether it
     arrives as ``1234`` or ``"1234"``. bool scalars are excluded ("True"/"False" are
     never credentials and would over-redact).
+
+    ``files`` are YAML files whose ``!secret`` values Core resolved: the
+    ``secrets.yaml`` files Core's loader reads for them are loaded too (see
+    :func:`_secret_files`).
 
     ``degraded`` is True ONLY when a ``secrets.yaml`` is PRESENT but could not be
     read/parsed: the scrub then silently turns OFF, and a caller can surface
@@ -48,45 +57,70 @@ def _load_secret_scrub(hass: HomeAssistant) -> tuple[frozenset[str], bool]:
     path_fn = getattr(config, "path", None)
     if not callable(path_fn):
         return frozenset(), False
-    try:
-        path = path_fn(SECRET_YAML)
-        if not path:
-            return frozenset(), False
-        with open(path, encoding="utf-8") as handle:
-            raw = yaml.safe_load(handle)
-    except FileNotFoundError:
-        # Expected: many instances have no secrets.yaml — nothing to scrub.
-        return frozenset(), False
-    except Exception:
-        # Present-but-unreadable / malformed / permission error: unexpected, so warn
-        # once (this runs once per call) AND report degraded so the emission callers
-        # can signal that options were NOT redacted, and the helper search that its
-        # match corpus was not scrubbed, rather than raising into the WS handler.
-        _LOGGER.warning(
-            "Could not read secrets.yaml for the secret-scrub; continuing WITHOUT "
-            "redaction (emitted options may be unredacted, search matches unscrubbed)",
-            exc_info=True,
-        )
-        return frozenset(), True
-    if not isinstance(raw, dict):
-        return frozenset(), False
-    return _collect_secret_strings(raw), False
+    values: set[str] = set()
+    degraded = False
+    for path in _secret_files(path_fn(SECRET_YAML), files):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                raw = yaml.safe_load(handle)
+        except FileNotFoundError:
+            # Expected: many instances have no secrets.yaml — nothing to scrub.
+            continue
+        except Exception:
+            # Present-but-unreadable / malformed / permission error: unexpected, so
+            # warn AND report degraded so the emission callers can signal that
+            # options were NOT redacted, and the helper search that its match corpus
+            # was not scrubbed, rather than raising into the WS handler.
+            _LOGGER.warning(
+                "Could not read %s for the secret-scrub; continuing WITHOUT its "
+                "values (emitted config may be unredacted, search matches unscrubbed)",
+                path,
+                exc_info=True,
+            )
+            degraded = True
+            continue
+        if isinstance(raw, dict):
+            values |= _collect_secret_strings(raw)
+    return frozenset(values), degraded
+
+
+def _secret_files(root_file: str | None, files: Iterable[str]) -> list[str]:
+    """The config directory's ``secrets.yaml`` and, for each of ``files``, the
+    ones Core's loader also looks a ``!secret`` up in: each directory from the
+    file's own up to the config directory."""
+    if not root_file:
+        return []
+    root = os.path.dirname(root_file)
+    found = [root_file]
+    for name in files:
+        folder = os.path.dirname(os.path.abspath(name))
+        while folder.startswith(root + os.sep):
+            found.append(os.path.join(folder, SECRET_YAML))
+            folder = os.path.dirname(folder)
+    return list(dict.fromkeys(found))
 
 
 def _collect_secret_strings(raw: dict[Any, Any]) -> frozenset[str]:
-    """Plaintext ``str()`` forms of ``secrets.yaml`` scalars (str/int/float).
+    """Plaintext ``str()`` forms of ``secrets.yaml`` scalars (str/int/float),
+    those inside a mapping or list secret included.
 
     bool scalars are excluded ("True"/"False" are never credentials and would
     over-redact); empty strings are dropped. See :func:`_load_secret_scrub`.
     """
     values: set[str] = set()
-    for v in raw.values():
-        if isinstance(v, bool):
-            continue
-        if isinstance(v, str):
+    pending = list(raw.values())
+    # A YAML alias can make a mapping or list contain itself.
+    seen: set[int] = set()
+    while pending:
+        v = pending.pop()
+        if isinstance(v, (dict, list)):
+            if id(v) not in seen:
+                seen.add(id(v))
+                pending.extend(v.values() if isinstance(v, dict) else v)
+        elif isinstance(v, str):
             if v:
                 values.add(v)
-        elif isinstance(v, (int, float)):
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
             values.add(str(v))
     return frozenset(values)
 
@@ -140,5 +174,5 @@ def _scrub_secret_values(value: Any, secret_values: frozenset[str]) -> Any:
     if isinstance(value, bool):
         return value
     if isinstance(value, (str, int, float)) and str(value) in secret_values:
-        return "**redacted**"
+        return REDACTED
     return value

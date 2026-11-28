@@ -25,21 +25,43 @@ from .helpers import (
     raise_tool_error,
 )
 
+# What an action passes on rather than runs: an action name inside it is data.
+_PAYLOAD_KEYS = frozenset(
+    {
+        "data",
+        "data_template",
+        "event_data",
+        "event_data_template",
+        "variables",
+        "for_each",
+    }
+)
+
 
 def _guard_actions(node: Any) -> None:
-    """Hold each literal action, nested ones too, to ha_call_service's checks.
+    """Hold each action, nested ones too, to ha_call_service's checks.
 
-    shortcut: a templated action name is not resolved here, as in a stored
-    script; Core resolves it when the step runs.
+    A templated action name is refused: Core resolves it only when the step
+    runs, after these checks.
     """
     if isinstance(node, list):
         for item in node:
             _guard_actions(item)
     elif isinstance(node, dict):
         for key, value in node.items():
+            if key in _PAYLOAD_KEYS:
+                continue
             if key in ("action", "service", "service_template") and isinstance(
                 value, str
             ):
+                if "{" in value:
+                    raise_tool_error(
+                        create_validation_error(
+                            "run_sequence takes a literal action name such as "
+                            "'light.turn_on', not a template.",
+                            parameter="run_sequence",
+                        )
+                    )
                 domain, _, service = value.partition(".")
                 if is_component_domain(domain):
                     raise_tool_error(

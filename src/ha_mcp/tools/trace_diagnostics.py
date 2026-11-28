@@ -81,7 +81,9 @@ async def _gather_diagnostics(
     diagnostics["trace_storage_enabled"] = await _is_trace_storage_enabled(
         client, entity_id, domain
     )
-    diagnostics["suggestion"] = _diagnostic_suggestion(diagnostics, domain)
+    diagnostics["suggestion"] = _diagnostic_suggestion(
+        diagnostics, domain, (entity or {}).get("disabled_by")
+    )
     return diagnostics, warnings
 
 
@@ -116,8 +118,11 @@ async def _is_trace_storage_enabled(
         return None
 
 
-def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
-    """Describe the first Core-provided reason no trace is available."""
+def _diagnostic_suggestion(
+    diagnostics: dict[str, Any], domain: str, disabled_by: Any = None
+) -> str:
+    """Describe the first Core-provided reason no trace is available;
+    ``disabled_by`` is the entity registry row's."""
     if not diagnostics.get("entity_exists"):
         return f"Could not find {domain} entity. Verify the entity_id with ha_search()."
     validation = diagnostics.get("validation")
@@ -141,10 +146,16 @@ def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
             "which to store a trace (common for YAML automations without an id)."
         )
     if diagnostics.get("loaded") is False:
+        if disabled_by:
+            # Core adds no entity for it, so no service can run it either.
+            return (
+                f"This {domain}'s entity is disabled in the entity registry, so "
+                "Core has not loaded it and cannot run it. Enable the entity to "
+                "load it."
+            )
         return (
-            "Core reports this automation is not loaded. Check its validation "
-            "or repair issue; automation.trigger can still execute a disabled "
-            "automation."
+            f"Core reports this {domain} is not loaded. Check its validation or "
+            "repair issue."
         )
     if diagnostics.get("entity_state") == "unavailable":
         return (

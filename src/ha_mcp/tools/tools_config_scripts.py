@@ -5,6 +5,7 @@ This module provides tools for retrieving, creating, updating, and removing
 Home Assistant script configurations.
 """
 
+import functools
 import logging
 from typing import Annotated, Any, Literal, NoReturn, cast
 
@@ -68,6 +69,12 @@ from .helpers import (
     register_tool_methods,
     reject_malformed_list_fields,
     validate_identifier_not_empty,
+)
+from .loaded_config import (
+    STORAGE_SOURCE,
+    LoadedDefinition,
+    YamlDefinedError,
+    raise_if_script_in_yaml,
 )
 from .reference_validator import validate_config_references as ref_check
 from .script_sequence_run import refuse_misused_run_control, run_script_sequence
@@ -142,6 +149,8 @@ class ConfigScriptTools:
 
         Returns the complete configuration for a script, including sequence, mode, fields, and other settings.
 
+        `source.kind` is `storage` for a script Home Assistant's UI and ha_config_set_script store. It is `yaml` for one defined in a package or another YAML file: `config` is then the definition Home Assistant has loaded, `source` names its file and line (with the ha_mcp_tools component), and the config tools cannot change it.
+
         The returned `config_hash` stays the same across consecutive reads of an unchanged config.
 
         `entity` is the script's entity registry row, `validation` holds Home Assistant's status and error when the script failed to load (None when it loaded), and `references` lists the entities, devices, areas, floors, labels and blueprint it uses. `references` is None without the ha_mcp_tools component's lookup, while Home Assistant has not loaded the script (its entity is disabled or it failed to load), and before Home Assistant registers an entity for a new script (`entity` is None then); `warnings` says which.
@@ -167,11 +176,13 @@ class ConfigScriptTools:
                 ],
             )
 
-            # The body ALWAYS comes from the REST config endpoint, which reads
-            # the config file. The entity's in-memory raw_config lags it until
-            # the reload after a write completes, so a get racing that reload
-            # would return the pre-edit body.
-            return await self._legacy_get_script(script_id)
+            # A stored body comes from the REST config endpoint, which reads
+            # the config file; the entity's raw_config lags it until the
+            # reload after a write completes.
+            try:
+                return await self._legacy_get_script(script_id)
+            except YamlDefinedError as err:
+                return await self._legacy_get_script(script_id, err.definition)
         except ToolError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -186,27 +197,31 @@ class ConfigScriptTools:
             )
             return None  # unreachable: exception_to_structured_error always raises
 
-    async def _legacy_get_script(self, script_id: str) -> dict[str, Any]:
-        """Assemble the script-get response: the body from REST; the registry
-        row, load failure and references from the component's lookup, or,
-        without it, the row and load failure from Core's registry and repairs
-        commands (no references)."""
-        config_result = await self._fetch_script_config_envelope(script_id)
-        actual_config = config_result.get("config", config_result)
-        config_hash_value = compute_config_hash(actual_config)
-
+    async def _legacy_get_script(
+        self, script_id: str, loaded: LoadedDefinition | None = None
+    ) -> dict[str, Any]:
+        """Assemble the script-get response: the body from REST, or ``loaded``
+        for a YAML-defined script; the registry row, load failure and
+        references from the component's lookup, or, without it, the row and
+        load failure from Core's registry and repairs commands."""
+        look = functools.partial(automation_lookup, self._client, domain="script")
+        if loaded is None:
+            config_result = await self._fetch_script_config_envelope(script_id)
+            actual_config = config_result.get("config", config_result)
+            key = config_result.get("script_id")
+            lookup = await look(unique_id=key) if key else None
+        else:
+            actual_config = loaded.config
+            lookup = await look(entity_id=loaded.entity_id)
+            row = (lookup or {}).get("entity") or {}
+            key = row.get("unique_id") or loaded.entity_id.removeprefix("script.")
         # The category is injected after hashing so a failed registry read
         # does not change the hash.
-        warnings: list[str] = []
-        key = config_result.get("script_id")
-        lookup = (
-            await automation_lookup(self._client, unique_id=key, domain="script")
-            if key
-            else None
-        )
-        entity_id: str | None = None
+        config_hash_value = compute_config_hash(actual_config)
+        warnings: list[str] = loaded.warnings if loaded else []
+        entity_id: str | None = loaded.entity_id if loaded else None
         if lookup is None:
-            entity_id = await script_entity_or_warning(
+            entity_id = entity_id or await script_entity_or_warning(
                 self._client, script_id, key, warnings, "registry entry unavailable"
             )
         elif lookup.get("found") is False:
@@ -245,6 +260,7 @@ class ConfigScriptTools:
             # returns it; the hash is computed over the body too.
             "config": actual_config,
             "config_hash": config_hash_value,
+            "source": loaded.source if loaded else STORAGE_SOURCE,
             "entity": entity,
             "validation": validation,
             "references": references,
@@ -256,16 +272,13 @@ class ConfigScriptTools:
     async def _raise_script_not_found(
         self, script_id: str, *, bare_key: bool = False
     ) -> NoReturn:
-        """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing script.
-
-        Single source of truth for the 404→RESOURCE_NOT_FOUND mapping used
-        by the GET path (``_fetch_script_config_envelope``) and the
-        mutation paths (``ha_config_set_script`` update branch,
-        ``ha_config_remove_script``). Populates ``available_script_ids``
-        (up to 10 entity_ids) from the entity registry: a bare slug can be
-        another script's storage key. ``bare_key``: the id was read only as a
-        storage key, so the suggestions name its entity form.
+        """Raise for a script Core's config API stores nothing for, on reads
+        and writes alike: CONFIG_NOT_FOUND for one defined in YAML, else
+        RESOURCE_NOT_FOUND with up to 10 ``available_script_ids``. ``bare_key``:
+        the id was read only as a storage key, so the suggestions name its
+        entity form.
         """
+        await raise_if_script_in_yaml(self._client, script_id)
         available_ids = await list_visible_registry_ids(self._client, "script")
         suggestions = ["Use ha_search(domain_filter='script') to find existing scripts"]
         if bare_key:
@@ -287,14 +300,8 @@ class ConfigScriptTools:
         )
 
     async def _fetch_script_config_envelope(self, script_id: str) -> dict[str, Any]:
-        """Fetch the raw REST envelope, mapping 404 to RESOURCE_NOT_FOUND.
-
-        Returns the dict envelope from ``rest_client.get_script_config``
-        (``success``/``script_id``/``config`` keys). Raises a structured
-        ``RESOURCE_NOT_FOUND`` ToolError via ``_raise_script_not_found`` on
-        404. Other ``HomeAssistantAPIError`` instances propagate unchanged
-        to caller exception handlers.
-        """
+        """The REST client's ``{success, script_id, config}`` envelope; a 404
+        raises through ``_raise_script_not_found``."""
         try:
             return cast(dict[str, Any], await self._client.get_script_config(script_id))
         except HomeAssistantAPIError as e:
@@ -305,23 +312,11 @@ class ConfigScriptTools:
     async def _get_script_config_internal(
         self, script_id: str
     ) -> tuple[dict[str, Any], str, str | None]:
-        """Fetch script config without logging or category injection.
-
-        Returns ``(actual_config, config_hash, resolved_id)`` where
-        ``actual_config`` is the inner script body (not the REST wrapper) and
-        ``resolved_id`` is the storage key the REST client resolved the input to
-        (from the envelope's ``script_id``). Threading ``resolved_id`` lets the
-        upsert call site skip a second entity-registry lookup.
-        Used internally by _fetch_and_verify_hash and _take_control_config.
-
-        ``resolved_id`` is ``None`` when the envelope omits ``script_id`` — the
-        write target must then be re-resolved from the caller's input rather
-        than defaulting to the (unresolved) caller slug, which for a renamed
-        script would target the wrong storage key. This is a structural
-        invariant, not a live path: ``get_script_config`` always sets the key.
-
-        404 responses from the REST client are mapped to a structured
-        ``RESOURCE_NOT_FOUND`` ToolError via ``_fetch_script_config_envelope``.
+        """``(body, config_hash, resolved_id)`` for a write: the stored body
+        and the storage key the REST client resolved the input to, which the
+        upsert reuses. ``resolved_id`` is None only if the envelope omits
+        ``script_id``; the write then resolves the caller's id again. A script
+        with nothing stored raises through ``_fetch_script_config_envelope``.
         """
         config_result = await self._fetch_script_config_envelope(script_id)
         actual_config = config_result.get("config", config_result)
@@ -732,6 +727,9 @@ class ConfigScriptTools:
                     "script", script_id, resolved_key
                 )
                 stored = await self._client._config_exists("script", resolved_key)
+                await raise_if_script_in_yaml(
+                    self._client, script_id, resolved_key, stored=stored
+                )
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(config_dict)
@@ -1098,7 +1096,7 @@ class ConfigScriptTools:
 
         Deletes a script from Home Assistant's editable script storage
         (``scripts.yaml``, as the UI and ha_config_set_script write it); a
-        script defined elsewhere in YAML is not found there.
+        script defined elsewhere in YAML is refused, naming its file.
 
         WARNING: Deleting a script that is used by automations may cause those automations to fail.
         """

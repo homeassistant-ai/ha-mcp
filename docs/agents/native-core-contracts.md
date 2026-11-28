@@ -237,7 +237,8 @@ is not found, never a create. Core's DELETE answers 400 "Resource not
 found" for a missing id, which the remove tool reports as not found. An
 automation the registry resolves but Core's config API answers "Resource not
 found" for is defined in YAML or a package, outside `automations.yaml`; the
-get, set and remove tools report it as CONFIG_NOT_FOUND. A config id with no
+get tool returns the definition Core has loaded, and the set and remove tools
+report it as CONFIG_NOT_FOUND. A config id with no
 registry row returns the body Core stores under it, with `entity` None; only
 an id Core stores nothing under is not found. References in a proposed
 automation, script or scene come from the component's
