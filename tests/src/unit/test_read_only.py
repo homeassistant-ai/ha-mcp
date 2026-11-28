@@ -165,9 +165,6 @@ class TestExemptionRules:
             # allowed so a read-only agent can still sanity-check a
             # proposed energy config.
             ({"mode": "set", "config": {}, "dry_run": True}, True),
-            # Suggestion changes have no preview: dry_run never lets them through.
-            ({"mode": "dismiss_suggestions", "dry_run": True}, False),
-            ({"mode": "restore_suggestions", "statistic_ids": ["sensor.x"]}, False),
             # Strict ``is True``: the middleware sees raw pre-validation
             # arguments, so truthy non-bools (which schema coercion may
             # turn into False before the tool runs) must fail closed.
@@ -792,7 +789,6 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "config",
         "config_hash",
         "include_suggestions",
-        "statistic_ids",
     },
     "ha_manage_pipeline": {
         # Selector for action='get' (read) and the blocked write actions.

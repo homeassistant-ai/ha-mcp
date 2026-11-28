@@ -23,7 +23,6 @@ from .core_contract import (
     validate_energy_proposal,
 )
 from .energy_preferences import (
-    change_energy_suggestions,
     compute_per_key_hashes,
     get_energy_prefs,
     include_energy_statistics,
@@ -111,14 +110,11 @@ class EnergyTools:
     async def ha_manage_energy_prefs(
         self,
         mode: Annotated[
-            Literal["get", "set", "dismiss_suggestions", "restore_suggestions"],
+            Literal["get", "set"],
             Field(
                 description=(
                     "'get' reads the preferences; 'set' saves the top-level "
-                    "keys passed in config; 'dismiss_suggestions' / "
-                    "'restore_suggestions' hide or bring back suggested meters "
-                    "(statistic_ids) for the token's Home Assistant user, as "
-                    "Settings > Energy does."
+                    "keys passed in config."
                 )
             ),
         ],
@@ -153,11 +149,10 @@ class EnergyTools:
             bool,
             Field(
                 description=(
-                    "With mode='set', preview without saving. With the component, validates "
+                    "If True, preview without saving. With the component, validates "
                     "the complete proposal through Core's registered save schema. "
                     "Without that capability, explicitly reports proposal validation "
-                    "unavailable. Semantic energy/validate checks persisted state only. "
-                    "The suggestion modes have no preview."
+                    "unavailable. Semantic energy/validate checks persisted state only."
                 ),
                 default=False,
             ),
@@ -180,25 +175,16 @@ class EnergyTools:
                 description=(
                     "With mode='get', include the energy, gas and water meters "
                     "Settings > Energy suggests adding (energy_suggestions): each "
-                    "statisticId with the slots it can fill, the statistics this "
-                    "user dismissed, and editors, which names the source or device "
-                    "kind and field each slot fills. Computed by the installed "
-                    "frontend through the component; Home Assistant 2026.12 and later."
+                    "statisticId with the slots it can fill, and editors, which names "
+                    "the source or device kind and field each slot fills. Dismissing "
+                    "is per person in Settings > Energy; the read leaves out the "
+                    "meters dismissed by the Home Assistant account HA-MCP connects "
+                    "as (dismissed_by), which may not be the person using the panel. "
+                    "Computed by the installed frontend through the component; Home "
+                    "Assistant 2026.12 and later."
                 )
             ),
         ] = False,
-        statistic_ids: Annotated[
-            list[str] | None,
-            JSON_STRING_COERCION,
-            Field(
-                description=(
-                    "Statistic IDs for mode='dismiss_suggestions' or "
-                    "'restore_suggestions'. Needs the component and Home "
-                    "Assistant 2026.12 or later."
-                ),
-                default=None,
-            ),
-        ] = None,
     ) -> dict[str, Any]:
         """Manage the Home Assistant Energy dashboard preferences: its energy
         sources (grid, solar, battery, gas, water, home) and its device
@@ -245,32 +231,6 @@ class EnergyTools:
                 await include_energy_statistics(self._client, result)
                 if include_statistics
                 else result
-            )
-
-        if mode in ("dismiss_suggestions", "restore_suggestions"):
-            if dry_run:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"mode='{mode}' has no preview; dry_run applies to mode='set'",
-                        context={"mode": mode},
-                    )
-                )
-            if not statistic_ids:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_MISSING_PARAMETER,
-                        f"'statistic_ids' is required when mode='{mode}'",
-                        context={"mode": mode},
-                        suggestions=[
-                            "Take statisticId values from ha_manage_energy_prefs(mode='get', include_suggestions=True)",
-                        ],
-                    )
-                )
-            return await change_energy_suggestions(
-                self._client,
-                "dismiss" if mode == "dismiss_suggestions" else "restore",
-                statistic_ids,
             )
 
         if config is None:

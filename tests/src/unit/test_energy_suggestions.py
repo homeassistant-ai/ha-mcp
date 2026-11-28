@@ -20,7 +20,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant.common import MockUser
 
-from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.tools_energy import EnergyTools
 
@@ -65,9 +64,15 @@ def _suggested(result: dict[str, Any]) -> list[str]:
     return [s["statisticId"] for s in result["energy_suggestions"]["suggestions"]]
 
 
-async def _stored(hass: HomeAssistant, user: MockUser) -> Any:
-    """The user's energy frontend data, which Settings > Energy reads."""
-    return (await async_user_store(hass, user.id)).data.get("energy")
+def _dismissed_in_settings(
+    hass_storage: dict[str, Any], user: MockUser, dismissed: Any
+) -> None:
+    """The user's energy frontend data as Settings > Energy saves a dismissal."""
+    hass_storage[f"frontend.user_data_{user.id}"] = {
+        "version": 1,
+        "key": f"frontend.user_data_{user.id}",
+        "data": {"energy": {"dismissed_suggestions": dismissed}},
+    }
 
 
 @pytest.mark.usefixtures("fresh_card_state")
@@ -76,12 +81,13 @@ async def test_suggestions_are_the_installed_frontends_own(
     recorder_mock: Recorder,
     hass: HomeAssistant,
     hass_storage: dict[str, Any],
+    hass_admin_user: MockUser,
     component_core_client: HomeAssistantClient,
     configured: bool,
 ) -> None:
     """A meter not yet in the dashboard is suggested with the slots the
-    frontend offers, also before anything was saved; a frontend without
-    suggestions (2026.11) says so."""
+    frontend offers, also before anything was saved, and the read names whose
+    dismissals it reflects; a frontend without suggestions (2026.11) says so."""
     await _meters(hass, hass_storage, configured=configured)
 
     result = await EnergyTools(component_core_client).ha_manage_energy_prefs(
@@ -99,6 +105,7 @@ async def test_suggestions_are_the_installed_frontends_own(
     assert "device" in by_id["sensor.oven_energy"]["slots"]
     assert suggestions["editors"]["device"]["stat"] == "stat_consumption"
     assert suggestions["dismissed"] == []
+    assert suggestions["dismissed_by"] == hass_admin_user.name
 
 
 async def test_suggestions_without_the_component_say_it_is_needed(
@@ -107,115 +114,53 @@ async def test_suggestions_without_the_component_say_it_is_needed(
     hass_storage: dict[str, Any],
     core_client: HomeAssistantClient,
 ) -> None:
-    """The read still answers with a warning naming the component; a dismiss
-    is refused."""
+    """The read still answers, with a warning naming the component."""
     await _meters(hass, hass_storage)
-    tool = EnergyTools(core_client)
 
-    result = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
-    with pytest.raises(ToolError, match="COMPONENT_NOT_INSTALLED"):
-        await tool.ha_manage_energy_prefs(
-            mode="dismiss_suggestions", statistic_ids=["sensor.oven_energy"]
-        )
+    result = await EnergyTools(core_client).ha_manage_energy_prefs(
+        mode="get", include_suggestions=True
+    )
 
     assert result["config"]["device_consumption"]
     assert result["energy_suggestions"]["status"] == "unavailable"
     assert any("HA-MCP component" in w for w in result["warnings"])
 
 
-@pytest.mark.usefixtures("fresh_card_state")
-async def test_dismissed_meters_stay_hidden_in_settings_until_restored(
-    recorder_mock: Recorder,
-    hass: HomeAssistant,
-    hass_storage: dict[str, Any],
-    hass_admin_user: MockUser,
-    component_core_client: HomeAssistantClient,
-) -> None:
-    """Several meters dismissed at once are saved, once each, where Settings >
-    Energy reads them, and come back when restored; a frontend without
-    suggestions refuses and saves nothing."""
-    await _meters(hass, hass_storage)
-    tool = EnergyTools(component_core_client)
-    both = ["sensor.oven_energy", "sensor.boiler_energy"]
-
-    if not _SUGGESTS:
-        with pytest.raises(ToolError):
-            await tool.ha_manage_energy_prefs(
-                mode="dismiss_suggestions", statistic_ids=both
-            )
-        assert await _stored(hass, hass_admin_user) is None
-        return
-    await tool.ha_manage_energy_prefs(mode="dismiss_suggestions", statistic_ids=both)
-    stored = await _stored(hass, hass_admin_user)
-    hidden = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
-    await tool.ha_manage_energy_prefs(mode="restore_suggestions", statistic_ids=both)
-    back = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
-
-    assert sorted(stored["dismissed_suggestions"]) == sorted(both)
-    assert not set(both) & set(_suggested(hidden))
-    assert await _stored(hass, hass_admin_user) == {"dismissed_suggestions": []}
-    assert set(both) <= set(_suggested(back))
-
-
 @_NEEDS_SUGGESTIONS
 @pytest.mark.usefixtures("fresh_card_state")
 @pytest.mark.parametrize(
-    ("mode", "statistic_id"),
+    ("dismissed", "listed"),
     [
-        ("dismiss_suggestions", "sensor.oven_enrgy"),
-        ("restore_suggestions", "sensor.oven_energy"),
+        (["sensor.oven_energy"], ["sensor.oven_energy"]),
+        (["sensor.fridge_energy"], []),
+        (None, []),
     ],
-    ids=["dismiss_unknown", "restore_not_dismissed"],
+    ids=["dismissed", "dismissed_then_configured", "null"],
 )
-async def test_a_meter_settings_does_not_list_changes_nothing(
+async def test_meters_dismissed_in_settings_are_listed_apart_and_kept(
     recorder_mock: Recorder,
     hass: HomeAssistant,
     hass_storage: dict[str, Any],
     hass_admin_user: MockUser,
     component_core_client: HomeAssistantClient,
-    mode: str,
-    statistic_id: str,
+    dismissed: Any,
+    listed: list[str],
 ) -> None:
-    """A dismiss of a meter that is not suggested, or a restore of one that is
-    not dismissed, is refused with the id named and nothing saved."""
+    """A meter dismissed in Settings > Energy is listed as dismissed, not
+    suggested; one dismissed and since added to the dashboard is listed
+    nowhere, and a null list reads as empty, as the panel shows them. The read
+    leaves the stored list as it is."""
+    _dismissed_in_settings(hass_storage, hass_admin_user, dismissed)
     await _meters(hass, hass_storage)
 
-    with pytest.raises(ToolError, match="VALIDATION_INVALID_PARAMETER") as refused:
-        await EnergyTools(component_core_client).ha_manage_energy_prefs(
-            mode=mode, statistic_ids=[statistic_id]
-        )
-
-    assert statistic_id in str(refused.value)
-    assert await _stored(hass, hass_admin_user) is None
-
-
-@_NEEDS_SUGGESTIONS
-@pytest.mark.usefixtures("fresh_card_state")
-async def test_parallel_dismisses_all_stay_dismissed(
-    recorder_mock: Recorder,
-    hass: HomeAssistant,
-    hass_storage: dict[str, Any],
-    hass_admin_user: MockUser,
-    component_core_client: HomeAssistantClient,
-) -> None:
-    """Two dismisses sent at once both land; neither overwrites the other."""
-    await _meters(hass, hass_storage)
-    tool = EnergyTools(component_core_client)
-
-    await asyncio.gather(
-        *(
-            tool.ha_manage_energy_prefs(
-                mode="dismiss_suggestions", statistic_ids=[meter]
-            )
-            for meter in ("sensor.oven_energy", "sensor.boiler_energy")
-        )
+    result = await EnergyTools(component_core_client).ha_manage_energy_prefs(
+        mode="get", include_suggestions=True
     )
 
-    stored = await _stored(hass, hass_admin_user)
-    assert sorted(stored["dismissed_suggestions"]) == [
-        "sensor.boiler_energy",
-        "sensor.oven_energy",
-    ]
+    assert result["energy_suggestions"]["dismissed"] == listed
+    assert not set(listed) & set(_suggested(result))
+    stored = (await async_user_store(hass, hass_admin_user.id)).data
+    assert stored == {"energy": {"dismissed_suggestions": dismissed}}
 
 
 @_NEEDS_SUGGESTIONS
@@ -262,76 +207,6 @@ async def test_a_power_sensor_built_from_a_meter_does_not_hide_it(
     assert "sensor.oven_energy" in _suggested(result)
 
 
-@_NEEDS_SUGGESTIONS
-@pytest.mark.usefixtures("fresh_card_state")
-async def test_a_dismissed_meter_added_to_the_dashboard_is_no_longer_listed(
-    recorder_mock: Recorder,
-    hass: HomeAssistant,
-    hass_storage: dict[str, Any],
-    component_core_client: HomeAssistantClient,
-) -> None:
-    """A meter dismissed and later added to the dashboard is listed neither as
-    suggested nor as dismissed, as in Settings > Energy, and cannot be
-    restored."""
-    await _meters(hass, hass_storage)
-    tool = EnergyTools(component_core_client)
-    await tool.ha_manage_energy_prefs(
-        mode="dismiss_suggestions", statistic_ids=["sensor.oven_energy"]
-    )
-    current = await tool.ha_manage_energy_prefs(mode="get")
-    await tool.ha_manage_energy_prefs(
-        mode="set",
-        config={
-            "device_consumption": [
-                *current["config"]["device_consumption"],
-                {"stat_consumption": "sensor.oven_energy"},
-            ]
-        },
-        config_hash={
-            "device_consumption": current["config_hash_per_key"]["device_consumption"]
-        },
-    )
-
-    read = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
-    with pytest.raises(ToolError, match="VALIDATION_INVALID_PARAMETER"):
-        await tool.ha_manage_energy_prefs(
-            mode="restore_suggestions", statistic_ids=["sensor.oven_energy"]
-        )
-
-    assert "sensor.oven_energy" not in read["energy_suggestions"]["dismissed"]
-    assert "sensor.oven_energy" not in _suggested(read)
-
-
-@_NEEDS_SUGGESTIONS
-@pytest.mark.usefixtures("fresh_card_state")
-async def test_a_null_dismissed_list_reads_as_empty(
-    recorder_mock: Recorder,
-    hass: HomeAssistant,
-    hass_storage: dict[str, Any],
-    hass_admin_user: MockUser,
-    component_core_client: HomeAssistantClient,
-) -> None:
-    """Frontend user data that stores the dismissed list as null reads as
-    nothing dismissed, as the panel's ``?? []`` does, and a dismiss still works."""
-    hass_storage[f"frontend.user_data_{hass_admin_user.id}"] = {
-        "version": 1,
-        "key": f"frontend.user_data_{hass_admin_user.id}",
-        "data": {"energy": {"dismissed_suggestions": None}},
-    }
-    await _meters(hass, hass_storage)
-    tool = EnergyTools(component_core_client)
-
-    read = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
-    await tool.ha_manage_energy_prefs(
-        mode="dismiss_suggestions", statistic_ids=["sensor.oven_energy"]
-    )
-
-    assert read["energy_suggestions"]["dismissed"] == []
-    assert await _stored(hass, hass_admin_user) == {
-        "dismissed_suggestions": ["sensor.oven_energy"]
-    }
-
-
 @pytest.mark.usefixtures("fresh_card_state")
 async def test_a_timed_out_read_leaves_the_users_frontend_data_loading(
     recorder_mock: Recorder,
@@ -363,5 +238,6 @@ async def test_a_timed_out_read_leaves_the_users_frontend_data_loading(
     release.set()
 
     assert result["energy_suggestions"]["status"] == "unavailable"
+    assert "Timeout" in result["energy_suggestions"]["reason"]
     assert (await browser).data == {}
     assert (await async_user_store(hass, hass_admin_user.id)).data == {}

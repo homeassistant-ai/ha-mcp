@@ -170,9 +170,8 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/energy_suggestions`` — the energy, gas and water meters
   Settings > Energy suggests adding, computed by the installed frontend's own
   function on Core's statistics, preferences and states and the connected
-  user's dismissals, with its map of the field each slot fills. With
-  ``dismiss`` / ``restore`` it first changes the user's dismissed list where
-  the panel saves it. See ``energy_suggestions.py``.
+  user's dismissals, with its map of the field each slot fills. Read only. See
+  ``energy_suggestions.py``.
 * ``ha_mcp_tools/logbook_events`` — Core's own logbook query run in-process:
   ``EventProcessor`` with the REST flags (``timestamp=False`` ISO ``when``,
   ``include_entity_name=True``) and the ``logbook/get_events`` filter set

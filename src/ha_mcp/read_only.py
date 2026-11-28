@@ -158,10 +158,10 @@ def _energy_write(args: dict[str, Any]) -> str | None:
     mode = args.get("mode")
     if mode == "get":
         return None
-    # A mode='set' dry run previews without saving; the suggestion modes have
-    # no preview. Strict ``is True``: the middleware sees RAW pre-validation
-    # arguments, so a non-bool truthy value (e.g. the string "false") that
-    # schema coercion could turn into False must fail closed here.
+    # A mode='set' dry run previews without saving. Strict ``is True``: the
+    # middleware sees RAW pre-validation arguments, so a non-bool truthy value
+    # (e.g. the string "false") that schema coercion could turn into False
+    # must fail closed here.
     if mode == "set" and args.get("dry_run") is True:
         return None
     return f"mode={mode!r}"

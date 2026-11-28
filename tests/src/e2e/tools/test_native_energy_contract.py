@@ -8,7 +8,6 @@ from ha_mcp._vendor.fastmcp import Client
 from ha_mcp.client.rest_client import HomeAssistantClient
 
 from ..utilities.assertions import MCPAssertions, assert_mcp_success
-from ..utilities.cleanup import CleanupSteps
 from ..utilities.core_version import core_at_least
 from ..utilities.topology import component_surface_available
 
@@ -194,9 +193,9 @@ async def test_energy_suggestions_come_from_the_frontend_through_the_component(
     mcp_client: Client, ha_client: HomeAssistantClient
 ) -> None:
     """From Core 2026.12 the component runs the installed frontend's
-    suggestions, and a dismissed meter comes back when restored; an older
-    frontend says it has none; without the component the read still answers
-    and names it."""
+    suggestions and names whose dismissals they reflect; an older frontend
+    says it has none; without the component the read still answers and names
+    it."""
     raw = assert_mcp_success(
         await mcp_client.call_tool(
             "ha_manage_energy_prefs", {"mode": "get", "include_suggestions": True}
@@ -214,24 +213,5 @@ async def test_energy_suggestions_come_from_the_frontend_through_the_component(
         return
     assert suggestions["editors"]["device"]["stat"] == "stat_consumption"
     # The recorder seed gives the energy meters sum statistics.
-    meter = suggestions["suggestions"][0]["statisticId"]
-    mcp = MCPAssertions(mcp_client)
-    try:
-        hidden = await mcp.call_tool_success(
-            "ha_manage_energy_prefs",
-            {"mode": "dismiss_suggestions", "statistic_ids": [meter]},
-        )
-    finally:
-        with CleanupSteps() as cleanup, cleanup.step():
-            restored = await mcp.call_tool_success(
-                "ha_manage_energy_prefs",
-                {"mode": "restore_suggestions", "statistic_ids": [meter]},
-            )
-    assert meter in hidden["energy_suggestions"]["dismissed"]
-    assert meter not in [
-        s["statisticId"] for s in hidden["energy_suggestions"]["suggestions"]
-    ]
-    assert meter not in restored["energy_suggestions"]["dismissed"]
-    assert meter in [
-        s["statisticId"] for s in restored["energy_suggestions"]["suggestions"]
-    ]
+    assert suggestions["suggestions"]
+    assert suggestions["dismissed_by"]

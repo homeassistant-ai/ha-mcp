@@ -461,27 +461,3 @@ async def test_a_malformed_device_reaches_cores_refusal(
         )
 
     assert '"ha_error_code": "invalid_format"' in str(refused.value)
-
-
-@pytest.mark.parametrize(
-    ("arguments", "code"),
-    [
-        (
-            {"statistic_ids": ["sensor.x"], "dry_run": True},
-            "VALIDATION_INVALID_PARAMETER",
-        ),
-        ({}, "VALIDATION_MISSING_PARAMETER"),
-        ({"statistic_ids": []}, "VALIDATION_MISSING_PARAMETER"),
-    ],
-    ids=["dry_run", "no_ids", "empty_ids"],
-)
-async def test_suggestion_change_without_ids_or_with_a_preview_is_refused(
-    component_core_client: HomeAssistantClient,
-    arguments: dict[str, Any],
-    code: str,
-) -> None:
-    """A dismiss or restore has no preview and needs the meters to change."""
-    with pytest.raises(ToolError, match=code):
-        await EnergyTools(component_core_client).ha_manage_energy_prefs(
-            mode="dismiss_suggestions", **arguments
-        )

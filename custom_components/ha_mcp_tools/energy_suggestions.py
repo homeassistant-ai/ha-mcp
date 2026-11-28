@@ -1,14 +1,15 @@
 """The energy meters Settings > Energy suggests, for ``ha_mcp_tools/energy_suggestions``.
 
 From Home Assistant 2026.12, Settings > Energy lists the energy, gas and water
-meters that are not in the Energy dashboard yet, and lets the user dismiss and
-restore them. Only the frontend computes that list and the dismissed list
-(``src/data/energy_suggestions.ts``), so the installed frontend's own functions
-run here on the data it reads in the browser: the recorder's sum statistics,
-the energy preferences, the states and the statistics the user dismissed. A
-dismissal is saved where the frontend saves it, the user's ``energy`` frontend
-data. The slot map (``ENERGY_SUGGESTION_EDITORS``) names the field of a new
-source or device each suggested slot fills.
+meters that are not in the Energy dashboard yet. Only the frontend computes
+that list (``src/data/energy_suggestions.ts``), so the installed frontend's own
+function runs here on the data the panel hands it: the recorder's sum
+statistics, the energy preferences, the states of the meters the panel keeps
+and the statistics the user dismissed. Dismissals belong to each Home
+Assistant user's own Settings > Energy, so this read reports the list of the
+account the connection runs as and never changes it. The slot map
+(``ENERGY_SUGGESTION_EDITORS``) names the field of a new source or device each
+suggested slot fills.
 """
 
 from __future__ import annotations
@@ -38,42 +39,25 @@ CAPABILITY = "energy_suggestions"
 # on; the module that holds both is energy_suggestions.ts.
 _MARKERS = ('tab:"electricity"', ".has_sum")
 _USER_DATA_KEY = "energy"
-_LOCKS = "ha_mcp_tools_energy_suggestion_locks"
 # The suggestion panel subscribes to the states of the statistics this filter
 # keeps; other energy panels set the same field.
 _PANEL_MARKERS = ("this._statisticIds=", "dismissed_suggestions")
 _PANEL_FILTER_RE = re.compile(r"this\._statisticIds=[\w$]+\.filter\(")
+_NOT_FOUND = "The installed frontend's energy meter suggestions were not found"
 
 
-def _exports(build: FrontendBuild) -> tuple[str, dict[str, str]] | None:
-    """The module and its exports: compute, editors, update and restore."""
+def _exports(build: FrontendBuild) -> tuple[str, str, str] | None:
+    """The module, its compute export and its slot map export."""
     module_id = build.module_containing(*_MARKERS)
     if module_id is None:
         return None
     exported = build.module_exports(module_id)
-    functions = {n: d for n, d in exported.items() if "=>" in d.split("{", 1)[0]}
-    found = {
-        "compute": [n for n, d in functions.items() if all(m in d for m in _MARKERS)],
-        "editors": [
-            n for n, d in exported.items() if d.startswith("{") and "kind:" in d
-        ],
-        # Besides compute, the only one that reads the recorder's statistic_id:
-        # it drops dismissed ids the recorder no longer lists.
-        "update": [
-            n
-            for n, d in functions.items()
-            if ".statistic_id" in d and ".has_sum" not in d
-        ],
-    }
-    found["restore"] = [
-        n for n in functions if n not in found["compute"] + found["update"]
-    ]
-    if any(len(names) != 1 for names in found.values()):
+    compute = [n for n, d in exported.items() if all(m in d for m in _MARKERS)]
+    editors = [n for n, d in exported.items() if d.startswith("{") and "kind:" in d]
+    if len(compute) != 1 or len(editors) != 1:
         # The frontend changed its layout; a component update reads it.
-        raise HomeAssistantError(
-            "The installed frontend's energy meter suggestions were not found"
-        )
-    return module_id, {role: names[0] for role, names in found.items()}
+        raise HomeAssistantError(_NOT_FOUND)
+    return module_id, compute[0], editors[0]
 
 
 def _panel_states(build: FrontendBuild, data: dict[str, Any]) -> dict[str, Any]:
@@ -83,102 +67,47 @@ def _panel_states(build: FrontendBuild, data: dict[str, Any]) -> dict[str, Any]:
     body = build.module_body(module_id) if module_id else ""
     found = _PANEL_FILTER_RE.search(body)
     if module_id is None or found is None:
-        raise HomeAssistantError(
-            "The installed frontend's energy meter suggestions were not found"
-        )
+        raise HomeAssistantError(_NOT_FOUND)
     keep = body[found.end() : _balanced_end(body, found.end() - 1) - 1]
     kept = build.run_expression(module_id, f"s=>s.filter({keep})", data["statistics"])
     ids = {meta["statistic_id"] for meta in kept}
     return {k: v for k, v in data["states"].items() if k in ids}
 
 
-def _dismissed_after(
-    build: FrontendBuild,
-    module_id: str,
-    names: dict[str, str],
-    data: dict[str, Any],
-    msg: dict[str, Any],
-) -> list[str]:
-    """The dismissed list after the frontend's own dismiss and restore steps."""
-    dismissed: list[str] = data["dismissed"]
-    if ids := msg.get("dismiss"):
-        updated = build.run_export(
-            module_id, names["update"], dismissed, ids, data["statistics"]
-        )
-        if any(isinstance(item, list) for item in updated):
-            # Frontends before "Dismiss all" (frontend #56198) dismiss one
-            # statistic per call.
-            for statistic_id in ids:
-                dismissed = build.run_export(
-                    module_id,
-                    names["update"],
-                    dismissed,
-                    statistic_id,
-                    data["statistics"],
-                )
-        else:
-            dismissed = updated
-    for statistic_id in msg.get("restore") or []:
-        dismissed = build.run_export(
-            module_id, names["restore"], dismissed, statistic_id
-        )
-    return dismissed
-
-
-def _suggest(
-    build: FrontendBuild, data: dict[str, Any], msg: dict[str, Any]
-) -> tuple[dict[str, Any], list[str] | None]:
-    """The panel's view and, for a dismiss or restore, the list to save."""
+def _suggest(build: FrontendBuild, data: dict[str, Any]) -> dict[str, Any]:
     located = _exports(build)
     if located is None:
-        reason = (
-            "The installed frontend suggests no energy meters "
-            "(Settings > Energy does from Home Assistant 2026.12)."
-        )
-        if msg.get("dismiss") or msg.get("restore"):
-            raise HomeAssistantError(reason)
-        return {"status": "unavailable", "reason": reason}, None
-    module_id, names = located
+        return {
+            "status": "unavailable",
+            "reason": "The installed frontend suggests no energy meters "
+            "(Settings > Energy does from Home Assistant 2026.12).",
+        }
+    module_id, compute, editors = located
     data = {**data, "states": _panel_states(build, data)}
     # The panel computes every eligible meter, then lists those its user
     # dismissed apart; a stored id it no longer suggests (now configured, or
     # gone) is listed nowhere.
-    eligible = build.run_export(module_id, names["compute"], {**data, "dismissed": []})
-    eligible_ids = [s["statisticId"] for s in eligible]
-
-    def view(dismissed: list[str]) -> dict[str, Any]:
-        shown = build.run_export(
-            module_id, names["compute"], {**data, "dismissed": dismissed}
-        )
-        shown_ids = {s["statisticId"] for s in shown}
-        return {
-            "status": "available",
-            "suggestions": shown,
-            "dismissed": [i for i in eligible_ids if i not in shown_ids],
-            "editors": build.run_export(module_id, names["editors"]),
-        }
-
-    result = view(data["dismissed"])
-    # The panel dismisses only a meter it lists and restores only one it lists
-    # as dismissed; anything else changes nothing and is reported.
-    unknown = [
-        *(i for i in msg.get("dismiss") or [] if i not in eligible_ids),
-        *(i for i in msg.get("restore") or [] if i not in result["dismissed"]),
-    ]
-    if unknown:
-        return {**result, "unknown": unknown}, None
-    if not (msg.get("dismiss") or msg.get("restore")):
-        return result, None
-    stored = _dismissed_after(build, module_id, names, data, msg)
-    return view(stored), stored
+    eligible = build.run_export(module_id, compute, {**data, "dismissed": []})
+    shown = build.run_export(module_id, compute, data)
+    shown_ids = {s["statisticId"] for s in shown}
+    return {
+        "status": "available",
+        "suggestions": shown,
+        "dismissed": [
+            s["statisticId"] for s in eligible if s["statisticId"] not in shown_ids
+        ],
+        "editors": build.run_export(module_id, editors),
+    }
 
 
 async def _inputs(hass: HomeAssistant, user_id: str) -> dict[str, Any]:
-    """What Settings > Energy hands the functions, read from Core."""
+    """What Settings > Energy hands the function, read from Core."""
     manager = await async_get_manager(hass)
     statistics = await get_instance(hass).async_add_executor_job(
         list_statistic_ids, hass, None, "sum"
     )
+    # Shielded: a timeout stops this wait without cancelling Core's shared
+    # load of the user's frontend data, which the browser may be awaiting.
     store = await asyncio.shield(async_user_store(hass, user_id))
     return {
         "statistics": statistics,
@@ -197,25 +126,19 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
 
     async def prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
         user_id = msg["ha_mcp_context"].user_id
-        # A change reads and saves the user's whole list; one at a time per
-        # user, as the panel queues its saves.
-        lock = hass.data.setdefault(_LOCKS, {}).setdefault(user_id, asyncio.Lock())
-        async with lock, asyncio.timeout(cd.CARD_WORK_SECONDS):
+        async with asyncio.timeout(cd.CARD_WORK_SECONDS):
             build = await cd.async_get_definitions(hass, timeout=15)
             if build is None:
                 raise HomeAssistantError(
                     "The installed frontend's code could not be loaded"
                 )
             data = await _inputs(hass, user_id)
-            result, stored = await hass.async_add_executor_job(
-                _suggest, build, data, msg
+            result: dict[str, Any] = await hass.async_add_executor_job(
+                _suggest, build, data
             )
-            if stored is not None and stored != data["dismissed"]:
-                # The panel saves the whole energy user data as this one list.
-                store = await asyncio.shield(async_user_store(hass, user_id))
-                await store.async_set_item(
-                    _USER_DATA_KEY, {"dismissed_suggestions": stored}
-                )
+        if result["status"] == "available":
+            user = await hass.auth.async_get_user(user_id)
+            result["dismissed_by"] = user.name if user else None
         return {"result": result}
 
     def do_energy_suggestions(
@@ -225,11 +148,7 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
 
     return [
         (
-            {
-                vol.Required("type"): WS_ENERGY_SUGGESTIONS,
-                vol.Optional("dismiss"): vol.All([str], vol.Length(min=1)),
-                vol.Optional("restore"): vol.All([str], vol.Length(min=1)),
-            },
+            {vol.Required("type"): WS_ENERGY_SUGGESTIONS},
             do_energy_suggestions,
             prep,
         )

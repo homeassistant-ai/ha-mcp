@@ -1,17 +1,16 @@
 """Read native Energy preferences, hash saved state and enrich statistic references."""
 
+import json
 import logging
-from typing import Any, Literal
+from typing import Any
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .core_contract import core_contract, energy_suggestions
 from .helpers import (
     exception_to_structured_error,
     raise_core_refusal,
-    raise_tool_error,
 )
 from .statistics_helpers import fetch_statistics_metadata, statistics_unit
 
@@ -66,51 +65,17 @@ async def include_energy_suggestions(
     """Attach the meters Settings > Energy suggests; a failed read keeps the result."""
     try:
         suggestions = dict(await energy_suggestions(client))
-    except ToolError:
+    except ToolError as err:
         logger.warning("Energy meter suggestions failed", exc_info=True)
         suggestions = {
             "status": "unavailable",
-            "reason": "The HA-MCP component could not compute the energy meter "
-            "suggestions; update it, then read them again.",
+            "reason": f"{json.loads(str(err))['error']['message']}. If this "
+            "persists, update the HA-MCP component.",
         }
     if suggestions["status"] == "unavailable":
         result.setdefault("warnings", []).append(suggestions["reason"])
     result["energy_suggestions"] = suggestions
     return result
-
-
-async def change_energy_suggestions(
-    client: Any, action: Literal["dismiss", "restore"], statistic_ids: list[str]
-) -> dict[str, Any]:
-    """Dismiss or restore suggested meters for the token's Home Assistant user,
-    as Settings > Energy does."""
-    mode = f"{action}_suggestions"
-    suggestions = await energy_suggestions(client, {action: statistic_ids})
-    if suggestions["status"] != "available":
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.COMPONENT_NOT_INSTALLED,
-                suggestions["reason"],
-                context={"mode": mode},
-            )
-        )
-    if unknown := suggestions.get("unknown"):
-        listed = "suggested" if action == "dismiss" else "dismissed"
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Not {listed} by Settings > Energy, nothing changed: {', '.join(unknown)}",
-                context={"mode": mode, "unknown": unknown},
-                suggestions=[
-                    "Take statisticId values from ha_manage_energy_prefs(mode='get', include_suggestions=True)",
-                ],
-            )
-        )
-    return {
-        "success": True,
-        "mode": f"{action}_suggestions",
-        "energy_suggestions": suggestions,
-    }
 
 
 def compute_per_key_hashes(prefs: dict[str, Any]) -> dict[str, str]:
