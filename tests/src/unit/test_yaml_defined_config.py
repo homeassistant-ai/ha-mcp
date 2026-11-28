@@ -90,9 +90,12 @@ _FILES = {
         "      event_data:\n"
         "        code: !secret office_code\n"
         "        pin: !secret office_pin\n"
+        "        !secret office_key: open\n"
     ),
     # Core resolves a !secret from the secrets.yaml nearest the file naming it.
-    "automations/secrets.yaml": "office_code: hunter2-office\noffice_pin: 471147\n",
+    "automations/secrets.yaml": (
+        "office_code: hunter2-office\noffice_pin: 471147\noffice_key: hunter2-key\n"
+    ),
     "scripts/office.yaml": (
         "office_join:\n  alias: Office Join\n  sequence:\n    - event: office_join_only\n"
     ),
