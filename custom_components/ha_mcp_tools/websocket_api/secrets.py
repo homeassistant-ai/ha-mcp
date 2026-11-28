@@ -15,6 +15,8 @@ from homeassistant.core import HomeAssistant
 # setting covers the whole command surface.
 _LOGGER = logging.getLogger(__package__)
 
+REDACTED = "**redacted**"
+
 
 def _load_secret_scrub(
     hass: HomeAssistant, files: Iterable[str] = ()
@@ -170,5 +172,5 @@ def _scrub_secret_values(value: Any, secret_values: frozenset[str]) -> Any:
     if isinstance(value, bool):
         return value
     if isinstance(value, (str, int, float)) and str(value) in secret_values:
-        return "**redacted**"
+        return REDACTED
     return value

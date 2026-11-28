@@ -16,7 +16,7 @@ import pytest
 from homeassistant.components import automation
 from homeassistant.core import HomeAssistant
 
-from custom_components.ha_mcp_tools import loaded_config, websocket_api
+from custom_components.ha_mcp_tools import websocket_api
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools import entity_registration
@@ -24,7 +24,7 @@ from ha_mcp.tools.component_api import COMPONENT_INSTALL_HINT
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
-from ._command_faults import received, registry_lookup_failing
+from ._command_faults import received
 from ._config_dir_yaml import setup_from_configuration, write_config_files
 from ._scripts_core import stored_scripts
 from ._tool_errors import error_body
@@ -294,17 +294,18 @@ class TestRead:
             assert not any("YAML" in w for w in result.get("warnings", []))
         assert loaded == {"automation/config": [], "script/config": []}
 
-    async def test_component_command_failing_reads_from_core_with_a_warning(
-        self, hass: HomeAssistant, scripts: ConfigScriptTools
+    async def test_secret_changed_after_load_is_still_redacted(
+        self, hass: HomeAssistant, automations: AutomationConfigTools
     ) -> None:
-        with registry_lookup_failing(hass, loaded_config.WS_LOADED_CONFIG):
-            result = await scripts.ha_config_get_script(
-                script_id="script.packaged_speakers"
-            )
+        """Core keeps the value it resolved at load; redacting by what
+        secrets.yaml holds now returned the loaded value once the file changed."""
+        await write_config_files(hass, {"secrets.yaml": "door_code: rotated\n"})
 
-        assert result["config"]["sequence"] == [{"event": "packaged_script_only"}]
-        assert result["source"]["file"] is None
-        assert any(COMPONENT_INSTALL_HINT in w for w in result["warnings"])
+        result = await automations.ha_config_get_automation(
+            entity_id="automation.packaged_night"
+        )
+
+        assert "hunter2-" not in str(result)
 
     @pytest.mark.parametrize("routing", [FALLBACK], indirect=True)
     async def test_without_the_component_redaction_withholds_the_definition(

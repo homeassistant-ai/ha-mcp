@@ -236,15 +236,9 @@ write and `updated` otherwise, and an `automation.x` that does not resolve
 is not found, never a create. Core's DELETE answers 400 "Resource not
 found" for a missing id, which the remove tool reports as not found. An
 automation the registry resolves but Core's config API answers "Resource not
-found" for is defined in YAML or a package, outside `automations.yaml`. The
-get tool returns the definition Core has loaded, from the component's
-`ha_mcp_tools/loaded_config` bridge (capability `loaded_config`), which also
-names the file and line Core's YAML loader read it from; without the component
-the body comes from Core's `automation/config` WebSocket command and the file
-stays unknown. A stored automation is never read that way, since the loaded
-copy lags the stored one after a write. The set and remove tools report a
-YAML-defined automation as CONFIG_NOT_FOUND and point to the config tools for
-new work, never to the file; the script tools do the same. A config id with no
+found" for is defined in YAML or a package, outside `automations.yaml`; the
+get tool returns the definition Core has loaded, and the set and remove tools
+report it as CONFIG_NOT_FOUND. A config id with no
 registry row returns the body Core stores under it, with `entity` None; only
 an id Core stores nothing under is not found. References in a proposed
 automation, script or scene come from the component's

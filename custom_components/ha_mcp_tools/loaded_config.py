@@ -15,11 +15,16 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
+from annotatedyaml import SECRET_YAML
 from homeassistant.config import AUTOMATION_CONFIG_PATH, SCRIPT_CONFIG_PATH
 from homeassistant.const import CONF_ID
 
 from .config_file_items import _files
-from .websocket_api.secrets import _load_secret_scrub, _scrub_secret_values
+from .websocket_api.secrets import (
+    REDACTED,
+    _load_secret_scrub,
+    _scrub_secret_values,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -77,7 +82,7 @@ def loaded_config(
     file, line = _declared_at(hass, domain, entity, raw)
     return {
         "loaded": True,
-        "config": _scrub_secret_values(raw, secret_values),
+        "config": _redacted(raw, secret_values),
         "file": file,
         "line": line if isinstance(line, int) else None,
         # Core's config API reads it: an automation needs its id for that. Seen
@@ -87,6 +92,24 @@ def loaded_config(
         # secrets.yaml could not be read, so config is not redacted.
         "scrub_degraded": scrub_degraded,
     }
+
+
+def _redacted(node: Any, secret_values: frozenset[str]) -> Any:
+    """``node`` without the secrets Core resolved into it.
+
+    Core's loader names the file each string, mapping and list came from, so a
+    value read from a ``secrets.yaml`` is redacted whatever that file holds
+    now. A number carries no such name and is matched against the files'
+    current values.
+    """
+    source = getattr(node, "__config_file__", None)
+    if source is not None and os.path.basename(source) == SECRET_YAML:
+        return REDACTED
+    if isinstance(node, dict):
+        return {key: _redacted(value, secret_values) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_redacted(item, secret_values) for item in node]
+    return _scrub_secret_values(node, secret_values)
 
 
 def _loaded(hass: HomeAssistant, entity_id: str) -> tuple[str, Any, Any]:
