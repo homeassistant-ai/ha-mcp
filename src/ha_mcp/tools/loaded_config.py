@@ -86,7 +86,7 @@ class LoadedDefinition:
         )
         notes = [note]
         if not self.from_component:
-            notes.append(FILE_NEEDS_COMPONENT)
+            notes += [FILE_NEEDS_COMPONENT, SECRETS_PLAIN]
         elif self.unredacted:
             notes.append(SECRETS_UNREAD)
         return notes
@@ -100,16 +100,18 @@ ENABLE_TO_READ = (
     "Enable its entity with ha_set_entity to read the definition Home Assistant loads"
 )
 SECRETS_UNREAD = (
-    "a secrets.yaml could not be read or has changed since Home Assistant "
-    "started, so !secret values in config may not be redacted"
+    "a secrets.yaml could not be read, so !secret values in config may not be redacted"
+)
+SECRETS_PLAIN = (
+    "config comes from Home Assistant's own command without the component, "
+    "so its !secret values are not redacted"
 )
 WITHHELD = (
     " Its definition is withheld: redact_secrets is on, and the !secret "
     "values Home Assistant resolved in it could not be redacted"
 )
 WITHHELD_WHY = {
-    True: f"{WITHHELD}, since a secrets.yaml could not be read or has changed "
-    "since Home Assistant started.",
+    True: f"{WITHHELD}, since a secrets.yaml could not be read.",
     False: f"{WITHHELD} without the ha_mcp_tools component. {COMPONENT_INSTALL_HINT}",
 }
 

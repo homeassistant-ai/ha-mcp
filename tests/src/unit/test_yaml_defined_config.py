@@ -9,7 +9,6 @@ whose configuration Core's own YAML loader read.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +81,17 @@ _FILES = {
         "    sequence:\n"
         "      - event: packaged_script_only\n"
     ),
+    # A package with no secret in it, whose automation holds a number.
+    "packages/num.yaml": (
+        "automation:\n"
+        "  - id: packaged_number\n"
+        "    alias: Packaged Number\n"
+        "    triggers: []\n"
+        "    actions:\n"
+        "      - event: number_only\n"
+        "        event_data:\n"
+        "          level: 5\n"
+    ),
     "automations/office.yaml": (
         "- id: office_lights\n"
         "  alias: Office Lights\n"
@@ -153,17 +163,6 @@ def scripts(routing: str, core_client: HomeAssistantClient) -> ConfigScriptTools
     return ConfigScriptTools(core_client)
 
 
-async def _as_at_start(hass: HomeAssistant) -> None:
-    """Date the secrets files before this process started, as on an instance
-    whose secrets.yaml has not been touched since Home Assistant read it."""
-
-    def age() -> None:
-        for name in ("secrets.yaml", "automations/secrets.yaml"):
-            os.utime(hass.config.path(name), (946684800, 946684800))
-
-    await hass.async_add_executor_job(age)
-
-
 def _yaml_source(routing: str, file: str, line: int) -> dict[str, Any]:
     known = routing == COMPONENT
     return {
@@ -203,6 +202,10 @@ class TestRead:
         assert result["entity"]["entity_id"].startswith("automation.")
         assert "cannot change it" in result["warnings"][0]
         assert any(COMPONENT_INSTALL_HINT in w for w in result["warnings"]) == (
+            routing == FALLBACK
+        )
+        # Core's own command returns !secret values resolved, and the read says so.
+        assert any("not redacted" in w for w in result["warnings"]) == (
             routing == FALLBACK
         )
 
@@ -254,54 +257,72 @@ class TestRead:
 
         assert any("may not be redacted" in w for w in result["warnings"])
 
-    async def test_numeric_secret_changed_after_load_is_withheld_under_redaction(
-        self, hass: HomeAssistant, automations: AutomationConfigTools, redact_on: None
+    async def test_numeric_secret_changed_after_load_is_still_redacted(
+        self, hass: HomeAssistant, automations: AutomationConfigTools
     ) -> None:
         """A number carries no trace of the secrets file it came from, so once
         that file changed, the loaded number passed as the automation's own."""
         read = automations.ha_config_get_automation
-        await _as_at_start(hass)
         assert "471147" not in str(await read(entity_id="automation.office_lights"))
 
-        await write_config_files(
-            hass, {"automations/secrets.yaml": "office_pin: 999999\n"}
-        )
+        await write_config_files(hass, {"automations/secrets.yaml": "office_pin: 9\n"})
 
-        with pytest.raises(ToolError) as exc:
-            await read(entity_id="automation.office_lights")
-        assert "471147" not in str(error_body(exc))
+        assert "471147" not in str(await read(entity_id="automation.office_lights"))
 
-    async def test_numeric_secret_whose_file_was_deleted_is_withheld_under_redaction(
-        self, hass: HomeAssistant, automations: AutomationConfigTools, redact_on: None
+    async def test_numeric_secret_whose_file_was_deleted_is_still_redacted(
+        self, hass: HomeAssistant, automations: AutomationConfigTools
     ) -> None:
         """Once its secrets.yaml is gone, nothing names the loaded number as a
         secret; it was returned as the automation's own."""
         read = automations.ha_config_get_automation
-        await _as_at_start(hass)
         assert "471147" not in str(await read(entity_id="automation.office_lights"))
 
         secrets = Path(hass.config.path("automations/secrets.yaml"))
         await hass.async_add_executor_job(secrets.unlink)
 
-        with pytest.raises(ToolError) as exc:
-            await read(entity_id="automation.office_lights")
-        assert "471147" not in str(error_body(exc))
+        assert "471147" not in str(await read(entity_id="automation.office_lights"))
 
-    async def test_numeric_secret_key_whose_file_was_deleted_is_withheld(
-        self, hass: HomeAssistant, automations: AutomationConfigTools, redact_on: None
+    async def test_numeric_secret_key_whose_file_was_deleted_is_still_redacted(
+        self, hass: HomeAssistant, automations: AutomationConfigTools
     ) -> None:
-        """A number used as a mapping key was not counted as a number, so a
-        definition whose only number was a secret key was returned in full."""
+        """A numeric secret used as a mapping key is redacted like a value."""
         read = automations.ha_config_get_automation
-        await _as_at_start(hass)
         assert "864213" not in str(await read(entity_id="automation.office_keyed"))
 
         secrets = Path(hass.config.path("automations/secrets.yaml"))
         await hass.async_add_executor_job(secrets.unlink)
 
-        with pytest.raises(ToolError) as exc:
-            await read(entity_id="automation.office_keyed")
-        assert "864213" not in str(error_body(exc))
+        assert "864213" not in str(await read(entity_id="automation.office_keyed"))
+
+    async def test_number_holding_definition_reads_after_a_file_is_added_beside_it(
+        self, hass: HomeAssistant, automations: AutomationConfigTools, redact_on: None
+    ) -> None:
+        """A new file in the packages folder says nothing about its secrets,
+        yet every automation there that held a number was withheld."""
+        read = automations.ha_config_get_automation
+        await read(entity_id="automation.packaged_number")
+
+        await write_config_files(hass, {"packages/added.yaml": "{}"})
+
+        result = await read(entity_id="automation.packaged_number")
+        assert result["config"]["actions"][0]["event_data"] == {"level": 5}
+
+    async def test_number_holding_definition_reads_after_secrets_edit_and_reload(
+        self, hass: HomeAssistant, automations: AutomationConfigTools, redact_on: None
+    ) -> None:
+        """A reload reads the secrets again, so the loaded numbers match the
+        edited file; they were still withheld until a restart."""
+        read = automations.ha_config_get_automation
+        await read(entity_id="automation.packaged_number")
+
+        secrets = Path(hass.config.path("secrets.yaml"))
+        text = await hass.async_add_executor_job(secrets.read_text)
+        await hass.async_add_executor_job(secrets.write_text, text + "added: later")
+        await hass.services.async_call("automation", "reload", blocking=True)
+        await hass.async_block_till_done()
+
+        result = await read(entity_id="automation.packaged_number")
+        assert result["config"]["actions"][0]["event_data"] == {"level": 5}
 
     async def test_two_secret_keys_keep_both_entries(
         self, hass: HomeAssistant, automations: AutomationConfigTools

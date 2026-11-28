@@ -12,9 +12,7 @@ definition from (``__config_file__`` / ``__line__``).
 
 from __future__ import annotations
 
-import functools
 import os
-import time
 from typing import TYPE_CHECKING, Any
 
 from annotatedyaml import SECRET_YAML
@@ -26,15 +24,17 @@ from .websocket_api.secrets import (
     REDACTED,
     _load_secret_scrub,
     _scrub_secret_values,
-    _secret_files,
 )
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 WS_LOADED_CONFIG = "ha_mcp_tools/loaded_config"
-# The fallback for the process start.
-_IMPORTED = time.time()
+# Every secret value read so far. A number carries no trace of the secrets.yaml
+# it came from, so one Core resolved before that file changed or went away is
+# still redacted once it has been read here; a change between a load and the
+# first read goes unseen.
+_REMEMBERED: set[str] = set()
 # Advertised by websocket_api's info; without it the server reads the body
 # from Core's own WebSocket command and cannot name the file.
 CAPABILITY = "loaded_config"
@@ -136,57 +136,13 @@ def _loaded(hass: HomeAssistant, entity_id: str) -> tuple[str, Any, Any]:
     return domain, entity, getattr(entity, "raw_config", None)
 
 
-def _has_number(node: Any) -> bool:
-    if isinstance(node, dict):
-        # A key can be a number too.
-        return any(_has_number(key) or _has_number(node[key]) for key in node)
-    if isinstance(node, list):
-        return any(_has_number(item) for item in node)
-    return isinstance(node, (int, float)) and not isinstance(node, bool)
-
-
-@functools.cache
-def _process_started() -> float:
-    """When this Home Assistant process started, before it loaded any config."""
-    try:
-        with open("/proc/self/stat", encoding="utf-8") as stat:
-            ticks = int(stat.read().rsplit(")", 1)[1].split()[19])
-        with open("/proc/stat", encoding="utf-8") as stat:
-            boot = next(int(line.split()[1]) for line in stat if line[:5] == "btime")
-        return boot + ticks / os.sysconf("SC_CLK_TCK")
-    except OSError, ValueError, IndexError, StopIteration:
-        return _IMPORTED
-
-
-def _changed_since_start(path: str) -> bool:
-    """Whether a secrets.yaml may differ from the one Core read at its start.
-
-    A missing one leaves no trace of its own: removing a file changes its
-    directory, so the directory's change time stands in for it.
-    """
-    started = _process_started()
-    try:
-        return os.path.getmtime(path) > started
-    except FileNotFoundError:
-        try:
-            return os.path.getmtime(os.path.dirname(path)) > started
-        except OSError:
-            return True
-    except OSError:
-        return True
-
-
 def _scrub_inputs(hass: HomeAssistant, raw: Any) -> tuple[frozenset[str], bool]:
-    """The values to scrub from ``raw`` and whether the scrub can miss one."""
+    """The values to scrub from ``raw`` and whether a secrets file was unreadable."""
     # Every file the definition draws on: Core resolves a !secret from the
     # secrets.yaml nearest the file that names it.
-    files = sorted(set(_files(raw)))
-    values, degraded = _load_secret_scrub(hass, files)
-    # A number carries no source name: one Core resolved from a secrets.yaml
-    # that has changed since cannot be told from the definition's own numbers.
-    consulted = _secret_files(hass.config.path(SECRET_YAML), files)
-    changed = any(_changed_since_start(path) for path in consulted)
-    return values, degraded or (changed and _has_number(raw))
+    values, degraded = _load_secret_scrub(hass, sorted(set(_files(raw))))
+    _REMEMBERED.update(values)
+    return frozenset(_REMEMBERED), degraded
 
 
 async def _prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
