@@ -13,11 +13,21 @@ definition from (``__config_file__`` / ``__line__``).
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable, Mapping
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from annotatedyaml import SECRET_YAML
 from homeassistant.config import AUTOMATION_CONFIG_PATH, SCRIPT_CONFIG_PATH
-from homeassistant.const import CONF_ID
+from homeassistant.const import (
+    ATTR_DOMAIN,
+    ATTR_SERVICE,
+    CONF_ID,
+    EVENT_CALL_SERVICE,
+    SERVICE_RELOAD,
+)
+from homeassistant.core import callback
+from homeassistant.helpers.start import async_at_started
 
 from .config_file_items import _files
 from .websocket_api.secrets import (
@@ -27,14 +37,13 @@ from .websocket_api.secrets import (
 )
 
 if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant
+    from homeassistant.core import Event, HomeAssistant
 
 WS_LOADED_CONFIG = "ha_mcp_tools/loaded_config"
-# Every secret value read so far. A number carries no trace of the secrets.yaml
-# it came from, so one Core resolved before that file changed or went away is
-# still redacted once it has been read here; a change between a load and the
-# first read goes unseen.
-_REMEMBERED: set[str] = set()
+# hass.data: every secret value read so far. A number carries no trace of the
+# secrets.yaml it came from, so one Core resolved before that file changed or
+# went away is redacted only if the file was read here while it held the number.
+_SEEN = "ha_mcp_tools_secret_values_seen"
 # Advertised by websocket_api's info; without it the server reads the body
 # from Core's own WebSocket command and cannot name the file.
 CAPABILITY = "loaded_config"
@@ -95,7 +104,7 @@ def loaded_config(
         # for an item removed there while Core still holds it, until the reload.
         "in_storage": file == _STORAGE[domain]
         and (domain == "script" or CONF_ID in raw),
-        # A secret in config may not be redacted: see _scrub_inputs.
+        # A secrets.yaml could not be read: a secret in config may not be redacted.
         "scrub_degraded": scrub_degraded,
     }
 
@@ -105,8 +114,8 @@ def _redacted(node: Any, secret_values: frozenset[str]) -> Any:
 
     Core's loader names the file each string, mapping and list came from, so a
     value read from a ``secrets.yaml`` is redacted whatever that file holds
-    now. A number carries no such name and is matched against the files'
-    current values.
+    now. A number carries no such name and is matched against every secret
+    value read so far.
     """
     source = getattr(node, "__config_file__", None)
     if source is not None and os.path.basename(source) == SECRET_YAML:
@@ -136,21 +145,66 @@ def _loaded(hass: HomeAssistant, entity_id: str) -> tuple[str, Any, Any]:
     return domain, entity, getattr(entity, "raw_config", None)
 
 
-def _scrub_inputs(hass: HomeAssistant, raw: Any) -> tuple[frozenset[str], bool]:
-    """The values to scrub from ``raw`` and whether a secrets file was unreadable."""
-    # Every file the definition draws on: Core resolves a !secret from the
-    # secrets.yaml nearest the file that names it.
-    values, degraded = _load_secret_scrub(hass, sorted(set(_files(raw))))
-    _REMEMBERED.update(values)
-    return frozenset(_REMEMBERED), degraded
+async def _secret_values(
+    hass: HomeAssistant, files: Iterable[str]
+) -> tuple[frozenset[str], bool]:
+    """Every secret value read so far, and whether a secrets file was unreadable.
+
+    ``files`` are YAML files Core loaded: Core resolves a !secret from the
+    secrets.yaml nearest the file that names it, and those are read now.
+    """
+    values, degraded = await hass.async_add_executor_job(
+        _load_secret_scrub, hass, sorted(set(files))
+    )
+    seen: set[str] = hass.data.setdefault(_SEEN, set())
+    seen.update(values)
+    return frozenset(seen), degraded
 
 
 async def _prep(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     # Read once: a reload during the file read below must not swap in another
     # definition than the one the secrets were read for.
     loaded = _loaded(hass, msg["entity_id"])
-    values, degraded = await hass.async_add_executor_job(_scrub_inputs, hass, loaded[2])
+    values, degraded = await _secret_values(hass, _files(loaded[2]))
     return {"secret_values": values, "scrub_degraded": degraded, "loaded": loaded}
+
+
+async def _read_loaded_secrets(
+    hass: HomeAssistant, _event: Event | None = None
+) -> None:
+    """Read the secrets files every loaded automation and script draws on."""
+    files: set[str] = set()
+    for domain in _STORAGE:
+        component = hass.data.get(domain)
+        for entity in component.entities if component is not None else ():
+            files.update(_files(getattr(entity, "raw_config", None)))
+    await _secret_values(hass, files)
+
+
+@callback
+def _is_script_reload(data: Mapping[str, Any]) -> bool:
+    return (
+        data.get(ATTR_DOMAIN) == "script" and data.get(ATTR_SERVICE) == SERVICE_RELOAD
+    )
+
+
+@callback
+def async_follow_loads(hass: HomeAssistant) -> None:
+    """Read the secrets when Core loads them, so a number that later changes in
+    its file stays redacted. Like the commands, this lasts until a restart.
+    """
+    if _SEEN in hass.data:
+        return
+    hass.data[_SEEN] = set()
+    async_at_started(hass, _read_loaded_secrets)
+    # Fired once an automation reload is done.
+    hass.bus.async_listen("automation_reloaded", partial(_read_loaded_secrets, hass))
+    # A script reload fires nothing of its own; Core announces the call first.
+    hass.bus.async_listen(
+        EVENT_CALL_SERVICE,
+        partial(_read_loaded_secrets, hass),
+        event_filter=_is_script_reload,
+    )
 
 
 def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:

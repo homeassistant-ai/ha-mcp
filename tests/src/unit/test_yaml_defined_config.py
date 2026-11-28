@@ -119,7 +119,14 @@ _FILES = {
     ),
     "scripts/office.yaml": (
         "office_join:\n  alias: Office Join\n  sequence:\n    - event: office_join_only\n"
+        "office_gate:\n"
+        "  alias: Office Gate\n"
+        "  sequence:\n"
+        "    - event: office_gate_only\n"
+        "      event_data:\n"
+        "        pin: !secret office_gate_pin\n"
     ),
+    "scripts/secrets.yaml": "office_gate_pin: 135790\n",
 }
 
 
@@ -261,13 +268,49 @@ class TestRead:
         self, hass: HomeAssistant, automations: AutomationConfigTools
     ) -> None:
         """A number carries no trace of the secrets file it came from, so once
-        that file changed, the loaded number passed as the automation's own."""
+        that file changed, the loaded number passed as the automation's own,
+        on the first read after a start too."""
         read = automations.ha_config_get_automation
-        assert "471147" not in str(await read(entity_id="automation.office_lights"))
+        # The component reads the secrets files once Home Assistant has started.
+        await hass.async_block_till_done()
 
         await write_config_files(hass, {"automations/secrets.yaml": "office_pin: 9\n"})
 
         assert "471147" not in str(await read(entity_id="automation.office_lights"))
+
+    @pytest.mark.parametrize(
+        ("domain", "secrets_file", "loaded"),
+        [
+            ("automation", "automations/secrets.yaml", "471147"),
+            ("script", "scripts/secrets.yaml", "135790"),
+        ],
+    )
+    async def test_numeric_secret_loaded_by_a_reload_then_changed_is_redacted(
+        self,
+        hass: HomeAssistant,
+        automations: AutomationConfigTools,
+        scripts: ConfigScriptTools,
+        domain: str,
+        secrets_file: str,
+        loaded: str,
+    ) -> None:
+        """A reload loads the secrets as they are then. A number loaded that
+        way and changed in its file afterwards was returned in plain text."""
+        text = _FILES[secrets_file]
+        await write_config_files(hass, {secrets_file: text.replace(loaded, "246802")})
+        await hass.services.async_call(domain, "reload", blocking=True)
+        await hass.async_block_till_done()
+        await write_config_files(hass, {secrets_file: text.replace(loaded, "9")})
+
+        if domain == "automation":
+            result = await automations.ha_config_get_automation(
+                entity_id="automation.office_lights"
+            )
+        else:
+            result = await scripts.ha_config_get_script(script_id="office_gate")
+
+        assert result["source"]["kind"] == "yaml"
+        assert "246802" not in str(result)
 
     async def test_numeric_secret_whose_file_was_deleted_is_still_redacted(
         self, hass: HomeAssistant, automations: AutomationConfigTools
@@ -275,7 +318,7 @@ class TestRead:
         """Once its secrets.yaml is gone, nothing names the loaded number as a
         secret; it was returned as the automation's own."""
         read = automations.ha_config_get_automation
-        assert "471147" not in str(await read(entity_id="automation.office_lights"))
+        await hass.async_block_till_done()
 
         secrets = Path(hass.config.path("automations/secrets.yaml"))
         await hass.async_add_executor_job(secrets.unlink)
@@ -287,7 +330,7 @@ class TestRead:
     ) -> None:
         """A numeric secret used as a mapping key is redacted like a value."""
         read = automations.ha_config_get_automation
-        assert "864213" not in str(await read(entity_id="automation.office_keyed"))
+        await hass.async_block_till_done()
 
         secrets = Path(hass.config.path("automations/secrets.yaml"))
         await hass.async_add_executor_job(secrets.unlink)
