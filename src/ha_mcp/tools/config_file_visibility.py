@@ -40,9 +40,11 @@ from .helpers import raise_tool_error
 
 _CAPABILITY = "config_file_items"
 _LOAD_ERROR_SUGGESTIONS = [
-    "Fix the error in details: a whole-file ha_write_file, a confirmed "
-    "ha_delete_file and a ha_manage_backup restore still run while the "
-    "configuration does not load",
+    (
+        "Fix the error in details: a whole-file ha_write_file, a confirmed "
+        "ha_delete_file and a ha_manage_backup restore still run while the "
+        "configuration does not load"
+    ),
     "Or turn off enforce mode in the ha-mcp settings UI (Entity Visibility tab)",
 ]
 
