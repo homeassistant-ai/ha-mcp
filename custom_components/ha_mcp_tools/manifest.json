@@ -1,6 +1,6 @@
 {
     "domain": "ha_mcp_tools",
-    "name": "HA-MCP — Manage Home Assistant with AI",
+    "name": "HA-MCP \u2014 Manage Home Assistant with AI",
     "after_dependencies": [
         "backup",
         "blueprint",
@@ -36,7 +36,7 @@
         "mcp>=1.24.0",
         "ruamel.yaml>=0.18.0",
         "voluptuous-openapi>=0.4.1",
-        "ha-mcp==9.3.0"
+        "ha-mcp-dev==9.4.0.dev3782"
     ],
-    "version": "9.3.0"
+    "version": "9.4.0"
 }
