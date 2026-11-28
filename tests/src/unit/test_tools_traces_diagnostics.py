@@ -264,6 +264,28 @@ class TestGatherDiagnostics:
         assert result["references"]["blueprint"] is None
         assert not any("component" in warning for warning in warnings)
 
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("registry_api")
+    async def test_a_disabled_script_is_not_called_an_automation(
+        self,
+        hass: HomeAssistant,
+        component_core_client: HomeAssistantClient,
+        entity_registry: er.EntityRegistry,
+    ) -> None:
+        """A disabled script was called an automation and told that
+        automation.trigger can still run it."""
+        await _setup(hass, "script", {"test": {"sequence": [{"event": "trace_test"}]}})
+        entity_registry.async_update_entity(
+            "script.test", disabled_by=er.RegistryEntryDisabler.USER
+        )
+        await hass.async_block_till_done()
+
+        result, _warnings = await _diagnose(component_core_client, "script.test")
+
+        assert result["loaded"] is False
+        assert "this script is not loaded" in result["suggestion"]
+        assert "automation" not in result["suggestion"]
+
 
 class TestDiagnosticsResponseWarnings:
     """Diagnostics warnings surface at the tool response level."""

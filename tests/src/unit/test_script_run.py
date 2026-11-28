@@ -326,8 +326,16 @@ async def test_run_sequence_not_sent_is_an_error(tools: ConfigScriptTools) -> No
         [{"if": [], "then": [{"service": "HA_MCP_TOOLS.write_file"}]}],
         [{"parallel": [{"action": "hassio.restore_full"}]}],
         [{"service_template": "hassio.restore_full"}],
+        # Core would render the name only when the step runs, past the checks.
+        [{"action": "{{ 'ha_mcp_tools.get_caller_token' }}"}],
     ],
-    ids=["component", "component-nested", "snapshot-restore-nested", "legacy-key"],
+    ids=[
+        "component",
+        "component-nested",
+        "snapshot-restore-nested",
+        "legacy-key",
+        "templated-name",
+    ],
 )
 async def test_run_sequence_holds_its_actions_to_the_service_guards(
     tools: ConfigScriptTools,
@@ -349,3 +357,22 @@ async def test_run_sequence_holds_its_actions_to_the_service_guards(
         await tools.ha_config_set_script(script_id="morning", run_sequence=sequence)
 
     send.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_run_sequence_runs_an_action_whose_data_names_a_guarded_service(
+    hass: HomeAssistant, tools: ConfigScriptTools
+) -> None:
+    """An event whose data held an ``action`` key naming a component service
+    was refused, although the data is only passed on."""
+    events = async_capture_events(hass, "audit")
+
+    result = await tools.ha_config_set_script(
+        script_id="morning",
+        run_sequence=[
+            {"event": "audit", "event_data": {"action": "ha_mcp_tools.write_file"}}
+        ],
+    )
+
+    assert result["action"] == "run_sequence"
+    assert [e.data for e in events] == [{"action": "ha_mcp_tools.write_file"}]

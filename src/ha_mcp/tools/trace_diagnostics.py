@@ -141,11 +141,10 @@ def _diagnostic_suggestion(diagnostics: dict[str, Any], domain: str) -> str:
             "which to store a trace (common for YAML automations without an id)."
         )
     if diagnostics.get("loaded") is False:
-        return (
-            "Core reports this automation is not loaded. Check its validation "
-            "or repair issue; automation.trigger can still execute a disabled "
-            "automation."
-        )
+        advice = f"Core reports this {domain} is not loaded. Check its validation or repair issue"
+        if domain == "automation":
+            advice += "; automation.trigger can still execute a disabled automation"
+        return f"{advice}."
     if diagnostics.get("entity_state") == "unavailable":
         return (
             f"The {domain} is unavailable, so Home Assistant cannot run it. "
