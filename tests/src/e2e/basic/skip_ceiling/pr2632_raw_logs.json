@@ -1,13 +1,13 @@
 {
-  "reason": "The host boot listing runs on HAOS and the file tail test runs on Container. Each lane skips one. On both embedded no-tools lanes the fault-log test now runs, offsetting that skip.",
+  "reason": "The host boot listing runs on HAOS, and the file tail and file timeline tests run on Container with the component: each skips on the other backend. The level and structured error-log tests need the component, so they skip with those two on the no-tools lanes that have no component entry. On both embedded no-tools lanes the fault-log test now runs, offsetting a skip.",
   "deltas": {
     "container": 1,
-    "container_no_tools": 1,
+    "container_no_tools": 5,
     "embedded": 1,
-    "haos": 1,
-    "haos_stdio": 1,
-    "haos_embedded": 1,
-    "haos_inaddon": 1,
-    "haos_inaddon_no_tools": 1
+    "haos": 2,
+    "haos_stdio": 2,
+    "haos_embedded": 2,
+    "haos_inaddon": 2,
+    "haos_inaddon_no_tools": 4
   }
 }

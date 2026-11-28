@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from .._vendor.websockets.exceptions import ConnectionClosed
-from .error_log_journald import container_page
+from .error_log_journald import container_page, log_lines
 from .exceptions import HomeAssistantAPIError, HomeAssistantError
 from .models import ErrorLogPage
 
@@ -43,6 +43,6 @@ async def backlog_page(
             # One older line proves the page's continuation without the file.
             # Core sends the file's last 100 lines. A shorter nonempty backlog
             # contains the whole file. An empty one may mean logging is disabled.
-            if 0 < len(event) < 100 or len(backlog.splitlines()) > lines + offset:
+            if 0 < len(event) < 100 or len(log_lines(backlog)) > lines + offset:
                 return container_page(backlog, lines, offset)
     return None

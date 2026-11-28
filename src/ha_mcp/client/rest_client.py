@@ -1115,9 +1115,13 @@ class HomeAssistantClient:
         return response.text
 
     async def _supervisor_logs_response(
-        self, path: str, headers: dict[str, str], params: dict[str, Any]
+        self,
+        path: str,
+        headers: dict[str, str],
+        params: dict[str, Any],
+        selection: str = "",
     ) -> httpx.Response:
-        """Send one Supervisor ``/logs`` request and map its failures.
+        """Send one Supervisor ``/logs<selection>`` request and map its failures.
 
         Split from ``_supervisor_logs_get`` so the error-log route can read
         Supervisor's ``X-First-Cursor`` while plain-text callers keep the body.
@@ -1132,7 +1136,7 @@ class HomeAssistantClient:
                 f"Supervisor token absent at call time for /{path}/logs "
                 "(addon-mode gate fired but SUPERVISOR_TOKEN env var not set)"
             )
-        relative_path = f"/{path}/logs"
+        relative_path = f"/{path}/logs{selection}"
 
         try:
             async with asyncio.timeout(self.timeout):

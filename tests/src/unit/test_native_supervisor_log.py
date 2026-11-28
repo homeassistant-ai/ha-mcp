@@ -80,19 +80,41 @@ async def test_large_journal_search_retries_a_smaller_native_range(
 async def test_a_searched_window_over_the_byte_limit_is_read_in_pieces(
     component_core_client: HomeAssistantClient, core_supervisor: Supervisor
 ) -> None:
+    """The second half is read from the first half's cursor."""
     path = "/host/logs"
     core_supervisor.reply("GET", path, text=("x" * 1024 + "\n") * 1100)
-    core_supervisor.reply("GET", path, text="kernel: done\n")
+    core_supervisor.reply(
+        "GET", path, text="kernel: first done\n", headers={"X-First-Cursor": "c1"}
+    )
+    core_supervisor.reply("GET", path, text="kernel: second done\n")
     result = await call_logs(
         component_core_client,
         source="system_service",
         slug="host",
         hours_back=1,
         search="done",
+        order="oldest",
     )
-    assert result["log"] == "kernel: done"
+    assert result["log"] == "kernel: first done\nkernel: second done"
     assert not result.get("warnings")
-    assert core_supervisor.requests == [("GET", path), ("GET", path)]
+    assert core_supervisor.headers("GET", path)["Range"] == "entries=c1:5000:5000"
+
+
+@pytest.mark.skipif(
+    not hasattr(aiohasupervisor.models, "LogsOptions"),
+    reason="Core 2026.11's Supervisor client does not implement native journal reads",
+)
+async def test_a_one_line_tail_is_the_newest_line(
+    component_core_client: HomeAssistantClient, core_supervisor: Supervisor
+) -> None:
+    """A one-entry range reads from the journal's head, so two are asked for."""
+    path = "/host/logs"
+    core_supervisor.reply("GET", path, text="older\nnewest\n")
+    result = await call_logs(
+        component_core_client, source="system_service", slug="host", limit=1
+    )
+    assert result["log"] == "newest"
+    assert core_supervisor.headers("GET", path)["Range"] == "entries=:-1:2"
 
 
 @pytest.mark.skipif(

@@ -5,8 +5,10 @@ has from 2026.12. Before that, and without the component, the reads go to
 Supervisor's API directly or through Core's proxy.
 """
 
+import json
 import re
 from typing import Any, NoReturn
+from urllib.parse import quote
 
 from .._version import is_running_in_addon
 from ..client.error_log_journald import JournaldPage, log_lines, range_header
@@ -16,6 +18,7 @@ from ..client.exceptions import (
     HomeAssistantError,
 )
 from ..client.journal_window import fetch_range
+from ..client.rest_client import MIN_LOG_WINDOW_LINES
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
     COMPONENT_VIA_MARKETPLACE,
@@ -27,6 +30,7 @@ from .component_api import (
 from .helpers import exception_to_structured_error, raise_tool_error
 from .log_common import (
     DEFAULT_LOG_LIMIT,
+    IDENTIFIER_PATTERN,
     SLUG_PATTERN,
     SUPERVISOR_SEARCH_WINDOW_LINES,
     _addon_auth_error_suggestions,
@@ -36,7 +40,8 @@ from .log_common import (
 
 # The component's timeline command takes each source's text up to 1,000,000
 # characters, and Core closes a WebSocket on a message over 4 MiB.
-_TIMELINE_TEXT_CHARS = 2_000_000
+_SOURCE_TEXT_CHARS = 1_000_000
+_TIMELINE_MESSAGE_BYTES = 3_000_000
 _RANGE_TAIL = re.compile(r"(?P<head>.*):(?P<skip>-?\d+):(?P<count>\d+)")
 
 
@@ -80,34 +85,86 @@ def _byte_limited(exc: HomeAssistantAPIError) -> bool:
     return bool((exc.response_data or {}).get("byte_limited"))
 
 
-async def _proxy_window(
-    client: Any, args: dict[str, Any], requests: dict[str, list[dict[str, str]]]
-) -> dict[str, Any]:
-    """Make the reads the component could not, through Supervisor's API."""
-    if not is_running_in_addon() and not await client._is_supervised_install():
+def _fit(text: str, budget: int) -> tuple[str, bool]:
+    """``text`` cut at a line end to what one source may send, and whether it was cut.
+
+    The budget is in bytes of the JSON the WebSocket client sends, which
+    escapes every non-ASCII character.
+    """
+    cut = False
+    while len(text) > _SOURCE_TEXT_CHARS or len(json.dumps(text)) > budget:
+        keep = min(len(text), _SOURCE_TEXT_CHARS) * 3 // 4
+        text = text[: text.rfind("\n", 0, keep) + 1] or text[:keep]
+        cut = True
+    return text, cut
+
+
+async def _proxied(client: Any, request: dict[str, str]) -> JournaldPage:
+    return await fetch_range(
+        client,
+        _journal_path(request["source"]),
+        request["range"],
+        request.get("format"),
+    )
+
+
+async def _proxy_texts(
+    client: Any, requests: dict[str, list[dict[str, str]]], alone: bool
+) -> tuple[dict[str, str], list[str], dict[str, str]]:
+    """Each timeline source's text, the sources cut to size, and the ones that failed.
+
+    ``alone`` says no other source is left to return when all of these fail.
+    """
+    budget = _TIMELINE_MESSAGE_BYTES // len(requests)
+    texts: dict[str, str] = {}
+    limited: list[str] = []
+    errors: dict[str, str] = {}
+    failure: HomeAssistantAPIError | None = None
+    for name, (request,) in requests.items():
+        try:
+            text = (await _proxied(client, request)).text
+        except HomeAssistantAuthError:
+            if not await proxy_refused_path(client):
+                raise
+            errors[name] = "Home Assistant serves no logs for this source."
+            continue
+        except HomeAssistantAPIError as exc:
+            errors[name], failure = str(exc), exc
+            continue
+        texts[name], cut = _fit(text, budget)
+        if cut:
+            limited.append(name)
+    if alone and failure and not texts:
+        raise failure
+    if alone and not texts:
         raise_tool_error(
             create_error_response(
                 ErrorCode.RESOURCE_NOT_FOUND,
-                "This installation has no Supervisor, so it has no journal for "
-                f"{', '.join(requests)}. Its only log source is core.",
+                "; ".join(f"{name}: {text}" for name, text in errors.items()),
             )
         )
+    return texts, limited, errors
+
+
+async def _proxy_window(
+    client: Any,
+    sources: list[str],
+    args: dict[str, Any],
+    requests: dict[str, list[dict[str, str]]],
+) -> dict[str, Any]:
+    """Make the reads the component could not, through Supervisor's API.
+
+    The component then merges them with the sources it reads itself: Core's
+    log file, where an install writes one beside the journal.
+    """
     warning = await journal_fallback_warning(
         client, "the exact journal window uses the Supervisor API"
     )
-
-    async def read(request: dict[str, str]) -> JournaldPage:
-        return await fetch_range(
-            client,
-            _journal_path(request["source"]),
-            request["range"],
-            request.get("format"),
-        )
-
-    search = args["search"].casefold()
     if args["raw"]:
         ((page_read, probe_read),) = requests.values()
-        page, probe = await read(page_read), await read(probe_read)
+        page = await _proxied(client, page_read)
+        probe = await _proxied(client, probe_read)
+        search = args["search"].casefold()
         lines = [line for line in log_lines(page.text) if search in line.casefold()]
         return {
             "log": "\n".join(lines),
@@ -115,36 +172,21 @@ async def _proxy_window(
             "has_more": bool(probe.first_cursor or probe.text),
             "warnings": [warning],
         }
-    budget = min(1_000_000, _TIMELINE_TEXT_CHARS // len(requests))
-    texts: dict[str, str] = {}
-    limited: list[str] = []
-    errors: dict[str, str] = {}
-    failure: HomeAssistantAPIError | None = None
-    for name, (request,) in requests.items():
-        try:
-            text = (await read(request)).text
-        except HomeAssistantAPIError as exc:
-            errors[name], failure = str(exc), exc
-            continue
-        if len(text) > budget:
-            text = text[: text.rfind("\n", 0, budget) + 1] or text[:budget]
-            limited.append(name)
-        texts[name] = text
-    if failure and not texts:
-        raise failure
+    served = [name for name in sources if name not in requests]
+    texts, limited, errors = await _proxy_texts(client, requests, not served)
     parsed = await ask_component(
         client,
         "log_time_window",
         **args,
-        sources=list(texts),
+        sources=[name for name in sources if name in texts or name in served],
         journal_text=texts,
         journal_limited=limited,
     )
     if parsed is None:
         _raise_component_required(await get_component_caps(client))
     if errors:
-        parsed["errors"] = errors
-    return {**parsed, "warnings": [warning]}
+        parsed["errors"] = {**parsed.get("errors", {}), **errors}
+    return {**parsed, "warnings": [warning, *parsed.get("warnings", [])]}
 
 
 def _raise_component_required(caps: Any) -> NoReturn:
@@ -199,8 +241,16 @@ async def _window_reply(
         if reply is None:
             _raise_component_required(await get_component_caps(client))
         if reply.get("unavailable"):
-            reply = await _proxy_window(client, args, reply["requests"])
+            reply = await _proxy_window(client, sources, args, reply["requests"])
     except HomeAssistantAuthError as exc:
+        if await proxy_refused_path(client):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Home Assistant serves no logs for {', '.join(sources)}.",
+                    context={"sources": sources},
+                )
+            )
         exception_to_structured_error(
             exc,
             context={"sources": sources},
@@ -321,18 +371,23 @@ async def component_journal_page(
                 "range": f"entries={first.first_cursor}:{half}:{count - half}",
             },
         )
-        return JournaldPage(
-            first.text + (rest.text if rest else ""), first.first_cursor
-        )
+        if rest is None:
+            return None
+        return JournaldPage(first.text + rest.text, first.first_cursor)
     if result is None:
         return None
     return JournaldPage(result["text"], result.get("first_cursor"))
 
 
-async def _proxy_selection(
-    client: Any, source: str, args: dict[str, Any], warning: str
-) -> dict[str, Any]:
-    if listing := args.get("listing"):
+async def _proxy_listing(client: Any, listing: str) -> dict[str, Any]:
+    """The host journal's boots or identifiers, asked of Supervisor."""
+    if is_running_in_addon():
+        # Core refuses the app's token on its Supervisor command.
+        response = await client._supervisor_logs_response(
+            "host", {"Accept": "application/json"}, {}, f"/{listing}"
+        )
+        result = response.json()
+    else:
         reply = await client.send_websocket_message(
             {
                 "type": "supervisor/api",
@@ -343,16 +398,38 @@ async def _proxy_selection(
         if not reply.get("success"):
             raise HomeAssistantAPIError(str(reply.get("error")))
         result = reply["result"]
-        payload = result.get("data", result) if isinstance(result, dict) else None
-        if not isinstance(payload, dict) or listing not in payload:
-            raise HomeAssistantAPIError(
-                "Supervisor returned an unexpected journal listing."
-            )
-        return payload
-    boot = args.get("boot")
+    payload = result.get("data", result) if isinstance(result, dict) else None
+    if not isinstance(payload, dict) or listing not in payload:
+        raise HomeAssistantAPIError(
+            "Supervisor returned an unexpected journal listing."
+        )
+    return payload
+
+
+async def _proxy_selection(
+    client: Any, source: str, args: dict[str, Any], warning: str
+) -> dict[str, Any]:
+    if listing := args.get("listing"):
+        return await _proxy_listing(client, listing)
+    boot, identifier, latest = (
+        args.get(key) for key in ("boot", "identifier", "latest")
+    )
+    selection = (
+        (f"/boots/{boot}" if boot is not None else "")
+        + (f"/identifiers/{quote(identifier, safe='')}" if identifier else "")
+        + ("/latest" if latest else "")
+    )
+    headers = {"Accept": "text/plain"}
+    params = {"no_colors": "true", "lines": str(args["lines"])}
+    if is_running_in_addon():
+        # Core's proxy refuses the app's token; Supervisor serves every selection.
+        response = await client._supervisor_logs_response(
+            _journal_path(source), headers, params, selection
+        )
+        return {"text": response.text}
     if (
-        args.get("identifier")
-        or (args.get("latest") and source != "core")
+        identifier
+        or (latest and source != "core")
         or (boot is not None and not re.fullmatch(r"-?\d+", str(boot)))
     ):
         # Core's Supervisor proxy serves none of these paths.
@@ -367,16 +444,11 @@ async def _proxy_selection(
                 ],
             )
         )
-    path = f"/hassio/{_journal_path(source)}/logs"
-    if boot is not None:
-        path += f"/boots/{boot}"
-    if args.get("latest"):
-        path += "/latest"
     response = await client._raw_request(
         "GET",
-        path,
-        headers={"Accept": "text/plain"},
-        params={"no_colors": "true", "lines": str(args["lines"])},
+        f"/hassio/{_journal_path(source)}/logs{selection}",
+        headers=headers,
+        params=params,
     )
     return {"text": response.text}
 
@@ -401,7 +473,7 @@ async def _selection_reply(
     if reply is not None:
         return reply
     warning = await journal_fallback_warning(
-        client, "the journal selection uses Core's Supervisor proxy"
+        client, "the journal selection was read through the Supervisor API"
     )
     warnings.append(warning)
     return await _proxy_selection(client, journal, {**args, "lines": lines}, warning)
@@ -425,8 +497,10 @@ def _selected_name(
         if source == "supervisor"
         else slug or "host"
     )
-    if source not in {"system_service", "error_log", "supervisor"} or (
-        identifier and journal != "host"
+    if (
+        source not in {"system_service", "error_log", "supervisor"}
+        or (identifier and journal != "host")
+        or (identifier and not re.fullmatch(IDENTIFIER_PATTERN, identifier))
     ):
         raise_tool_error(
             create_error_response(
@@ -476,7 +550,9 @@ async def selected_journal(
             client,
             journal,
             args,
-            SUPERVISOR_SEARCH_WINDOW_LINES if search else effective,
+            SUPERVISOR_SEARCH_WINDOW_LINES
+            if search
+            else max(effective, MIN_LOG_WINDOW_LINES),
             warnings,
         )
     except HomeAssistantAuthError as exc:

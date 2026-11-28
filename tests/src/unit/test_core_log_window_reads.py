@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import aiohasupervisor.models
 import pytest
 from homeassistant.core import HomeAssistant
 
@@ -14,6 +15,10 @@ from ._error_log_core import call_logs, serve_log
 from ._error_log_core import log_file as log_file
 from ._log_tool_calls import set_up_core_logs
 from ._tool_errors import error_body
+from ._tools_addons_core import Supervisor
+from ._tools_addons_core import core_supervisor as core_supervisor
+from ._tools_addons_core import supervisor as supervisor
+from ._tools_addons_core import target_app as target_app
 
 _DAY = "2026-11-12"
 
@@ -40,6 +45,7 @@ async def test_a_record_longer_than_one_read_is_returned_and_the_timeline_moves_
     assert [row["message"].split("\n")[0] for row in first["records"]] == [
         "INFO (MainThread) [a] burst"
     ]
+    assert first["warnings"]
     last = await call_logs(
         component_core_client, **(args | {"start_time": first["next_start_time"]})
     )
@@ -47,6 +53,44 @@ async def test_a_record_longer_than_one_read_is_returned_and_the_timeline_moves_
         "INFO (MainThread) [a] after"
     ]
     assert not last["has_more"]
+
+
+async def test_a_timeline_without_supervisor_keeps_core_and_names_the_journal(
+    log_file: Path, component_core_client: HomeAssistantClient
+) -> None:
+    await serve_log(log_file, f"{_line(1, 'a', 'kept')}\n")
+    page = await call_logs(
+        component_core_client,
+        sources=["core", "supervisor"],
+        start_time=f"{_DAY}T10:00:00+00:00",
+        end_time=f"{_DAY}T10:00:09+00:00",
+    )
+    assert [row["source"] for row in page["records"]] == ["core"]
+    assert list(page["errors"]) == ["supervisor"]
+    assert not page.get("warnings"), "no update is missing: there is no Supervisor"
+
+
+@pytest.mark.skipif(
+    hasattr(aiohasupervisor.models, "LogsOptions"),
+    reason="Core 2026.12 reads the journal itself; this is the 2026.11 fallback",
+)
+async def test_a_supervisor_install_with_a_log_file_merges_it_with_the_journal(
+    log_file: Path,
+    component_core_client: HomeAssistantClient,
+    core_supervisor: Supervisor,
+) -> None:
+    """Core writes a log file under Supervisor only when asked to."""
+    await serve_log(log_file, f"{_line(1, 'a', 'from the file')}\n")
+    core_supervisor.reply(
+        "GET", "/host/logs", text=f"{_DAY} 10:00:02.000+00:00 host kernel: journal\n"
+    )
+    page = await call_logs(
+        component_core_client,
+        sources=["core", "host"],
+        start_time=f"{_DAY}T10:00:00+00:00",
+        end_time=f"{_DAY}T10:00:09+00:00",
+    )
+    assert [row["source"] for row in page["records"]] == ["core", "host"]
 
 
 async def test_lines_holding_a_carriage_return_page_once_each(
@@ -138,6 +182,8 @@ _WINDOW = {
         {"source": "error_log", "latest": True, "hours_back": 1},
         {"source": "error_log", "latest": True, "boot": -1},
         {"source": "supervisor", "slug": "core_ssh", "identifier": "kernel"},
+        {"source": "system_service", "slug": "host", "identifier": "../../core/info"},
+        {"source": "system_service", "slug": "host", "identifier": ".."},
         {"source": "error_log", "level": "NOTSET"},
     ],
 )

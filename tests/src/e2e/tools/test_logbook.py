@@ -17,7 +17,10 @@ from ha_mcp.tools.error_log_parsing import (
 
 from ..utilities.assertions import MCPAssertions, safe_call_tool
 from ..utilities.cleanup import CleanupSteps
-from ..utilities.component_path import assert_component_path
+from ..utilities.component_path import (
+    assert_component_path,
+    component_fallback_warnings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -492,9 +495,13 @@ async def test_logs_error_log_source(mcp_client):
     # response has to say how big it was and whether history remains. The
     # window carries a header lookback beyond the caller's limit so the oldest
     # visible record can arrive whole; when the window opens inside a record
-    # the tool re-fetches wider, so only the floor is fixed here.
+    # the tool re-fetches wider, so only the floor is fixed here. Without the
+    # component no record headers are known, and the window is the limit.
     assert data["offset"] == 0
-    assert data["window_lines"] >= 20 + _ERROR_LOG_HEADER_LOOKBACK_LINES
+    lookback = (
+        0 if component_fallback_warnings(raw_data) else _ERROR_LOG_HEADER_LOOKBACK_LINES
+    )
+    assert data["window_lines"] >= 20 + lookback
     assert isinstance(data["has_more"], bool), (
         f"has_more should be a bool, got {data['has_more']!r}"
     )
@@ -670,6 +677,7 @@ async def test_logs_system_source_with_search(mcp_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires_component_surface
 async def test_logs_error_log_with_level_filter(mcp_client):
     """Test error log filtering by level.
 
@@ -697,6 +705,7 @@ async def test_logs_error_log_with_level_filter(mcp_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires_component_surface
 async def test_logs_error_log_structured_parses_real_log(mcp_client):
     """structured=True must actually parse a REAL log, not just return a shape.
 
@@ -771,6 +780,7 @@ async def test_logs_logbook_with_search(mcp_client):
 
 @pytest.mark.asyncio
 @pytest.mark.container_only
+@pytest.mark.requires_component_surface
 async def test_file_log_tail_pages_through_the_component(mcp_client):
     """The component reads the newest line of Core's log file and the one before."""
     async with MCPAssertions(mcp_client) as mcp:
@@ -791,6 +801,7 @@ async def test_file_log_tail_pages_through_the_component(mcp_client):
 
 @pytest.mark.asyncio
 @pytest.mark.container_only
+@pytest.mark.requires_component_surface
 async def test_core_timeline_and_exact_window_read_the_log_file(mcp_client):
     """A time window of Core's log file, as records and as raw lines."""
     end = datetime.now(UTC) + timedelta(minutes=1)

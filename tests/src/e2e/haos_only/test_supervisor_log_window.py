@@ -48,7 +48,7 @@ def _host(**params: Any) -> dict[str, Any]:
 async def test_current_boot_is_discoverable(mcp_client: Any) -> None:
     async with MCPAssertions(mcp_client) as mcp:
         data = await mcp.call_tool_success("ha_get_logs", _host(listing="boots"))
-    assert data["boots"]
+    assert "0" in data["boots"]
 
 
 async def test_host_entries_all_fall_inside_the_window(mcp_client: Any) -> None:

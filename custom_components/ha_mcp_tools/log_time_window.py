@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.const import KEY_DATA_LOGGING
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.hassio import is_hassio
 
 from .supervisor_log import _prepare as read_journal
 
@@ -63,6 +64,8 @@ async def _source(
         if not reply.get("byte_limited") or entries == 1:
             break
         entries //= 2
+    if reply.get("unavailable") and not is_hassio(hass):
+        return {"error": "This installation has no Supervisor journal.", "status": 404}
     if reply.get("unavailable"):
         return {**reply, "requests": _requests(name, start, end, wanted, raw, skip)}
     if "text" not in reply:
@@ -100,6 +103,7 @@ def _merge(
     )
 
     rows: list[tuple[datetime, str, str]] = []
+    warnings: list[str] = []
     complete_end = None
     for name, lines, limited in batches:
         records = _parse_log_records(lines)
@@ -119,6 +123,10 @@ def _merge(
             if boundary <= first:
                 # Keep the first time's records, so the next page starts later.
                 boundary = first + timedelta(milliseconds=1)
+                warnings.append(
+                    f"The {name} records at {first.isoformat()} fill one read of "
+                    f"{len(lines)} lines; anything more at that instant is not returned."
+                )
             complete_end = min(complete_end or boundary, boundary)
         rows.extend(
             (row.time, name, row.message)
@@ -139,6 +147,8 @@ def _merge(
             for stamp, name, message in group
         )
     result: dict[str, Any] = {"records": selected, "returned_records": len(selected)}
+    if warnings:
+        result["warnings"] = warnings
     if next_time and next_time <= end:
         result["next_start_time"] = next_time.isoformat()
     result["has_more"] = "next_start_time" in result
@@ -262,7 +272,7 @@ async def _prepare(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
                 (name, lines, bool(batch.get("byte_limited")) or len(lines) >= count)
             )
     if requests:
-        # Core before 2026.12, or no Supervisor: the caller makes these reads.
+        # Core before 2026.12: the caller makes these reads.
         return {"unavailable": True, "requests": requests}
     if errors and not batches:
         text = "; ".join(f"{name}: {error}" for name, error in errors.items())

@@ -26,6 +26,7 @@ from ..client.journal_window import (
     window_start,
 )
 from ..client.rest_client import (
+    MIN_LOG_WINDOW_LINES,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
@@ -254,9 +255,13 @@ class SupervisorLogSourcesMixin:
     async def _service_tail(
         self, path: str, lines: int, read_tail: Callable[[int], Awaitable[str]]
     ) -> tuple[str, dict[str, Any]]:
-        # Supervisor reads its ``lines`` parameter as this same range.
+        # Supervisor reads its ``lines`` parameter as this same range. A
+        # one-entry range starts at the journal's head, so two are asked for.
         page = await component_journal_page(
-            self._client, journal_name(path), whole=True, range=range_header(lines)
+            self._client,
+            journal_name(path),
+            whole=True,
+            range=range_header(max(lines, MIN_LOG_WINDOW_LINES)),
         )
         if page is not None:
             return page.text, {}

@@ -311,6 +311,41 @@ class TestTheCredentialToFix:
             assert any("Long-Lived Access Token" in s for s in suggestions)
             assert not any("SUPERVISOR_TOKEN" in s for s in suggestions)
 
+    @pytest.mark.parametrize(
+        ("selection", "path"),
+        [
+            ({"boot": -1}, "/host/logs/boots/-1"),
+            ({"identifier": "kernel"}, "/host/logs/identifiers/kernel"),
+            ({"latest": True, "slug": "core"}, "/core/logs/latest"),
+        ],
+    )
+    async def test_a_journal_selection_inside_the_app_goes_to_supervisor(
+        self, app_route: Route, selection: dict[str, Any], path: str
+    ):
+        """Core's proxy refuses the app's token (#1116)."""
+        app_route.supervisor.reply("selected line\n")
+
+        result = await ask(
+            app_route.client, Target("system_service", "host", ""), **selection
+        )
+
+        assert result["log"] == "selected line"
+        assert [seen.path for seen in app_route.supervisor.requests] == [path]
+
+    async def test_a_boots_listing_inside_the_app_goes_to_supervisor(
+        self, app_route: Route
+    ):
+        app_route.supervisor.reply('{"result": "ok", "data": {"boots": {"0": "abc"}}}')
+
+        result = await ask(
+            app_route.client, Target("system_service", "host", ""), listing="boots"
+        )
+
+        assert result["boots"] == {"0": "abc"}
+        assert [seen.path for seen in app_route.supervisor.requests] == [
+            "/host/logs/boots"
+        ]
+
     async def test_a_service_cores_proxy_does_not_serve_is_not_found(
         self, core_route: Route
     ):

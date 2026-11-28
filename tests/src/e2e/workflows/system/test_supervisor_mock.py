@@ -99,10 +99,11 @@ class TestGetLogsSystemService:
     ):
         """An unknown route is rejected by the journal server."""
         async with MCPAssertions(mcp_client) as mcp:
-            await mcp.call_tool_failure(
+            result = await mcp.call_tool_failure(
                 "ha_get_logs",
-                {"source": "system_service", "slug": "not_a_real_service"},
+                {"source": "system_service", "slug": "notarealservice"},
             )
+        assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
 @pytest.mark.system

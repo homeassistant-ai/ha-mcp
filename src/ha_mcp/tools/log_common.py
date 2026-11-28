@@ -26,6 +26,9 @@ SUPERVISOR_SEARCH_WINDOW_LINES = 2000
 MAX_LIMIT = 500
 # One Supervisor service or app name, as the component's commands accept it.
 SLUG_PATTERN = r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*"
+# One syslog identifier as one URL path segment; the host journal has names
+# such as "(rpcbind)".
+IDENTIFIER_PATTERN = r"(?!\.{1,2}$)[^/\\?#%\x00-\x20]+"
 
 
 def _coerce_limit(
