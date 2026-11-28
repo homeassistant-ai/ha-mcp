@@ -127,7 +127,8 @@ def _dismissed_after(
 
 def _suggest(
     build: FrontendBuild, data: dict[str, Any], msg: dict[str, Any]
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[str] | None]:
+    """The panel's view and, for a dismiss or restore, the list to save."""
     located = _exports(build)
     if located is None:
         reason = (
@@ -136,35 +137,40 @@ def _suggest(
         )
         if msg.get("dismiss") or msg.get("restore"):
             raise HomeAssistantError(reason)
-        return {"status": "unavailable", "reason": reason}
+        return {"status": "unavailable", "reason": reason}, None
     module_id, names = located
     data = {**data, "states": _panel_states(build, data)}
-    result: dict[str, Any] = {
-        "status": "available",
-        "suggestions": build.run_export(module_id, names["compute"], data),
-        "dismissed": data["dismissed"],
-        "editors": build.run_export(module_id, names["editors"]),
-    }
-    # The panel dismisses only a meter it suggests and restores only one it
-    # lists as dismissed; anything else changes nothing and is reported.
-    suggested = {s["statisticId"] for s in result["suggestions"]}
-    unknown = [
-        *(
-            i
-            for i in msg.get("dismiss") or []
-            if i not in suggested | {*data["dismissed"]}
-        ),
-        *(i for i in msg.get("restore") or [] if i not in data["dismissed"]),
-    ]
-    if unknown:
-        return {**result, "unknown": unknown}
-    if msg.get("dismiss") or msg.get("restore"):
-        dismissed = _dismissed_after(build, module_id, names, data, msg)
-        result["dismissed"] = dismissed
-        result["suggestions"] = build.run_export(
+    # The panel computes every eligible meter, then lists those its user
+    # dismissed apart; a stored id it no longer suggests (now configured, or
+    # gone) is listed nowhere.
+    eligible = build.run_export(module_id, names["compute"], {**data, "dismissed": []})
+    eligible_ids = [s["statisticId"] for s in eligible]
+
+    def view(dismissed: list[str]) -> dict[str, Any]:
+        shown = build.run_export(
             module_id, names["compute"], {**data, "dismissed": dismissed}
         )
-    return result
+        shown_ids = {s["statisticId"] for s in shown}
+        return {
+            "status": "available",
+            "suggestions": shown,
+            "dismissed": [i for i in eligible_ids if i not in shown_ids],
+            "editors": build.run_export(module_id, names["editors"]),
+        }
+
+    result = view(data["dismissed"])
+    # The panel dismisses only a meter it lists and restores only one it lists
+    # as dismissed; anything else changes nothing and is reported.
+    unknown = [
+        *(i for i in msg.get("dismiss") or [] if i not in eligible_ids),
+        *(i for i in msg.get("restore") or [] if i not in result["dismissed"]),
+    ]
+    if unknown:
+        return {**result, "unknown": unknown}, None
+    if not (msg.get("dismiss") or msg.get("restore")):
+        return result, None
+    stored = _dismissed_after(build, module_id, names, data, msg)
+    return view(stored), stored
 
 
 async def _inputs(hass: HomeAssistant, user_id: str) -> dict[str, Any]:
@@ -173,7 +179,7 @@ async def _inputs(hass: HomeAssistant, user_id: str) -> dict[str, Any]:
     statistics = await get_instance(hass).async_add_executor_job(
         list_statistic_ids, hass, None, "sum"
     )
-    store = await async_user_store(hass, user_id)
+    store = await asyncio.shield(async_user_store(hass, user_id))
     return {
         "statistics": statistics,
         "preferences": manager.data or EnergyManager.default_preferences(),
@@ -181,9 +187,8 @@ async def _inputs(hass: HomeAssistant, user_id: str) -> dict[str, Any]:
             state.entity_id: json_loads(state.as_dict_json)
             for state in hass.states.async_all()
         },
-        "dismissed": (store.data.get(_USER_DATA_KEY) or {}).get(
-            "dismissed_suggestions", []
-        ),
+        "dismissed": (store.data.get(_USER_DATA_KEY) or {}).get("dismissed_suggestions")
+        or [],
     }
 
 
@@ -202,14 +207,14 @@ def command_specs(vol: Any) -> list[tuple[dict[Any, Any], Any, Any]]:
                     "The installed frontend's code could not be loaded"
                 )
             data = await _inputs(hass, user_id)
-            result: dict[str, Any] = await hass.async_add_executor_job(
+            result, stored = await hass.async_add_executor_job(
                 _suggest, build, data, msg
             )
-            if result.get("dismissed", data["dismissed"]) != data["dismissed"]:
+            if stored is not None and stored != data["dismissed"]:
                 # The panel saves the whole energy user data as this one list.
-                store = await async_user_store(hass, user_id)
+                store = await asyncio.shield(async_user_store(hass, user_id))
                 await store.async_set_item(
-                    _USER_DATA_KEY, {"dismissed_suggestions": result["dismissed"]}
+                    _USER_DATA_KEY, {"dismissed_suggestions": stored}
                 )
         return {"result": result}
 

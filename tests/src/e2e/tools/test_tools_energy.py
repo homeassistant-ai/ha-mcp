@@ -203,6 +203,13 @@ async def _save_devices(mcp_client, devices: list[dict]) -> None:
     """Save ``device_consumption`` whole under its per-key hash from a fresh read."""
     mcp = MCPAssertions(mcp_client)
     current = await mcp.call_tool_success("ha_manage_energy_prefs", {"mode": "get"})
+    if "device_consumption" not in current["config_hash_per_key"]:
+        # Nothing saved yet and no Core defaults read: the first save takes
+        # the full hash and Core fills in its defaults.
+        current = await mcp.call_tool_success(
+            "ha_manage_energy_prefs",
+            {"mode": "set", "config": {}, "config_hash": current["config_hash"]},
+        )
     await mcp.call_tool_success(
         "ha_manage_energy_prefs",
         {

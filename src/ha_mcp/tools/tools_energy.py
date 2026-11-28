@@ -6,6 +6,7 @@ energy/validate only examines persisted preferences.
 """
 
 import logging
+from collections import Counter
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -38,6 +39,29 @@ from .helpers import (
 from .tool_hints import write_hints
 
 logger = logging.getLogger(__name__)
+
+
+def _device_uses(entries: list[Any], field: str) -> Counter[Any]:
+    return Counter(
+        entry[field]
+        for entry in entries
+        if isinstance(entry, dict) and "stat_consumption" in entry and entry.get(field)
+    )
+
+
+def _new_device_repeats(config: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    """Meters or power sensors a submitted device list uses twice where the
+    saved list did not. An HA-MCP policy: Core saves such a list, but the
+    Energy panel's device editors leave out what another device of the list
+    already uses, so the panel never builds one."""
+    return [
+        f"{key}: {value}"
+        for key, entries in config.items()
+        if isinstance(entries, list)
+        for field in ("stat_consumption", "stat_rate")
+        for value, n in _device_uses(entries, field).items()
+        if n > 1 and n > _device_uses(current.get(key) or [], field)[value]
+    ]
 
 
 def _flatten_validation_errors(raw: Any) -> list[dict[str, Any]]:
@@ -185,7 +209,8 @@ class EnergyTools:
         WHEN TO USE:
         - To add, change or remove one source or device: read its list with
           mode='get', edit it, and send that key back with its
-          config_hash_per_key entry, as Settings > Energy does.
+          config_hash_per_key entry, as Settings > Energy does. A key with no
+          entry there (nothing saved yet) is sent with the full config_hash.
         - To add a meter that is not in the dashboard yet: mode='get' with
           include_suggestions=True names the slots each suggested meter fills.
 
@@ -320,6 +345,18 @@ class EnergyTools:
                 "config"
             ]
             self._check_config_hash(config, config_hash, current_prefs)
+            if repeats := _new_device_repeats(config, current_prefs):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "A device list would use the same meter or power sensor "
+                        f"twice: {', '.join(repeats)}",
+                        context={"mode": "set", "repeats": repeats},
+                        suggestions=[
+                            "Each device of a list has its own meter and power sensor, as in Settings > Energy",
+                        ],
+                    )
+                )
 
             save_result = await self._client.send_websocket_message(save_payload)
             if not save_result.get("success"):

@@ -228,4 +228,10 @@ async def test_energy_suggestions_come_from_the_frontend_through_the_component(
                 {"mode": "restore_suggestions", "statistic_ids": [meter]},
             )
     assert meter in hidden["energy_suggestions"]["dismissed"]
+    assert meter not in [
+        s["statisticId"] for s in hidden["energy_suggestions"]["suggestions"]
+    ]
     assert meter not in restored["energy_suggestions"]["dismissed"]
+    assert meter in [
+        s["statisticId"] for s in restored["energy_suggestions"]["suggestions"]
+    ]

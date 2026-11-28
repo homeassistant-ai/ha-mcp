@@ -326,6 +326,7 @@ async def test_core_save_refusal_keeps_cores_code_and_saves_nothing(
         await _save_key(tool, "energy_sources", [{"type": "future"}])
 
     error = str(exc_info.value)
+    assert "Got 'future'" in error  # Core's own refusal text
     assert "VALIDATION_INVALID_PARAMETER" in error
     assert '"ha_error_code": "invalid_format"' in error
     assert "Command failed" not in error
@@ -402,6 +403,48 @@ async def test_save_without_a_hash_is_refused_and_saves_nothing(
         )
 
     assert not _sent(spy, "energy/save_prefs")
+
+
+@pytest.mark.parametrize(
+    ("saved", "submitted", "refused"),
+    [
+        ([_FRIDGE], [_FRIDGE, _FRIDGE], True),
+        (
+            [_FRIDGE],
+            [
+                {"stat_consumption": "sensor.a", "stat_rate": "sensor.p"},
+                {"stat_consumption": "sensor.b", "stat_rate": "sensor.p"},
+            ],
+            True,
+        ),
+        ([_FRIDGE, _FRIDGE], [_FRIDGE, _FRIDGE], False),
+        ([_FRIDGE], [_FRIDGE, {"stat_consumption": "sensor.new"}], False),
+    ],
+    ids=["meter_twice", "power_twice", "already_saved_twice", "distinct"],
+)
+async def test_a_device_list_cannot_gain_a_meter_used_twice(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    core_client: HomeAssistantClient,
+    saved: list[dict[str, Any]],
+    submitted: list[dict[str, Any]],
+    refused: bool,
+) -> None:
+    """Core saves a device list that uses one meter or power sensor twice;
+    Settings > Energy never builds one, so the tool refuses a new repeat and
+    leaves an existing one alone."""
+    await _set_up_energy(hass, hass_storage, {**_PREFS, "device_consumption": saved})
+    tool = EnergyTools(core_client)
+
+    with sent_messages(core_client) as spy:
+        if refused:
+            with pytest.raises(ToolError, match="VALIDATION_INVALID_PARAMETER"):
+                await _save_key(tool, "device_consumption", submitted)
+        else:
+            await _save_key(tool, "device_consumption", submitted)
+
+    assert bool(_sent(spy, "energy/save_prefs")) is not refused
 
 
 @pytest.mark.parametrize(

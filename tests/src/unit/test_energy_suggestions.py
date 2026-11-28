@@ -148,10 +148,12 @@ async def test_dismissed_meters_stay_hidden_in_settings_until_restored(
     stored = await _stored(hass, hass_admin_user)
     hidden = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
     await tool.ha_manage_energy_prefs(mode="restore_suggestions", statistic_ids=both)
+    back = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
 
     assert sorted(stored["dismissed_suggestions"]) == sorted(both)
     assert not set(both) & set(_suggested(hidden))
     assert await _stored(hass, hass_admin_user) == {"dismissed_suggestions": []}
+    assert set(both) <= set(_suggested(back))
 
 
 @_NEEDS_SUGGESTIONS
@@ -257,3 +259,43 @@ async def test_a_power_sensor_built_from_a_meter_does_not_hide_it(
     )
 
     assert "sensor.oven_energy" in _suggested(result)
+
+
+@_NEEDS_SUGGESTIONS
+@pytest.mark.usefixtures("fresh_card_state")
+async def test_a_dismissed_meter_added_to_the_dashboard_is_no_longer_listed(
+    recorder_mock: Recorder,
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    component_core_client: HomeAssistantClient,
+) -> None:
+    """A meter dismissed and later added to the dashboard is listed neither as
+    suggested nor as dismissed, as in Settings > Energy, and cannot be
+    restored."""
+    await _meters(hass, hass_storage)
+    tool = EnergyTools(component_core_client)
+    await tool.ha_manage_energy_prefs(
+        mode="dismiss_suggestions", statistic_ids=["sensor.oven_energy"]
+    )
+    current = await tool.ha_manage_energy_prefs(mode="get")
+    await tool.ha_manage_energy_prefs(
+        mode="set",
+        config={
+            "device_consumption": [
+                *current["config"]["device_consumption"],
+                {"stat_consumption": "sensor.oven_energy"},
+            ]
+        },
+        config_hash={
+            "device_consumption": current["config_hash_per_key"]["device_consumption"]
+        },
+    )
+
+    read = await tool.ha_manage_energy_prefs(mode="get", include_suggestions=True)
+    with pytest.raises(ToolError, match="VALIDATION_INVALID_PARAMETER"):
+        await tool.ha_manage_energy_prefs(
+            mode="restore_suggestions", statistic_ids=["sensor.oven_energy"]
+        )
+
+    assert "sensor.oven_energy" not in read["energy_suggestions"]["dismissed"]
+    assert "sensor.oven_energy" not in _suggested(read)

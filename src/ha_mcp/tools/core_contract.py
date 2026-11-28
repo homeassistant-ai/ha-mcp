@@ -13,7 +13,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
-from .helpers import raise_tool_error
+from .helpers import ha_error_code_field, raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,10 @@ async def _contract_bridge(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"Could not obtain {feature}: {exc}",
-                context={k: v for k, v in params.items() if k != "payload"},
+                context={
+                    **{k: v for k, v in params.items() if k != "payload"},
+                    **ha_error_code_field(getattr(exc, "code", None)),
+                },
             )
         )
         return {}  # unreachable
