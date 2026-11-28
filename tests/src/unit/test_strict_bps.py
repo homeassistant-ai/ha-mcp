@@ -328,6 +328,13 @@ class TestAckKeyShape:
         assert STRICT_BPS_KEY_PARAM in line
         assert "not a secret" in line.lower()
 
+    def test_ack_line_names_every_gated_tool(self) -> None:
+        """An agent must be able to tell from the guide which tools take the
+        key, rather than learning it per tool from rejections."""
+        line = strict_bps_ack_line()
+        for tool in STRICT_BPS_GATED_TOOLS:
+            assert tool in line
+
 
 # ---------------------------------------------------------------------------
 # The gate on a real server
@@ -571,6 +578,26 @@ class TestTheGateOnTheServer:
         )
 
         assert not result.is_error, result
+
+    async def test_a_tool_outside_the_gate_ignores_the_key(
+        self, hass: HomeAssistant, strict_server: Server
+    ) -> None:
+        """The guide tells agents to send the key to gated write tools; one
+        that sends it to an ungated tool as well must not get an
+        unknown-parameter rejection, and the key must not reach the tool."""
+        hass.states.async_set("light.kitchen", "on")
+
+        result = await _call(
+            strict_server,
+            "ha_get_state",
+            {
+                "entity_id": "light.kitchen",
+                STRICT_BPS_KEY_PARAM: current_strict_bps_ack_key(),
+            },
+        )
+
+        assert not result.is_error, result
+        assert _logged_key("ha_get_state") is None
 
     async def test_with_strict_mode_off_a_keyless_write_goes_through(
         self,

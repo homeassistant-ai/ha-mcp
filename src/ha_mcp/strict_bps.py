@@ -206,10 +206,12 @@ def strict_bps_ack_line() -> str:
     effective (server.py). This is the ONLY place the actual
     key value is emitted to a caller.
     """
+    gated = ", ".join(STRICT_BPS_GATED_TOOLS)
     return (
         f"Acknowledgment key: {current_strict_bps_ack_key()} — strict "
         "best-practices mode is ON; pass this exact value as the "
-        "BestPracticeKey argument on gated write tools. This key is a "
+        f"BestPracticeKey argument on the gated write tools ({gated}); "
+        "other tools need no key and ignore it. This key is a "
         "read-receipt, not a secret: it is published here deliberately by "
         "the ha-mcp server, rotates hourly, and grants no privileges — "
         "replaying it is the designed acknowledgment protocol."
@@ -259,10 +261,11 @@ def _raise_bps_ack_required_error(name: str) -> NoReturn:
 class StrictBpsMiddleware(Middleware):
     """Block gated write tools that lack the acknowledgment key.
 
-    Passthrough for every tool outside ``STRICT_BPS_GATED_TOOLS``. For the
-    gated tools it always consumes (strips) the ``BestPracticeKey`` argument,
-    and blocks the call when strict mode is effective and the supplied key
-    was missing or wrong. Consults the live flags per call (via
+    Every call has the ``BestPracticeKey`` argument consumed (stripped), so
+    a tool outside ``STRICT_BPS_GATED_TOOLS`` that does not declare it
+    ignores the key instead of rejecting it as an unknown parameter. Gated
+    tools are blocked when strict mode is effective and the supplied key was
+    missing or wrong; every other tool passes through. Consults the live flags per call (via
     :func:`strict_bps_effective`), so a toggle applies live in
     standalone-HTTP/embedded mode like ``read_only_mode`` (other modes
     pick it up on restart).
@@ -316,14 +319,14 @@ class StrictBpsMiddleware(Middleware):
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
         name = context.message.name
-        if name not in STRICT_BPS_GATED_TOOLS:
-            return await call_next(context)
 
         # The gate is the ONLY reader of BestPracticeKey: strip it before
-        # dispatch (whether or not strict mode is on) so the key value never
-        # reaches the tool body, the policy middleware's approval args-hash
-        # (where the hourly-rotating value would churn remembered approvals
-        # every rotation), or downstream logging.
+        # dispatch (whether or not strict mode is on, and for every tool) so
+        # the key value never reaches the tool body, the policy middleware's
+        # approval args-hash (where the hourly-rotating value would churn
+        # remembered approvals every rotation), or downstream logging. An
+        # agent told to send the key to gated write tools may also send it
+        # to an ungated one, which would otherwise reject it as unknown.
         args = context.message.arguments or {}
         supplied = args.get(STRICT_BPS_KEY_PARAM)
         if STRICT_BPS_KEY_PARAM in args:
@@ -331,6 +334,9 @@ class StrictBpsMiddleware(Middleware):
             context = context.copy(
                 message=context.message.model_copy(update={"arguments": stripped})
             )
+
+        if name not in STRICT_BPS_GATED_TOOLS:
+            return await call_next(context)
 
         # isinstance guards the set-membership test: the middleware reads
         # raw transport arguments before pydantic validation, so an
