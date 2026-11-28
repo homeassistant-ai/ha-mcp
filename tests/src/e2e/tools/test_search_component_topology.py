@@ -11,6 +11,9 @@ from ..utilities.topology import component_surface_available
 logger = logging.getLogger(__name__)
 
 
+_YAML_ITEM_GAP = "not scanned (per-id config endpoint returned 404"
+
+
 def _assert_only_yaml_scene_degradation(data: dict) -> None:
     """Every degradation the response reports is the YAML-scene one (#2292).
 
@@ -27,15 +30,23 @@ def _assert_only_yaml_scene_degradation(data: dict) -> None:
         for part in (data.get("partial_reason") or "").split(" ; ")
         if part.strip()
     ]
+    # The seeded package automation and script (custom_packages/
+    # e2e_yaml_defined.yaml) are the same structural gap for their domains: the
+    # legacy path reads bodies from Core's config API, which answers 404 for them.
+    yaml_item_gaps = [text for text in fragments if _YAML_ITEM_GAP in text]
     if data.get("partial") is True:
-        # Only the YAML-scene gap explains an omission; the attribute-only note
+        # Only a YAML gap explains an omission; the attribute-only note
         # describes scenes that were still scored.
-        assert any(is_yaml_scene_gap(text) for text in fragments), (
-            f"A partial result must name the YAML-scene gap: {data}"
+        assert yaml_item_gaps or any(is_yaml_scene_gap(text) for text in fragments), (
+            f"A partial result must name a YAML gap: {data}"
         )
-    offenders = [text for text in fragments if not is_structural_scene_fragment(text)]
+    offenders = [
+        text
+        for text in fragments
+        if text not in yaml_item_gaps and not is_structural_scene_fragment(text)
+    ]
     assert not offenders, (
-        "Only the structural YAML-scene fragments are acceptable without a "
+        "Only the structural YAML fragments are acceptable without a "
         f"component surface; got {offenders}"
     )
 
